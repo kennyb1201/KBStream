@@ -114,8 +114,10 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -609,11 +611,24 @@ internal const val HeroTrailerNearEndMs = 3_000L
  * "unknown" as "near the end" would therefore disable the fresh-URL retry in
  * the one case it was built for, and a once-playable trailer would stay dead
  * until its 6 h cache entry aged out.
+ *
+ * [isIdentityBlocked] is the other "do not retry" answer, and it is not an
+ * arithmetic one: it is the shared classifier's verdict that YouTube refused
+ * the client IDENTITY (a googlevideo 403 that the source's own mode ladder
+ * already cycled every UA / range / ratebypass mode for). The 2026-10-18 field
+ * log settles what a retry buys there: the one-shot retry re-resolved, got a
+ * FRESH signed URL, and that URL 403'd on its very first request. Retrying a
+ * refused identity cannot produce playback - only another mount, another
+ * buffer, another failure - so a trailer treats it like the end of the clip and
+ * crossfades to the backdrop. Every other failure keeps the retry, because a
+ * fresh URL genuinely does recover those.
  */
 internal fun shouldRetryHeroTrailerAfterError(
     positionMs: Long,
-    durationMs: Long
+    durationMs: Long,
+    isIdentityBlocked: Boolean = false
 ): Boolean {
+    if (isIdentityBlocked) return false
     if (durationMs <= 0L) return true
     return durationMs - positionMs.coerceAtLeast(0L) >= HeroTrailerNearEndMs
 }
@@ -660,7 +675,14 @@ private fun HeroInlineTrailerPlayer(
      * failure in the last [HeroTrailerNearEndMs] of the trailer, because there
      * is nothing worth resuming there.
      */
-    onFailed: (positionMs: Long) -> Unit = {}
+    onFailed: (positionMs: Long) -> Unit = {},
+    /**
+     * YouTube refused the client identity for this playback (see
+     * [isYouTubeIdentityBlocked]). The watch config has already been
+     * invalidated by the time this fires, so the owner only has to keep count:
+     * a repeat refusal of the same video is a refusal on the fresh identity.
+     */
+    onIdentityBlocked: () -> Unit = {}
 ) {
     val context = LocalContext.current
     // One pooled player for every hero trailer: renderer initialization is
@@ -883,10 +905,43 @@ private fun HeroInlineTrailerPlayer(
                             (if (durationMs > 0L) "${durationMs}ms" else "unknown length"),
                         error
                     )
+                    // A player-visible 403 is not a mode mismatch: the chunked
+                    // source already cycled every client UA / ratebypass /
+                    // bounded-range mode and every one was refused, which means
+                    // YouTube is refusing the client IDENTITY (the cached
+                    // watch config's visitor data). Re-resolving with that same
+                    // identity would only re-sign a URL it already said no to,
+                    // so the config goes first and the next resolve - whenever
+                    // the hero naturally makes one - fetches a fresh visitor.
+                    // Deliberately 403-on-googlevideo only: a timeout, a 5xx or
+                    // an addon host's own refusal keeps the cached identity and
+                    // the ordinary retry.
+                    val identityBlocked = error.isYouTubeIdentityBlocked()
+                    if (identityBlocked) {
+                        InnerTubeExtractor.invalidateConfig()
+                        onIdentityBlocked()
+                    }
                     handler.removeCallbacks(watchdog)
                     onEnded()
-                    if (shouldRetryHeroTrailerAfterError(positionMs, durationMs)) {
+                    if (
+                        shouldRetryHeroTrailerAfterError(
+                            positionMs,
+                            durationMs,
+                            isIdentityBlocked = identityBlocked
+                        )
+                    ) {
                         onFailed(positionMs)
+                    } else if (identityBlocked) {
+                        // Ambient content: a refusal the app cannot fix has to
+                        // be invisible. The backdrop is already up (onEnded
+                        // above), there is no error card or spinner anywhere on
+                        // this path, and skipping the retry is what removes the
+                        // re-mount / re-buffer stutter the field log recorded.
+                        Log.w(
+                            "HOME_HERO",
+                            "Trailer refused by YouTube for this identity; " +
+                                "skipping the retry and leaving the backdrop up"
+                        )
                     } else {
                         Log.w(
                             "HOME_HERO",
@@ -1192,6 +1247,17 @@ private fun HomeHero(
     // loop resolve → mount → 403 forever.
     var trailerAttempt by remember(trailerKey) { mutableStateOf(0) }
 
+    // How many times YouTube has refused THIS trailer in this session.
+    //
+    // A refusal never spends the retry above (a refused identity cannot be
+    // recovered by re-signing - see shouldRetryHeroTrailerAfterError), so this
+    // counter is what remembers that a refusal happened. The first one
+    // invalidates the watch config, which means the resolve that follows it is
+    // signed with a FRESH visitor: a second refusal is therefore real evidence
+    // that the fresh identity is refused too, and is what marks the video
+    // blocked for the session.
+    var trailerIdentityRefusals by remember(trailerKey) { mutableStateOf(0) }
+
     // Re-arm the trailer when the app returns to the foreground: ON_PAUSE
     // silenced the player (audio-leak fix), so bump the epoch to drop the
     // stale source and re-resolve instead of leaving a paused/blank player.
@@ -1235,6 +1301,19 @@ private fun HomeHero(
         trailerResumeMs = 0L
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+            // A video YouTube already refused on a fresh identity is not
+            // resolved again this session: the retry below would invalidate
+            // (which lifts the block) and then pay a watch-page fetch + full
+            // resolve on every foreground return, for a URL that will 403.
+            // Checked BEFORE the retry's invalidate for exactly that reason.
+            if (TrailerPlayerLauncher.isIdentityBlocked(trailerKey)) {
+                Log.w(
+                    "HOME_HERO",
+                    "Hero trailer key=$trailerKey is blocked by YouTube this " +
+                        "session; keeping the backdrop"
+                )
+                return@LaunchedEffect
+            }
             if (trailerAttempt > 0) {
                 // Bust the cached source so the retry gets a fresh signed URL.
                 TrailerPlayerLauncher.invalidate(trailerKey)
@@ -1598,6 +1677,23 @@ private fun HomeHero(
                                         trailerAttempt += 1
                                     } else {
                                         resolvedTrailer = null
+                                    }
+                                },
+                                onIdentityBlocked = {
+                                    // The first refusal already invalidated the
+                                    // watch config, so the resolve that follows
+                                    // it is signed with a fresh visitor. A second
+                                    // refusal of the same video is therefore the
+                                    // fresh identity being refused too, and that
+                                    // is when the video is marked for the
+                                    // session - so a later re-arm goes straight
+                                    // to the backdrop instead of buying a
+                                    // watch-page fetch every time.
+                                    trailerIdentityRefusals += 1
+                                    if (trailerIdentityRefusals >= 2) {
+                                        trailerKey?.let {
+                                            TrailerPlayerLauncher.markIdentityBlocked(it)
+                                        }
                                     }
                                 }
                             )

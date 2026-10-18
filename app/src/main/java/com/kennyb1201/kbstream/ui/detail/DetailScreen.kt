@@ -2324,7 +2324,8 @@ fun DetailScreen(
      */
     fun trailerPlayerIntent(
         context: Context,
-        source: PlayableSource
+        source: PlayableSource,
+        videoId: String
     ): Intent =
         Intent(context, NativePlayerActivity::class.java).apply {
             val userAgent = when (source) {
@@ -2346,6 +2347,10 @@ fun DetailScreen(
 
             putExtra("parent_type", "movie")
             putExtra("item_name", "Trailer")
+            // Identifies the session as a trailer so a player-visible 403 can
+            // invalidate the cached YouTube watch config (see
+            // TrailerPlayerLauncher.isYouTubeIdentityBlocked's callers).
+            putExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID, videoId)
         }
 
     /**
@@ -2369,7 +2374,7 @@ fun DetailScreen(
                     return@launch
                 }
 
-            context.startActivity(trailerPlayerIntent(context, source))
+            context.startActivity(trailerPlayerIntent(context, source, key))
         }
     }
 

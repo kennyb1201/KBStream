@@ -87,6 +87,59 @@ class HeroTrailerResumeTest {
         )
     }
 
+    // ------------------------------------------- refused identity (403) rows --
+    //
+    // The 2026-10-18 log (Onn 4K Plus, `gc0t8AfMP6k`): the trailer 403'd at
+    // 36726ms of 93833ms, the one-shot retry re-resolved, and the FRESH signed
+    // URL 403'd on its very first request. A refused identity cannot be
+    // recovered by re-signing, so this class never retries - retrying it only
+    // produces the mount / buffer / fail churn the viewer actually saw.
+
+    @Test
+    fun `a refused identity is never retried, whatever the position`() {
+        listOf(
+            // The field log's own numbers.
+            36_726L to 93_833L,
+            // Every row the other rules answer yes to.
+            0L to 93_833L,
+            0L to 30_000L,
+            15_000L to 30_000L,
+            27_000L to 30_000L
+        ).forEach { (pos, dur) ->
+            assertFalse(
+                "a 403 at ${pos}ms of ${dur}ms must not retry",
+                shouldRetryHeroTrailerAfterError(pos, dur, isIdentityBlocked = true)
+            )
+        }
+    }
+
+    @Test
+    fun `a refused identity is not retried even with an unknown duration`() {
+        // Unknown duration is the stale-URL retry case for every OTHER error,
+        // and it is exactly the shape the refused case arrives in (the fresh
+        // URL 403'd before the container was read far enough to report a
+        // length). It must not be allowed to turn the retry back on here.
+        val timeUnset = Long.MIN_VALUE + 1
+        assertFalse(shouldRetryHeroTrailerAfterError(0L, 0L, isIdentityBlocked = true))
+        assertFalse(shouldRetryHeroTrailerAfterError(0L, timeUnset, isIdentityBlocked = true))
+        assertFalse(shouldRetryHeroTrailerAfterError(1_234L, timeUnset, isIdentityBlocked = true))
+    }
+
+    @Test
+    fun `a refused identity is not retried near the end either`() {
+        // Both answers agree here, and the near-end rule must not be what is
+        // doing the work.
+        assertFalse(shouldRetryHeroTrailerAfterError(29_500L, 30_000L, isIdentityBlocked = true))
+        assertFalse(shouldRetryHeroTrailerAfterError(30_000L, 30_000L, isIdentityBlocked = true))
+    }
+
+    @Test
+    fun `the identity flag is defaulted, so every existing row is unchanged`() {
+        assertTrue(shouldRetryHeroTrailerAfterError(15_000L, 30_000L))
+        assertTrue(shouldRetryHeroTrailerAfterError(0L, 0L))
+        assertFalse(shouldRetryHeroTrailerAfterError(29_500L, 30_000L))
+    }
+
     @Test
     fun `the window is a small positive number`() {
         assertTrue(HeroTrailerNearEndMs > 0L)
@@ -141,13 +194,23 @@ class HeroTrailerResumeTest {
     @Test
     fun `the guard is what decides whether the retry happens`() {
         val handler = errorHandler()
+        val flat = handler.replace(Regex("\\s+"), " ")
         assertTrue(
-            "the near-end decision must gate the retry",
-            handler.contains("if (shouldRetryHeroTrailerAfterError(positionMs, durationMs))")
+            "the decision must gate the retry, and it must be handed the " +
+                "classifier's verdict - a refused identity is the one failure a " +
+                "re-signed URL provably cannot fix",
+            flat.contains(
+                "if ( shouldRetryHeroTrailerAfterError( positionMs, durationMs, " +
+                    "isIdentityBlocked = identityBlocked ) ) {"
+            )
         )
         assertTrue(
             "and the position must be what is handed over",
             handler.contains("onFailed(positionMs)")
+        )
+        assertTrue(
+            "the verdict must come from the shared classifier, not a local code check",
+            flat.contains("val identityBlocked = error.isYouTubeIdentityBlocked()")
         )
     }
 

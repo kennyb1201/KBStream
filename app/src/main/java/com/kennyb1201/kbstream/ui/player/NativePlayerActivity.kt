@@ -76,6 +76,9 @@ import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
@@ -1479,6 +1482,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     // History
     private var isLiveChannel = false
+
+    /**
+     * The YouTube video id this session is playing as a TRAILER, or null for
+     * ordinary playback (see [TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID]).
+     *
+     * Only used to classify a player-visible 403: in a trailer session the
+     * stream is a googlevideo URL signed for a cached watch config, so a
+     * refusal is the identity being stale - not this device failing to decode
+     * something - and the next resolve is only worth making with a fresh one.
+     */
+    private var trailerVideoId: String? = null
 
     // Zap banner (CH+/CH- channel info overlay) — bound in bindViews(),
     // populated by showZapBanner() during a live-channel zap.
@@ -3356,6 +3370,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         itemName = intent.getStringExtra("item_name")
             ?.takeIf { it.isNotBlank() }
             ?: intent.getStringExtra("display_name").orEmpty()
+        trailerVideoId = intent
+            .getStringExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID)
+            ?.takeIf { it.isNotBlank() }
         itemPoster = intent.getStringExtra("item_poster")
         clearLogoUrl = intent.getStringExtra("clear_logo_url")
         backdropUrl = intent.getStringExtra("backdrop_url")
@@ -6397,6 +6414,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // [fileErrorTailCompletion]). Below the threshold not one byte of
             // the recovery changes.
             if (fileErrorTailCompletion()) return
+            // A googlevideo 403 in a trailer session is a refused client
+            // identity: refresh it and leave cleanly (see the helper).
+            if (refreshIdentityOnTrailerRefusal(error)) return
             // A cached link that fails to OPEN is a dead link: forget it now, so
             // the next replay resolves fresh instead of looping back into this
             // same error card. Only a failure ABOUT THE LINK counts (PB-P2-2):
@@ -10381,6 +10401,44 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // marker and the resume bar exactly where the viewer had been.
         saveProgress(reason = "ended", forceCompleted = true)
         routeAfterCompletedEnd()
+    }
+
+    /**
+     * Invalidates the cached YouTube watch config when a TRAILER session's
+     * playback is refused with a googlevideo 403 ([isYouTubeIdentityBlocked]).
+     *
+     * The 2026-10-18 hero-trailer log (Onn 4K Plus, `gc0t8AfMP6k`) is the shape
+     * this exists for: the stream 403'd mid-playback, the chunked source cycled
+     * every client UA / range / ratebypass mode inside the player, and the one
+     * retry re-resolved and 403'd again on its FIRST request. Every mode being
+     * refused is not a mode mismatch - it is the client identity (the cached
+     * watch config's visitor data) being refused, and re-signing with it just
+     * produces another dead URL.
+     *
+     * The config is what the next resolve starts from, so invalidating here is
+     * what gives that resolve a fresh visitor. Only a trailer session and only
+     * this failure shape: a timeout, a 5xx or another host's own 403 keeps the
+     * cached identity and the ordinary ladder.
+     *
+     * Returns true when it handled the failure, and the caller then returns
+     * WITHOUT touching the recovery ladder. A trailer is ambient content, so
+     * this is a CLEAN EXIT rather than a recovery: the activity finishes and the
+     * viewer is back on the detail screen with the trailer row still tappable.
+     * None of the ladder's outcomes would be honest here - the retry rebuilds a
+     * player whose URL was just refused, the source walk hunts a different
+     * addon for a YouTube trailer that has only one source, and the error card
+     * says the main content failed when only the 30-second clip did.
+     */
+    private fun refreshIdentityOnTrailerRefusal(error: PlaybackException): Boolean {
+        if (trailerVideoId == null || !error.isYouTubeIdentityBlocked()) return false
+        Log.w(
+            "PLAYER_RETRY",
+            "Trailer stream refused by YouTube (403 on googlevideo); " +
+                "invalidating the watch config and closing the trailer session"
+        )
+        InnerTubeExtractor.invalidateConfig()
+        finish()
+        return true
     }
 
     /**

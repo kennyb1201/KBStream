@@ -544,7 +544,11 @@ object InnerTubeExtractor {
 
     fun invalidateConfig() {
         cachedConfig.set(null)
-        Log.d(TAG, "Watch config invalidated")
+        // Warning, not debug: this is now the field's evidence that the
+        // playback side invalidated the identity (a 403 retry on a TV), and
+        // Fire OS suppresses debug-level logs - the same reason the trailer
+        // resolution traces above are warnings.
+        Log.w(TAG, "Watch config invalidated")
     }
 
     // ── Player API ────────────────────────────────────────────────────

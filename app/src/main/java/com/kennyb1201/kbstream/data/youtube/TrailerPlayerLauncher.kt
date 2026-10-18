@@ -9,6 +9,17 @@ import kotlinx.coroutines.sync.withLock
 
 object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
 
+    /**
+     * Launch extra carrying the YouTube video id of a trailer session.
+     *
+     * The player needs it to tell a trailer from the title it opened as: a
+     * player-visible 403 on a googlevideo URL in a TRAILER session is YouTube
+     * refusing the client identity, which the session reports by invalidating
+     * the cached watch config and closing cleanly instead of showing the
+     * main-content error ladder.
+     */
+    const val EXTRA_TRAILER_VIDEO_ID = "trailer_video_id"
+
     private const val TAG = "TrailerLauncher"
 
     /**
@@ -38,6 +49,21 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     private const val FAILURE_TTL_MS = 10 * 60 * 1000L // 10 minutes
+
+    /**
+     * Videos YouTube refused even AFTER the watch config was rebuilt: the
+     * stream 403'd on a fresh visitor too, so re-signing again is not going to
+     * help this session.
+     *
+     * Session-scoped on purpose (an in-memory set, gone with the process): the
+     * refusal is about the identity this process is holding, not about the
+     * video forever. Kept apart from [resolutionFailures] because that one is a
+     * short-lived "don't hammer a resolve that just failed" throttle, while this
+     * is "do not resolve this at all until something explicit asks again".
+     * Neither is capped: the only writer is a playback failure, so the set can
+     * hold no more ids than the viewer sat through trailers for.
+     */
+    private val identityBlocked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * Caps for the two caches above, which live for the whole process (this is
@@ -81,10 +107,47 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         "trailer: sources=${sourceCache.size}/$MAX_SOURCE_ENTRIES" +
             " failures=${resolutionFailures.size}/$MAX_FAILURE_ENTRIES"
 
-    /** Drops any cached source for [videoId] so the next resolve fetches a fresh signed URL. */
+    /**
+     * Drops any cached source for [videoId] so the next resolve fetches a fresh
+     * signed URL, and lifts a previous [markIdentityBlocked]: an explicit
+     * invalidation is a caller saying "try this one again".
+     */
     fun invalidate(videoId: String) {
         sourceCache.remove(videoId)
+        identityBlocked.remove(normalizeId(videoId))
     }
+
+    /**
+     * Records that YouTube refused [videoIdOrUrl] even on a freshly fetched
+     * watch config (see [isYouTubeIdentityBlocked] and its callers). Resolves
+     * for it short-circuit until [invalidate] or process death.
+     */
+    fun markIdentityBlocked(videoIdOrUrl: String) {
+        val videoId = normalizeId(videoIdOrUrl)
+        identityBlocked.add(videoId)
+        // The signed URL for it is worthless too, so drop it: a later manual
+        // invalidate then has nothing stale to serve.
+        sourceCache.remove(videoId)
+        Log.w(
+            TAG,
+            "Trailer $videoId refused by YouTube on a fresh identity; blocked for this session"
+        )
+    }
+
+    /**
+     * True when this video is known to be refused by the YouTube identity this
+     * process holds. Accepts the id or a watch URL, like [resolvePlayableUrl].
+     */
+    fun isIdentityBlocked(videoIdOrUrl: String): Boolean =
+        identityBlocked.contains(normalizeId(videoIdOrUrl))
+
+    /**
+     * The stored form of a video key: the extracted id when one can be read, so
+     * the hero (which passes a bare id) and the detail screen (which passes a
+     * watch URL) agree on the entry.
+     */
+    private fun normalizeId(videoIdOrUrl: String): String =
+        extractVideoId(videoIdOrUrl) ?: videoIdOrUrl.trim()
 
     private fun markFailed(videoId: String) {
         resolutionFailures[videoId] = System.currentTimeMillis()
@@ -173,6 +236,17 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             TAG,
             "Extracted YouTube video ID: $videoId"
         )
+
+        // A video YouTube already refused on a fresh identity stays refused:
+        // skip the watch-page fetch and the whole resolve. The hero re-arms on
+        // every foreground return, so without this a refused trailer burns a
+        // config fetch + full resolve each time it cycles back around.
+        if (identityBlocked.contains(videoId)) {
+            Log.w(TAG, "Skipping resolution for $videoId (refused by YouTube on a fresh identity)")
+            return@withLock Result.failure(
+                IllegalStateException("Trailer $videoId is blocked by YouTube for this session")
+            )
+        }
 
         // Fail fast for videos that just failed to resolve — retrying a
         // region-blocked video through every resolver on each hero rotation
