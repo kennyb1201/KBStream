@@ -22,6 +22,14 @@ import org.junit.Test
  * at 0.71 coverage with 0.085 of the tile enclosed, FXX 0.032, CMT 0.146, BET
  * 0.406, against 0.000 for the featureless plates and 0.80 coverage with a
  * spread of 0.89 for ABC's opaque-lettering disc.
+ *
+ * The other half is the whitening that went wrong (field, 2026-10-18):
+ * Matchbox's clearlogo is chrome lettering on a black plate, dark and colorless
+ * by average - so it whitened - while 15% of its opaque pixels are LIGHT, and
+ * the tint turned plate and letters alike into a solid white rectangle. A mark
+ * carrying its own light detail has to be drawn as it is, while a knockout
+ * plate (transparent letters, no opaque light pixels) and a plain dark glyph
+ * still whiten.
  */
 class BrandMarkTreatmentTest {
 
@@ -75,11 +83,54 @@ class BrandMarkTreatmentTest {
     }
 
     @Test
-    fun `a dark plate with opaque light lettering still whitens`() {
+    fun `a dark plate with opaque light lettering is drawn as it is`() {
         // ABC's top-voted disc: a filled plate whose letters are painted, not
         // knocked out, so the coverage test must not swallow it into UNUSABLE.
+        //
+        // The verdict here used to be WHITEN, and that expectation was the
+        // Matchbox bug written down: letters painted onto a plate are OPAQUE
+        // light pixels, the rule never counted them, and whitening them away is
+        // what made the field's chrome logo an unreadable white rectangle.
         val disc = filled(opaqueBlack).apply { rect(12, 20, 24, 6, opaqueWhite) }
-        assertEquals(BrandMark.WHITEN, classify(disc))
+        assertEquals(BrandMark.AS_IS, classify(disc))
+    }
+
+    @Test
+    fun `chrome lettering on a dark plate stays as it is`() {
+        // The Matchbox clearlogo, measured 2026-10-18: silver 3D lettering on a
+        // black plate. coverage 0.29, avgLum 0.42, avgSat 0.14 - dark and
+        // colorless, so the whiten branch claimed it - and 15% of its opaque
+        // pixels are light, which is precisely what the SrcIn tint destroyed.
+        // Light lettering on a dark surface needs no help, so it is left alone.
+        val chrome = filled(clear).apply {
+            rect(4, 8, 40, 32, 0xFF0A0A0A.toInt())
+            rect(8, 20, 32, 8, 0xFFD8D8D8.toInt())
+        }
+        assertEquals(BrandMark.AS_IS, classify(chrome))
+    }
+
+    @Test
+    fun `anti-alias fringe on a dark glyph does not block the whitening`() {
+        // The only other way light pixels appear on a dark mark: the soft edge
+        // of a glyph. Well under the share, so the mark still whitens - which
+        // is what the threshold exists to keep.
+        val glyph = filled(clear).apply {
+            rect(20, 10, 8, 28, opaqueBlack)
+            rect(20, 10, 1, 1, 0xFFC8C8C8.toInt())
+        }
+        assertEquals(BrandMark.WHITEN, classify(glyph))
+    }
+
+    @Test
+    fun `the light share is measured against the opaque pixels, at its edge`() {
+        // Ten thousand opaque pixels of a dark plate, with 190 and 210 of them
+        // light: 1.9% whitens, 2.1% is the mark's own light detail.
+        fun plate(lightPixels: Int): IntArray = IntArray(10_000) { index ->
+            if (index < lightPixels) opaqueWhite else opaqueBlack
+        }
+
+        assertEquals(BrandMark.WHITEN, brandMarkTreatment(plate(190), 100, 100))
+        assertEquals(BrandMark.AS_IS, brandMarkTreatment(plate(210), 100, 100))
     }
 
     @Test

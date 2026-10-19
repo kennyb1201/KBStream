@@ -30,6 +30,27 @@ internal const val BRAND_MARK_OPAQUE_ALPHA = 64
 internal const val BRAND_MARK_KNOCKOUT_MIN_SHARE = 0.005f
 
 /**
+ * Luminance at or above which an opaque pixel counts as the mark's own LIGHT
+ * detail — chrome, silver or white lettering on a dark plate.
+ *
+ * 0.72 is deliberately above the grey a JPEG-compressed plate ripples through:
+ * the point is to find DRAWN light content, not the top of a noisy gradient.
+ */
+internal const val BRAND_MARK_LIGHT_LUM = 0.72f
+
+/**
+ * Share of the mark's OPAQUE pixels that must be light before it is treated as
+ * carrying its own readable light detail.
+ *
+ * Measured on TMDB's real artwork: Matchbox's clearlogo is chrome lettering on
+ * a black plate with 15% of its opaque pixels above [BRAND_MARK_LIGHT_LUM]
+ * (2026-10-18), while the anti-alias fringe around a dark glyph — the only
+ * other way light pixels appear — sits well under a percent. Two percent
+ * separates them with room to spare.
+ */
+internal const val BRAND_MARK_LIGHT_DETAIL_MIN_SHARE = 0.02f
+
+/**
  * Decides how a decoded brand mark should be drawn on the dark header.
  *
  * Three measurements separate the cases:
@@ -40,6 +61,10 @@ internal const val BRAND_MARK_KNOCKOUT_MIN_SHARE = 0.005f
  *    opaque pixel. It is near zero for a flat plate and large for a mark that
  *    has its own internal contrast (dark plate, light lettering).
  *  - avgLum / avgSat: how dark and how colorless the mark is overall.
+ *  - lightShare: the share of OPAQUE pixels that are light. This is what
+ *    separates a dark glyph (or a plate whose lettering is knocked out) from a
+ *    dark plate that already carries its own light lettering — chrome, silver
+ *    or white — and therefore needs no help (see [BrandMark.WHITEN]).
  *
  * A dark, colorless, HIGH-coverage plate with no internal contrast is the case
  * [BrandMark.UNUSABLE] exists for: whitening it erases whatever it said, and
@@ -50,6 +75,17 @@ internal const val BRAND_MARK_KNOCKOUT_MIN_SHARE = 0.005f
  * lettering on a light background. [hasKnockoutDetail] tells the two apart by
  * looking for transparent pixels the mark encloses, which is what stopped
  * Bravo, CMT, FXX and BET from showing anything at all.
+ *
+ * The whitening has a second failure the measurements above cannot see, and it
+ * is the one the field reported (2026-10-18): Matchbox's clearlogo is chrome
+ * lettering ON a black plate - average luminance 0.42, average saturation
+ * 0.14, so "dark and colorless" - but 15% of its opaque pixels are LIGHT. The
+ * SrcIn tint recolored the plate AND the letters into one solid white rounded
+ * rectangle. The rule now looks at [lightShare] for exactly this: a mark
+ * already carrying readable light detail is drawn as it is (light lettering on
+ * a dark surface needs no help), while the knockout case the whitening exists
+ * for has no opaque light pixels at all - transparent letters are skipped by
+ * the sampler - so it still whitens.
  */
 internal fun brandMarkTreatment(pixels: IntArray, width: Int, height: Int): BrandMark {
     if (pixels.isEmpty() || width <= 0 || height <= 0) return BrandMark.AS_IS
@@ -59,6 +95,7 @@ internal fun brandMarkTreatment(pixels: IntArray, width: Int, height: Int): Bran
     var satTotal = 0f
     var lumMin = 1f
     var lumMax = 0f
+    var lightCount = 0
     for (pixel in pixels) {
         val alpha = (pixel ushr 24) and 0xFF
         if (alpha < BRAND_MARK_OPAQUE_ALPHA) continue // transparent padding
@@ -69,6 +106,7 @@ internal fun brandMarkTreatment(pixels: IntArray, width: Int, height: Int): Bran
         lumTotal += lum
         lumMin = minOf(lumMin, lum)
         lumMax = maxOf(lumMax, lum)
+        if (lum > BRAND_MARK_LIGHT_LUM) lightCount++
         val max = maxOf(r, g, b)
         val min = minOf(r, g, b)
         satTotal += (max - min) / 255f
@@ -92,8 +130,13 @@ internal fun brandMarkTreatment(pixels: IntArray, width: Int, height: Int): Bran
             !hasKnockoutDetail(pixels, width, height) -> BrandMark.UNUSABLE
 
         // Dark, colorless mark drawn for a light background: safe to recolor
-        // white, and the only way it survives a dark header.
-        avgLum < 0.55f && avgSat < 0.28f -> BrandMark.WHITEN
+        // white - UNLESS it already carries opaque light detail (chrome /
+        // silver / white lettering on the dark plate). Whitening that erases the
+        // lettering into a solid white plate; drawn as-is, the light lettering
+        // reads on the dark surface with no help.
+        avgLum < 0.55f && avgSat < 0.28f &&
+            lightCount.toFloat() / count < BRAND_MARK_LIGHT_DETAIL_MIN_SHARE ->
+            BrandMark.WHITEN
 
         else -> BrandMark.AS_IS
     }
