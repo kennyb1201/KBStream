@@ -112,6 +112,31 @@ internal object SoftwareAudioRules {
     }
 
     /**
+     * Whether the bundled FFmpeg audio renderer must decline this compressed
+     * format even in "prefer app" mode: the device has a platform decoder for
+     * it, so MediaCodec takes the track and FFmpeg stays reserved for what the
+     * box cannot decode itself (DTS / DTS-HD / TrueHD). [deviceDecoderPresent]
+     * is the MediaCodecSelector answer, kept out of the pure function so the
+     * rule is unit-testable.
+     *
+     * Why it exists (field, Onn 4K Plus, 2026-10-18): "Prefer app decoders" runs
+     * the extension renderer in `EXTENSION_RENDERER_MODE_PREFER`, which puts it
+     * AHEAD of MediaCodec, and a renderer that supports a format is simply
+     * given it - so the bundled FFmpeg claimed AAC 2.0 stereo too and played it
+     * as "robotic computer noises", on a box whose MediaCodec decodes AAC
+     * perfectly. The setting exists for the codecs the sticks cannot decode,
+     * not for the ones they can.
+     *
+     * A blank or null mime is never a decline: with no type stated there is
+     * nothing for a platform decoder to match, and answering "decline" would
+     * take the track away from FFmpeg with nothing to hand it to.
+     */
+    fun ffmpegDeclinesForDeviceDecoder(
+        sampleMimeType: String?,
+        deviceDecoderPresent: Boolean
+    ): Boolean = !sampleMimeType.isNullOrBlank() && deviceDecoderPresent
+
+    /**
      * The reason this session belongs to the backup engine, or null when the
      * player is fine as it is.
      *

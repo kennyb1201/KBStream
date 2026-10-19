@@ -6,6 +6,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -89,6 +90,57 @@ class SoftwareAudioRulesTest {
         // libswresample, so a wide bitstream is left alone here.
         val wide = pcm(MimeTypes.AUDIO_TRUEHD, 12)
         assertNull(SoftwareAudioRules.refusesSoftwareDecode(wide))
+    }
+
+    // ── what FFmpeg declines because the device can decode it ────────────────
+
+    @Test
+    fun `a codec the device decodes is declined, even for FFmpeg`() {
+        // The Onn 4K Plus report: AAC 2.0 stereo through the FFmpeg audio
+        // renderer in "prefer app decoders" mode came out as robotic noise,
+        // while the same file was fine on MPV. AAC is exactly what MediaCodec
+        // does well, so FFmpeg must not be handed it.
+        assertTrue(
+            SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder(
+                sampleMimeType = MimeTypes.AUDIO_AAC,
+                deviceDecoderPresent = true
+            )
+        )
+        listOf(
+            MimeTypes.AUDIO_MPEG,
+            MimeTypes.AUDIO_VORBIS,
+            MimeTypes.AUDIO_OPUS,
+            MimeTypes.AUDIO_FLAC,
+            MimeTypes.AUDIO_AC3,
+            MimeTypes.AUDIO_E_AC3
+        ).forEach { mime ->
+            assertTrue(
+                "$mime is decodable by the platform decoder that claimed it",
+                SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder(mime, true)
+            )
+        }
+    }
+
+    @Test
+    fun `a codec the device cannot decode is still FFmpeg's`() {
+        // DTS / DTS-HD / TrueHD: no platform decoder found, so the preference
+        // the setting exists for still applies and the track keeps its sound.
+        listOf(MimeTypes.AUDIO_DTS, MimeTypes.AUDIO_DTS_HD, MimeTypes.AUDIO_TRUEHD)
+            .forEach { mime ->
+                assertFalse(
+                    "$mime has no platform decoder on these sticks",
+                    SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder(mime, false)
+                )
+            }
+    }
+
+    @Test
+    fun `an unstated codec is never declined`() {
+        // Nothing for a platform decoder to match: declining would take the
+        // track from FFmpeg and hand it to nobody.
+        assertFalse(SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder(null, true))
+        assertFalse(SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder("", true))
+        assertFalse(SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder("   ", true))
     }
 
     @Test

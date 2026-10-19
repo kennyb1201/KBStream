@@ -6,6 +6,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -82,6 +83,15 @@ internal class SplitModeRenderersFactory(
         }
     }
 
+    private companion object {
+        /**
+         * media3's own FFmpeg audio renderer class, as a NAME: see
+         * [buildAudioRenderers] for why this build cannot name it as a type.
+         */
+        const val FFMPEG_AUDIO_RENDERER_CLASS =
+            "androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer"
+    }
+
     override fun buildVideoRenderers(
         context: Context,
         extensionRendererMode: Int,
@@ -121,6 +131,61 @@ internal class SplitModeRenderersFactory(
             eventListener,
             allowedVideoJoiningTimeMs,
             out
+        )
+    }
+
+    /**
+     * Audio: device-first, on top of whatever mode the setting asked for.
+     *
+     * [buildAudioRenderers] runs the stock policy and the extension renderer it
+     * built (the one `EXTENSION_RENDERER_MODE_PREFER` puts AHEAD of MediaCodec)
+     * is then re-wrapped as a [DeviceFirstFfmpegAudioRenderer], which declines
+     * every format the device has its own decoder for. That is what stops
+     * "Prefer app decoders (FFmpeg)" from handing an AAC stereo track to
+     * FFmpeg on a box whose MediaCodec decodes it fine — the artifact this
+     * exists for — while DTS / DTS-HD / TrueHD, which no platform decoder
+     * claims, still reach FFmpeg (and still reach it FIRST in prefer mode, the
+     * setting's whole point).
+     *
+     * The extension renderer is matched by CLASS NAME rather than by type: a
+     * build without `libs/media3-ffmpeg-decoder.aar` has no such class to
+     * reference (see [DeviceFirstFfmpegAudioRenderer]), and the list simply has
+     * no entry to replace. Nothing else in the list is touched, so audio with
+     * the extension absent (or set to OFF) is exactly what it was.
+     */
+    override fun buildAudioRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        audioSink: AudioSink,
+        eventHandler: Handler,
+        eventListener: AudioRendererEventListener,
+        out: ArrayList<Renderer>
+    ) {
+        super.buildAudioRenderers(
+            context,
+            extensionRendererMode,
+            mediaCodecSelector,
+            enableDecoderFallback,
+            audioSink,
+            eventHandler,
+            eventListener,
+            out
+        )
+        val index = out.indexOfFirst { it.javaClass.name == FFMPEG_AUDIO_RENDERER_CLASS }
+        if (index == -1) return
+        // The instance the factory just built is not initialized yet (the player
+        // has not seen the list), so swapping it out here is safe — and unlike a
+        // drop, the wrapped instance keeps the sink chain built above.
+        out[index] = DeviceFirstFfmpegAudioRenderer(
+            delegate = out[index],
+            mediaCodecSelector = mediaCodecSelector
+        )
+        Log.i(
+            "PLAYER_AUDIO",
+            "FFmpeg audio renderer wrapped device-first (mode $extensionRendererMode); " +
+                "formats with a platform decoder go to MediaCodec"
         )
     }
 
