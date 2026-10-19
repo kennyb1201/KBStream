@@ -317,7 +317,7 @@ class LaunchSplashWiringContractTest {
             "it is emitted under the wordmark, inside the Compose half - the " +
                 "window background stays logo-only, so nothing shifts at the handoff",
             splash.indexOf("Spacer(Modifier.height(SpinnerGap))") >
-                splash.indexOf("text = \"KBStream\"")
+                splash.indexOf("text = \"KBSTREAM\"")
         )
         assertTrue(
             "and the mark's centring offset counts the ring, or adding it would move " +

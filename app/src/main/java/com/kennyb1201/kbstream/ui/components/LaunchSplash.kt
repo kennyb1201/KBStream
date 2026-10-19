@@ -37,7 +37,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
  * The Compose half of the launch splash: the brass play-button mark with the
- * "KBStream" wordmark under it, on the void.
+ * "KBSTREAM" wordmark under it, on the void.
  *
  * It continues the frame the launch theme's window background was already
  * painting (see @drawable/splash_background / Theme.KBStream.Splash), so the
@@ -96,7 +96,7 @@ fun LaunchSplash() {
             )
             Spacer(Modifier.height(WordmarkGap))
             Text(
-                text = "KBStream",
+                text = "KBSTREAM",
                 modifier = Modifier
                     // A fixed slot, because the offset above has to know how
                     // tall the wordmark is to leave the mark centred - and a

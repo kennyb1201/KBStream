@@ -5,7 +5,7 @@
   and this app's first composed pixel, so it replaces a flat, unbranded window.
 
   Deliberately drawables only - no wordmark. A layer-list cannot draw text, and
-  a rasterised one could not follow the theme; the "KBStream" lockup is the
+  a rasterised one could not follow the theme; the "KBSTREAM" lockup is the
   Compose half (LaunchSplash), which picks up the same centred mark from
   @dimen/splash_logo_size and adds the name under it.
 
