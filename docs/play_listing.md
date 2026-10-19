@@ -108,7 +108,7 @@ that is what a phone screenshot is expected to look like.
 
 - [ ] Feature graphic exists at 1024 × 500
 - [ ] All screenshots ≥ 1080 px on the short side, no TV UI in any of them
-- [ ] Short description ≤ 80 characters (the one above is 74)
+- [ ] Short description ≤ 80 characters (the one above is 75)
 - [ ] Full description pasted without markdown (Play renders plain text)
 - [ ] `What's new` matches the release being uploaded
 - [ ] Data safety form updated for the phone build (same data as before: no new
