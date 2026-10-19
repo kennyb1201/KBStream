@@ -77,6 +77,59 @@ re-apply it from `onConfigurationChanged`).
 activity is finishing, on Amazon devices, during an engine handoff, and when the
 setting is off. Unverified on hardware like everything else below.
 
+## Ship readiness (Phase 4)
+
+What Phase 4 can settle without a device, and what it cannot.
+
+**One artifact, one update feed.** There are no product flavors (the single
+runtime `FormFactor` decision from Phase 0 is why), and `AppUpdater` never reads
+the form factor: it takes the release's `metadata.json` plus its one `.apk` and
+installs it. `SingleArtifactUpdateContractTest` pins both halves, so a future
+flavor split or a form-factor branch in the updater turns red.
+
+**Notification permission is asked, once.** `GET_NEW_EPISODES` and the guide's
+live reminders are both on by default, and on Android 13+ a fresh install used
+to run them with no grant: `NotificationCenter.canPost()` refuses silently, so
+every alert was dropped with nothing on screen to explain it. MainActivity now
+asks once at launch, only when an alert feature is on, spends the prompt before
+the dialog opens (no re-ask after a denial), and records that locally rather
+than in the synced prefs blob - a sibling device still has to answer for itself.
+The Settings toggles remain the place to grant it later.
+`NotificationPromptRulesTest` and `NotificationPromptWiringContractTest` pin the
+four conditions, the launch path and the device-local flag.
+
+**Deep links land on the phone page.** `kbstream://title/...` is advertised on
+the invisible handoff activity, parsed by `TitleDeepLink`, forwarded into
+MainActivity, and opened on Detail - whose entry is the `FormFactor` dispatch,
+so a phone gets `DetailScreenMobile`.
+`DeepLinkMobileRouteContractTest` pins the chain end to end.
+
+**Low-RAM.** Nothing new was needed: the video buffer budget is a third of the
+process's own `maxMemory()` (clamped 48-160 MB, so it follows `largeHeap` and the
+device), and the image memory cache is 15 % of the system memory class
+(24-64 MB). On a 3-4 GB phone both land in the same range they already do on a
+TV box. The risk left is behavioural, not numerical, and it needs the device.
+
+**Play listing copy** lives in `docs/play_listing.md`, with the screenshot shot
+list. The graphics cannot be produced here - no device, no renderer - so they
+are a capture task.
+
+### The device pass this phase ends on
+
+- [ ] Screenshots from the shot list, feature graphic at 1024 x 500, listing copy
+      pasted (one icon, one banner, no TV UI in any phone shot)
+- [ ] Self-update on a phone: install an older build, check Settings -> Check for
+      updates, confirm the same APK arrives (no form-factor fork in the feed)
+- [ ] Notification prompt appears once on a fresh Android 13+ install with an
+      alert feature on; denying it does not re-prompt on the next launch
+- [ ] Both alert kinds actually arrive (new episode, guide reminder)
+- [ ] `kbstream://title/<id>` from a browser or adb opens the touch Detail page
+- [ ] Low-RAM pass on a 3-4 GB device: rails scroll, 4K/high-bitrate playback,
+      no `OutOfMemoryError`, no image-cache thrash (watch `PLAYER_PERF`'s
+      "Buffer budget" line)
+- [ ] **Final TV regression gate**: the full field-test checklist on both boxes
+      (next-build list + AFR/DV/splash items) before the release is tagged
+
 ## Screens
 
 | Screen | TV file | Phone file | Status |
@@ -657,7 +710,8 @@ Parity notes (not bugs to fix):
    horizontal seek (including while paused), both vertical halves, pinch aspect,
    hold-to-rotate, and that the portrait band and the chrome below it survive a
    rotation in both directions.
-3. Nothing else is queued: every screen in the table above is ported, Settings
+3. The Phase 4 device pass above (screenshots, listing, the device checklist).
+4. Nothing else is queued: every screen in the table above is ported, Settings
    has no deferred controls left, and the player's touch vocabulary is written.
 
 ## Verifying a port

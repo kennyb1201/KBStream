@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.os.Build
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -673,6 +674,59 @@ private suspend fun recoveredEpisodeAlreadyWatched(
      */
     private var incomingIntent by mutableStateOf<Intent?>(null)
 
+    /**
+     * The one-shot runtime notification prompt (see
+     * [com.kennyb1201.kbstream.data.notifications.NotificationPromptRules]).
+     *
+     * Registered as a field because an ActivityResult launcher has to exist
+     * before the activity reaches STARTED, and the answer needs no handling:
+     * both alert features already re-check `canPost()` themselves, and Android
+     * 13 stops re-showing the dialog after two denials anyway.
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { }
+
+    /**
+     * Asks for `POST_NOTIFICATIONS` once, when there is something to ask about.
+     *
+     * Both alert features are on by default, so before this a fresh install on
+     * Android 13+ had them enabled, ran its checks, and had every notification
+     * dropped by the system with nothing on screen to explain it. The ask is
+     * spent (flag set) before the dialog opens, so a denial does not re-ask on
+     * every launch; the Settings toggles remain the place to grant it later.
+     */
+    private fun maybeAskForNotificationPermission() {
+        val granted = Build.VERSION.SDK_INT <
+            com.kennyb1201.kbstream.data.notifications.NotificationPromptRules
+                .POST_NOTIFICATIONS_SDK ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val anyAlertEnabled =
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getNewEpisodeNotifications(this) ||
+                com.kennyb1201.kbstream.data.settings.AppPreferences
+                    .getLiveReminderNotifications(this)
+        val ask = com.kennyb1201.kbstream.data.notifications.NotificationPromptRules
+            .shouldAsk(
+                sdkInt = Build.VERSION.SDK_INT,
+                granted = granted,
+                alreadyAsked = com.kennyb1201.kbstream.data.settings.AppPreferences
+                    .getNotificationPermissionAsked(this),
+                anyAlertEnabled = anyAlertEnabled
+            )
+        if (!ask) return
+        com.kennyb1201.kbstream.data.settings.AppPreferences
+            .setNotificationPermissionAsked(this, true)
+        runCatching {
+            notificationPermissionLauncher.launch(
+                android.Manifest.permission.POST_NOTIFICATIONS
+            )
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // Keep `intent` current too: the cold-launch path reads it, and the
@@ -803,6 +857,8 @@ private suspend fun recoveredEpisodeAlreadyWatched(
                 com.kennyb1201.kbstream.ui.theme.themeVoidWindowColor(this)
             )
         )
+
+        maybeAskForNotificationPermission()
 
         val composeStartedMs = android.os.SystemClock.elapsedRealtime()
         setContent {

@@ -511,6 +511,20 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Notification permission prompt ───────────────────────────────
+    // Device-local on purpose and NOT part of the synced display blob: "this
+    // phone has spent its one POST_NOTIFICATIONS prompt" is a fact about this
+    // install's system dialog, not about the viewer. Syncing it would let a
+    // sibling device skip its own prompt.
+    private const val KEY_NOTIFICATION_PERMISSION_ASKED = "notification_permission_asked"
+
+    fun getNotificationPermissionAsked(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, false)
+
+    fun setNotificationPermissionAsked(context: Context, asked: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, asked).apply()
+    }
+
     private const val BINGE_STATE_PREFS = "kbstream_binge_state"
     private const val KEY_CONSECUTIVE_AUTOPLAYS = "consecutive_autoplays"
 
