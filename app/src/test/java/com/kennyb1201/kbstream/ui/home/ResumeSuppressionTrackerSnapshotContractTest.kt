@@ -69,6 +69,47 @@ class ResumeSuppressionTrackerSnapshotContractTest {
         )
     }
 
+    /**
+     * The flicker fix (field, 2026-10-18): the snapshot must be a UNION with the
+     * live map, not a copy of it. A show the suppression dropped is never
+     * re-enriched, so copying alternates between having and missing the show and
+     * the card disappears and reappears on every refresh.
+     */
+    @Test
+    fun `an ordinary refresh unions the snapshot instead of replacing it`() {
+        val vm = viewModel
+        assertTrue(
+            "the refresh must fold the live map into the snapshot",
+            vm.contains("mergeSuppressionMarks(") &&
+                vm.contains(
+                    "resumeSuppressionTrackerMarks,\n" +
+                        "                        trackerWatchedEpisodesByShow.toMap()"
+                )
+        )
+        assertFalse(
+            "a plain copy of the working map is the oscillating bug returning",
+            vm.contains("else {\n\n                    trackerWatchedEpisodesByShow.toMap()")
+        )
+    }
+
+    @Test
+    fun `a profile switch still empties the snapshot`() {
+        val vm = viewModel
+        val start = vm.indexOf("resumeSuppressionTrackerMarks =")
+        assertTrue("the snapshot assignment must exist", start >= 0)
+        val end = vm.indexOf("trackerWatchedEpisodesByShow.clear()", start)
+        assertTrue("the snapshot assignment must precede the clear", end > start)
+        val branch = vm.substring(start, end)
+        assertTrue(
+            "the hard branch must empty the snapshot - the marks belong to the profile being left",
+            branch.contains("if (hard) {\n\n                    emptyMap()")
+        )
+        assertTrue(
+            "the union must be the non-hard branch only",
+            branch.indexOf("emptyMap()") < branch.indexOf("mergeSuppressionMarks(")
+        )
+    }
+
     @Test
     fun `profile switches hard-clear the caches`() {
         assertTrue(

@@ -271,12 +271,15 @@ class HomeViewModel(
     // the enrichment pass refills trackerWatchedEpisodesByShow - so reading
     // the live map there always found it empty right after a refresh's
     // clear(), and the tracker's condemn-a-stale-resume-row path never fired
-    // on the refresh that most needed it. clearWatchedStateCaches snapshots
-    // the live map here before clearing it, so the read gets the previous
-    // cycle's completed marks instead of nothing. The live map keeps its
-    // exact refresh semantics for every other reader, and a profile switch
-    // resets this snapshot along with the map so a show id shared across
-    // profiles cannot inherit the marks of the profile being left.
+    // on the refresh that most needed it. clearWatchedStateCaches folds the
+    // live map into this snapshot before clearing it, so the read gets the
+    // previous cycle's completed marks instead of nothing. It is a UNION and
+    // not a copy (see mergeSuppressionMarks): a show the suppression dropped is
+    // never re-enriched, so a plain copy would drop its marks for one cycle
+    // and make the card flicker. The live map keeps its exact refresh
+    // semantics for every other reader, and a profile switch resets this
+    // snapshot along with the map so a show id shared across profiles cannot
+    // inherit the marks of the profile being left.
     private var resumeSuppressionTrackerMarks:
         Map<String, Set<Pair<Int, Int>>> = emptyMap()
 
@@ -3568,7 +3571,19 @@ Log.d(
 
                 } else {
 
-                    trackerWatchedEpisodesByShow.toMap()
+                    // Union, not replace: a show dropped by the suppression
+                    // never gets re-enriched, so its marks never refill this
+                    // working map - snapshotting the working map alone
+                    // alternates between having and missing the show, and the
+                    // card flickers on every refresh (see
+                    // mergeSuppressionMarks). A show that IS re-enriched still
+                    // gets its fresh set, which wins the union on a key
+                    // collision, so an unmarked episode restores its card on
+                    // the next cycle that keeps it.
+                    mergeSuppressionMarks(
+                        resumeSuppressionTrackerMarks,
+                        trackerWatchedEpisodesByShow.toMap()
+                    )
                 }
 
             trackerWatchedEpisodesByShow.clear()

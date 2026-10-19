@@ -270,6 +270,34 @@ internal fun supersededResumeRowIds(
 internal fun supersededResumeShowKey(parentId: String): String? =
     parentId.trim().takeIf { it.isNotEmpty() }?.let(::upNextIdentifier)
 
+/**
+ * The tracker-marks snapshot the NEXT up-next cycle reads: [fresh] folded into
+ * [old], never replacing it.
+ *
+ * The cycle order is "suppress first, enrich after": [supersededResumeRowIds]
+ * runs at the top, then the enrichment pass refills the live map only for the
+ * rows that SURVIVED it. A show the suppression dropped is therefore never
+ * re-enriched, so if the snapshot were the working map alone, that show's marks
+ * would vanish on the next refresh - the row would be kept, the card would come
+ * back, enrichment would refill the marks, and the refresh after that would
+ * drop it again. That is the Continue Watching flicker: the rows are never
+ * deleted, the card oscillates read-side on every refresh.
+ *
+ * A union keeps a dropped show's last-known marks, which is what makes the drop
+ * HOLD. A show that IS re-enriched still contributes its fresh set and, because
+ * [fresh] wins the union on a key collision, an episode the tracker has since
+ * unmarked stops suppressing on the next cycle that keeps the show.
+ *
+ * The accepted cost: a show that stays continuously dropped is never re-read,
+ * so a tracker mark removed elsewhere leaves its card suppressed until process
+ * death or a profile switch (the hard clear). No stop point is lost - the rows
+ * are untouched; only the card stays hidden.
+ */
+internal fun mergeSuppressionMarks(
+    old: Map<String, Set<Pair<Int, Int>>>,
+    fresh: Map<String, Set<Pair<Int, Int>>>
+): Map<String, Set<Pair<Int, Int>>> = old + fresh
+
 /** One completed episode, with the time it was watched. */
 private data class CompletedEpisode(
     val season: Int,

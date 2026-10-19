@@ -461,4 +461,53 @@ class LocalNextUpRulesTest {
             )
         )
     }
+
+    // ── the suppression snapshot is monotonic ────────────────────────────────
+
+    @Test
+    fun `a dropped show's marks survive a cycle whose fresh map lacks it`() {
+        // The suppression drops tt1 at the top of the cycle, so the enrichment
+        // pass never refills its marks - the fresh map has only tt2. Replacing
+        // the snapshot here is the flicker: the next cycle keeps the row and
+        // the cycle after drops it again.
+        val merged = mergeSuppressionMarks(
+            old = mapOf("tt1" to setOf(1 to 6)),
+            fresh = mapOf("tt2" to setOf(3 to 4))
+        )
+
+        assertEquals(setOf(1 to 6), merged["tt1"])
+        assertEquals(setOf(3 to 4), merged["tt2"])
+    }
+
+    @Test
+    fun `a dropped show stays dropped across repeated refreshes`() {
+        // The oscillation, played out: one enrichment, then refresh after
+        // refresh that refills nothing because the show is suppressed each
+        // time. A plain snapshot flips presence on every cycle; the union holds.
+        var snapshot = mergeSuppressionMarks(
+            old = emptyMap(),
+            fresh = mapOf("tt1" to setOf(1 to 6))
+        )
+        repeat(3) {
+            snapshot = mergeSuppressionMarks(old = snapshot, fresh = emptyMap())
+            assertEquals(
+                "cycle $it must keep the dropped show's marks",
+                setOf(1 to 6),
+                snapshot["tt1"]
+            )
+        }
+    }
+
+    @Test
+    fun `a re-enriched show's fresh set replaces the old`() {
+        // The show survived the suppression, so the tracker was re-read: its
+        // fresh set is the truth, not the union with what was known before
+        // (the tracker may have UNmarked an episode).
+        val merged = mergeSuppressionMarks(
+            old = mapOf("tt1" to setOf(1 to 2, 5 to 1)),
+            fresh = mapOf("tt1" to setOf(1 to 3))
+        )
+
+        assertEquals(mapOf("tt1" to setOf(1 to 3)), merged)
+    }
 }
