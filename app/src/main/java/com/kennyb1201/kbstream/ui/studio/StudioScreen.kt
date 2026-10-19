@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.mobile.StudioScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 
@@ -90,6 +91,24 @@ fun StudioScreen(
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, genre chips, logo header and rail
+    // actions, laid out for touch. One branch; the TV page below is unchanged
+    // (see StudioScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        StudioScreenMobile(
+            id = id,
+            name = name,
+            isNetwork = isNetwork,
+            providerId = providerId,
+            networkOrCompanyId = networkOrCompanyId,
+            networkIsCompany = networkIsCompany,
+            originalsCompanyId = originalsCompanyId,
+            onNavigateDetail = onNavigateDetail,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val browseGenres by viewModel.browseGenres.collectAsStateWithLifecycle()
     val selectedGenreId by viewModel.selectedGenreId.collectAsStateWithLifecycle()

@@ -51,6 +51,7 @@ import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.mobile.ProfilePickerScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
@@ -72,6 +73,17 @@ fun ProfilePickerScreen(
     onSelect: () -> Unit,
     onManage: () -> Unit
 ) {
+    // The phone entry: the same profile list, PIN gates and kids exit gate,
+    // laid out as tappable avatars. One branch; the TV page below is unchanged
+    // (see ProfilePickerScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        ProfilePickerScreenMobile(
+            onSelect = onSelect,
+            onManage = onManage
+        )
+        return
+    }
+
     val pickerContext = androidx.compose.ui.platform.LocalContext.current
     val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()
     val active by ProfileManager.activeProfile.collectAsStateWithLifecycle()

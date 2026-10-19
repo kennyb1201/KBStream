@@ -45,7 +45,11 @@ class HomeBuiltinRailWiringContractTest {
 
     private val slots by lazy { readSource(SLOTS) }
     private val home by lazy { readSource(HOME) }
-    private val dialog by lazy { readSource(DIALOG) }
+    // The manager is two files now: the dialog draws, and the shared row builder
+    // (used by the TV and phone dialogs alike) classifies every key. Read them
+    // together, because "the manager offers built-ins" is one contract no
+    // matter which file a given line lives in.
+    private val dialog by lazy { readSource(DIALOG) + readSource(DIALOG_ROWS) }
     private val viewModel by lazy { readSource(VIEW_MODEL) }
 
     @Test
@@ -229,6 +233,8 @@ class HomeBuiltinRailWiringContractTest {
             "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
         private const val DIALOG =
             "com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt"
+        private const val DIALOG_ROWS =
+            "com/kennyb1201/kbstream/ui/addons/HomeRailManagerRows.kt"
         private const val VIEW_MODEL =
             "com/kennyb1201/kbstream/ui/addons/AddonsViewModel.kt"
     }

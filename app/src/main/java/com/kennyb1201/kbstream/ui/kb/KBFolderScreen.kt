@@ -55,6 +55,18 @@ fun KBFolderScreen(
     ) -> Unit,
     viewModel: KBFolderViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, folder load and navigation calls,
+    // drawn as the collection's poster grid. One branch; the TV page below is
+    // unchanged (see KBFolderScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.KBFolderScreenMobile(
+            folderId = folderId,
+            onItemClick = onItemClick,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val state by viewModel.state.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()

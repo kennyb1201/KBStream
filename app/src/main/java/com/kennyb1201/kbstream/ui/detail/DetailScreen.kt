@@ -93,6 +93,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.size.Size
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
@@ -136,7 +137,6 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
-import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.home.UNKNOWN_SHOW_NAME
 import com.kennyb1201.kbstream.ui.home.upNextDisplayTitleOrNull
@@ -177,6 +177,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.kbAccentIndexState
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
+import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -587,6 +588,30 @@ fun DetailScreen(
     // play target (second card opened the first card's stream screen).
     viewModel: DetailViewModel = viewModel(key = "detail_${type}_$id")
 ) {
+    // The phone entry: the same ViewModel and callbacks, laid out for touch.
+    // One branch; the TV page below is unchanged (see DetailScreenMobile).
+    if (!FormFactor.isTv) {
+        DetailScreenMobile(
+            type = type,
+            id = id,
+            onNavigateDetail = onNavigateDetail,
+            onNavigateActor = onNavigateActor,
+            onNavigateStreams = onNavigateStreams,
+            // The rest of the route's own state: a Continue Watching deep link
+            // carries its target, the cover splash is painted from the art it
+            // arrived with, and both hand-backs below feed that same splash.
+            initialTarget = initialTarget,
+            initialPoster = initialPoster,
+            initialBackdrop = initialBackdrop,
+            initialClearLogo = initialClearLogo,
+            initialOverview = initialOverview,
+            onClearLogoResolved = onClearLogoResolved,
+            onBackdropResolved = onBackdropResolved,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
 
@@ -2346,36 +2371,15 @@ fun DetailScreen(
      * that UA, and the fullscreen player applies the header over its own
      * default. Null for NewPipe/Piped sources.
      */
+    // The intent shape now lives beside its phone caller (see
+    // DetailTrailerLaunch), so the two form factors cannot file a trailer two
+    // different ways.
     fun trailerPlayerIntent(
         context: Context,
         source: PlayableSource,
         videoId: String
     ): Intent =
-        Intent(context, NativePlayerActivity::class.java).apply {
-            val userAgent = when (source) {
-                is PlayableSource.Muxed -> {
-                    putExtra("stream_url", source.url)
-                    source.userAgent
-                }
-
-                is PlayableSource.Adaptive -> {
-                    putExtra("stream_url", source.videoUrl)
-                    putExtra("audio_url", source.audioUrl)
-                    source.userAgent
-                }
-            }
-
-            userAgent?.let { ua ->
-                putExtra("stream_headers", "User-Agent: $ua")
-            }
-
-            putExtra("parent_type", "movie")
-            putExtra("item_name", "Trailer")
-            // Identifies the session as a trailer so a player-visible 403 can
-            // invalidate the cached YouTube watch config (see
-            // TrailerPlayerLauncher.isYouTubeIdentityBlocked's callers).
-            putExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID, videoId)
-        }
+        DetailTrailerLaunch.intent(context, source, videoId)
 
     /**
      * Plays ONE of the title's videos, which is what the [DetailRow.MEDIA]

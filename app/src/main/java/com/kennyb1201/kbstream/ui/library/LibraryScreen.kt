@@ -78,6 +78,7 @@ import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
+import com.kennyb1201.kbstream.ui.mobile.LibraryScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
@@ -98,7 +99,7 @@ import kotlinx.coroutines.delay
  * is ViewModel state, so backing out of Detail comes back to the filter the
  * viewer left, and the recorded position is a position in that filter's grid.
  */
-private const val LIBRARY_BROWSE_SCREEN_KEY = "library"
+internal const val LIBRARY_BROWSE_SCREEN_KEY = "library"
 
 /**
  * Library tab: the user's personal lists and watchlists in one screen —
@@ -112,6 +113,17 @@ fun LibraryScreen(
     viewModel: LibraryViewModel =
         viewModel()
 ) {
+    // The phone entry: the same ViewModel, callbacks and filter/sort state,
+    // laid out for touch. One branch; the TV page below is unchanged (see
+    // LibraryScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        LibraryScreenMobile(
+            onItemClick = onItemClick,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val context = LocalContext.current
     val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()
     // A hidden title leaves My List, the merged All list and every

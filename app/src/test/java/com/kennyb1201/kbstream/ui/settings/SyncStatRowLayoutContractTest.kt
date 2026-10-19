@@ -64,7 +64,9 @@ class SyncStatRowLayoutContractTest {
     private fun syncStatRow(): String = between(
         source(SCREEN),
         "private fun SyncStatRow(label: String, value: String) {",
-        "private fun syncRelativeTime("
+        // Internal rather than private: the phone Sync pane imports this
+        // formatter instead of growing a second copy of "never"/relative time.
+        "internal fun syncRelativeTime("
     )
 
     @Test

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components.touch
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -120,6 +121,51 @@ private fun DiscoverFilterChip(
         ),
         modifier = Modifier.height(40.dp)
     )
+}
+
+/**
+ * A selectable pill for the touch screens: the season row, the Media tabs, the
+ * search suggestions and the browse category strip.
+ *
+ * A Material 3 `FilterChip` cannot carry a long press, and two of those callers
+ * need one (the season menu, and the browse chip's Add-to-Home/Hide menu), so
+ * this is the same visual pair - a surface fill with a 28% accent wash and an
+ * accent label when selected - built on [combinedClickable]. A chip with no
+ * long-press handler is an ordinary tap target.
+ *
+ * It lives here rather than in each screen because three screens now draw it
+ * and a fourth set of drift would end with one of them looking unlike the rest
+ * of the app.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun TouchChoiceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null
+) {
+    Surface(
+        shape = KBShapeCard,
+        color = if (selected) KBAccent.copy(alpha = 0.28f) else KBSurface,
+        contentColor = if (selected) KBAccent else KBTextLo,
+        modifier = modifier
+            .height(40.dp)
+            .clip(KBShapeCard)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 14.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
 }
 
 /**

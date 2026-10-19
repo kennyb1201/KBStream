@@ -54,8 +54,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -66,9 +64,6 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
-import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
-import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
-import com.kennyb1201.kbstream.data.kb.railMoveChangesOrder
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -183,186 +178,24 @@ internal fun CatalogManagerDialog(
 
     // One flat list: addon catalog rows first-class alongside collection
     // rows, arranged by the merged home order the ViewModel owns.
-    val rows: List<CatalogManagerDialogRow> =
+    // Derived by [homeRailManagerRows] rather than inline: the phone manager
+    // draws the same rows from the same function, so the two screens cannot
+    // disagree about a row, its order, or whether an arrow would move it.
+    val rows: List<HomeRailManagerRow> =
         remember(configurations, collectionsState, homeOrderVersion) {
-        val collectionByKey = collectionsState.collections.associateBy { it.key }
-        val addonByKey = configurations.associateBy {
-            KBHomeOrderPrefs.addonKeyFromManifest(
-                it.addonManifestUrl,
-                it.catalog.type,
-                it.catalog.id
+            homeRailManagerRows(
+                configurations = configurations,
+                collectionsState = collectionsState,
+                kidsMaxAge = kidsMaxAge,
+                isGuest = isGuest
             )
         }
-        // The browse rails join the list while they have chips in them: each
-        // is a rail the viewer can pin, move and hide like a collection, and a
-        // rail that cannot be seen in the manager cannot be arranged.
-        val browseRailByKey =
-            collectionsState.browseRails.associateBy { rail -> rail.key }
-        // The viewer's own built catalogs (the Catalog Builder's rule sets).
-        // They join this list because that is what makes them arrangeable: the
-        // builder is where a catalog is composed, and here is where every rail
-        // on Home is pinned, moved and hidden - one place, one arrangement.
-        val customCatalogByKey =
-            collectionsState.customCatalogs.associateBy { catalog ->
-                KBHomeOrderPrefs.customCatalogKey(catalog.id)
-            }
-        // Best-effort merged order read (same prefs the ViewModel writes), and
-        // the same rule it moves a row with: one shared function, so the list
-        // the user aims at is the list the move acts on. Deriving it here as
-        // well is what let the two disagree - the Browse rails were listed
-        // last here while the move buttons treated them as already first, so
-        // pressing UP on one did nothing and they could not be interleaved
-        // with the catalogs at all.
-        //
-        // The default order is the contract [mergedHomeRailKeys] documents:
-        // Browse rails, then catalogs, then collections.
-        //
-        // Every rail is part of the one order, the Top Today rows included:
-        // they are built-ins now (see KBHomeOrderPrefs.BUILTIN_KEYS), so they
-        // lead this list the way Home draws them and can be moved like anything
-        // else - no rail has a position Home does not let the manager aim at.
-        val prefs = KBHomeOrderPrefs.readOrder()
-        // Built-ins lead, exactly as they do in the ViewModel's copy of this
-        // list and on Home itself: the manager draws and moves the same merged
-        // list Home renders (see mergedHomeRailKeys).
-        //
-        // They are the PROFILE's built-ins, not the full registry: a kids
-        // profile has no Top Today rows on Home at all, and a guest profile has
-        // its own rails after them, so what is aimable here is exactly what
-        // Home draws for this profile (see KBHomeOrderPrefs.builtinKeysFor) - an
-        // arrow next to a rail nobody can see would move it two drawn slots.
-        //
-        // Every one of those rows can be moved, hidden and renamed, the app's
-        // own TMDB rails included: that is the whole reason the kids and guest
-        // rails are keyed as built-ins rather than by a base URL they do not
-        // have.
-        val movableDefaults = KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest) +
-            browseRailByKey.keys.toList() +
-            customCatalogByKey.keys.toList() +
-            addonByKey.keys +
-            collectionsState.collections.map { it.key }
-        val orderedKeys = mergedHomeRailKeys(prefs, movableDefaults)
-
-        orderedKeys.mapNotNull { key ->
-            val browseRail = browseRailByKey[key]
-            val row = if (browseRail != null) {
-                // isCollection is the flag that carries the PIN control, and
-                // this row has one. Its hidden state is the stored flag
-                // alone: unlike a collection, a never-arranged browse rail
-                // renders (under the Top Today rows), so it must not be
-                // listed as hidden for want of an arrangement entry.
-                //
-                // The legacy shared row's flags are deliberately not folded
-                // in: this is the list a pin or a move is written from, and
-                // writing the rail's OWN key is what takes it over from the
-                // row the chips used to share.
-                CatalogManagerDialogRow(
-                    key = key,
-                    isCollection = true,
-                    config = null,
-                    collectionKey = key,
-                    title = browseRail.title,
-                    subtitle = "Browse · ${browseRail.shortcuts.size} saved",
-                    isPinned = key in prefs.pinned,
-                    isHidden = key in prefs.hiddenSet,
-                    isBrowseRail = true
-                )
-            } else if (KBHomeOrderPrefs.isBuiltinKey(key)) {
-                // A built-in rail (Continue Watching, Upcoming Schedule):
-                // orderable and hideable, never pinnable - which is why
-                // isCollection stays false, and with it the pin control the
-                // row would otherwise draw. Rename still applies, and its
-                // title is the arrangement's override when there is one.
-                CatalogManagerDialogRow(
-                    key = key,
-                    isCollection = false,
-                    config = null,
-                    collectionKey = null,
-                    title = KBHomeOrderPrefs.railTitle(
-                        prefs,
-                        key,
-                        KBHomeOrderPrefs.builtinDefaultTitle(key).orEmpty()
-                    ),
-                    // The default name stays on the row under a rename, so a
-                    // renamed rail is still recognizable as the one the
-                    // viewer renamed.
-                    subtitle = "Built-in · " +
-                        KBHomeOrderPrefs.builtinDefaultTitle(key).orEmpty(),
-                    isPinned = false,
-                    isHidden = key in prefs.hiddenSet,
-                    isBuiltinRail = true
-                )
-            } else if (KBHomeOrderPrefs.isCustomCatalogKey(key)) {
-                // A built catalog: no configuration object and no pin control
-                // (exactly like an add-on catalog), but it gets the reorder
-                // arrows and the rename button, which is why it is flagged as
-                // a "built-in" row - those callbacks are generic by key, and
-                // this rail lives in the same key space they write.
-                val catalog = customCatalogByKey[key] ?: return@mapNotNull null
-                CatalogManagerDialogRow(
-                    key = key,
-                    isCollection = false,
-                    config = null,
-                    collectionKey = null,
-                    title = KBHomeOrderPrefs.railTitle(prefs, key, catalog.name),
-                    subtitle = "Catalog \u00b7 " + catalogSummaryLine(catalog),
-                    isPinned = key in prefs.pinned,
-                    isHidden = key in prefs.hiddenSet,
-                    isBuiltinRail = true,
-                    isCustomCatalog = true
-                )
-            } else if (key.startsWith("kb:")) {
-                val collection = collectionByKey[key] ?: return@mapNotNull null
-                // Hidden/pinned derive from the FRESH home-order prefs (the
-                // same rule Home and the ViewModel use: hidden-set membership,
-                // or never-arranged counts as hidden) — not the async
-                // collectionsState snapshot. That snapshot reloads a beat
-                // after a toggle, which left the row in its old section for
-                // one frame and dumped D-pad focus at the top of the dialog.
-                val arranged = prefs.pinned.toSet() + prefs.order.toSet() + prefs.hiddenSet
-                CatalogManagerDialogRow(
-                    key = key,
-                    isCollection = true,
-                    config = null,
-                    collectionKey = key,
-                    title = collection.title,
-                    subtitle = "Collection · ${collection.folderCount} folders",
-                    isPinned = key in prefs.pinned,
-                    isHidden = key in prefs.hiddenSet || key !in arranged
-                )
-            } else {
-                val config = addonByKey[key] ?: return@mapNotNull null
-                CatalogManagerDialogRow(
-                    key = key,
-                    isCollection = false,
-                    config = config,
-                    collectionKey = null,
-                    title = config.catalog.displayName.ifBlank { config.catalog.id },
-                    subtitle = "${config.catalog.type} · ${config.addonName}",
-                    isPinned = key in prefs.pinned.toSet(),
-                    isHidden = !config.catalog.showOnHome
-                )
-            }
-            // Exact, not a guess: an arrow is offered when pressing it would
-            // actually change where the rail sits on Home, and the same
-            // transforms decide that as perform the move (see
-            // railMoveChangesOrder). The per-kind heuristics this replaced left
-            // arrows live that did nothing at all - a catalog with nothing but
-            // pinned rails above it, and the loader-positioned rows.
-            row.copy(
-                canMoveTop = railMoveChangesOrder(prefs, movableDefaults, key, Int.MIN_VALUE),
-                canMoveUp = railMoveChangesOrder(prefs, movableDefaults, key, -1),
-                canMoveDown = railMoveChangesOrder(prefs, movableDefaults, key, +1),
-                canMoveBottom = railMoveChangesOrder(prefs, movableDefaults, key, Int.MAX_VALUE)
-            )
-        }
-    }
 
     val visibleRows = rows.filter { !it.isHidden }
     val hiddenRows = rows.filter { it.isHidden }
     val allCatalogsVisible = configurations.all { it.catalog.showOnHome }
 
-    fun moveRow(row: CatalogManagerDialogRow, slot: CatalogRowFocus.Slot, delta: Int) {
+    fun moveRow(row: HomeRailManagerRow, slot: CatalogRowFocus.Slot, delta: Int) {
         val fromIndex = visibleRows.indexOfFirst { it.key == row.key }
         if (fromIndex < 0) return
         // Arrange focus restore FIRST: the ViewModel write rebuilds the row
@@ -383,7 +216,7 @@ internal fun CatalogManagerDialog(
      * SHOW ALL / DONE row). Pin the toggle of the neighbor row (next, or
      * previous when hiding the last) so focus stays in the list instead.
      */
-    fun hideRowKeepFocus(row: CatalogManagerDialogRow) {
+    fun hideRowKeepFocus(row: HomeRailManagerRow) {
         val index = visibleRows.indexOfFirst { it.key == row.key }
         val neighborKey = when {
             visibleRows.size <= 1 -> null // list empties; let focus rest
@@ -424,7 +257,7 @@ internal fun CatalogManagerDialog(
      * without any focus travel. Nothing to pin when this empties the
      * hidden section — focus rests (dialog header), same as hide.
      */
-    fun showRowKeepFocus(row: CatalogManagerDialogRow) {
+    fun showRowKeepFocus(row: HomeRailManagerRow) {
         val index = hiddenRows.indexOfFirst { it.key == row.key }
         val neighborKey = when {
             hiddenRows.size <= 1 -> null
@@ -786,7 +619,7 @@ internal fun ConfirmRemoveCollectionDialog(
 
 @Composable
 private fun UnifiedManagerRow(
-    row: CatalogManagerDialogRow,
+    row: HomeRailManagerRow,
     position: Int,
     rowFocus: CatalogRowFocus,
     isHiddenSection: Boolean = false,
@@ -967,46 +800,6 @@ private fun UnifiedManagerRow(
         }
     }
 }
-
-/** Plain data holder for a unified manager row. */
-private data class CatalogManagerDialogRow(
-    val key: String,
-    val isCollection: Boolean,
-    val config: CatalogConfiguration?,
-    val collectionKey: String?,
-    val title: String,
-    val subtitle: String,
-    val isPinned: Boolean,
-    val isHidden: Boolean,
-    /**
-     * A browse rail (genres & tags, services & networks, ...) rather than a
-     * collection: the kind tag says BROWSE, and [isCollection] carries the pin
-     * control both kinds use.
-     */
-    val isBrowseRail: Boolean = false,
-    /**
-     * A built-in rail this app draws itself (Continue Watching, Upcoming
-     * Schedule): no configuration object, no pin control, but it does get the
-     * reorder arrows and the rename button.
-     */
-    val isBuiltinRail: Boolean = false,
-    /**
-     * A built catalog (the Catalog Builder's rule sets). It is arranged through
-     * the same generic key-based callbacks a built-in row uses, so
-     * [isBuiltinRail] is true for it too - this flag exists for the KIND TAG
-     * and nothing else, because calling a hand-composed catalog "BUILT-IN"
-     * would name the wrong feature.
-     */
-    val isCustomCatalog: Boolean = false,
-    /**
-     * Whether each reorder press would actually change where the rail sits on
-     * Home, decided by the same transforms that perform the move.
-     */
-    val canMoveTop: Boolean = false,
-    val canMoveUp: Boolean = false,
-    val canMoveDown: Boolean = false,
-    val canMoveBottom: Boolean = false
-)
 
 /** Tiny kind tag: collections, catalogs and the browse rails share one list. */
 @Composable

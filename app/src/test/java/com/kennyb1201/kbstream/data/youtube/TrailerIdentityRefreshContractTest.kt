@@ -52,6 +52,7 @@ class TrailerIdentityRefreshContractTest {
     private val launcher: String by lazy { readSource(TRAILER_LAUNCHER) }
     private val player: String by lazy { readSource(NATIVE_PLAYER) }
     private val detail: String by lazy { readSource(DETAIL_SCREEN) }
+    private val detailTrailer: String by lazy { readSource(DETAIL_TRAILER_LAUNCH) }
     private val extractor: String by lazy { readSource(INNER_TUBE) }
 
     /** The hero player's error handler, from its first statement to the listener's end. */
@@ -184,9 +185,18 @@ class TrailerIdentityRefreshContractTest {
     @Test
     fun `a trailer session is identifiable in the player`() {
         assertTrue(
-            "the detail screen must tag the launch as a trailer",
-            flat(detail).contains(
+            "the detail screen's trailer launch must tag the session as a trailer. " +
+                "The intent lives in the shared DetailTrailerLaunch, which the TV " +
+                "page and the phone's Media row both go through.",
+            flat(detailTrailer).contains(
                 "putExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID, videoId)"
+            )
+        )
+        assertTrue(
+            "the TV page must still build its trailer intent through that one " +
+                "place, so the tag cannot go missing on one form factor",
+            flat(detail).contains(
+                "DetailTrailerLaunch.intent(context, source, videoId)"
             )
         )
         assertTrue(
@@ -278,5 +288,7 @@ class TrailerIdentityRefreshContractTest {
         const val INNER_TUBE = "${YOUTUBE}InnerTubeExtractor.kt"
         const val NATIVE_PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val DETAIL_SCREEN = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
+        const val DETAIL_TRAILER_LAUNCH =
+            "com/kennyb1201/kbstream/ui/detail/DetailTrailerLaunch.kt"
     }
 }

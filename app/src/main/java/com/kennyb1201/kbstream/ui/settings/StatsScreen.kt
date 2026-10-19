@@ -61,6 +61,17 @@ fun StatsScreen(
     onBack: () -> Unit,
     viewModel: StatsViewModel = viewModel()
 ) {
+    // The phone entry: the same view model, the same numbers, laid out for a
+    // finger. One branch; the TV page below is unchanged (see
+    // StatsScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.StatsScreenMobile(
+            onBack = onBack,
+            viewModel = viewModel
+        )
+        return
+    }
+
     BackHandler(onBack = onBack)
 
     val state by viewModel.state.collectAsStateWithLifecycle()

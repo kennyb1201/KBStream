@@ -210,8 +210,12 @@ class KBFolderReturnFocusContractTest {
     @Test
     fun `the folder filters hidden titles, so a Hide is not a visual no-op`() {
         assertTrue(
+            // Internal, not private: the phone page reads the same helper rather
+            // than growing a second hidden-title rule (see
+            // KBFolderScreenMobile and its contract test). The claim below - one
+            // source, every layout reading it - is unchanged.
             "read at the source of every layout, not in one of them",
-            layouts.contains("private fun visibleFolderRails(") &&
+            layouts.contains("fun visibleFolderRails(") &&
                 layouts.contains("HiddenTitles.hides(")
         )
         assertEquals(

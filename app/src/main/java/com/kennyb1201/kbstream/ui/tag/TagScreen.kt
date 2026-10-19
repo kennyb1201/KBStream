@@ -84,6 +84,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.mobile.TagScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 
@@ -96,6 +97,21 @@ fun TagScreen(
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: TagViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, rails and card actions, laid out for
+    // touch. One branch; the TV page below is unchanged (see
+    // TagScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        TagScreenMobile(
+            id = id,
+            name = name,
+            isKeyword = isKeyword,
+            type = type,
+            onNavigateDetail = onNavigateDetail,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()

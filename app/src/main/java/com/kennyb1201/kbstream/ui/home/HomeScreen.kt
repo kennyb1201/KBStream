@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.browseChipSuccessor
 import com.kennyb1201.kbstream.data.kb.chipKey
@@ -130,6 +131,7 @@ import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
+import com.kennyb1201.kbstream.ui.mobile.HomeScreenMobile
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
@@ -3314,6 +3316,27 @@ fun HomeScreen(
     viewModel: HomeViewModel =
         viewModel()
 ) {
+    // The phone entry: same callbacks, same ViewModel, a touch-first layout.
+    // This is the one branch the port adds to this file - everything below is
+    // the TV screen, unchanged (see HomeScreenMobile for what a finger gets).
+    if (!FormFactor.isTv) {
+        HomeScreenMobile(
+            onItemClick = onItemClick,
+            onOpenDetailTarget = onOpenDetailTarget,
+            onSearch = onSearch,
+            onOpenGuide = onOpenGuide,
+            onOpenLibrary = onOpenLibrary,
+            onOpenSettings = onOpenSettings,
+            onSwitchProfile = onSwitchProfile,
+            onOpenCatalogGrid = onOpenCatalogGrid,
+            onOpenKBFolder = onOpenKBFolder,
+            onOpenBrowseShortcut = onOpenBrowseShortcut,
+            onManageRails = onManageRails,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val context = LocalContext.current
 
     // The artwork the viewer chose for the titles the rails show (see

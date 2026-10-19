@@ -36,7 +36,9 @@ class ActorReturnFocusContractTest {
     fun `the page keys itself by the actor it was opened for`() {
         assertTrue(
             "two actors' filmographies must not read each other's record",
-            source.contains("private fun actorBrowseScreenKey(actorId: Int): String = \"actor:\$actorId\"") &&
+            // Internal, not private: the phone page builds the same key (see
+            // ActorScreenMobile), so one page still has one key spelled once.
+            source.contains("internal fun actorBrowseScreenKey(actorId: Int): String = \"actor:\$actorId\"") &&
                 source.contains("val browseReturnKey = remember(actorId) { actorBrowseScreenKey(actorId) }")
         )
     }

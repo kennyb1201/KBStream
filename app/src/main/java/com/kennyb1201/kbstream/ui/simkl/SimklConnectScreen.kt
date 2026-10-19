@@ -36,6 +36,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.mobile.SimklConnectScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -55,6 +56,18 @@ fun SimklConnectScreen(
     onBack: () -> Unit,
     vm: SimklViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, device-code flow, counts and
+    // disconnect gate, laid out for touch. One branch; the TV page below is
+    // unchanged (see SimklConnectScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        SimklConnectScreenMobile(
+            modifier = modifier,
+            onBack = onBack,
+            vm = vm
+        )
+        return
+    }
+
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     // Raised by DISCONNECT; see the button's own note for what it is protecting.

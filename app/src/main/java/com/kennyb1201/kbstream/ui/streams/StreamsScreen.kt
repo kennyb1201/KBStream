@@ -58,6 +58,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
@@ -66,6 +67,7 @@ import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.mobile.StreamsScreenMobile
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
@@ -110,6 +112,26 @@ fun StreamsScreen(
     ) -> Unit,
     viewModel: StreamsViewModel = viewModel()
 ) {
+    // Phase 2's screen rule: one branch at the entry, the phone layout in a
+    // separate tv-free file, the same ViewModel and the same auto-play rules
+    // behind both. The D-pad picker below is untouched by the port.
+    if (!FormFactor.isTv) {
+        StreamsScreenMobile(
+            title = title,
+            displayName = displayName,
+            season = season,
+            episode = episode,
+            runtimeMinutes = runtimeMinutes,
+            backdropUrl = backdropUrl,
+            tmdbId = tmdbId,
+            clearLogoUrl = clearLogoUrl,
+            suppressAutoSelect = suppressAutoSelect,
+            onStreamSelected = onStreamSelected,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val streams by viewModel.streams.collectAsStateWithLifecycle()
     // The add-on behind each source, in the same order as [streams]: it goes to
     // the player so an add-on whose links are dead for that session can be

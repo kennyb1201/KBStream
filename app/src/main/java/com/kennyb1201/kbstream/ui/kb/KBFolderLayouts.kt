@@ -455,7 +455,7 @@ internal fun kbFolderCardKey(item: KBContentItem): String = "${item.type}:${item
  * Decade, Studio, Tag, Collection and the Library; a rail it empties is
  * dropped with it, which is what the elsewhere-shared rails already do.
  */
-private fun visibleFolderRails(
+internal fun visibleFolderRails(
     rails: List<KBRail>,
     hidden: Set<String>,
     resolvedIds: Map<String, String>

@@ -116,6 +116,7 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.mobile.SportsHubScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -207,6 +208,20 @@ fun SportsHubScreen(
     initialDetailGameId: String? = null,
     initialDetailTournamentId: String? = null,
 ) {
+    // The phone entry: the same ViewModel, the same rule objects and the same
+    // launch callback, laid out for touch. One branch; the TV page below is
+    // unchanged (see SportsHubScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        SportsHubScreenMobile(
+            viewModel = viewModel,
+            modifier = modifier,
+            onPlayChannels = onPlayChannels,
+            initialDetailGameId = initialDetailGameId,
+            initialDetailTournamentId = initialDetailTournamentId
+        )
+        return
+    }
+
     val enabled by viewModel.enabledLeagues.collectAsStateWithLifecycle()
     val leagueOrder by viewModel.leagueOrder.collectAsStateWithLifecycle()
     // The loaded sections, ESPN's own order. Ordering is the BODY's business,

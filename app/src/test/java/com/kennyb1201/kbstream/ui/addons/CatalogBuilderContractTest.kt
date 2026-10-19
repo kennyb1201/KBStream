@@ -63,6 +63,10 @@ class CatalogBuilderContractTest {
         const val HOME_SLOTS = "com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt"
         const val ADDONS_VM = "com/kennyb1201/kbstream/ui/addons/AddonsViewModel.kt"
         const val MANAGER = "com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt"
+        // The rows themselves are built in their own file now - the TV dialog and
+        // the phone dialog both call it, so a custom key is classified once.
+        const val MANAGER_ROWS =
+            "com/kennyb1201/kbstream/ui/addons/HomeRailManagerRows.kt"
         const val ADDONS_SCREEN = "com/kennyb1201/kbstream/ui/addons/AddonsScreen.kt"
         const val SETTINGS_SCREEN =
             "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
@@ -455,9 +459,10 @@ class CatalogBuilderContractTest {
             vm.contains("customCatalogs = CustomCatalogStore.list(context)")
         )
         val dialog = squash(source(MANAGER))
+        val rows = squash(source(MANAGER_ROWS))
         assertTrue(
-            "the dialog has to draw a row for a custom key",
-            dialog.contains("KBHomeOrderPrefs.isCustomCatalogKey(key)")
+            "the manager has to draw a row for a custom key",
+            rows.contains("KBHomeOrderPrefs.isCustomCatalogKey(key)")
         )
         assertTrue(
             "and it must not call a hand-composed catalog BUILT-IN",

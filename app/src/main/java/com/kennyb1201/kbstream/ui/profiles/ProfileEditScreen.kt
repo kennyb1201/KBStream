@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.mobile.ProfileEditScreenMobile
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -124,6 +125,17 @@ fun ProfileEditScreen(
     editingProfileId: String? = null,
     onDone: () -> Unit
 ) {
+    // The phone entry: the same profile writes, PIN validation and parent-PIN
+    // gates, laid out as a touch form. One branch; the TV page below is
+    // unchanged (see ProfileEditScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        ProfileEditScreenMobile(
+            editingProfileId = editingProfileId,
+            onDone = onDone
+        )
+        return
+    }
+
     val context = androidx.compose.ui.platform.LocalContext.current
     val feedback = rememberKBFeedback()
     val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()

@@ -375,6 +375,13 @@ app/src/main/java/com/kennyb1201/kbstream/
   domain/          # stream engine (ranking, auto-select)
   ui/              # Compose for Android TV screens (home, detail, player,
                    # search, profiles, settings, addons, IPTV, streams)
+  ui/mobile/       # the phone layouts of the ported screens (home, detail,
+                   # streams, guide, search, library, the genre/studio/decade
+                   # browse pages, collections, actor pages, Simkl connect, the
+                   # profile picker/editor, add-ons, the catalog builder, the
+                   # sports hub, Settings, viewing stats and imported KB
+                   # collections); see
+                   # docs/mobile_port.md for status and the deferred-work list
   work/            # background workers (EPG refresh, Simkl sync, addons), plus
                    # WorkPolicies: the retry and reminder-arming decisions they
                    # make, which is the part of this package a JVM test can reach
@@ -420,6 +427,8 @@ supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS + Realtime SQL reference
                    #   supabase_sync_rls.sql  -- schema + per-user RLS policies
                    #   supabase_realtime.sql -- enable live sync (publication)
+                   # mobile_port.md -- the phone port's status, and every item
+                   #   deliberately deferred inside a ported screen
 ```
 
 ## Notes

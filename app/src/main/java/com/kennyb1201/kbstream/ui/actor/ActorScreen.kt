@@ -62,6 +62,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.mobile.ActorScreenMobile
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -104,15 +105,15 @@ import kotlinx.coroutines.delay
  * carries, and the per-rail filter matches the same value (see
  * [BrowseReturnFocus]).
  */
-private const val ACTOR_MOVIES_RAIL = "moviesrow"
-private const val ACTOR_TV_RAIL = "tvrow"
+internal const val ACTOR_MOVIES_RAIL = "moviesrow"
+internal const val ACTOR_TV_RAIL = "tvrow"
 
 /**
  * The Actor page's own key, the only place it is spelled out (see
  * [BrowseReturnFocus]). One page per person: two actors' filmographies must not
  * read each other's record.
  */
-private fun actorBrowseScreenKey(actorId: Int): String = "actor:$actorId"
+internal fun actorBrowseScreenKey(actorId: Int): String = "actor:$actorId"
 
 @OptIn(ExperimentalFoundationApi::class)
 private class ActorBringIntoViewSpec(
@@ -161,6 +162,18 @@ fun ActorScreen(
     onNavigateDetail: (String, String) -> Unit,
     viewModel: ActorViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, filmography sorting, hidden-title
+    // filter and credit actions, laid out for touch. One branch; the TV page
+    // below is unchanged (see ActorScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        ActorScreenMobile(
+            actorId = actorId,
+            onNavigateDetail = onNavigateDetail,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val scope = rememberCoroutineScope()
     val person by viewModel.person.collectAsStateWithLifecycle()
     val resolvedCreditIds by viewModel.resolvedCreditIds.collectAsStateWithLifecycle()

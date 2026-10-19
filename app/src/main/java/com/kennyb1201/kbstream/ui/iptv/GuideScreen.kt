@@ -81,6 +81,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
@@ -102,6 +103,7 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.mobile.GuideScreenMobile
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
@@ -157,6 +159,23 @@ fun GuideScreen(
      */
     onOpenSports: (() -> Unit)? = null
 ) {
+    // Phase 2's screen rule: one branch at the entry, the phone layout in a
+    // separate tv-free file, the same ViewModel and callbacks behind both. The
+    // D-pad guide below is untouched by the port.
+    if (!FormFactor.isTv) {
+        GuideScreenMobile(
+            onBack = onBack,
+            onPlayChannel = onPlayChannel,
+            onPlayCatchup = onPlayCatchup,
+            onOpenSports = onOpenSports,
+            defaultPlaylistUrl = defaultPlaylistUrl,
+            defaultEpgUrl = defaultEpgUrl,
+            defaultPlaylistName = defaultPlaylistName,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val playlist by viewModel.playlist.collectAsStateWithLifecycle()
     val visibleChannels by viewModel.visibleChannels.collectAsStateWithLifecycle()
     // Channels whose guide row has actually been queried. Used to keep a

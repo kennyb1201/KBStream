@@ -85,6 +85,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.mobile.DecadeScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 
@@ -102,6 +103,19 @@ fun DecadeScreen(
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: DecadeViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, genre chips and rail actions, laid
+    // out for touch. One branch; the TV page below is unchanged (see
+    // DecadeScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        DecadeScreenMobile(
+            decadeStart = decadeStart,
+            name = name,
+            onNavigateDetail = onNavigateDetail,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val browseGenres by viewModel.browseGenres.collectAsStateWithLifecycle()
     val selectedGenreId by viewModel.selectedGenreId.collectAsStateWithLifecycle()

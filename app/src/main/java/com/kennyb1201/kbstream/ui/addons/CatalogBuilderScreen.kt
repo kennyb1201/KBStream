@@ -77,6 +77,7 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
+import com.kennyb1201.kbstream.ui.mobile.CatalogBuilderScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -100,6 +101,14 @@ fun CatalogBuilderScreen(
     onBack: () -> Unit,
     viewModel: CatalogBuilderViewModel = viewModel()
 ) {
+    // The phone entry: the same catalog store, draft and rule vocabulary, laid
+    // out for touch. One branch; the TV page below is unchanged (see
+    // CatalogBuilderScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        CatalogBuilderScreenMobile(onBack = onBack, viewModel = viewModel)
+        return
+    }
+
     BackHandler(onBack = onBack)
 
     val state by viewModel.state.collectAsStateWithLifecycle()

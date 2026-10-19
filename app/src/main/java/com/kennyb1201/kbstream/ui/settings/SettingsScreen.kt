@@ -281,6 +281,22 @@ fun SettingsScreen(
     /** Opens the read-only Viewing stats screen (finished watches). */
     onOpenStats: () -> Unit = {}
 ) {
+    // The phone entry: the same pane IA and the same preference keys, drawn as
+    // a grouped page with one pane pushed at a time. One branch; the TV page
+    // below is unchanged (see SettingsScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.SettingsScreenMobile(
+            onBack = onBack,
+            onOpenAddons = onOpenAddons,
+            onOpenSimkl = onOpenSimkl,
+            onOpenProfiles = onOpenProfiles,
+            onOpenCatalogManager = onOpenCatalogManager,
+            onOpenCatalogBuilder = onOpenCatalogBuilder,
+            onOpenStats = onOpenStats
+        )
+        return
+    }
+
     val context = LocalContext.current
 
     // The account's display prefs, as of the last real change to them.
@@ -3858,7 +3874,7 @@ private fun SyncStatRow(label: String, value: String) {
     }
 }
 
-private fun syncRelativeTime(timestampMs: Long): String =
+internal fun syncRelativeTime(timestampMs: Long): String =
     if (timestampMs <= 0L) {
         "never"
     } else {

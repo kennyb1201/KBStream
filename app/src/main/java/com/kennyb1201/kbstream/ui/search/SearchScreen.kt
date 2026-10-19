@@ -49,6 +49,7 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
+import com.kennyb1201.kbstream.ui.mobile.SearchScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
@@ -71,6 +72,25 @@ fun SearchScreen(
     listState: LazyListState = rememberLazyListState(),
     viewModel: SearchViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, callbacks and hoisted list state,
+    // laid out for touch. One branch; the TV page below is unchanged (see
+    // SearchScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        SearchScreenMobile(
+            onItemClick = onItemClick,
+            onPersonClick = onPersonClick,
+            onStudioClick = onStudioClick,
+            onCollectionClick = onCollectionClick,
+            onOpenTagScreen = onOpenTagScreen,
+            onOpenStudioScreen = onOpenStudioScreen,
+            onOpenCollectionScreen = onOpenCollectionScreen,
+            onOpenDecadeScreen = onOpenDecadeScreen,
+            listState = listState,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val query by viewModel.searchQuery.collectAsStateWithLifecycle()
     val resultsRaw by viewModel.results.collectAsStateWithLifecycle()
     val actorResults by viewModel.actorResults.collectAsStateWithLifecycle()

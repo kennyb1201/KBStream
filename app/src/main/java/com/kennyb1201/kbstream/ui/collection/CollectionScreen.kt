@@ -69,6 +69,7 @@ import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.mobile.CollectionScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
 
@@ -85,6 +86,19 @@ fun CollectionScreen(
     onNavigateDetail: (type: String, id: String) -> Unit,
     viewModel: CollectionViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, release order, hidden-title filter
+    // and part actions, laid out for touch. One branch; the TV page below is
+    // unchanged (see CollectionScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        CollectionScreenMobile(
+            collectionId = collectionId,
+            collectionName = collectionName,
+            onNavigateDetail = onNavigateDetail,
+            viewModel = viewModel
+        )
+        return
+    }
+
     val collectionRaw by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()

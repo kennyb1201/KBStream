@@ -89,6 +89,14 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 fun AddonsScreen(
     viewModel: AddonsViewModel = viewModel()
 ) {
+    // The phone entry: the same activity-scoped ViewModel and the same
+    // management calls, laid out as a list with a detail sheet. One branch; the
+    // TV page below is unchanged (see AddonsScreenMobile).
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.AddonsScreenMobile(viewModel = viewModel)
+        return
+    }
+
     val context = LocalContext.current
     val addons by viewModel.addons.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

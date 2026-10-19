@@ -1,0 +1,684 @@
+package com.kennyb1201.kbstream.ui.mobile
+
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.LibraryList
+import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.simkl.simklItemUrl
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
+import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
+import com.kennyb1201.kbstream.ui.library.LIBRARY_BROWSE_SCREEN_KEY
+import com.kennyb1201.kbstream.ui.library.LibraryFilter
+import com.kennyb1201.kbstream.ui.library.LibrarySort
+import com.kennyb1201.kbstream.ui.library.LibraryViewModel
+import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.MobileTheme
+import kotlinx.coroutines.delay
+
+/**
+ * Library, for a finger.
+ *
+ * The TV page is one strip of chips over a poster grid, with a side rail for
+ * personal lists. The phone keeps every piece of that - the same
+ * activity-scoped [LibraryViewModel], the same hidden-title filter, the same
+ * four filters, the UNWATCHED toggle, the four sort fields with their
+ * direction, the same per-source menus and the same delete confirmation - and
+ * lays it out as one vertical grid whose header, chip strips and list rail
+ * span the full width.
+ *
+ * The grid is the ROOT scrollable on purpose: a `LazyVerticalGrid` with
+ * full-span header items is the touch-native shape here, whereas a column with
+ * a nested grid would give the page two scrollbars.
+ *
+ * What is ported, not just listed:
+ *
+ *  - **return-to-poster**: a tap records the same [BrowseReturnTarget] the TV
+ *    grid records, so backing out of a Detail page reopens the library on the
+ *    poster that was pressed (scrolled to it, without a D-pad to focus);
+ *  - **personal lists**: the rail becomes a vertical list of lists with their
+ *    counts and source, a selected row highlights, local rows carry the
+ *    long-press delete (confirmed by a dialog, never on the press itself), and
+ *    "+ NEW LIST" opens an inline name field;
+ *  - **the menu**: Go to Details, watched-independent hide, Add to list, and
+ *    the per-source removal row - from this list, from the library, or the
+ *    explanatory "Managed on Simkl" row with its attribution link;
+ *  - **a row with no ids** says so instead of swallowing the tap: a tracker
+ *    entry can carry only a title and a poster, and those have no detail page.
+ *
+ * The TV's focus plumbing (per-card requesters, successor keys, the return
+ * focus loop) has no phone twin: hiding or removing a card just removes it.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun LibraryScreenMobile(
+    onItemClick: (mediaType: String, id: String) -> Unit,
+    viewModel: LibraryViewModel = viewModel()
+) {
+    MobileTheme {
+        val context = LocalContext.current
+
+        val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()
+        // A hidden title leaves My List, the merged All list and every personal
+        // list at once - the TV's filter, applied to the same four lists.
+        val hiddenTitleKeys = rememberHiddenTitleKeys()
+        fun hiddenItem(item: LibraryItem): Boolean =
+            HiddenTitles.hides(
+                hiddenTitleKeys,
+                item.mediaType,
+                item.title,
+                item.year,
+                item.imdbId,
+                item.tmdbId?.toString()
+            )
+        val state = remember(stateRaw, hiddenTitleKeys) {
+            stateRaw.copy(
+                localItems = stateRaw.localItems.filterNot(::hiddenItem),
+                allItems = stateRaw.allItems.filterNot(::hiddenItem),
+                watchlistItems = stateRaw.watchlistItems.filterNot(::hiddenItem),
+                selectedListItems = stateRaw.selectedListItems.filterNot(::hiddenItem)
+            )
+        }
+
+        // One grid per filter, exactly as on TV: switching filters is a new
+        // list, and the old scroll offset means nothing in it.
+        val gridState = remember(state.filter) { LazyGridState() }
+        var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
+
+        var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
+        var listPendingDelete by remember { mutableStateOf<LibraryList?>(null) }
+        var showCreateField by remember { mutableStateOf(false) }
+        var newListName by remember { mutableStateOf("") }
+        var notice by remember { mutableStateOf<String?>(null) }
+
+        // A row with no ids has no detail page; say so instead of a dead tap.
+        LaunchedEffect(notice) {
+            if (notice != null) {
+                delay(2500)
+                notice = null
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            // Re-read the list on every visit: the ViewModel is activity-scoped,
+            // and without this a title added from a Detail page (or removed
+            // here) never appeared.
+            viewModel.refresh()
+            // Then read back where this page's Detail was opened from, if it
+            // was opened from here.
+            returnTarget = BrowseReturnFocus.consume(LIBRARY_BROWSE_SCREEN_KEY)
+        }
+
+        val items = remember(state) {
+            when (state.filter) {
+                LibraryFilter.ALL -> state.allItems
+                LibraryFilter.MY_LIST -> state.localItems
+                LibraryFilter.WATCHLIST -> state.watchlistItems
+                LibraryFilter.LISTS -> state.selectedListItems
+            }
+        }
+
+        // Puts the grid back on the poster the viewer pressed. The rows can
+        // land after this grid composes (the refresh is in flight), so the
+        // record is held until the item is in the list.
+        LaunchedEffect(returnTarget, items) {
+            val target = returnTarget ?: return@LaunchedEffect
+            val index = items.indexOfFirst {
+                LocalLibraryStore.dedupeKey(it) == target.itemId
+            }.takeIf { it >= 0 }
+                ?: target.position.takeIf { it in items.indices }
+                ?: return@LaunchedEffect
+            runCatching { gridState.scrollToItem(index) }
+            returnTarget = null
+        }
+
+        fun openItem(item: LibraryItem, index: Int) {
+            val navigationId = item.navigationId
+            if (navigationId == null) {
+                notice = "No details page for \"${item.title}\""
+                return
+            }
+            BrowseReturnFocus.record(
+                BrowseReturnTarget(
+                    screenKey = LIBRARY_BROWSE_SCREEN_KEY,
+                    itemId = LocalLibraryStore.dedupeKey(item),
+                    position = index
+                )
+            )
+            onItemClick(item.mediaType, navigationId)
+        }
+
+        val emptyText = when (state.filter) {
+            LibraryFilter.ALL -> if (state.loading) {
+                "Loading…"
+            } else {
+                "Nothing here yet. Long-press any poster and choose " +
+                    "\"Add to list…\" — My List, watchlists and personal lists " +
+                    "all land in this merged view."
+            }
+
+            LibraryFilter.MY_LIST -> if (state.loading) {
+                "Loading…"
+            } else {
+                "Your list is empty. Long-press any poster on a detail page " +
+                    "and choose \"Add to Library\"."
+            }
+
+            LibraryFilter.WATCHLIST -> if (state.loading) {
+                "Loading watchlists…"
+            } else {
+                val sources = buildList {
+                    if (!state.simklConnected) add("Simkl not connected")
+                    if (!state.mdbListConfigured) add("MDBList key not set")
+                }
+                if (sources.isEmpty()) {
+                    "Watchlist is empty."
+                } else {
+                    "Watchlist is empty — " + sources.joinToString(" · ")
+                }
+            }
+
+            LibraryFilter.LISTS -> when {
+                state.loading && state.selectedList == null -> "Loading lists…"
+                state.selectedList == null -> "Select a list above."
+                else -> "This list is empty. Long-press any poster app-wide " +
+                    "and choose \"Add to list…\" to fill it."
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(KBVoid)
+        ) {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 104.dp),
+                state = gridState,
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 14.dp,
+                    bottom = 28.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            Text(
+                                text = "LIBRARY",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            Text(
+                                text = buildList {
+                                    if (state.simklConnected) add("SIMKL")
+                                    if (state.mdbListConfigured) add("MDBLIST")
+                                    add("LOCAL")
+                                }.joinToString(" + "),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = KBTextLo,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                        notice?.let { text ->
+                            Text(
+                                text = text,
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
+                item(key = "filters", span = { GridItemSpan(maxLineSpan) }) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        items(LibraryFilter.entries, key = { "filter_${it.name}" }) { filter ->
+                            TouchChoiceChip(
+                                label = filter.label,
+                                selected = state.filter == filter,
+                                onClick = { viewModel.setFilter(filter) }
+                            )
+                        }
+                        item(key = "unwatched") {
+                            TouchChoiceChip(
+                                label = if (state.hideWatched) {
+                                    "WATCHED HIDDEN"
+                                } else {
+                                    "UNWATCHED"
+                                },
+                                selected = state.hideWatched,
+                                onClick = { viewModel.toggleHideWatched() }
+                            )
+                        }
+                    }
+                }
+
+                item(key = "sorts", span = { GridItemSpan(maxLineSpan) }) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        // Each sort chip is a TWO-state control: the first tap
+                        // sorts ascending, the next flips it, and the selected
+                        // chip carries the direction glyph.
+                        items(LibrarySort.entries, key = { "sort_${it.name}" }) { sort ->
+                            val selected = state.sort == sort
+                            TouchChoiceChip(
+                                label = if (selected) {
+                                    "${sort.label} ${if (state.sortAscending) "▲" else "▼"}"
+                                } else {
+                                    sort.label
+                                },
+                                selected = selected,
+                                onClick = { viewModel.setSort(sort) }
+                            )
+                        }
+                    }
+                }
+
+                if (state.filter == LibraryFilter.LISTS) {
+                    item(key = "lists", span = { GridItemSpan(maxLineSpan) }) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            state.lists.forEach { list ->
+                                ListRow(
+                                    list = list,
+                                    selected = state.selectedList?.id == list.id,
+                                    onClick = { viewModel.selectList(list) },
+                                    onLongClick = {
+                                        // Only a list this device owns can be
+                                        // deleted; an MDBList list is managed
+                                        // on MDBList.
+                                        if (list.id < 0) listPendingDelete = list
+                                    }
+                                )
+                            }
+
+                            if (showCreateField) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    KBTextField(
+                                        value = newListName,
+                                        onValueChange = { newListName = it },
+                                        placeholder = "New list name",
+                                        modifier = Modifier.fillMaxWidth(),
+                                        onDone = {
+                                            if (newListName.isNotBlank()) {
+                                                viewModel.createLocalList(newListName)
+                                            }
+                                            newListName = ""
+                                            showCreateField = false
+                                        }
+                                    )
+                                    KBButton(
+                                        label = "CREATE",
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        if (newListName.isNotBlank()) {
+                                            viewModel.createLocalList(newListName)
+                                        }
+                                        newListName = ""
+                                        showCreateField = false
+                                    }
+                                }
+                            } else {
+                                KBButton(
+                                    label = "+ NEW LIST",
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    showCreateField = true
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (items.isEmpty()) {
+                    item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            text = emptyText,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 10.dp)
+                        )
+                    }
+                } else {
+                    itemsIndexed(
+                        items = items,
+                        key = { _, item -> LocalLibraryStore.dedupeKey(item) }
+                    ) { index, item ->
+                        LibraryTile(
+                            item = item,
+                            rating = state.ratings[LocalLibraryStore.dedupeKey(item)],
+                            isWatched = item.watchedKeyCandidates()
+                                .any { it in state.watchedKeys },
+                            isPartiallyWatched = item.watchedKeyCandidates()
+                                .any { it in state.partiallyWatchedKeys },
+                            onClick = { openItem(item, index) },
+                            onLongClick = { menuItem = item }
+                        )
+                    }
+                }
+            }
+
+            // The row menu: the same rows the TV menu holds, over the touch
+            // sheet.
+            menuItem?.let { item ->
+                val subtitle = listOfNotNull(
+                    item.year?.toString(),
+                    item.source.label
+                ).joinToString(" · ")
+                PosterContextMenu(
+                    title = item.title,
+                    subtitle = subtitle,
+                    libraryTarget = LibraryAddTarget(
+                        mediaType = item.mediaType,
+                        imdbId = item.imdbId,
+                        tmdbId = item.tmdbId,
+                        title = item.title,
+                        year = item.year,
+                        posterUrl = item.posterUrl
+                    ),
+                    hideTarget = hideTarget(
+                        item.title,
+                        item.mediaType,
+                        item.posterUrl,
+                        listOf(item.imdbId, item.tmdbId?.toString()),
+                        year = item.year
+                    ),
+                    actions = buildList {
+                        item.navigationId?.let { navigationId ->
+                            add(
+                                PosterContextAction(
+                                    label = "Go to Details",
+                                    description = "Open this title's detail page"
+                                ) {
+                                    val selected = item
+                                    menuItem = null
+                                    BrowseReturnFocus.record(
+                                        BrowseReturnTarget(
+                                            screenKey = LIBRARY_BROWSE_SCREEN_KEY,
+                                            itemId = LocalLibraryStore.dedupeKey(selected),
+                                            position = items.indexOf(selected)
+                                        )
+                                    )
+                                    onItemClick(selected.mediaType, navigationId)
+                                }
+                            )
+                        }
+
+                        when (item.source) {
+                            LibrarySource.LOCAL,
+                            LibrarySource.MDBLIST_WATCHLIST -> add(
+                                PosterContextAction(
+                                    label = "Remove from Library",
+                                    description =
+                                        "Remove it here and on every connected tracker",
+                                    isDestructive = true
+                                ) {
+                                    val selected = item
+                                    menuItem = null
+                                    viewModel.removeItem(selected)
+                                }
+                            )
+
+                            LibrarySource.LOCAL_LIST,
+                            LibrarySource.MDBLIST_LIST -> add(
+                                PosterContextAction(
+                                    label = "Remove from this list",
+                                    description = item.listName?.let {
+                                        "Take it out of \"$it\""
+                                    },
+                                    isDestructive = true
+                                ) {
+                                    val selected = item
+                                    menuItem = null
+                                    viewModel.removeItem(selected)
+                                }
+                            )
+
+                            LibrarySource.SIMKL_WATCHLIST,
+                            LibrarySource.SIMKL_LIST -> {
+                                // Simkl's attribution rule: name Simkl and link
+                                // back to the page for THAT item.
+                                simklItemUrl(
+                                    item.mediaType,
+                                    item.simklId,
+                                    item.simklSlug
+                                )?.let { url ->
+                                    add(
+                                        PosterContextAction(
+                                            label = "View on Simkl",
+                                            description =
+                                                "Open this title's page on simkl.com"
+                                        ) {
+                                            try {
+                                                context.startActivity(
+                                                    Intent(
+                                                        Intent.ACTION_VIEW,
+                                                        Uri.parse(url)
+                                                    )
+                                                )
+                                            } catch (_: ActivityNotFoundException) {
+                                                // No browser on this device: the
+                                                // row is a link out, so there is
+                                                // nothing else to do.
+                                            }
+                                            menuItem = null
+                                        }
+                                    )
+                                }
+                                add(
+                                    PosterContextAction(
+                                        label = "Managed on Simkl",
+                                        description =
+                                            "Remove it from your watchlist on simkl.com"
+                                    ) {
+                                        menuItem = null
+                                    }
+                                )
+                            }
+                        }
+                    },
+                    onDismiss = { menuItem = null }
+                )
+            }
+
+            // Deleting a list is confirmed, never done by the press itself.
+            listPendingDelete?.let { list ->
+                Dialog(onDismissRequest = { listPendingDelete = null }) {
+                    KBDialogPanel(
+                        title = "Delete list?",
+                        subtitle = list.name
+                    ) {
+                        Text(
+                            text = "The list is removed from this device. Its " +
+                                "${list.itemCount} titles stay in your Library.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            KBButton(
+                                label = "CANCEL",
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                listPendingDelete = null
+                            }
+                            KBButton(
+                                label = "DELETE",
+                                danger = true,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                listPendingDelete = null
+                                viewModel.deleteLocalList(list.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One row of the personal-lists rail: name, count and where it lives. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ListRow(
+    list: LibraryList,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)?
+) {
+    val sourceLabel = if (list.id < 0) "This device" else "MDBList"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(KBShapeCard)
+            .background(if (selected) KBAccent.copy(alpha = 0.22f) else KBSurface)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = list.name,
+            color = if (selected) KBAccent else KBTextHi,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "${list.itemCount} titles · $sourceLabel",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * One library poster: art, the shared caption block's fields (title, year and
+ * rating, all gated by the Settings toggles elsewhere), and the source tag
+ * that says which tracker the row lives on.
+ */
+@Composable
+private fun LibraryTile(
+    item: LibraryItem,
+    rating: Double?,
+    isWatched: Boolean,
+    isPartiallyWatched: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        PosterCard(
+            posterUrl = item.posterUrl,
+            contentDescription = item.title,
+            isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+        )
+        Text(
+            text = item.title,
+            color = KBTextHi,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        listOfNotNull(
+            item.year?.toString(),
+            rating?.takeIf { it > 0.0 }?.let { "★ %.1f".format(it) }
+        ).takeIf { it.isNotEmpty() }?.let { line ->
+            Text(
+                text = line.joinToString(" · "),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            text = item.source.label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
