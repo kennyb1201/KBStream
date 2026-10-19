@@ -320,9 +320,9 @@ internal class MpvSettingsSection(
         }
         column.addView(
             ui.label(
-                "Extra gain for quiet mixes. Unlike the main player's, this one has " +
-                    "no limiter behind it: mpv applies the gain and stops, so a boost " +
-                    "on an already-hot stream can clip.",
+                "Extra gain for quiet mixes, with a peak limiter behind it - the same " +
+                    "shape the main player's chain has, so a boost on an already-hot " +
+                    "stream is caught rather than clipped.",
                 topMarginDp = 4
             )
         )

@@ -11,8 +11,6 @@ import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.io.File
-import java.util.Locale
-import kotlin.math.pow
 
 /**
  * The backup engine's picture: a SurfaceView that libmpv renders into.
@@ -127,6 +125,21 @@ class MpvPlayerView @JvmOverloads constructor(
                 codec?.uppercase()?.takeIf { it.isNotBlank() },
                 channels?.takeIf { it > 0 }?.let { "${it}ch" }
             ).joinToString(" • ").ifBlank { title ?: "Track #$id" }
+
+        /**
+         * The SUBTITLE picker row: [label] plus the KIND the track names.
+         *
+         * The track's own title is the only place an SDH, forced, commentary or
+         * machine-translated track says so - the language tag never does - and
+         * the main player's rows have carried these tags since the "which of
+         * these English tracks is the right one" report (see
+         * SubtitleTrackRules.pickerLabel). This engine listed them all as a bare
+         * "ENG • SUBRIP", so the viewer had no way to tell them apart. Audio and
+         * source rows are unchanged; only subtitle rows use this.
+         */
+        val subtitleLabel: String
+            get() = listOfNotNull(label, SubtitleKindRules.tagText(title))
+                .joinToString(" \u00b7 ")
 
         /** `language|codec|channels`, the shape stored per title. */
         val signature: String
@@ -350,8 +363,21 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Center (or phantom-center) lift: 0 off, 1 low, 2 high. */
     private var dialogueBoost = 0
 
-    /** Extra output gain in dB, 0-15. */
+    /** Extra output gain in dB, 0-15, applied in the `af` chain (see [applyAudioFilters]). */
     private var volumeBoostDb = 0
+
+    /**
+     * The resolved `audio-channels` value for [downmixTarget], kept so the
+     * open-time option ([applyOptions]) and any later change write the same
+     * layout rather than re-deriving "Auto" against a different device answer.
+     */
+    private var audioChannelsOption = "stereo"
+
+    /** Decode-vs-passthrough for this session (see [setAudioOutput]). */
+    private var audioOutputMode = PlayerAudioTuning.AUDIO_OUTPUT_AUTO
+
+    /** Whether the downmix / dialogue / volume chain is at its defaults here. */
+    private var audioTuningNeutral = true
 
     /**
      * Multiplier over the boost, 0-1: the sleep timer's fade.
@@ -615,21 +641,48 @@ class MpvPlayerView @JvmOverloads constructor(
     fun isHardwareDecoding(): Boolean = hwdecValue != HWDEC_SW
 
     /**
-     * Output layout. "auto-safe" is mpv's default downmix, which folds to what
-     * the device can actually carry; Stereo always folds, and 5.1 keeps six
-     * channels for an AVR (the main player's own three options, one for one).
+     * Output layout: Auto / Stereo / 5.1, the main player's own three options.
+     *
+     * The value comes from [MpvAudioChains.downmixLayout], and Auto's answer is
+     * the DEVICE's (see there): the two engines fold a film to the same layout
+     * on the same box rather than one of them leaving 5.1 on a stereo TV.
      */
     fun setDownmix(target: Int) {
         downmixTarget = target
+        audioChannelsOption = MpvAudioChains.downmixLayout(target, resolveDeviceMaxChannels(context))
         if (!initialized) return
-        val layout = when (target) {
-            PlayerAudioTuning.DOWNMIX_STEREO -> "stereo"
-            PlayerAudioTuning.DOWNMIX_SURROUND -> "5.1"
-            else -> "auto-safe"
-        }
-        runCatching { MpvBackend.setPropertyString("audio-channels", layout) }
-            .onFailure { Log.w(TAG, "audio-channels=$layout rejected", it) }
+        runCatching { MpvBackend.setPropertyString("audio-channels", audioChannelsOption) }
+            .onFailure { Log.w(TAG, "audio-channels=$audioChannelsOption rejected", it) }
     }
+
+    /**
+     * Decode-vs-passthrough, the same [PlayerAudioTuning] preference the main
+     * player honors, resolved for this session by the Activity and applied as an
+     * open-time option (mpv fixes its decoders when the file opens).
+     *
+     * Before this, MPV always decoded to PCM, so the receiver users who asked
+     * for the bitstream lost the option entirely on this engine - and, worse, the
+     * two engines could disagree about what a title sounded like.
+     *
+     * [tuningNeutral] is the Activity's answer to "is the downmix / dialogue /
+     * volume chain doing anything for this session": Auto passes the bitstream
+     * through only while it is not, because passthrough never reaches the app's
+     * PCM chain and would silently discard a change the viewer asked for. That is
+     * exactly the rule [PlayerAudioTuning.requiresDecode] applies on the other
+     * engine.
+     */
+    fun setAudioOutput(outputMode: Int, tuningNeutral: Boolean) {
+        audioOutputMode = outputMode
+        audioTuningNeutral = tuningNeutral
+    }
+
+    /**
+     * The `audio-spdif` value for this session: the encoded formats mpv may
+     * hand to the output untouched, or an empty string to keep everything
+     * decoded.
+     */
+    private fun audioSpdifSpec(): String =
+        MpvAudioChains.audioSpdifSpec(audioOutputMode, audioTuningNeutral)
 
     /**
      * Dialogue lift, matching what the main player's chain does: a center
@@ -638,26 +691,26 @@ class MpvPlayerView @JvmOverloads constructor(
      *
      * Applied through mpv's `pan` filter, built from the channel count mpv
      * reports for what is playing now, because the filter has to name the
-     * channels it touches. A layout this does not have a spec for (mono, or
+     * channels it touches. A layout this does not have a spec for (mono, quad,
      * anything unusual) gets no filter at all rather than a spec mpv could
      * reject - silence would be a far worse answer than a gentle mix.
      */
     fun setDialogueBoost(level: Int) {
         dialogueBoost = level.coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
-        if (initialized) applyDialogueFilter()
+        if (initialized) applyAudioFilters()
     }
 
     /**
      * Overall output gain, the counterpart of the main player's `linearGain`.
      *
-     * mpv has no limiter on `volume`, so this is gain and nothing else: the
-     * panel's own note says so. `volume-max` has to be raised with it, because
-     * mpv's default ceiling (130) sits below every step above +2dB and would
-     * silently swallow the rest.
+     * Applied in the `af` chain ahead of a limiter (see [audioFilterSpec]) 
+     * rather than on mpv's `volume` property, which has no limiter after it - 
+     * that was the parity gap this closes: a boost on an already-hot stream
+     * clipped here while the main player's chain rode it out.
      */
     fun setVolumeBoostDb(db: Int) {
         volumeBoostDb = db.coerceIn(0, 15)
-        applyVolume()
+        if (initialized) applyAudioFilters()
     }
 
     /**
@@ -676,12 +729,13 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     private fun applyVolume() {
         if (!initialized) return
-        val boost =
-            if (volumeBoostDb <= 0) VOLUME_NORMAL
-            else VOLUME_NORMAL * 10.0.pow(volumeBoostDb / 20.0)
-        val percent = boost * outputGain
+        // The boost is NOT here any more: it rides the `af` chain ahead of its
+        // limiter (see [applyAudioFilters]), which is the only order in which
+        // the limiter can see the boosted samples. What is left is mpv's own
+        // gain - the sleep timer's fade over unity - and that only ever goes
+        // down, so nothing needs `volume-max` raised for it.
+        val percent = VOLUME_NORMAL * outputGain
         runCatching {
-            MpvBackend.setPropertyDouble("volume-max", VOLUME_MAX)
             MpvBackend.setPropertyDouble("volume", percent)
         }.onFailure { Log.w(TAG, "volume=$percent rejected", it) }
     }
@@ -866,14 +920,49 @@ class MpvPlayerView @JvmOverloads constructor(
             return true
         }
         val matches = subtitleTracks().filter { LanguageMatch.matches(language, it.language) }
-        val match = rankedSubtitleMatch(matches)
+        // No tagged match: an UNTAGGED track is the common case in rips, and it
+        // is the viewer's own language far more often than not - so it is tried
+        // before giving up, ranked SDH then regular exactly as the language
+        // bucket is. This is step 3 of the other engine's rule
+        // ([SubtitleTrackRules.choose]): without it a rip whose subs carry no
+        // language tag played with subtitles on ExoPlayer and with none here,
+        // silently - the strict language filter matched nothing and subtitles
+        // were simply switched off.
+        val untagged = subtitleTracks().filter { LanguageMatch.canonical(it.language) == null }
+        val match = rankedSubtitleMatch(matches) ?: rankedSubtitleMatch(untagged)
         if (match == null) {
+            // Nothing to show and nothing untagged to fall back on: turning
+            // subtitles off here is the same "a preference must never silently
+            // show the wrong track" rule as before, now only reached when there
+            // really is no candidate.
             clearSubtitles()
+            Log.i(TAG, "no '$language' subtitle track" + trackListText(subtitleTracks()) + "; subtitles off")
             return false
         }
         runCatching { MpvBackend.setPropertyInt("sid", match.id) }
+        // The auto-pick is logged for the field: the main player has logged its
+        // own selection since the "it keeps picking the wrong subtitle" reports,
+        // and without this line the same report is undebuggable on this engine.
+        Log.i(
+            TAG,
+            "Auto-selected subtitle: '$language' track=${match.id} " +
+                "kind=${SubtitleKindRules.tagText(match.title) ?: "regular"} " +
+                "title=${match.title ?: "untagged"} lang=${match.language ?: "untagged"}" +
+                " match=${if (matches.isEmpty()) "untagged-bucket" else "language"}"
+        )
         return true
     }
+
+    /** The file's subtitle tracks as a log line: what was there to choose from. */
+    private fun trackListText(tracks: List<Track>): String =
+        if (tracks.isEmpty()) {
+            " in this file"
+        } else {
+            " in [" + tracks.joinToString(", ") { track ->
+                "${track.language ?: "untagged"}#${track.id}" +
+                    (track.title?.let { " ($it)" } ?: "")
+            } + "]"
+        }
 
     /** Picks one specific audio track, for the panel's "this file" list. */
     fun selectAudioTrack(id: Int) {
@@ -1284,6 +1373,15 @@ class MpvPlayerView @JvmOverloads constructor(
         // any other media session.
         MpvBackend.setOptionString("ao", "audiotrack,opensles")
         MpvBackend.setOptionString("audio-set-media-role", "yes")
+        // Output layout and decode-vs-passthrough, both from the same
+        // preferences the main player reads (see [setDownmix] and
+        // [setAudioOutput]). Open-time here on purpose: the layout is what mpv
+        // builds its conversion chain around, and `audio-spdif` decides which
+        // decoders exist for the file at all. The Activity sets both before
+        // [initialize], so the very first file already opens with the viewer's
+        // choice rather than mpv's default.
+        MpvBackend.setOptionString("audio-channels", audioChannelsOption)
+        MpvBackend.setOptionString("audio-spdif", audioSpdifSpec())
 
         // Networking. A dead host should fail in half a minute instead of
         // sitting on a spinner, and TLS is verified against the BUNDLED Mozilla
@@ -1517,62 +1615,19 @@ class MpvPlayerView @JvmOverloads constructor(
      * back afterwards: a spec mpv will not accept is worth a log line, and the
      * value it settled on is the honest one to report.
      */
-    private fun applyDialogueFilter() {
-        val spec = dialogueFilterSpec(dialogueBoost, audioChannelCount())
+    private fun applyAudioFilters() {
+        val spec = MpvAudioChains.audioFilterSpec(dialogueBoost, audioChannelCount(), volumeBoostDb)
         runCatching { MpvBackend.setPropertyString("af", spec.orEmpty()) }
             .onFailure { Log.w(TAG, "af rejected: $spec", it) }
         if (spec != null) {
             val applied = getPropertyStringOrNull("af").orEmpty()
             if (applied.isBlank()) {
-                Log.w(TAG, "mpv did not take the dialogue filter: $spec")
+                Log.w(TAG, "mpv did not take the audio filter chain: $spec")
             } else {
-                Log.i(TAG, "dialogue filter = $applied (" + spec + ")")
+                Log.i(TAG, "audio filter chain = $applied ($spec)")
             }
         }
     }
-
-    /**
-     * The `pan` spec for [level] at [channels], or null for "no filter".
-     *
-     * Only the center channel is lifted on a multichannel mix, and the mid
-     * component on a stereo one: `mid = (L+R)/2` is where a 2.0 track keeps its
-     * voices while music beds sit in `(L-R)/2`, so lifting mid raises dialogue
-     * without dragging the whole mix up - exactly what [PlayerAudioTuning.midGain]
-     * and [PlayerAudioTuning.inPlaceCenterGain] express on the other engine.
-     *
-     * Channels are named by index (`c2` is the center in every standard
-     * layout), which is what keeps this independent of whether the file
-     * declares 5.1 or 5.1(side).
-     */
-    private fun dialogueFilterSpec(level: Int, channels: Int): String? {
-        if (level <= 0) return null
-        val gain = 1f + 0.35f * level
-        fun gainText(value: Float): String = String.format(Locale.US, "%.4f", value)
-        return when (channels) {
-            // Mono has no center to lift and no second channel to fold
-            // against: the whole track is already the dialogue.
-            1 -> null
-            2 -> {
-                val same = gainText((gain + 1f) / 2f)
-                val cross = gainText((gain - 1f) / 2f)
-                "pan=stereo|c0=$same*c0+$cross*c1|c1=$cross*c0+$same*c1"
-            }
-            6 -> passThroughWithCenterLift("5.1", 6, gainText(gain))
-            8 -> passThroughWithCenterLift("7.1", 8, gainText(gain))
-            else -> null
-        }
-    }
-
-    /** [count] channels of the [layout], all passed through bar the center. */
-    private fun passThroughWithCenterLift(layout: String, count: Int, gain: String): String =
-        buildString {
-            append("pan=").append(layout)
-            for (index in 0 until count) {
-                append("|c").append(index).append('=')
-                if (index == CENTER_CHANNEL_INDEX) append(gain).append('*')
-                append('c').append(index)
-            }
-        }
 
     private fun observeProperties() {
         MpvBackend.observeProperty("time-pos", MpvFormat.MPV_FORMAT_DOUBLE)
@@ -2163,9 +2218,11 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun eventProperty(property: String, value: Long) {
         if (released) return
         when (property) {
-            // The file's layout is known from here on: place the dialogue
-            // filter against the track actually playing.
-            "audio-params/channel-count" -> if (dialogueBoost > 0) applyDialogueFilter()
+            // The file's layout is known from here on: build the audio filter
+            // chain against the track actually playing (the dialogue pan needs
+            // the channel count; the boost's limiter rides the same chain).
+            "audio-params/channel-count" ->
+                if (dialogueBoost > 0 || volumeBoostDb > 0) applyAudioFilters()
         }
     }
 
@@ -2455,13 +2512,7 @@ class MpvPlayerView @JvmOverloads constructor(
         /** mpv's own 100 = unity gain. */
         const val VOLUME_NORMAL = 100.0
 
-        /**
-         * The ceiling `volume` is clipped at. Every step of the panel's boost
-         * is above mpv's default 130, so this has to be raised with the gain.
-         */
-        const val VOLUME_MAX = 800.0
 
-        /** FL, FR, FC, ... - the center is channel 3 in every standard layout. */
-        const val CENTER_CHANNEL_INDEX = 2
+
     }
 }

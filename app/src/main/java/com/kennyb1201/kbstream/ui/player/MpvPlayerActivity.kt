@@ -1167,6 +1167,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                         nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()
                         pickerOpen -> dismissPicker()
                         settingsOpen -> hideSettingsPanel()
+                        // The controls overlay is the LAST thing Back takes on
+                        // its way out, exactly as on the ExoPlayer engine
+                        // (NativePlayerActivity's controlsVisible arm): with the
+                        // bar up, the press puts it down and playback carries
+                        // on. Without this arm the press fell straight to
+                        // exitPlayer and ended the session from a screen whose
+                        // only other content was the bar itself.
+                        controlsVisible -> setControlsVisible(View.GONE)
                         else -> exitPlayer()
                     }
                 }
@@ -1187,6 +1195,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // Off / forced only / on, the global subtitle mode: also an open-time
         // choice, so it is set before initialize() beside the languages above.
         view.setSubtitleMode(AppPreferences.getSubtitleMode(this))
+        // Output layout and decode-vs-passthrough: both are open-time options on
+        // this engine (mpv fixes its conversion chain and its decoders when the
+        // file opens), so like the languages above they are handed over before
+        // initialize(). [PlayerAudioTuning.requiresDecode]'s rule - bitstreaming
+        // would silently discard a tuning change the viewer asked for - is what
+        // "neutral" carries here.
+        view.setDownmix(effectiveAudioDownmix())
+        view.setAudioOutput(
+            outputMode = AppPreferences.getAudioOutput(this),
+            tuningNeutral = effectiveAudioDownmix() == PlayerAudioTuning.DOWNMIX_AUTO &&
+                effectiveAudioDialogueBoost() == 0 &&
+                effectiveAudioVolumeBoost() == 0
+        )
 
         if (!view.initialize()) return
 
@@ -1203,7 +1224,6 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // than in applyOptions() because these are runtime properties - and the
         // buffer profile, which is not, is read by the view itself.
         view.setBufferMode(AppPreferences.getDefaultBufferMode(this))
-        view.setDownmix(effectiveAudioDownmix())
         view.setDialogueBoost(effectiveAudioDialogueBoost())
         view.setVolumeBoostDb(effectiveAudioVolumeBoost())
 
@@ -1542,12 +1562,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             applyPillBackground(next, selected = false, focused = false)
         }
         // The one shared overlay, driven by this engine through PlayerChromeHost.
-        // MPV hid its bar after eight seconds, not the main player's six, so it
-        // keeps its own timeout.
+        // The auto-hide timeout is [PlayerChrome.AUTO_HIDE_MS]'s own default:
+        // this engine used to pass eight seconds where the main player used six,
+        // which left the bar up over the picture for two seconds longer on one
+        // engine than the other for no reason a viewer could see.
         chrome = PlayerChrome(
             findViewById(R.id.chrome_layer),
-            this,
-            autoHideMs = CONTROLS_TIMEOUT_MS
+            this
         )
         // The shared bar, kept only for this engine's own key handling.
         seekBar = findViewById(R.id.chrome_seekbar)
@@ -2132,7 +2153,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 listOfNotNull(searchItem, openFileItem) + addonRows + onlineRows + listOf(offItem) +
                     tracks.map { track ->
                         PickerItem(
-                            label = track.label,
+                            // The kind tag (SDH / FORCED / COMMENTARY / MT)
+                            // rides the row: three English tracks used to list
+                            // as three identical "ENG \u00b7 SUBRIP" rows.
+                            label = track.subtitleLabel,
                             isSelected = track.selected,
                             onClick = {
                                 // A hand-picked row (an SDH or forced track) is
@@ -5361,8 +5385,38 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // must not restart the episode from the top. Replay is an
                     // explicit seek or a fresh session, not a toggle.
                     if (endedHandled) return true
+                    // MEDIA_PAUSE only, and only before the first frame: the
+                    // same startup guard the main player's two PAUSE arms carry.
+                    // Fire OS emits spurious MEDIA_PAUSE events around HDMI-CEC
+                    // and voice-remote activity, including while the load splash
+                    // is still up, and pausing then parked the session on frame
+                    // 1 with nothing to resume it. Nothing is on screen to pause
+                    // until the playhead has moved, so the press is swallowed.
+                    if (event.keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE && !sessionHasPlayed()) {
+                        return true
+                    }
                     surface?.togglePause()
                     showControls()
+                    return true
+                }
+
+                // Headset / Bluetooth remote transport keys - the same three
+                // targets the main player's dispatch has (see its MEDIA_NEXT /
+                // MEDIA_PREVIOUS / MEDIA_STOP arms). This engine handled only
+                // REWIND, FAST_FORWARD and PLAY/PAUSE, so every Next, Previous
+                // and Stop from a paired remote did nothing at all.
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    onChromeNext()
+                    return true
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    previousEpisodeOrRestart()
+                    return true
+                }
+
+                KeyEvent.KEYCODE_MEDIA_STOP -> {
+                    exitPlayer()
                     return true
                 }
 
@@ -5852,6 +5906,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
     }
 
+    /**
+     * MEDIA_PREVIOUS: the main player's rule (see its MEDIA_PREVIOUS arm) -
+     * step back to the start of this episode, and hand over to the previous one
+     * only once the playhead is already there, so a double press walks back
+     * through a binge while a single press rewatches what is playing.
+     */
+    private fun previousEpisodeOrRestart() {
+        val position = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
+        if (position > PREVIOUS_RESTART_WINDOW_MS) {
+            seekTo(0L)
+            return
+        }
+        val showSeason = season ?: return
+        val showEpisode = episode ?: return
+        if (showEpisode <= 1) return
+        launchNextEpisode(showSeason, showEpisode - 1)
+    }
+
     override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)
 
     override fun onChromeOpenAudioPicker() = showPicker(PickerMode.AUDIO)
@@ -5894,7 +5966,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         private const val COMPLETION_THRESHOLD_RATIO = 0.95f
         private const val MIN_RESUME_POSITION_MS = 10_000L
         private const val SEEK_STEP_MS = 10_000L
-        private const val CONTROLS_TIMEOUT_MS = 8_000L
+
+        /**
+         * How far into an episode a MEDIA_PREVIOUS press still means "rewind
+         * this one" rather than "go back one": the same five seconds the main
+         * player's arm uses, so a remote behaves the same on either engine.
+         */
+        private const val PREVIOUS_RESTART_WINDOW_MS = 5_000L
 
         /**
          * What the INFO panel's VIDEO/AUDIO rows read while the engine is up
