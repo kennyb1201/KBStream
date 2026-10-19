@@ -3460,10 +3460,13 @@ private fun AboutSection(modifier: Modifier = Modifier) {
                 )
             }
         }
-        // Nothing to offer on a Play build: the update row drives a download +
-        // install that build's manifest cannot perform (see PLAY_BUILD). The
-        // changelog stays - it is informational.
-        if (!com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD) {
+        // Nothing to offer on a Play build (the update row drives a download +
+        // install that build's manifest cannot perform - see PLAY_BUILD) or on
+        // a debug build (a side-by-side install the release feed cannot update).
+        // The changelog stays - it is informational.
+        if (!com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD &&
+            !com.kennyb1201.kbstream.BuildConfig.DEBUG
+        ) {
             Spacer(modifier = Modifier.height(10.dp))
             UpdateRow()
         }
@@ -3506,13 +3509,17 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             // PLAY_BUILD), so "check manually above" pointed at nothing and the
             // "installs without leaving the app" sentence described the wrong
             // update path. The Play copy says where updates actually come from.
-            text = if (com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD) {
-                "Updates are delivered by the Play Store. Check for updates there — " +
-                    "the app itself never replaces its own build on this install."
-            } else {
-                "Updates are published with every build. Check manually above — " +
-                    "KBStream also checks on launch every 12 hours and installs " +
-                    "without leaving the app."
+            text = when {
+                com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD ->
+                    "Updates are delivered by the Play Store. Check for updates there — " +
+                        "the app itself never replaces its own build on this install."
+                com.kennyb1201.kbstream.BuildConfig.DEBUG ->
+                    "This is a debug build installed alongside the release. It is " +
+                        "updated from the CI artifact, not by the in-app updater."
+                else ->
+                    "Updates are published with every build. Check manually above — " +
+                        "KBStream also checks on launch every 12 hours and installs " +
+                        "without leaving the app."
             },
             color = KBTextLo.copy(alpha = 0.7f),
             style = MaterialTheme.typography.labelSmall,

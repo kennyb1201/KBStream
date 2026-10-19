@@ -25,6 +25,8 @@ import android.content.res.Configuration
  * Phase 0 of the mobile port uses this object only for orientation. Screen
  * dispatch (`if (FormFactor.isTv) TvContent() else MobileContent()`) arrives
  * with the mobile screens, and the TV composables themselves are never edited.
+ * The television window policy is the manifest's own landscape lock, exactly as
+ * it was in the tagged build; see [applyOrientation].
  */
 object FormFactor {
 
@@ -80,22 +82,24 @@ object FormFactor {
         modeType == Configuration.UI_MODE_TYPE_TELEVISION || !hasTouchscreen
 
     /**
-     * Pins the window orientation for this form factor.
+     * Clears the manifest's landscape lock on a phone, and does nothing at all
+     * on a television.
      *
-     * The four activities stopped declaring `android:screenOrientation` in the
-     * manifest so a phone is not forced into landscape. TV keeps the exact
-     * landscape lock it had - the same `SCREEN_ORIENTATION_LANDSCAPE` the
-     * manifest used to give it - and mobile is left unspecified, which is the
-     * system's normal sensor behavior. Called from each activity's `onCreate`
-     * right after `super`, the only behavioral edit any existing activity got
-     * in this phase.
+     * The four activities keep `android:screenOrientation="landscape"` in the
+     * manifest, exactly as the tagged build had it: that is the TV window
+     * policy, and the TV path must stay identical to the build that shipped.
+     * A phone overrides the manifest attribute at runtime with
+     * `SCREEN_ORIENTATION_UNSPECIFIED` (the system's normal sensor behavior).
+     *
+     * Must be called BEFORE `super.onCreate`, so the override is in place before
+     * the window is created. Setting it afterwards let the already-created TV
+     * window see a request it did not need and played a rotation animation on
+     * every screen change - the reason this is not simply re-applied in onCreate
+     * as before. On TV this returns before touching the activity: no
+     * `requestedOrientation` write, no platform call.
      */
     fun applyOrientation(activity: Activity) {
-        activity.requestedOrientation =
-            if (isTv) {
-                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            }
+        if (isTv) return
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
 }

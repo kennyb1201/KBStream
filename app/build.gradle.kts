@@ -201,6 +201,19 @@ android {
         versionCode = ciVersionCode
         versionName = ciVersionName
 
+        // The launcher label lives in a resource rather than in the manifest so
+        // the debug build can present itself as "KBStream Debug" beside the
+        // tagged release instead of as a second identical icon.
+        resValue("string", "app_name", "KBStream")
+        // The global-search provider's authority. The release value is the
+        // historical one, unchanged; the debug build overrides it below, because
+        // two installed packages cannot publish the same provider authority.
+        resValue(
+            "string",
+            "search_suggest_authority",
+            "com.kennyb1201.kbstream.search"
+        )
+
         // The self-update flow is compiled into every build's UI, but a Play
         // build must not have it at all: `-PplayBuild` strips
         // REQUEST_INSTALL_PACKAGES from the merged manifest, so the offer could
@@ -221,6 +234,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // resValue carries the launcher label and the per-variant search
+        // authority (see defaultConfig / debug below). AGP 9 leaves the
+        // feature off unless it is asked for.
+        resValues = true
     }
 
     // English only. The app's own strings are English (see the strings.xml),
@@ -245,6 +262,23 @@ android {
     }
 
     buildTypes {
+        // A debug build is a SIDE-BY-SIDE testing build, not a replacement for
+        // the tagged install. Its own applicationId lets both APKs be installed
+        // at once (Android keeps one install per package), which is also what
+        // makes the debug signing key harmless to the release install; its own
+        // search authority keeps the two providers from colliding; and its own
+        // label distinguishes the launcher entries. Its data directory, profiles
+        // and sign-in are its own - the two installs share nothing.
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            resValue("string", "app_name", "KBStream Debug")
+            resValue(
+                "string",
+                "search_suggest_authority",
+                "com.kennyb1201.kbstream.debug.search"
+            )
+        }
         release {
             // A release built without the KBSTREAM_* variables is UNSIGNED, and
             // AGP says nothing about it: the task still succeeds, the output is

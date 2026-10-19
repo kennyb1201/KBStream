@@ -307,7 +307,7 @@ object AppUpdater {
 
     /** Silent launch-time check, throttled to once per 12h. Failures are quiet. */
     fun maybeAutoCheck(context: Context) {
-        if (BuildConfig.PLAY_BUILD) return
+        if (BuildConfig.PLAY_BUILD || BuildConfig.DEBUG) return
         val last = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getLong(KEY_LAST_CHECK_MS, 0L)
         if (System.currentTimeMillis() - last < AUTO_CHECK_INTERVAL_MS) return
@@ -336,7 +336,12 @@ object AppUpdater {
         // install (and asking for it is a Play policy risk). The check is a
         // no-op rather than an offer that cannot be accepted - the Settings row
         // is hidden on the same flag.
-        if (BuildConfig.PLAY_BUILD) return
+        //
+        // A debug build is the side-by-side testing install: a `.debug`
+        // applicationId and the debug signing key, so the release APK this feed
+        // serves could never be installed over it. The check is a no-op for the
+        // same reason, and its own updates come from the CI artifact.
+        if (BuildConfig.PLAY_BUILD || BuildConfig.DEBUG) return
         when (state.value) {
             is UpdateState.Checking, is UpdateState.Downloading -> return
             is UpdateState.ReadyToInstall -> return // APK already staged

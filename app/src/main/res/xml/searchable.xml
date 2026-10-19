@@ -14,11 +14,11 @@
      searchSuggestSelection=" ?" is what makes the typed text arrive as the
      first selection argument instead of only in the URI. -->
 <searchable xmlns:android="http://schemas.android.com/apk/res/android"
-    android:label="KBStream"
+    android:label="@string/app_name"
     android:hint="Search movies, shows and channels"
     android:includeInGlobalSearch="true"
     android:searchSettingsDescription="Search your add-on catalogs and live TV"
-    android:searchSuggestAuthority="com.kennyb1201.kbstream.search"
+    android:searchSuggestAuthority="@string/search_suggest_authority"
     android:searchSuggestIntentAction="android.intent.action.VIEW"
     android:searchSuggestSelection=" ?"
     android:searchSuggestThreshold="2" />

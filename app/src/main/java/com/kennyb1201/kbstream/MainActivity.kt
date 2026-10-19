@@ -714,10 +714,10 @@ private suspend fun recoveredEpisodeAlreadyWatched(
         // superclass builds the window, so the splash theme is never inherited
         // by a dialog, a popup or a screen.
         setTheme(R.style.Theme_KBStream)
-        super.onCreate(savedInstanceState)
-        // The manifest no longer pins a landscape orientation: TV keeps its
-        // landscape lock and a phone is left free to rotate. See FormFactor.
+        // A phone clears the manifest's landscape lock before the window exists;
+        // on TV this returns without touching the activity. See FormFactor.
         FormFactor.applyOrientation(this)
+        super.onCreate(savedInstanceState)
         // Application.onCreate → this activity's create: the part of the
         // launch the user actually waits on before the first frame. A
         // cumulative figure rather than a phase delta, so it is recorded here

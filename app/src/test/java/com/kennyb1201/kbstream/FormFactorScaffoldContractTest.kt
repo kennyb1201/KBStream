@@ -55,28 +55,67 @@ class FormFactorScaffoldContractTest {
             .substringBefore("</activity>")
 
     @Test
-    fun `no window is pinned to a landscape manifest orientation`() {
-        assertFalse(
-            "a manifest orientation applies to every form factor; orientation " +
-                "is FormFactor.applyOrientation's job now",
-            manifest().contains("android:screenOrientation")
-        )
+    fun `every window keeps the tagged build's landscape manifest lock`() {
+        listOf(
+            ".MainActivity",
+            ".ui.player.NativePlayerActivity",
+            ".ui.player.MpvPlayerActivity",
+            ".ui.player.ExternalPlayerActivity"
+        ).forEach { name ->
+            assertTrue(
+                "$name must keep android:screenOrientation=\"landscape\": that " +
+                    "manifest value is the TV window policy, and the TV path is " +
+                    "meant to be identical to the tagged build",
+                activityBlock(name).contains("android:screenOrientation=\"landscape\"")
+            )
+        }
     }
 
     @Test
-    fun `every window-owning activity asks the form factor for its orientation`() {
+    fun `every window-owning activity clears the lock before the window exists`() {
         listOf(
             "com/kennyb1201/kbstream/MainActivity.kt",
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
             "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
             "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
         ).forEach { path ->
+            val activity = source(path)
+            val call = activity.indexOf("FormFactor.applyOrientation(this)")
+            val superCall = activity.indexOf("super.onCreate(savedInstanceState)")
             assertTrue(
-                "$path must call FormFactor.applyOrientation(this), or that " +
-                    "activity has no orientation policy at all",
-                source(path).contains("FormFactor.applyOrientation(this)")
+                "$path must call FormFactor.applyOrientation(this), or a phone " +
+                    "has no way past the manifest's landscape lock",
+                call >= 0
+            )
+            assertTrue(
+                "$path must call it BEFORE super.onCreate; setting it after the " +
+                    "window is created is what played a rotation on every screen",
+                superCall >= 0 && call < superCall
             )
         }
+    }
+
+    @Test
+    fun `the helper never touches a tv window`() {
+        val formFactor = source("com/kennyb1201/kbstream/FormFactor.kt")
+        val tvGuard = formFactor.indexOf("if (isTv) return")
+        val platformWrite = formFactor.indexOf("activity.requestedOrientation")
+        assertTrue(
+            "applyOrientation must return before touching the activity on TV",
+            tvGuard >= 0
+        )
+        assertTrue(
+            "the TV return must come before the platform write",
+            platformWrite > tvGuard
+        )
+        assertFalse(
+            "TV no longer requests landscape in code - the manifest owns that lock",
+            formFactor.contains("SCREEN_ORIENTATION_LANDSCAPE")
+        )
+        assertTrue(
+            "the phone override is what clears the lock",
+            formFactor.contains("SCREEN_ORIENTATION_UNSPECIFIED")
+        )
     }
 
     @Test
