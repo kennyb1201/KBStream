@@ -286,6 +286,8 @@ class ExternalPlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // TV stays landscape-locked; a phone may rotate (see FormFactor).
+        com.kennyb1201.kbstream.FormFactor.applyOrientation(this)
 
         // The window behind this hand-off card: the theme's static
         // colorBackground cannot follow the AMOLED toggle, so an AMOLED install

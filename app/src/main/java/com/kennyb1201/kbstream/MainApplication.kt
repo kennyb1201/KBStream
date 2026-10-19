@@ -43,6 +43,11 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // Start the clock the diagnostics perf block measures startup against.
         // Must stay first: everything below is part of the launch cost.
         com.kennyb1201.kbstream.data.reporting.PerfTrace.markAppStart()
+        // Form factor, resolved before any activity exists. One artifact ships
+        // to both TVs and phones (the self-updater downloads this same APK),
+        // so every mobile branch reads this rather than a build variant. It
+        // only drives orientation today; the TV composables are untouched.
+        FormFactor.init(this)
         // Build fingerprint, logged before anything that can fail. The question
         // every device test turns on is "which build is this?": a logcat full of
         // behavior from a stale APK wastes the whole session, and a suppression

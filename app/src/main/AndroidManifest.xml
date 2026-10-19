@@ -182,12 +182,17 @@
              over. MainActivity.onCreate swaps to Theme.KBStream before
              super.onCreate, so the splash theme is only ever that pre-Compose
              frame - see Theme.KBStream.Splash. -->
+        <!-- Orientation is NOT declared on any of the four window-owning
+             activities: it is applied at runtime by FormFactor.applyOrientation
+             (TV -> landscape, phone -> unspecified/sensor), so one artifact can
+             serve both. resizeableActivity is manifest-only, and true is what a
+             phone needs for multi-window and foldable continuity; Android TV
+             does not use multi-window, so the TV layout is unaffected. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:resizeableActivity="false"
-            android:screenOrientation="landscape"
+            android:resizeableActivity="true"
             android:theme="@style/Theme.KBStream.Splash"
             android:windowSoftInputMode="stateHidden|adjustResize">
             <intent-filter>
@@ -259,8 +264,7 @@
             android:exported="false"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
-            android:screenOrientation="landscape" />
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode" />
 
         <!-- Backup engine (MPV). Takes the same launch extras as
              NativePlayerActivity, so a failed ExoPlayer session hands its own
@@ -275,8 +279,7 @@
             android:exported="false"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
-            android:screenOrientation="landscape" />
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode" />
 
         <!-- Third engine (External player). Hands the stream to an installed
              video app (VLC, MX Player, Kodi) and keeps the SESSION here: the
@@ -288,8 +291,7 @@
             android:name=".ui.player.ExternalPlayerActivity"
             android:exported="false"
             android:resizeableActivity="false"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
-            android:screenOrientation="landscape" />
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode" />
 
         <!-- Self-update fallback flow: shares the downloaded APK with the
              system installer via a content URI. -->

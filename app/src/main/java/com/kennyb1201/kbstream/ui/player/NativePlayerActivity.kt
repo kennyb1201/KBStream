@@ -3163,6 +3163,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     @SuppressLint("GestureBackNavigation")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // TV stays landscape-locked; a phone may rotate (see FormFactor).
+        com.kennyb1201.kbstream.FormFactor.applyOrientation(this)
         // The window behind and around the picture. The theme's static
         // colorBackground cannot follow the AMOLED toggle, so an AMOLED install
         // showed the ordinary #0A0E14 void wherever the video surface does not
