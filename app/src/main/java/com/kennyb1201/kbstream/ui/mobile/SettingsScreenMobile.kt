@@ -151,6 +151,7 @@ fun SettingsScreenMobile(
     onBack: () -> Unit,
     onOpenAddons: () -> Unit = {},
     onOpenSimkl: () -> Unit = {},
+    onOpenTrakt: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
@@ -182,6 +183,7 @@ fun SettingsScreenMobile(
                         SettingsPane.INTEGRATIONS -> IntegrationsPaneMobile(
                             onOpenAddons = onOpenAddons,
                             onOpenSimkl = onOpenSimkl,
+                            onOpenTrakt = onOpenTrakt,
                             onOpenProfiles = onOpenProfiles,
                             onOpenStats = onOpenStats
                         )
@@ -539,6 +541,7 @@ private fun SettingsPillMobile(label: String, selected: Boolean, onClick: () -> 
 private fun IntegrationsPaneMobile(
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
+    onOpenTrakt: () -> Unit,
     onOpenProfiles: () -> Unit,
     onOpenStats: () -> Unit
 ) {
@@ -566,6 +569,11 @@ private fun IntegrationsPaneMobile(
             label = "Simkl",
             description = "Connect your Simkl account for scrobbling",
             onClick = onOpenSimkl
+        )
+        SettingsNavRowMobile(
+            label = "Trakt",
+            description = "Connect your Trakt account for scrobbling",
+            onClick = onOpenTrakt
         )
         SettingsNavRowMobile(
             label = "Viewing stats",

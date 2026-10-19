@@ -134,6 +134,7 @@ import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
+import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 import com.kennyb1201.kbstream.ui.player.addonsFor
 import com.kennyb1201.kbstream.ui.player.sourceAddonsJson
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
@@ -210,6 +211,14 @@ sealed class Screen {
      * now agree, and both follow where the page was opened from.
      */
     data class Simkl(val returnTo: Screen = Home) : Screen()
+
+    /**
+     * The Trakt connect page: a third tracker beside Simkl, reached from
+     * Settings' tracker row. It carries its own return destination for the same
+     * reason [Simkl] does - the page has more than one way in, and each one's
+     * Back must land where the viewer came from.
+     */
+    data class Trakt(val returnTo: Screen = Home) : Screen()
 
     object Guide : Screen()
 
@@ -1999,6 +2008,7 @@ fun AppRoot(
                     }
                 },
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Settings) },
+                onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Settings) },
                 onOpenProfiles = {
                     // Real picker so the profile can be SWITCHED here — the
                     // old wiring jumped straight into the editor, which can
@@ -2163,6 +2173,12 @@ fun AppRoot(
                 onOpenDecadeScreen = { decadeStart, name ->
                     screen = Screen.Decade(decadeStart, name, Screen.Search)
                 }
+            )
+        }
+
+        is Screen.Trakt -> {
+            TraktConnectScreen(
+                onBack = { screen = stableBackDestination(current.returnTo) }
             )
         }
 

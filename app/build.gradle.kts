@@ -73,6 +73,18 @@ val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
 // was invisible: the only effect of the secret was to gate the question
 // "is Simkl set up?" on a value nothing consumed.
 
+// Trakt, by client id only - the same rule as Simkl above, and for the same
+// reason. Trakt's current authentication guide marks the client secret
+// deprecated for user sign-in and points at PKCE for the browser flow; the
+// device flow the app actually uses is a public-client flow too. A secret
+// compiled in here would be recoverable from every published APK, so if the
+// device-token endpoint ever rejects a secret-less request the answer is a
+// server-side exchange, never a buildConfigField named *SECRET* (pinned by
+// SimklClientConfigTest). The id itself is public by construction.
+val traktClientId = localProps.getProperty("TRAKT_CLIENT_ID")
+    ?: System.getenv("TRAKT_CLIENT_ID")
+    ?: ""
+
 val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
     ?: ""
@@ -224,6 +236,7 @@ android {
         buildConfigField("Boolean", "PLAY_BUILD", playBuild.toString())
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
+        buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
         buildConfigField("String", "INNERTUBE_API_KEY", "\"$innertubeApiKey\"")

@@ -269,6 +269,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAddons: () -> Unit = {},
     onOpenSimkl: () -> Unit = {},
+    onOpenTrakt: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     /**
      * Opens the Home rail manager. The manager is the Add-ons screen's dialog
@@ -289,6 +290,7 @@ fun SettingsScreen(
             onBack = onBack,
             onOpenAddons = onOpenAddons,
             onOpenSimkl = onOpenSimkl,
+            onOpenTrakt = onOpenTrakt,
             onOpenProfiles = onOpenProfiles,
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
@@ -787,6 +789,14 @@ fun SettingsScreen(
                         label = "Simkl",
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
+                    )
+
+                    // The third tracker, beside the other: same row shape, its
+                    // own page and its own token store (see TraktConnectScreen).
+                    NavigationRow(
+                        label = "Trakt",
+                        description = "Connect your Trakt account for scrobbling",
+                        onClick = onOpenTrakt
                     )
                 SettingsSectionHeader("API Keys")
                 if (kidsKeysHidden) {

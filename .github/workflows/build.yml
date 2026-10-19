@@ -37,6 +37,10 @@ jobs:
       # SIMKL_CLIENT_SECRET secret to pass, and no buildConfigField to receive
       # one (see app/build.gradle.kts).
       SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+      # Trakt's device-code app. The id only: this is a public-client flow and
+      # no client secret may be compiled into the APK (SimklClientConfigTest
+      # fails the build on any *SECRET* BuildConfig field).
+      TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       # Authenticates the Sentry Gradle plugin's R8-mapping upload so release
       # crash traces arrive deobfuscated (real class/method names).

@@ -113,6 +113,14 @@ internal fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        // Trakt's connect page carries its own return destination too, for the
+        // same reason Simkl's does: it is opened from a tracker row whose Back
+        // must land back on that row.
+        is Screen.Trakt -> {
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
@@ -248,6 +256,9 @@ internal fun decodeScreen(
             )
             "search" -> Screen.Search
             "simkl" -> Screen.Simkl(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "trakt" -> Screen.Trakt(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "guide" -> Screen.Guide
@@ -422,6 +433,7 @@ internal val Screen.navDepth: Int
         is Screen.Guide,
         is Screen.Settings,
         is Screen.Simkl,
+        is Screen.Trakt,
         is Screen.ProfilePicker,
         is Screen.Detail,
         is Screen.CatalogGrid,
@@ -454,6 +466,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.CatalogBuilder -> "catalogBuilder"
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
+    is Screen.Trakt -> "trakt"
     is Screen.Guide -> "guide"
     is Screen.Sports -> "sports"
     is Screen.Library -> "library"
