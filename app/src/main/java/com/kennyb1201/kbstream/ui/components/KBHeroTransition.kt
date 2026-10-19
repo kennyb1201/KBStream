@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
@@ -47,24 +48,75 @@ class KBHeroTransition(
     companion object {
         /** Stable shared-element key for one title. */
         fun keyOf(type: String, id: String): String = "$type:$id"
+
+        /**
+         * Whether a node still joins the flight while its screen heads to
+         * [state]. Only the way in does; see [modifierFor] for why.
+         */
+        internal fun joinsFlight(state: EnterExitState): Boolean =
+            state == EnterExitState.Visible
     }
 
     /**
-     * The shared-element modifier for [key].
+     * The shared-element modifier for [key], or a plain [Modifier] on the way
+     * out.
      *
-     * `placeholderSize = ContentSize` keeps both ends honest. It means "hold
-     * the slot at the size this composable would normally be", so the rail
-     * keeps the poster's own footprint for the duration of the flight instead
-     * of letting the posters beside it shuffle across to fill the gap (and
-     * shuffle back on return). `AnimatedSize` would instead drag the rail
-     * layout out to the destination's size mid-flight.
+     * The flight is deliberately **one-way**: card -> hero on enter, and no
+     * flight at all on pop. The hero backdrop is a `ContentScale.Crop` image at
+     * full-bleed aspect; flying it back into a poster-sized rect makes the
+     * shared-element overlay re-measure that crop at every interpolated bound
+     * while the rect morphs across aspect ratios, and the crop scale spikes —
+     * a zoomed-in frame for the first split second of Back. That is inherent to
+     * `Crop` + cross-aspect shared elements, not something `boundsTransform`
+     * can tune away.
+     *
+     * So while the enclosing scope is exiting (`targetState` is
+     * [EnterExitState.PostExit]) this returns a plain modifier and the hero
+     * fades with the screen's normal exit transition instead. The source card's
+     * sticky `heroSourceKey` is untouched and it simply finds no partner, so no
+     * flight runs; the rail reappears through the incoming screen's own
+     * transition. Predictive back cancels for free: a cancelled gesture flips
+     * `targetState` back to [EnterExitState.Visible], this recomposes, and the
+     * shared element is re-attached.
+     *
+     * This is the **destination** rule only. A source card must keep using
+     * [sourceModifierFor]: on the way *in* it sits on the outgoing screen, whose
+     * own `targetState` is already [EnterExitState.PostExit], so gating it here
+     * would delete the flight's other end and the enter would stop working.
+     *
+     * The enter flight is unchanged. `placeholderSize = ContentSize` keeps both
+     * ends honest: it means "hold the slot at the size this composable would
+     * normally be", so the rail keeps the poster's own footprint for the
+     * duration of the flight instead of letting the posters beside it shuffle
+     * across to fill the gap (and shuffle back on return). `AnimatedSize` would
+     * instead drag the rail layout out to the destination's size mid-flight.
      *
      * `boundsTransform` uses the same duration as the screen transition, so the
      * flight and the crossfade finish together instead of the poster arriving a
      * beat late — including the reduced-motion case, where it is 0.
      */
     @Composable
-    fun modifierFor(key: String): Modifier = with(sharedScope) {
+    fun modifierFor(key: String): Modifier {
+        if (!joinsFlight(visibilityScope.transition.targetState)) {
+            return Modifier
+        }
+        return sharedElementModifier(key)
+    }
+
+    /**
+     * The shared-element modifier for a card that can **start** a flight.
+     *
+     * Unconditional on purpose: the source is on the outgoing screen while the
+     * flight is in progress, and that screen's `targetState` is
+     * [EnterExitState.PostExit] for the whole enter animation. The one-way rule
+     * in [modifierFor] is the destination's, and applying it here would take
+     * away the source exactly when it is needed.
+     */
+    @Composable
+    internal fun sourceModifierFor(key: String): Modifier = sharedElementModifier(key)
+
+    @Composable
+    private fun sharedElementModifier(key: String): Modifier = with(sharedScope) {
         Modifier.sharedElement(
             sharedContentState = rememberSharedContentState(key = key),
             animatedVisibilityScope = visibilityScope,
@@ -110,7 +162,8 @@ val LocalKBHeroTransition = compositionLocalOf<KBHeroTransition?> { null }
  * This is the **destination** end, and also the right choice for any endpoint
  * that is always in play — the Detail hero, which is not focusable and so has
  * no focus to be gated on. A card that can *start* a flight should use
- * [heroSourceElement] instead.
+ * [heroSourceElement] instead. The destination still drops out on pop (see
+ * [KBHeroTransition.modifierFor]): it is only in play on the way in.
  *
  * Only worth adding to a node that can open a **Detail** page. Two Detail pages
  * share one `AnimatedContent` content key and therefore do not animate at all,
@@ -179,6 +232,6 @@ fun Modifier.heroSourceElement(type: String, id: String): Modifier {
             if (focusState.hasFocus) heroSourceKey.value = key
         }
         .then(
-            if (isSource.value) transition.modifierFor(key) else Modifier
+            if (isSource.value) transition.sourceModifierFor(key) else Modifier
         )
 }
