@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import java.time.LocalDate
 
 /**
  * The Upcoming rail's caught-up candidates, from the two sources that do not
@@ -68,6 +69,61 @@ internal data class CaughtUpShowCandidate(
      */
     val fromTracker: Boolean = false
 )
+
+/**
+ * Whether the episode TMDB names as `next_episode_to_air` is genuinely still
+ * ahead of this viewer - the guard that keeps a stale cached detail from
+ * building a phantom "Next up" card.
+ *
+ * Reported: after finishing the last aired episode of a show, the Upcoming rail
+ * showed "Next up" for the episode that had just been watched, with no episode
+ * title. The cached series detail had been fetched before that episode aired,
+ * so TMDB's `next_episode_to_air` still named it; the viewer was caught up on
+ * everything aired, so the card was built and shown - and on the next launch,
+ * once the detail cache had rolled over, it vanished on its own. A "next"
+ * episode that has already been watched, or whose air date is already behind
+ * us, is not next, and the builder must not emit it.
+ *
+ * Two checks, deliberately different in strength:
+ *  - the watched-set check is airtight and comes from the parser's own
+ *    [CaughtUpShowCandidate.watchedEpisodes] (no extra fetch), because it does
+ *    not depend on TMDB's data being fresh; and
+ *  - the air-date check covers the case the watched set cannot see - an
+ *    episode that has aired but was never recorded watched here.
+ *
+ * A missing or unparseable air date fails OPEN (the episode is kept), matching
+ * the rail's existing authority for "is this upcoming": the schedule builder's
+ * second-source air-date correction drops a date it cannot place, and an
+ * unknown date is never on its own a reason to hide a card.
+ *
+ * [today] is injectable so the boundary can be tested without a clock; every
+ * caller in the app takes the default.
+ */
+internal fun nextAirStillUpcoming(
+    seasonNumber: Int?,
+    episodeNumber: Int?,
+    airDate: String?,
+    watchedEpisodes: Set<Pair<Int, Int>>,
+    today: LocalDate = LocalDate.now()
+): Boolean {
+
+    if (
+        seasonNumber != null &&
+        episodeNumber != null &&
+        watchedEpisodes.contains(seasonNumber to episodeNumber)
+    ) {
+        return false
+    }
+
+    val date =
+        airDate?.let { raw ->
+            runCatching { LocalDate.parse(raw) }.getOrNull()
+        }
+
+    if (date != null && !date.isAfter(today)) return false
+
+    return true
+}
 
 /**
  * One candidate per show with completed episodes, most recently completed

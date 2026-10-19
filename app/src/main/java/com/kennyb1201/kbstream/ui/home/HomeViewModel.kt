@@ -2319,10 +2319,13 @@ Log.d(
      *
      * The detail is the same cached lookup the Continue Watching cards make,
      * and "caught up" is the app's own rule over the episodes the candidate's
-     * source recorded watched. Whether the next episode's date is in the future
-     * is deliberately left to the schedule builder: that is where the
-     * second-source air-date correction lives, and a date it cannot place is
-     * dropped there (the rail keeps one authority for "is this upcoming").
+     * source recorded watched. Whether the episode TMDB calls next is really
+     * next is settled HERE, before anything is built (see
+     * [nextAirStillUpcoming]): a cached detail whose next_episode_to_air went
+     * stale around air day must not become a card. The schedule builder still
+     * owns the rail's second-source air-date correction; this is the builder
+     * refusing to emit a "next" episode that is already watched or already
+     * aired.
      */
     private suspend fun buildCaughtUpUpcomingCard(
         candidate: CaughtUpShowCandidate
@@ -2335,6 +2338,22 @@ Log.d(
         val air =
             detail.nextEpisodeToAir
                 ?: return null
+
+        // TMDB's next_episode_to_air goes stale around air day: the cached
+        // detail can still name an episode that has since aired (and that this
+        // viewer has since watched). A "next" episode that is already watched -
+        // or whose air date is already past - is not next; emitting it builds
+        // the phantom "Next up: S04E01" card for a finished show.
+        if (
+            !nextAirStillUpcoming(
+                seasonNumber = air.seasonNumber,
+                episodeNumber = air.episodeNumber,
+                airDate = air.airDate,
+                watchedEpisodes = candidate.watchedEpisodes
+            )
+        ) {
+            return null
+        }
 
         val caughtUp =
             LocalSeriesProgress.isCaughtUp(
