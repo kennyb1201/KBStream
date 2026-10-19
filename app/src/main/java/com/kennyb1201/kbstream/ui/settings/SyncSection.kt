@@ -13,12 +13,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.ui.components.KBButton
+import com.kennyb1201.kbstream.ui.components.KBSecretField
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -40,6 +40,12 @@ fun SyncSection() {
     val authState by SupabaseSync.authState.collectAsStateWithLifecycle()
     val lastSync by SupabaseSync.lastSyncAtMs.collectAsStateWithLifecycle()
     val syncError by SupabaseSync.syncError.collectAsStateWithLifecycle()
+
+    // Read once for the row below (and stable across the section's
+    // recompositions): a kids profile does not get the account controls.
+    val kidsProfile = com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.collectAsStateWithLifecycle().value
+        ?.kidsMaxAge != null
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -89,10 +95,16 @@ fun SyncSection() {
                     onClick = { SupabaseSync.syncNow(context) },
                     enabled = !busy
                 )
-                KBButton(
-                    label = "SIGN OUT",
-                    onClick = { SupabaseSync.signOut(context) }
-                )
+                // m10 (audit): signing the household out of the sync account
+                // is not a kids-profile action - it is the account the parent
+                // set up, and the press is one tap with no confirmation. Not
+                // drawn here; an adult profile still signs out normally.
+                if (!kidsProfile) {
+                    KBButton(
+                        label = "SIGN OUT",
+                        onClick = { SupabaseSync.signOut(context) }
+                    )
+                }
             }
 
             Text(
@@ -126,12 +138,17 @@ fun SyncSection() {
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
             )
-            KBTextField(
+            // A masked KBSecretField rather than a hand-rolled password box:
+            // every API key field in this app is a KBSecretField with a reveal
+            // chip, and this - the one field a viewer types a password into with
+            // a remote - was the only masked input with no way to check what was
+            // entered.
+            // keepFocusOnDone carries over: this is a modal-style form on a
+            // scrolling page, so committing must not drop focus.
+            KBSecretField(
                 value = password,
                 onValueChange = { password = it },
                 placeholder = "Password (6+ characters)",
-                keyboardType = KeyboardType.Password,
-                visualTransformation = PasswordVisualTransformation(),
                 keepFocusOnDone = true,
                 modifier = Modifier
                     .fillMaxWidth()

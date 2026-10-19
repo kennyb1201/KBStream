@@ -410,9 +410,22 @@ fun KBSecretField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     onDone: (() -> Unit)? = null,
-    onFocusChanged: ((Boolean) -> Unit)? = null
+    onFocusChanged: ((Boolean) -> Unit)? = null,
+    /**
+     * Forwarded to the field: a masked field inside a modal form keeps focus on
+     * Done rather than letting the next Down escape behind the form (the sync
+     * sign-in is the one such caller).
+     */
+    keepFocusOnDone: Boolean = false,
+    /**
+     * Whether the eye chip exists at all. False for a field a viewer must not
+     * be able to read back (a kids profile's API-key cards, see m11): the value
+     * stays masked and the chip that would unmask it is not composed, so there
+     * is no press - and no focus stop - that shows the secret.
+     */
+    revealable: Boolean = true
 ) {
-    var revealed by remember { mutableStateOf(false) }
+    var revealed by remember(revealable) { mutableStateOf(false) }
     var fieldFocused by remember { mutableStateOf(false) }
     var chipFocused by remember { mutableStateOf(false) }
 
@@ -432,17 +445,20 @@ fun KBSecretField(
             focusRequester = focusRequester,
             visualTransformation = secretFieldTransformation(revealed),
             onDone = onDone,
+            keepFocusOnDone = keepFocusOnDone,
             onFocusChanged = { focused ->
                 fieldFocused = focused
                 onFocusChanged?.invoke(focused)
             }
         )
-        Spacer(modifier = Modifier.width(8.dp))
-        KBRevealChip(
-            revealed = revealed,
-            onToggle = { revealed = !revealed },
-            onFocusChanged = { chipFocused = it }
-        )
+        if (revealable) {
+            Spacer(modifier = Modifier.width(8.dp))
+            KBRevealChip(
+                revealed = revealed,
+                onToggle = { revealed = !revealed },
+                onFocusChanged = { chipFocused = it }
+            )
+        }
     }
 }
 

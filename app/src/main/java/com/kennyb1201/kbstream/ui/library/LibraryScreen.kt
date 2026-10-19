@@ -280,7 +280,12 @@ fun LibraryScreen(
                     label = filter.label,
                     selected = state.filter == filter,
                     onClick = { viewModel.setFilter(filter) },
-                    modifier = if (filter == LibraryFilter.entries.first()) {
+                    // The entry focus goes on the SELECTED chip, not always on
+                    // ALL: the filter lives in the activity-scoped ViewModel, so
+                    // re-entering Library on WATCHLIST or LISTS with focus on the
+                    // ALL chip meant the first D-pad press undid the viewer's
+                    // choice. The selected chip is composed whenever this row is.
+                    modifier = if (filter == state.filter) {
                         Modifier.focusRequester(topFocusRequester)
                     } else {
                         Modifier

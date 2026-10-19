@@ -292,6 +292,17 @@ class ExternalPlayerActivity : ComponentActivity() {
         // showed the ordinary #0A0E14 void behind it.
         applyPlayerWindowTone(this)
 
+        // .... and a kids profile does not get this engine at all (audit C8):
+        // the locks are enforced from the app's own player Activities, so a
+        // title handed to another app plays on with bedtime and the daily
+        // budget suspended. [PlayerEngine.selected] coerces the stored pref, so
+        // reaching here with a kids profile active means a stale hand-off; end
+        // it here rather than let it through.
+        if (!com.kennyb1201.kbstream.data.player.PlayerEngine.externalAllowedForProfile()) {
+            finish()
+            return
+        }
+
         // Kids Mode: end the hand-off the moment a daily limit or bedtime
         // lands rather than leaving this picker up behind it. Once the chosen
         // app is on top this Activity stops too, so - like watching in any

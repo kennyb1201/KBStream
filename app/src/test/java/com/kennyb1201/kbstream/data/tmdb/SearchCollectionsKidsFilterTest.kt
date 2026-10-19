@@ -169,18 +169,29 @@ class SearchCollectionsKidsFilterTest {
     }
 
     @Test
-    fun `actors, studios and the title rail are left as they were`() {
+    fun `actors keep their names but lose their known-for titles on a kids profile`() {
         val search = source(SEARCH)
         assertTrue(
             "the title path must keep its own ceiling filter",
             search.contains("tmdbRepository.kidsFilterMetas(mergedTitles.map { it.meta })")
         )
+        // M10 (audit): the person CARD prints up to three known-for TITLE names
+        // under the name, so a search for an adult performer put adult titles in
+        // plain text on a kids profile. The person rail is therefore built twice:
+        // untouched off a kids profile, and with the known-for strip on one. The
+        // NAME itself stays - a person is not content and has no certification.
         assertTrue(
-            "actors are names, not content: no certification signal to filter on",
-            search.contains("_actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)")
+            "the unfiltered person rail is kept for an ordinary profile",
+            search.contains("_actorResults.value =") &&
+                search.contains("personResults.distinctBy { it.id }") &&
+                search.contains(".take(MAX_PERSON_RESULTS)")
         )
         assertTrue(
-            "same for studios",
+            "and a kids profile gets the same names with an empty known-for list",
+            search.contains(".map { it.copy(knownFor = emptyList()) }")
+        )
+        assertTrue(
+            "same for studios: a company name is not content",
             search.contains("_studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)")
         )
     }

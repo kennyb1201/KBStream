@@ -572,13 +572,28 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             .let { allowed -> mergedTitles.filter { it.meta in allowed } }
                             .take(MAX_TITLE_RESULTS)
                     }
-                _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
+                // M10 (audit): the person CARD prints up to three known-for
+                // TITLE names under the name, and a search for an adult
+                // performer therefore put adult titles in plain text on a kids
+                // profile. Tapping through was already safe (filmography
+                // filtered at source, Detail gated); the text was the leak. The
+                // known-for strip is dropped on a kids profile and the
+                // department kept, because a person's NAME is not content and
+                // carries no certification - the titles under it are.
+                _actorResults.value =
+                    if (tmdbRepository.kidsMaxAge() == null) {
+                        personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
+                    } else {
+                        personResults.distinctBy { it.id }
+                            .take(MAX_PERSON_RESULTS)
+                            .map { it.copy(knownFor = emptyList()) }
+                    }
                 _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
                 // Collections carry no rating of their own, so the ceiling is
                 // applied to their members: a kids profile sees a franchise
-                // only when at least one of its films is allowed. Actors and
-                // studios are left alone deliberately — a person or company
-                // name is not content and carries no certification signal.
+                // only when at least one of its films is allowed. Studios are
+                // left alone deliberately — a company name is not content and
+                // carries no certification signal.
                 _collectionResults.value =
                     if (tmdbRepository.kidsMaxAge() == null) {
                         collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
@@ -1474,6 +1489,18 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             .activeProfile.value?.kidsMaxAge != null
         if (kids == isKidsMode) return
         isKidsMode = kids
+
+        // m1: the query TEXT is part of the leak too. A recent chip is only a
+        // string and re-running one is a filtered search, so nothing adult can
+        // be played from it - but an adult query sitting on a kids profile's
+        // search screen is exactly what turning the ceiling on was for. Cleared
+        // on the way IN only: turning the ceiling back off leaves what the
+        // viewer searched alone. The list is per-profile, so this cannot touch
+        // another profile's history.
+        if (kids) {
+            _recentSearches.value = emptyList()
+            persistRecentSearches()
+        }
 
         // Drop any in-flight results first: adult content from the previous
         // profile must not survive into the kids view (or vice versa).

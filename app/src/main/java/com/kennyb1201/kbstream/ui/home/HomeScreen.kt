@@ -1985,7 +1985,15 @@ private fun HomeHero(
     // Only show the episode description for non-resume items (a finale
     // that is being resumed still has a saved position, so it behaves
     // like a plain resume card here).
+    //
+    // And not under spoiler-free, which is the point of [hidesHeroEpisodeTitle]
+    // above: the episode's NAME is hidden there while its SYNOPSIS - the actual
+    // spoiler text - was still drawn, so the mode hid the smaller of the two
+    // leaks. The title's own latch is reused rather than re-derived; for every
+    // badge that reaches this block it means "spoiler-free is on", because the
+    // one badge that reads as in-progress here is excluded just below.
     if (
+        !hidesHeroEpisodeTitle &&
         continueWatchingItem.badge !=
             UpNextBadge.CONTINUE_WATCHING &&
         continueWatchingItem.startPositionMs <= 0L
@@ -4430,9 +4438,24 @@ fun HomeScreen(
                                 // remote retries the rail build immediately,
                                 // with no need to leave Home or poke a setting
                                 // when a cold-start load failed.
+                                // A network failure and an empty add-on list are
+                                // NOT the same state, and this card used to
+                                // assert the wrong one: the ViewModel crafts
+                                // "Couldn't reach your add-ons…" for exactly this
+                                // branch and the message was dropped on the
+                                // floor, so a TV that lost the network on cold
+                                // start told the viewer they had no add-ons. Its
+                                // text is preferred whenever there IS an error;
+                                // "add an addon" is for the case with nothing to
+                                // report.
+                                val emptyMessage = error?.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "Couldn't reach your add-ons. Check the " +
+                                            "network connection, then press OK to retry."
+                                    }
+                                    ?: "No catalogs available. Add an addon to get started."
                                 KBStatusMessage(
-                                    message = "No catalogs available. Add an addon " +
-                                        "to get started.",
+                                    message = emptyMessage,
                                     icon = KB_STATUS_ICON_EMPTY,
                                     onRetry = { viewModel.refreshRailsOnly() },
                                     modifier = Modifier.fillParentMaxSize()

@@ -69,6 +69,7 @@ import com.kennyb1201.kbstream.data.iptv.ChannelRecall
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.iptv.GuideRevision
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
+import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
@@ -4639,7 +4640,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                    exoPlayer?.pause(); showControls(); true
+                    // Guarded exactly like the PLAY arm below, and for a reported
+                    // Fire TV symptom: Fire OS emits spurious MEDIA_PAUSE events
+                    // around HDMI-CEC and voice-remote activity, including while
+                    // the startup splash is still up. Pausing then set
+                    // playWhenReady=false AFTER createPlayer had set it true; the
+                    // player still reached READY and painted frame 1 (so the
+                    // splash came down and the controls came up) and nothing ever
+                    // auto-resumed - the viewer saw "it pauses after initial load
+                    // and I have to unpause". Before the first frame there is
+                    // nothing on screen to pause, so the press is swallowed.
+                    if (!hasPlayedOnce) true else {
+                        exoPlayer?.pause(); showControls(); true
+                    }
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY -> {
                     // Same guard as togglePlayPause(): a stray PLAY after the end
@@ -4819,7 +4832,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 if (playbackEndedHandled) return true
                 exoPlayer?.play(); hideControls(); return true
             }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer?.pause(); showControls(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                // Same startup guard as the surface listener's arm: a spurious
+                // MEDIA_PAUSE during the initial load (Fire TV emits them around
+                // CEC / voice-remote events) would otherwise park the player on
+                // frame 1 with nothing to resume it.
+                if (hasPlayedOnce) {
+                    exoPlayer?.pause(); showControls()
+                }
+                return true
+            }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { advanceToNextEpisode(); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
@@ -6996,6 +7018,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun updateUIError() {
         hideBufferingSpinner()
         reconnectingContainer.visibility = View.GONE
+        // The pulsing "loading" splash sat BEHIND the failure card in all three
+        // card-raising paths below, so a failure read as "still loading" from
+        // across the room (z-order saved the card, but the animation did not
+        // stop). The card means the load is over.
+        hideSplash()
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
@@ -7278,6 +7305,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     "release has broken timestamps. Try a different source, a lower resolution, " +
                     "or a non-Dolby-Vision release." +
                     "\n\n" + failureDiagnostic("the stream never became ready")
+            hideSplash()
             errorContainer.visibility = View.VISIBLE
             btnChangeSource.visibility = View.VISIBLE
             offerErrorSwitch()
@@ -7517,6 +7545,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 (if (triedOtherSources) "Other sources were also tried automatically. " else "") +
                 "If Dolby Vision playback is on, try setting it to Off for this file, or choose " +
                 "a different source — a 1080p H.264 release usually plays on any device."
+        hideSplash()
         errorContainer.visibility = View.VISIBLE
         btnChangeSource.visibility = View.VISIBLE
         offerErrorSwitch()
@@ -10009,7 +10038,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 )
             val entry = guideChannelIdFor(channel)
                 ?.let { programs[epgProgramChannelKey(it)] }
-            val nowProgram = entry?.now
+            // m7: the programme inside a surviving channel is unvetted text a
+            // playlist author writes. On a kid-locked-live-TV profile a title
+            // the signal list rejects reads as "no guide data" rather than as
+            // the programme's own name; the timing bar stays, because when a
+            // block runs is not content.
+            val nowProgram = entry?.now?.takeIf { program ->
+                !KidsLiveTvFilter.programHidden(program.title, program.description)
+            }
+            val nextProgram = entry?.next?.takeIf { program ->
+                !KidsLiveTvFilter.programHidden(program.title, program.description)
+            }
             ChannelGuideRow(
                 channelNumber = channel.chno?.trim()?.takeIf { it.isNotEmpty() },
                 name = channel.name,
@@ -10023,7 +10062,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         " – " + zapTime(it.endUtcMillis)
                 },
                 nowProgressPermille = nowProgram?.let { guideProgressPermille(it, now) },
-                nextTitle = entry?.next?.let {
+                nextTitle = nextProgram?.let {
                     "Next  " + zapTime(it.startUtcMillis) + "  " + it.title
                 },
                 isCurrent = channel.channelId == currentId,
@@ -12022,12 +12061,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             historyParentIdOverride?.let {
                 putExtra(MpvPlayerActivity.EXTRA_HISTORY_PARENT_ID, it)
             }
+            // m9: the third engine in a chain still belongs to the profile that
+            // STARTED the session. The MPV handoff above pins it; this one used
+            // to drop it, so an Exo -> external switch after a profile change
+            // filed the session under the new profile.
+            sessionProfileId?.let {
+                putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
+            }
         }
 
         Log.i(
             "PLAYER_RETRY",
             "handing playback to the external player from ${position}ms"
         )
+        // Same order as [handOffToMpv], and for the same reason: this activity
+        // outlives the handoff launch (the wrapper starts before this one
+        // stops), so its loaders would still hold the stream the external app
+        // is opening. The window is smaller across processes, but a debrid or
+        // usenet link that allows ONE connection does not care which engine
+        // asked - the second opener fails either way.
+        runCatching { exoPlayer?.stop() }
         errorMessageStr = null
         errorContainer.visibility = View.GONE
         reconnectingContainer.visibility = View.VISIBLE
@@ -12375,7 +12428,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * PipSupport).
      */
     private fun enterPipIfEnabled() {
-        enterPipMode(this)
+        // The same latches [resumeAfterBackgroundReturn] reads as "handing
+        // over": the successor activity starts before this one's onStop, and a
+        // PiP window here would skip that onStop teardown entirely and leave a
+        // stopped player floating over the session that took the screen.
+        enterPipMode(
+            this,
+            handingOver = mpvHandoffStarted || externalHandoffStarted || nextEpisodeHandoffStarted
+        )
     }
 
 
@@ -12485,6 +12545,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         clockHandler.removeCallbacks(clockRunnable)
         scrubHandler.removeCallbacksAndMessages(null)
         zapHandler.removeCallbacksAndMessages(null)
+        // The channel-number commit is on its own handler as well, and it was
+        // only ever cleared in onDestroy: a digit typed inside the 1.2 s
+        // debounce window and then backgrounded fired commitChannelNumberEntry
+        // -> tuneToChannel -> switchToSource -> recreatePlayer against a
+        // stopped activity, rebuilding a player this onStop had just released.
+        channelNumberHandler.removeCallbacks(channelNumberCommitRunnable)
+        channelNumberHandler.removeCallbacks(channelNumberHudHideRunnable)
         // The guide's long-press timer lives on its own handler too: a hold
         // that outlasted the screen would otherwise fire showChannelGuide()
         // against a stopped activity.
@@ -12688,6 +12755,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         dvStripRetryDone = false; forceDvStripForSession = false
         decoderResourceFallbackDone = false
         decoderFailureRetried = false
+        // Per source too: left set by a previous container-parse failure, the
+        // NEXT source's own parse failure skipped its one raw-extractor probe
+        // and went straight to the MPV handoff.
+        containerParseRetried = false
         // Per-source Dolby Vision identity. These used to survive into the
         // next player build, so a P5 title followed by any other title kept
         // the P5 GL color path "on": the shader then applied ICtCp math to

@@ -21,6 +21,15 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  *    same launcher dump, on the platform most of this app's users run.
  *  - **Never against the setting.** Settings → Playback owns the switch; a
  *    viewer who turned PiP off wants a Home press to leave playback alone.
+ *  - **Never during an engine handoff.** Starting the successor activity runs
+ *    this activity's `onPause` while the old engine is still tearing down, so a
+ *    Home-shaped pause at that instant put a PiP window around a player that was
+ *    already stopped. Worse, PiP means `onStop` never runs, and the handoff's
+ *    own teardown lives there (the MPV surface is released in `onStop` because
+ *    libmpv holds the one-deep decoder the successor engine has to allocate),
+ *    so the hand-back was skipped and the dead window floated over the new
+ *    session. Callers pass their own latch: this helper has no way to read them.
+ *    [handingOver] is that latch.
  *
  * What is deliberately *not* consulted is `FEATURE_PICTURE_IN_PICTURE`. A box
  * that lacks it returns false from the call below and nothing happens, so the
@@ -29,8 +38,11 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * platform really shrinks the window is answered by `enterPictureInPictureMode`
  * itself, not by a manifest flag.
  */
-internal fun enterPipMode(activity: Activity): Boolean {
+internal fun enterPipMode(activity: Activity, handingOver: Boolean = false): Boolean {
     if (activity.isFinishing || activity.isDestroyed) return false
+    // See the class kdoc: an in-flight handoff gives the successor engine the
+    // screen, and a PiP window here defeats the hand-back its `onStop` owes.
+    if (handingOver) return false
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
     if (Build.MANUFACTURER.equals("Amazon", ignoreCase = true)) return false
     if (!AppPreferences.getEnablePip(activity)) return false

@@ -240,6 +240,15 @@ class XmltvImporter(
         // live guide. @Transaction — the old guide is never briefly absent
         // while reads land between the delete and the re-key.
         //
+        // A cancelled import must not promote anything: the whole point of the
+        // staging key is that only the attempt that is still wanted can swap.
+        // The watchdog's retry displaces the wedged attempt and cancels it
+        // (see IptvRepository.importGuide), but an import unwedging in the same
+        // instant could otherwise reach this line, delete the retry's finished
+        // live guide and promote its own partial leftovers. Checked HERE as
+        // well as at the batch flushes, because this write is the one that is
+        // destructive rather than additive.
+        currentCoroutineContext().ensureActive()
         // This is the single heaviest guide write (re-keying every imported
         // row), so it is the one most worth deferring past playback.
         EpgWriteGate.holdWhilePlaying()

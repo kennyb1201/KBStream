@@ -197,6 +197,12 @@ object ProfileManager {
             .edit().putString(KEY_ACTIVE, profile.id).apply()
         _activeProfile.value = profile
         onActiveProfileChanged()
+        // The kids time guard evaluates on its 30 s tick, on app start/stop and
+        // on a parent override — NOT on a switch. So picking a profile that is
+        // already locked (or leaving one) left the veil answering for the other
+        // profile for up to half a minute, in both directions. Re-evaluate
+        // right here: `setActive` is the one place the active profile changes.
+        runCatching { KidsTimeGuard.refresh() }
     }
 
     /**
@@ -286,16 +292,32 @@ object ProfileManager {
 
     // ── Profile PIN (Who's Watching lock) ────────────────────────────
     // Only the SHA-256 hash is stored/synced — the plain PIN never persists.
-    private fun hashPin(pin: String): String {
+    //
+    // `internal` rather than private: the app-level PARENT PIN (see
+    // [KidsTimeGuard.hasParentPin]) is a second credential of the same kind, and
+    // it has to hash and verify with exactly this function - a second algorithm,
+    // or the same one written twice, is how two stored hashes drift apart.
+    internal fun hashPin(pin: String): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest(pin.toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) }
     }
 
+    /** The one rule for what a PIN may be: exactly four digits. */
+    internal fun isValidPin(pin: String): Boolean =
+        pin.length == 4 && pin.all { it.isDigit() }
+
+    /**
+     * Whether [pin] hashes to [hash]. False for a stored null/blank, the same
+     * honest answer [verifyPin] gives for a profile with no PIN.
+     */
+    internal fun verifyHash(hash: String?, pin: String): Boolean =
+        hash?.takeIf { it.isNotBlank() }?.let { hashPin(pin) == it } ?: false
+
     /** Sets (4 digits) or clears (null/blank) a profile's PIN. Returns false on malformed input. */
     fun setPin(context: Context, profileId: String, pin: String?): Boolean {
         val clean = pin?.trim().orEmpty()
-        if (clean.isNotEmpty() && (clean.length != 4 || clean.any { !it.isDigit() })) return false
+        if (clean.isNotEmpty() && !isValidPin(clean)) return false
         val updated = loadProfiles(context).map { p ->
             if (p.id != profileId) p else p.copy(pinHash = clean.takeIf { it.isNotEmpty() }?.let { hashPin(it) })
         }
@@ -349,7 +371,13 @@ object ProfileManager {
                 kidsLockLiveTv = lockLiveTv,
                 kidsRequirePinToExit = requirePinToExit,
                 kidsDailyLimitMinutes = dailyLimitMinutes.coerceIn(0, 24 * 60),
-                kidsBedtimeMinutes = bedtimeMinutes.coerceIn(0, 24 * 60 - 1)
+                // The bedtime chip domain is 0 (Off) then 1..11 = 1 PM..11 PM and
+                // 12 = MIDNIGHT, which the editor stores as `24*60 + minute`. The
+                // old ceiling of `24*60 - 1` clamped midnight to 23:59, so the
+                // chip the viewer picked came back as "11 PM" and the chosen
+                // minute was destroyed — same value the cloud-merge path below
+                // was clamping too.
+                kidsBedtimeMinutes = bedtimeMinutes.coerceIn(0, 24 * 60 + 59)
             )
         }
         saveProfiles(context, updated)
@@ -383,8 +411,16 @@ object ProfileManager {
 
     fun hasPin(profile: Profile): Boolean = !profile.pinHash.isNullOrBlank()
 
+    /**
+     * True only when [profile] HAS a PIN and [pin] matches it.
+     *
+     * This used to answer `true` for a profile with no PIN (`?: true`), which
+     * made a security primitive say "yes" for the case it cannot check. Every
+     * current caller guards with [hasPin] first, so nothing changes today, but
+     * the next call site that forgets the guard would have been an open door.
+     */
     fun verifyPin(profile: Profile, pin: String): Boolean =
-        profile.pinHash?.let { hashPin(pin) == it } ?: true
+        verifyHash(profile.pinHash, pin)
 
     /** Explicitly sets (or clears) a profile's custom avatar URL. Clearing also drops uploaded data. */
     fun setCustomAvatar(context: Context, profileId: String, url: String?) {
@@ -533,19 +569,20 @@ object ProfileManager {
         }
 
         if (_activeProfile.value?.id == profileId) {
-            val next = updated.firstOrNull()
-            _activeProfile.value = next
-            if (next != null) {
-                setActive(context, next)
-            } else {
-                // Deleted the LAST profile: persist the cleared active id
-                // and run the same cache-reset sequence a switch performs,
-                // so UI state (watched caches, addons, Simkl, scoped DB
-                // handles) can't keep serving the deleted profile's data.
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().remove(KEY_ACTIVE).apply()
-                onActiveProfileChanged()
-            }
+            // Deleting the ACTIVE profile does NOT hand the app to another one
+            // (audit C3). It used to run `setActive(updated.firstOrNull())`,
+            // which in the ordinary two-profile household meant deleting the
+            // kids profile landed straight on the ADULT profile - an
+            // unauthenticated switch that made the delete itself the escape.
+            // Nothing is activated now: the id is cleared and choosing a
+            // profile is its own act again (and, since the audit, an
+            // authenticated one - see KidsGate). The cache-reset sequence is
+            // the same one a switch runs, so no scoped handle, watched cache or
+            // addon list keeps serving the deleted profile's data.
+            _activeProfile.value = null
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().remove(KEY_ACTIVE).apply()
+            onActiveProfileChanged()
         }
     }
 
@@ -803,9 +840,12 @@ object ProfileManager {
                 kidsDailyLimitMinutes =
                     (str("kidsDailyLimitMinutes")?.toIntOrNull() ?: 0)
                         .coerceIn(0, 24 * 60),
+                // Ceiling matches the editor's chip domain (see setKidsOptions):
+                // midnight is `24*60 + minute`, and clamping it to 23:59 turned a
+                // synced midnight back into "11 PM" on this device.
                 kidsBedtimeMinutes =
                     (str("kidsBedtimeMinutes")?.toIntOrNull() ?: 0)
-                        .coerceIn(0, 24 * 60 - 1),
+                        .coerceIn(0, 24 * 60 + 59),
                 guest = bool("guest", default = false),
                 createdAt = lng("createdAt") ?: 0L
             )

@@ -63,8 +63,10 @@ class SportsHubLineupRetryContractTest {
     @Test
     fun `retry is the only path that replaces an in-flight read`() {
         assertEquals(
-            "the prewarm shares its read with the matching pass; only the retry may take one away",
-            1,
+            "the prewarm shares its read with the matching pass, so exactly two paths may take a " +
+                "read away: the retry, and the profile switch (whose read belongs to the profile " +
+                "being left - see observeProfileSwitches)",
+            2,
             Regex("channelsJob\\?\\.cancel\\(\\)").findAll(vm).count()
         )
         val prewarm = bodyOf("private fun prewarmLineup()")
@@ -153,8 +155,11 @@ class SportsHubLineupRetryContractTest {
             resolve.contains("_lineupStatus.value = LineupStatus.MISSING")
         )
         assertTrue(
-            "and that is the branch the empty read takes",
-            resolve.indexOf("channels.isEmpty()") < resolve.indexOf("LineupStatus.MISSING")
+            "and that is the branch the empty READ takes - tested before the kids filter " +
+                "narrows the lineup, because the two are different answers: no playlist at " +
+                "all is MISSING, while a playlist the profile may not see still reports READY",
+            resolve.indexOf("playlistChannelsNow.isEmpty()") <
+                resolve.indexOf("LineupStatus.MISSING")
         )
     }
 

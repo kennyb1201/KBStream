@@ -39,7 +39,16 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+// Compose's KeyEvent under an alias: this file imports android.view.KeyEvent
+// for the platform handlers, and the two cannot share a name. `key`/`type` are
+// the compose extension properties on it, and extensions have to be imported.
+import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -92,6 +101,7 @@ import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerNameOrUnknown
 import com.kennyb1201.kbstream.ui.launchSplashVisible
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
+import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.notifications.NotificationCenter
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
@@ -1599,18 +1609,27 @@ fun AppRoot(
     // profile's PIN to unlock for this session.
     KidsTimeLockOverlay()
 
+    // m5 (audit): nothing else may be composable as its own WINDOW while the
+    // time lock is up. A `Dialog` is a separate window from the veil's, so the
+    // update offer and the exit prompt sat freely above a locked screen -
+    // touchable and D-pad-drivable, with their own buttons, over a veil that had
+    // just swallowed every press aimed at the app behind it. The veil wins.
+    val timeLocked by com.kennyb1201.kbstream.data.sync.KidsTimeGuard.state
+        .collectAsStateWithLifecycle()
+
     // Update popup on every screen except Settings (Settings has the full
     // updater row; everywhere else the user would otherwise never know a new
     // build exists until they happen to visit Settings). Shown when the
     // launch check found a newer release that hasn't been dismissed for this
     // version. Covers Home/Search/Detail/Player/Guide/Library/Profiles.
-    if (screen !is Screen.Settings) {
+    if (screen !is Screen.Settings && !timeLocked.locked) {
         UpdateAvailablePopup(isPlaying = screen is Screen.Player)
     }
 
     // The exit prompt sits before the onboarding early-return so Back is also
-    // confirmed while the onboarding guide stands in for Home.
-    if (confirmExit) {
+    // confirmed while the onboarding guide stands in for Home - but not over a
+    // lock (m5): the veil already swallows Back.
+    if (confirmExit && !timeLocked.locked) {
         ExitConfirmDialog(
             onDismiss = { confirmExit = false },
             onConfirm = {
@@ -1906,12 +1925,31 @@ fun AppRoot(
                 // this leaves the same one-shot request Home's "Manage rails"
                 // card does and navigates to the screen that hosts it; the
                 // builder is a screen of its own and opens directly.
+                // M5 (audit): both of these are doors to add-on management -
+                // the Collections pane handed them their own entries when the
+                // rail doors moved here, and they were the two that forgot the
+                // gate `onOpenAddons` enforces. On a profile with "Lock
+                // add-ons" on, the Add-ons screen (and the catalogs builder
+                // beside it) is exactly what must not open, or the lock is a
+                // label rather than a lock. Same check, one place, both doors.
                 onOpenCatalogManager = {
-                    com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
-                    screen = Screen.Addons(returnTo = Screen.Settings)
+                    val active =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+                    if (active?.kidsMaxAge != null && active.kidsHideAddons) {
+                        screen = Screen.Home
+                    } else {
+                        com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
+                        screen = Screen.Addons(returnTo = Screen.Settings)
+                    }
                 },
                 onOpenCatalogBuilder = {
-                    screen = Screen.CatalogBuilder(returnTo = Screen.Settings)
+                    val active =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+                    if (active?.kidsMaxAge != null && active.kidsHideAddons) {
+                        screen = Screen.Home
+                    } else {
+                        screen = Screen.CatalogBuilder(returnTo = Screen.Settings)
+                    }
                 },
                 onOpenStats = { screen = Screen.Stats }
             )
@@ -2167,13 +2205,20 @@ fun AppRoot(
                 // channel route - a card that matched a channel hands it to the
                 // SAME liveChannelScreen the guide uses.
                 onPlayChannels = { gameId, tournamentId, channels ->
+                    // Defense in depth for kids-proof C7: the hub already matches
+                    // games against the profile's VISIBLE channels, but a launch
+                    // is the moment that matters, so the filter is re-applied at
+                    // the one place the sports hub can start a live channel
+                    // rather than trusted from the caller. A channel the guide
+                    // hides cannot be started from here at all.
+                    val playable = KidsLiveTvFilter.visible(channels)
                     // The head is the feed the hub's matcher chose and the rest
                     // are the backups the sheet listed; the player walks them in
                     // this order if one will not open.
-                    channels.firstOrNull()?.let { primary ->
+                    playable.firstOrNull()?.let { primary ->
                         screen = liveChannelScreen(
                             channel = primary,
-                            backups = channels.drop(1),
+                            backups = playable.drop(1),
                             epgIconUrl = null,
                             // One of these two is the id of the sheet WATCH was
                             // pressed in; Back from the game returns here and
@@ -3191,14 +3236,50 @@ private fun KidsTimeLockOverlay() {
     // parent picking up the remote had to D-pad-hunt from a hidden node to
     // reach it. Playback itself is still ended by `KidsTimeGuard.enforceLock`
     // in the player Activities; this is the shell's half.
+    // A field whenever ANY credential can answer it: the locked profile's own
+    // PIN, or the app-level parent PIN (see KidsTimeGuard.setParentPin). The
+    // copy below is the same for both on purpose - which one answers is the
+    // parent's business, not something the veil should announce to the child
+    // holding the remote.
     val hasPinField = profile != null &&
-        com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(profile)
+        (
+            com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(profile) ||
+                guard.hasParentPin()
+            )
     val lockRoot = remember { FocusRequester() }
     val pinField = remember { FocusRequester() }
     // Whether the OVERLAY ITSELF holds focus (the no-PIN case), which is what
     // decides if the key handler below swallows the press. It must not swallow
     // while the PIN field has focus, or the digits would never reach it.
     var lockRootFocused by remember { mutableStateOf(false) }
+
+    // The four D-pad directions are swallowed in the PREVIEW phase, before the
+    // focused node can act on them.
+    //
+    // Consuming them in the bubble phase (below) was not enough: Compose's
+    // default directional navigation runs on KeyDown as the key travels to the
+    // focused node, and a focus move CONSUMES the event - so the bubble-phase
+    // handler never saw the press it was meant to stop. Same story with a PIN
+    // on screen: KBTextField moves focus Down/Up in ITS preview handler, which
+    // is inner to this one, so it ran first too. Nothing scopes this overlay
+    // (no focusGroup, no trap) and focus search is purely geometric - it knows
+    // nothing about the veil - so the press landed on a Home or Settings tile
+    // composed UNDERNEATH, and the kid could then drive the covered screen
+    // blind to the profile picker, switch profiles, and so unlock the very
+    // profile the veil exists to hold. The preview handler runs before every
+    // other node on the path, including the field's own, so the move can no
+    // longer happen at all. Focus stays where the overlay put it (the field, or
+    // the lock root) until the lock ends.
+    val isVeilDirectionKey: (Key) -> Boolean = { key ->
+        key == Key.DirectionUp || key == Key.DirectionDown ||
+            key == Key.DirectionLeft || key == Key.DirectionRight
+    }
+    // The parameter type is named in full: this file also imports
+    // android.view.KeyEvent for the platform handlers, and an inferred
+    // parameter binds to that one.
+    val veilKeys = Modifier.onPreviewKeyEvent { event: ComposeKeyEvent ->
+        event.type == KeyEventType.KeyDown && isVeilDirectionKey(event.key)
+    }
     LaunchedEffect(lockState.locked, hasPinField) {
         // Verified retry: `requestFocus()` returns false for a node that has not
         // been laid out yet, and this effect can run before the overlay's first
@@ -3214,11 +3295,28 @@ private fun KidsTimeLockOverlay() {
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.97f))
+            // The trap: see [veilKeys]. Outer-most on the chain, so its preview
+            // pass is the first thing a D-pad press meets.
+            .then(veilKeys)
             // Focus lands here when the profile has no PIN (nothing else in the
             // overlay can take it), and the key handler swallows whatever the
             // focused child did not consume, so nothing behind the veil can be
             // driven. The tap handler does the same for touch, which used to
-            // pass through the non-consuming Box.
+            // pass through the non-consuming Box. Directional keys never reach
+            // here: they are swallowed in the preview phase above, which is what
+            // actually keeps focus inside the veil.
+            //
+            // M11 (audit): a locked kids profile with NO pin used to have no way
+            // out at all - Back is swallowed, everything is covered, and the
+            // only exits were the PIN override or the window expiring. Kenny's
+            // call (2026-10-18) was one app-level PARENT PIN, set once and asked
+            // only here, so a lock on a PIN-less profile now has a door a kid
+            // cannot open (see KidsTimeGuard.setParentPin and overrideForSession)
+            // while profile switching stays PIN-free for daily use. A profile
+            // with neither credential is still deliberately without an exit -
+            // any escape hatch for a profile with no credential is a bypass a kid
+            // can use - and the editor now refuses to create that state (see the
+            // save gate in ProfileEditScreen).
             .focusRequester(lockRoot)
             .focusable()
             .onFocusChanged { state ->
@@ -3244,6 +3342,10 @@ private fun KidsTimeLockOverlay() {
                 text = when (lockState.reason) {
                     com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.BEDTIME ->
                         "TIME FOR BED"
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.CLOCK ->
+                        "CLOCK CHANGED"
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.UNKNOWN ->
+                        "LOCKED"
                     else -> "WATCH TIME IS DONE"
                 },
                 color = KBAccent,
@@ -3254,6 +3356,18 @@ private fun KidsTimeLockOverlay() {
                 text = when (lockState.reason) {
                     com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.BEDTIME ->
                         "${lockState.profileName ?: "This profile"} is resting until 4:00 AM."
+                    // M3: the device clock moved without time passing, so the
+                    // limits cannot be trusted; the lock holds until it is put
+                    // back (and lifts with the next day).
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.CLOCK ->
+                        "${lockState.profileName ?: "This profile"} is locked while " +
+                            "this device's clock has been changed. Put the time back " +
+                            "to use it."
+                    // m13: the guard failed closed rather than leaving the
+                    // profile open, so the copy must not claim a limit was hit.
+                    com.kennyb1201.kbstream.data.sync.KidsTimeGuard.LockState.Reason.UNKNOWN ->
+                        "${lockState.profileName ?: "This profile"} is locked while " +
+                            "its time limit is checked. Ask a parent to open Settings."
                     else ->
                         "${lockState.profileName ?: "This profile"} used its " +
                             "${lockState.dailyLimitMinutes} min today. Come back tomorrow!"
@@ -3263,9 +3377,7 @@ private fun KidsTimeLockOverlay() {
                 modifier = Modifier.padding(top = 10.dp)
             )
 
-            if (profile != null &&
-                com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(profile)
-            ) {
+            if (profile != null && hasPinField) {
                 Text(
                     text = "Parent PIN to unlock",
                     color = KBTextLo,

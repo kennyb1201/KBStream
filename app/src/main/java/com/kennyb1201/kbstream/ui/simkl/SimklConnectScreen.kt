@@ -14,9 +14,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -26,7 +32,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -49,6 +57,14 @@ fun SimklConnectScreen(
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
+    // Raised by DISCONNECT; see the button's own note for what it is protecting.
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+    // m10 (audit): unlinking wipes the local watch corpus, so a kids profile
+    // does not get the button at all - confirmation or not, that is a parent's
+    // action, and the parent has a profile of their own to do it from.
+    val kidsProfile = com.kennyb1201.kbstream.data.sync.ProfileManager
+        .activeProfile.collectAsStateWithLifecycle().value
+        ?.kidsMaxAge != null
 
     Box(
         modifier = modifier
@@ -133,12 +149,22 @@ fun SimklConnectScreen(
                         // The destructive one carries the danger tint: it was
                         // drawn in the same bright label as REFRESH, so the row
                         // that unlinks the account looked like the row that
-                        // refreshes it.
-                        KBButton(
-                            label = "DISCONNECT",
-                            danger = true,
-                            onClick = vm::disconnect
-                        )
+                        // refreshes it. It also asks first now: `disconnect()`
+                        // does not merely unlink the account — it clears every
+                        // local resume position, watched marker and completed
+                        // marker (and the TV launcher's rows with them), which
+                        // is the entire local watch corpus. One tap with no
+                        // confirmation, under a label that reads like an
+                        // unlink, was the app's most destructive button. Its
+                        // sibling "Clear Continue Watching" in Settings has
+                        // always confirmed; this now matches it.
+                        if (!kidsProfile) {
+                            KBButton(
+                                label = "DISCONNECT",
+                                danger = true,
+                                onClick = { showDisconnectConfirm = true }
+                            )
+                        }
                     }
                 } else {
                     SimklStatusPanel(
@@ -198,6 +224,57 @@ fun SimklConnectScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
+        }
+    }
+
+    if (showDisconnectConfirm) {
+        DisconnectConfirmDialog(
+            onConfirm = {
+                showDisconnectConfirm = false
+                vm.disconnect()
+            },
+            onDismiss = { showDisconnectConfirm = false }
+        )
+    }
+}
+
+/**
+ * The DISCONNECT gate.
+ *
+ * Wording names the wipe, not just the unlink, because that is what the button
+ * actually does (see SimklViewModel.disconnect). CANCEL takes focus through the
+ * app's own verified retry ([landFocusOn]) — the dialog enters the tree this
+ * same frame and a fresh FocusRequester answers false until it is attached.
+ */
+@Composable
+private fun DisconnectConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { landFocusOn(cancelFocusRequester) }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Disconnect from Simkl?") {
+            Text(
+                text = "This unlinks your Simkl account and clears every resume " +
+                    "position and watched marker stored on this device, along " +
+                    "with the launcher's Continue Watching rows. It cannot be " +
+                    "undone.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBButton(label = "DISCONNECT", danger = true, onClick = onConfirm)
+                KBButton(
+                    label = "CANCEL",
+                    modifier = Modifier.focusRequester(cancelFocusRequester),
+                    onClick = onDismiss
+                )
+            }
         }
     }
 }

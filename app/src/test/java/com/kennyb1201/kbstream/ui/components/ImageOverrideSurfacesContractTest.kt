@@ -76,7 +76,14 @@ class ImageOverrideSurfacesContractTest {
         )
         assertTrue(
             "only artwork opens the menu: a trailer card carries no path to store",
-            detail.contains("if (card.imagePath != null) { mediaImageMenu = card }")
+            detail.contains("if (card.imagePath != null) {") &&
+                detail.contains("mediaImageMenu = card")
+        )
+        assertTrue(
+            "and the card that raised it is remembered, so closing the menu hands the focus " +
+                "back to it instead of leaving the D-pad at the top of the page",
+            detail.contains("mediaImageMenuCardFocusRequester =") &&
+                detail.contains("fun dismissMediaImageMenu()")
         )
     }
 

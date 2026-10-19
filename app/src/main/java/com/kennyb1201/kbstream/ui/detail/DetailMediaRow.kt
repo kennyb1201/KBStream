@@ -44,6 +44,18 @@ internal data class MediaCardItem(
     val title: String,
     /** The video this card plays, or null for an artwork card. */
     val video: TmdbVideo? = null,
+    /**
+     * Whether pressing a VIDEO card can actually start it (see
+     * [DetailMediaRow.isPlayable]). Unread on an artwork card, which is why it
+     * defaults to true.
+     *
+     * A card that cannot play is still DRAWN - the Trailers page is "every video
+     * TMDB lists for this title", and a video the app cannot open is still one
+     * of them - but it says so on its own face instead of swallowing the press:
+     * a Vimeo or Dailymotion entry used to be a silent no-op that read as a
+     * broken remote.
+     */
+    val playable: Boolean = true,
     /** The image a fullscreen view shows, or null for a video card. */
     val fullImageUrl: String? = null,
     /**
@@ -144,7 +156,8 @@ internal object DetailMediaRow {
                 imageUrl = thumbnailUrl(video),
                 badge = type.uppercase(Locale.US).takeIf { it.isNotEmpty() },
                 title = video.name?.trim()?.takeIf { it.isNotEmpty() } ?: type,
-                video = video
+                video = video,
+                playable = isPlayable(video)
             )
         }
 
@@ -286,11 +299,24 @@ internal object DetailMediaRow {
      * broken-image tile.
      */
     fun youtubeThumbnailUrl(video: TmdbVideo): String? =
-        if (video.site.equals("YouTube", ignoreCase = true) && video.key.isNotBlank()) {
+        if (isPlayable(video)) {
             "https://img.youtube.com/vi/${video.key}/hqdefault.jpg"
         } else {
             null
         }
+
+    /**
+     * Whether the trailer player can open [video].
+     *
+     * The player resolves ONE shape of source - `youtube.com/watch?v=<key>`
+     * (see the detail page's playTrailer) - so a YouTube video with a key is
+     * playable and everything else (Vimeo, Dailymotion, an empty key) is not.
+     * The same test [com.kennyb1201.kbstream.data.tmdb.TrailerPick] makes before
+     * it offers the header's button, stated once for the page that draws every
+     * video rather than only the one it picks.
+     */
+    fun isPlayable(video: TmdbVideo): Boolean =
+        video.key.isNotBlank() && video.site.equals("YouTube", ignoreCase = true)
 
     private fun thumbnailUrl(video: TmdbVideo): String? =
         youtubeThumbnailUrl(video) ?: video.thumbnail?.takeIf { it.isNotBlank() }

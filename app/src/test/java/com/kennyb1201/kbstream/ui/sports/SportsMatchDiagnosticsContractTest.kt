@@ -120,8 +120,11 @@ class SportsMatchDiagnosticsContractTest {
             hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(game.id, null, feeds) }")
         )
         assertTrue(
-            "which the hub turns into the channel plus its backups",
-            activity.contains("backups = channels.drop(1)")
+            "which the hub turns into the channel plus its backups, through the profile's " +
+                "kids live-TV filter (C7) - the launch is the second door into the live " +
+                "player and must not open a channel the guide hides",
+            activity.contains("val playable = KidsLiveTvFilter.visible(channels)") &&
+                activity.contains("backups = playable.drop(1)")
         )
         assertTrue(
             "and the launch loads them behind the chosen feed as the player's own ladder",

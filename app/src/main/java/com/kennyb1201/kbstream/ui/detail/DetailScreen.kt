@@ -158,6 +158,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBFocusButton
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -1260,6 +1261,7 @@ fun DetailScreen(
         lastBackdropCardFocusRequester?.requestFocus()
     }
 
+
     /**
      * The image choices the viewer has made, and the TMDB id they are filed
      * under for this title.
@@ -1277,6 +1279,23 @@ fun DetailScreen(
     // ImageOverrideMenu). One menu for the row: the card it was opened on is
     // what it writes (see DetailMediaRow.overrideRows for which rows it gets).
     var mediaImageMenu by remember { mutableStateOf<MediaCardItem?>(null) }
+
+    // The Media card that long press was on, for the hand-back. The menu draws
+    // in its OWN focus group (see PosterContextMenu), so it takes focus with it
+    // and clearing the flag alone dropped the viewer at the top of the page -
+    // the one menu on this screen that did not put focus back (the studio chip,
+    // review, poster, season, episode and play-button menus all do, each
+    // through its own requester).
+    var mediaImageMenuCardFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissMediaImageMenu() {
+        mediaImageMenu = null
+        mediaImageMenuCardFocusRequester?.requestFocus()
+    }
 
     val premiereDateFormatter = remember {
         DateFormats.longDate()
@@ -1422,6 +1441,11 @@ fun DetailScreen(
         userManuallyChangedSeason = false
         seasonFocusRequesters.clear()
         episodeFocusRequesters.clear()
+        // A drill-down ("More Like This") reuses this composition with a new
+        // type/id, so the previous title's drill-down-return latch has to go
+        // with the rest of its state: left set, it would suppress the play
+        // button's default focus on a title that was never returned to.
+        restoredReturnFocus = false
         viewModel.load(
             type = type,
             id = id,
@@ -2861,8 +2885,18 @@ fun DetailScreen(
             //    below takes the focus to the rail card a moment later: the play
             //    button visibly grabbed it first and was then yanked away. A page
             //    with a pending return record for this title belongs to the rail.
-            LaunchedEffect(returnTarget) {
-                if (returnTarget != null) return@LaunchedEffect
+            //  - And the guard had a hole of its own: `returnTarget` is CLEARED
+            //    by the return effect below (`returnTarget = null`, "read once,
+            //    whatever came of it"), which restarts this effect with a null
+            //    key - the guard then passed - so the play button grabbed the
+            //    focus straight back off the rail card the return effect had just
+            //    landed on. The field behaviour was a flash of the right card
+            //    followed by Play taking it: still "loses the viewer's place".
+            //    [restoredReturnFocus] is the latch that says the rail owns focus
+            //    for this page (the resume-episode focus already honours it), so
+            //    the default-focus effect has to honour it too.
+            LaunchedEffect(returnTarget, restoredReturnFocus) {
+                if (returnTarget != null || restoredReturnFocus) return@LaunchedEffect
                 landFocusOn(playButtonFocusRequester)
             }
 
@@ -5316,15 +5350,35 @@ fun DetailScreen(
                                             // A poster draws portrait (see
                                             // MediaCardItem.portrait).
                                             portrait = card.portrait,
+                                            // A video the player cannot speak
+                                            // says so on the card (see
+                                            // MediaThumbCard), so the press is
+                                            // never a guess.
+                                            unplayable = card.video != null &&
+                                                !card.playable,
                                             onClick = {
                                                 val video = card.video
-                                                if (video != null) {
-                                                    playTrailer(context, video)
-                                                } else {
-                                                    lastBackdropCardFocusRequester =
-                                                        requester
-                                                    selectedBackdrop =
-                                                        card.fullImageUrl
+                                                when {
+                                                    // A video the trailer player
+                                                    // cannot open: the card
+                                                    // carries the mark, and the
+                                                    // press resolves nothing.
+                                                    // It used to build a
+                                                    // youtube.com URL out of a
+                                                    // Vimeo key and fail in a
+                                                    // logged exception the
+                                                    // viewer never saw - a dead
+                                                    // press that looked like a
+                                                    // broken remote.
+                                                    video != null && !card.playable -> Unit
+                                                    video != null ->
+                                                        playTrailer(context, video)
+                                                    else -> {
+                                                        lastBackdropCardFocusRequester =
+                                                            requester
+                                                        selectedBackdrop =
+                                                            card.fullImageUrl
+                                                    }
                                                 }
                                             },
                                             modifier = Modifier
@@ -5363,6 +5417,8 @@ fun DetailScreen(
                                             // Trailers page offers no rows either.
                                             onLongClick = {
                                                 if (card.imagePath != null) {
+                                                    mediaImageMenuCardFocusRequester =
+                                                        requester
                                                     mediaImageMenu = card
                                                 }
                                             }
@@ -5450,12 +5506,13 @@ fun DetailScreen(
                                             }
                                         }
                                         // A row press closes the menu, like every
-                                        // other action in it.
-                                        mediaImageMenu = null
+                                        // other action in it - and hands focus
+                                        // back to the card it was raised on.
+                                        dismissMediaImageMenu()
                                     }
                                 )
                             },
-                        onDismiss = { mediaImageMenu = null }
+                        onDismiss = { dismissMediaImageMenu() }
                     )
                 }
 
@@ -7644,6 +7701,13 @@ private fun MediaThumbCard(
     contentDescription: String,
     onClick: () -> Unit,
     portrait: Boolean = false,
+    /**
+     * A video card the trailer player cannot open (see
+     * [MediaCardItem.playable]): the card is drawn with an UNAVAILABLE mark so
+     * the press is answered BEFORE it is made, and the press itself resolves
+     * nothing.
+     */
+    unplayable: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -7706,6 +7770,33 @@ private fun MediaThumbCard(
                     Text(
                         text = label,
                         color = KBTextHi,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // The other corner, and the other kind of fact: the type badge
+            // names WHAT the video is, this one says it cannot be opened. Its
+            // own chip rather than a change to the badge, because a teaser is
+            // still a teaser - and it is the whole answer to "the press does
+            // nothing", which is what a trailer the player cannot speak used to
+            // be (see MediaCardItem.playable). Danger-tinted so it reads as the
+            // exception at TV distance, not as another label.
+            if (unplayable) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .clip(KBShapeSmall)
+                        .background(KBDanger.copy(alpha = 0.22f))
+                        .border(1.dp, KBDanger.copy(alpha = 0.65f), KBShapeSmall)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "UNAVAILABLE",
+                        color = KBDanger,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1

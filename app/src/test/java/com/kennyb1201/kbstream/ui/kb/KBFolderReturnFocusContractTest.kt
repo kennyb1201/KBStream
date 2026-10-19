@@ -41,9 +41,15 @@ class KBFolderReturnFocusContractTest {
         assertTrue(
             "and owns the two scroll states and the requester the landing " +
                 "asks: a Back out of Detail disposes everything below it",
-            screen.contains("val browseListState = rememberLazyListState()") &&
-                screen.contains("val browseGridState = rememberLazyGridState()") &&
+            screen.contains("val browseListState = remember(folderId) { LazyListState() }") &&
+                screen.contains("val browseGridState = remember(folderId) { LazyGridState() }") &&
                 screen.contains("val returnFocusRequester = remember { FocusRequester() }")
+        )
+        assertFalse(
+            "and both states are keyed on the folder: a folder opened from inside a folder is a " +
+                "route-argument swap in place, and an unkeyed state hands the new folder the old " +
+                "one's scroll position",
+            screen.contains("rememberLazyListState()") || screen.contains("rememberLazyGridState()")
         )
         assertTrue(
             "a press records the card before it navigates",

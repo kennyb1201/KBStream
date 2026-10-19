@@ -111,11 +111,25 @@ internal class MpvSettingsSection(
         // Engine-specific, so it lives here rather than in the control bar: the
         // main player has no equivalent because ExoPlayer cannot decode in
         // software at all.
+        // On the MediaCodec embed output the Software pill is not an escape
+        // hatch - it reproduces the headline symptom. That output renders
+        // IMGFMT_MEDIACODEC frames straight to the Surface and accepts them only
+        // from the zero-copy --hwdec=mediacodec path, so `hwdec=no` leaves
+        // nothing to show: black screen, audio playing. The note below actively
+        // sold it as "the way out when this box has no video decoders left" on
+        // exactly the two boxes (see MpvVideoOutput.resolve) that are sent here.
+        // The pill is therefore only offered when this session's output can draw
+        // a copied frame, and the note says why when it cannot.
+        val softwareUnavailable = activity.videoOutputIsMediaCodecEmbed()
         column.addView(ui.label("Decoding", topMarginDp = 8))
         ui.addPillRow(
             column,
             4,
-            listOf("Hardware" to true, "Software" to false),
+            if (softwareUnavailable) {
+                listOf("Hardware" to true)
+            } else {
+                listOf("Hardware" to true, "Software" to false)
+            },
             decodePills
         ) { hardware ->
             activity.chooseHardwareDecoding(hardware)
@@ -123,8 +137,14 @@ internal class MpvSettingsSection(
         }
         column.addView(
             ui.label(
-                "Software decoding is the way out when this box has no video " +
-                    "decoders left, which is often why a title landed on this engine.",
+                if (softwareUnavailable) {
+                    "Hardware only: this box uses the MediaCodec video output, " +
+                        "which can only show frames the hardware decoder made. " +
+                        "Software decoding would play audio over a black screen."
+                } else {
+                    "Software decoding is the way out when this box has no video " +
+                        "decoders left, which is often why a title landed on this engine."
+                },
                 topMarginDp = 4
             )
         )
@@ -164,6 +184,21 @@ internal class MpvSettingsSection(
 
         // ── SUBTITLES ──────────────────────────────────────────────────
         column.addView(ui.header("SUBTITLES", topMarginDp = 16))
+        // Same output, same honesty: the MediaCodec embed path cannot draw
+        // subtitles at all (mpv's own docs for it: "subtitle rendering, OSD/OSC,
+        // video filters, etc are not available with this driver"), so every
+        // control below sets something that cannot take effect. The main
+        // player's picker annotates tracks it cannot draw; this is the panel's
+        // equivalent.
+        if (activity.videoOutputIsMediaCodecEmbed()) {
+            column.addView(
+                ui.label(
+                    "This box's video output (MediaCodec) cannot draw subtitles, " +
+                        "so the settings on this page have no effect here.",
+                    topMarginDp = 4
+                )
+            )
+        }
         column.addView(ui.label("Size", topMarginDp = 6))
         ui.addPillRow(
             column,

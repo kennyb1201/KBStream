@@ -89,7 +89,9 @@ class KidsTimeGuardTest {
             "com/kennyb1201/kbstream/data/sync/KidsTimeGuard.kt")
         assertTrue("source missing: $file", file.isFile)
         val src = file.readText()
-        listOf("dayKey", "todayMinutes", "profileIdForCounter").forEach { field ->
+        // `todaySeconds` since m4: the counter is kept in SECONDS so a 30 s
+        // tick costs 30 s of budget instead of rounding up to a whole minute.
+        listOf("dayKey", "todaySeconds", "profileIdForCounter").forEach { field ->
             assertTrue(
                 "$field is written by the ticker and read on the main thread",
                 Regex("@Volatile\\s+private var $field\\b").containsMatchIn(src)

@@ -267,6 +267,35 @@ class DetailMediaRowWiringContractTest {
     }
 
     @Test
+    fun `a trailer the player cannot open says so instead of swallowing the press`() {
+        assertTrue(
+            "the row's verdict reaches the card",
+            screen.contains("unplayable = card.video != null && !card.playable")
+        )
+        assertTrue(
+            "and only a playable video reaches the player - a Vimeo key used to be " +
+                "built into a youtube.com URL and die in a logged exception the " +
+                "viewer never saw, which is a dead press",
+            screen.contains("video != null && !card.playable -> Unit") &&
+                screen.contains("video != null -> playTrailer(context, video)")
+        )
+        val card = screen
+            .substringAfter("private fun MediaThumbCard(")
+            .substringBefore("private fun BackdropOverlay(")
+        assertTrue(
+            "the card carries the mark",
+            card.contains("if (unplayable) {") &&
+                card.contains("text = \"UNAVAILABLE\"")
+        )
+        assertTrue(
+            "in its own corner, because the type badge still has to say WHAT the " +
+                "video is: a teaser that cannot be opened is still a teaser",
+            card.contains("badge?.takeIf { it.isNotBlank() }?.let { label ->") &&
+                card.contains(".align(Alignment.TopEnd)")
+        )
+    }
+
+    @Test
     fun `the row owns no vertical logic of its own beyond the strip`() {
         assertFalse(
             "the row is a row of the page's one chain: it must not decide for " +

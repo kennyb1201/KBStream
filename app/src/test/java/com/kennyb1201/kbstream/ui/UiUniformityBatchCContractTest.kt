@@ -156,9 +156,12 @@ class UiUniformityBatchCContractTest {
             3,
             count(guide, "KBDialogPanel(")
         )
+        // Two since the parent-PIN gate: the profile's own PIN prompt, and the
+        // exit gate's (C4/M2) — the second is what asks for a credential before
+        // a kids profile is left, and it draws the same plate.
         assertEquals(
-            "the profile picker's PIN prompt draws it too",
-            1,
+            "the profile picker's PIN prompts draw it too",
+            2,
             count(source("ui/profiles/ProfilePickerScreen.kt"), "KBDialogPanel(")
         )
         assertEquals(

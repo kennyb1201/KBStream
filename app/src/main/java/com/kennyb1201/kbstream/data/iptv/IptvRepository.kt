@@ -282,6 +282,11 @@ class IptvRepository(
 
         val requestKey = normalizeGuideKey(normalizedUrl)
         val waiter = CompletableDeferred<Result<Unit>>()
+        val myJob = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+
+        // The attempt this call displaces, if any. Cancelled OUTSIDE the lock
+        // below.
+        var displaced: kotlinx.coroutines.Job? = null
 
         val activeImport = importRequestMutex.withLock {
             val running = if (joinActiveImport) {
@@ -289,13 +294,27 @@ class IptvRepository(
                     Log.w(TAG, "GUIDE IMPORT JOIN source=${Redaction.url(normalizedUrl)}")
                 }
             } else {
+                // The retry is displacing an attempt, not merely ignoring it.
+                // It used to REPLACE the map entry and leave the previous owner
+                // running: both attempts then staged under the same
+                // "<url>@importing" key, and `swapStagedGuideIntoLive` is a
+                // clear-live-then-re-key-staged in one transaction - so a wedged
+                // attempt that un-wedged after the retry had finished deleted
+                // the retry's complete live guide and promoted its own partial
+                // leftovers. Taking the owner's Job is what lets this call stop
+                // it; the importer's own pre-swap ensureActive() is the second
+                // half of the same guard.
+                displaced = activeImportJobs.remove(requestKey)
+                activeGuideImports.remove(requestKey)
                 null
             }
             running ?: waiter.also {
                 activeGuideImports[requestKey] = it
+                if (myJob != null) activeImportJobs[requestKey] = myJob
                 Log.d(TAG, "GUIDE IMPORT START source=${Redaction.url(normalizedUrl)}")
             }
         }
+        displaced?.cancel()
 
         if (activeImport !== waiter) {
             return@withContext activeImport.await().getOrThrow()
@@ -388,6 +407,7 @@ class IptvRepository(
         } finally {
             importRequestMutex.withLock {
                 activeGuideImports.remove(requestKey, waiter)
+                if (activeGuideImports[requestKey] == null) activeImportJobs.remove(requestKey)
             }
 
             Log.d(TAG, "GUIDE IMPORT END source=${Redaction.url(normalizedUrl)}")
@@ -1343,5 +1363,16 @@ class IptvRepository(
         private val importRequestMutex = Mutex()
         private val activeGuideImports =
             ConcurrentHashMap<String, CompletableDeferred<Result<Unit>>>()
+
+        /**
+         * The Job of whoever OWNS each active import, keyed like
+         * [activeGuideImports].
+         *
+         * The deferred alone cannot stop an import: it only releases the
+         * callers that joined it. The watchdog's retry has to end the attempt it
+         * is displacing, or the two race over one staging key (see
+         * [importGuide]).
+         */
+        private val activeImportJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     }
 }

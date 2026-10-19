@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -70,22 +71,53 @@ object PlayerEngine {
             // installed has nothing to hand a title TO, so the stored choice
             // reads back as ExoPlayer rather than launching into a chooser with
             // an empty list.
+            //
+            // And a kids profile never gets it either (audit C8), however the
+            // pref got set: see [externalAllowedForProfile].
             chosen == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
-                !ExternalPlayer.isAvailable(context) ->
+                (!ExternalPlayer.isAvailable(context) || !externalAllowedForProfile()) ->
                 AppPreferences.PLAYER_ENGINE_EXO
 
             else -> chosen
         }
     }
 
-    /** Whether this box has an installed app the External engine could use. */
+    /**
+     * Whether the External engine can be USED right now: this box has an app to
+     * hand a stream to, AND the active profile may hand one over.
+     *
+     * The profile half is folded in here on purpose (audit C8): every reader of
+     * this predicate is deciding whether to OFFER the external path - the
+     * launcher, both in-app players' "play in another app" buttons and the
+     * MPV -> external hand-off - so one rule here is the difference between a
+     * kids profile that cannot reach that path and four call sites that each
+     * have to remember. A box that HAS a video app is what
+     * [ExternalPlayer.isAvailable] answers.
+     */
     fun externalAvailable(context: Context): Boolean =
-        ExternalPlayer.isAvailable(context)
+        externalAllowedForProfile() && ExternalPlayer.isAvailable(context)
+
+    /**
+     * Whether the External engine may be used on the ACTIVE profile at all.
+     *
+     * False on a kids profile, and that is a lock rather than a preference
+     * (audit C8): the time locks are enforced from the app's own player
+     * Activities (`KidsTimeGuard.enforceLock`), so once a title is handed to
+     * VLC/MX those collectors stop running - bedtime and the daily limit never
+     * fire mid-playback, and the budget does not burn while the other app owns
+     * the screen. An engine that silently disables both limits is not something
+     * a kids profile may choose (nor keep, if it was chosen before the profile
+     * became restricted), so the stored pref is coerced at [selected] and this
+     * is the one predicate both the launch and the settings row ask.
+     */
+    fun externalAllowedForProfile(): Boolean =
+        ProfileManager.activeProfile.value?.kidsMaxAge == null
 
     /**
      * True when a launch should open the external-player wrapper instead of
      * either in-app engine. The stored choice alone decides: unlike MPV, there
-     * is no per-title rule that overrides it.
+     * is no per-title rule that overrides it - except the profile rule above,
+     * which a kids profile cannot opt out of.
      */
     fun prefersExternal(context: Context): Boolean =
         externalAvailable(context) &&

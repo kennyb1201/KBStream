@@ -52,6 +52,7 @@ import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
+import com.kennyb1201.kbstream.ui.components.KBRailAppendIndicator
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
@@ -907,6 +908,21 @@ private fun DecadeRailRow(
                         modifier = Modifier
                             .width(tileWidth)
                             .padding(top = 5.dp)
+                    )
+                }
+            }
+
+            // The rail's append state, drawn (see KBRailAppendIndicator):
+            // isLoadingMore was threaded down here and only the sentinel read
+            // it, so a page in flight read as the end of the list.
+            if (isLoadingMore) {
+                item(key = "rail_tail_loading") {
+                    // Read HERE: the rail's own size is declared inside each
+                    // card's scope, and this tail is a sibling of those cards.
+                    val tailSize = rememberPosterSize()
+                    KBRailAppendIndicator(
+                        width = tailSize.width,
+                        height = tailSize.height
                     )
                 }
             }

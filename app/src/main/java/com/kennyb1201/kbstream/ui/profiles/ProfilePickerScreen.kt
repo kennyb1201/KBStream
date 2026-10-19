@@ -44,6 +44,8 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.data.sync.KidsGate
+import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
@@ -81,14 +83,39 @@ fun ProfilePickerScreen(
     var pinEntry by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf(false) }
 
-    // Kids Mode exit gate: what to do once the CURRENT profile's PIN is
+    // Kids Mode exit gate: what to do once the CURRENT profile's credential is
     // verified (switch to a target profile, or open Manage).
     var exitGateAction by remember {
         mutableStateOf<ExitGateAction?>(null)
     }
+    var exitGateEntry by remember { mutableStateOf("") }
+    var exitGateError by remember { mutableStateOf(false) }
+    // Set while the gate has NOTHING to verify against (a gated kids profile on
+    // a device with no PIN of either kind): the same dialog then CREATES the
+    // parent PIN, which is the audit's "never fail open" without bricking a TV
+    // that has no credential to ask for.
+    var exitGateNew by remember { mutableStateOf("") }
+    var exitGateConfirm by remember { mutableStateOf("") }
+    var exitGateCreateError by remember { mutableStateOf<String?>(null) }
 
     val firstRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { firstRequester.requestFocus() }
+
+    // Exit gate (audit C4/M2/M7), computed here rather than inside the tiles:
+    // the dialog below needs the same answer, and leaving the CURRENT kids
+    // profile - switching to any other profile, opening Manage, or creating one
+    // - is an authenticated act whenever that profile ASKS for one or is LOCKED
+    // right now. ExitGateAction records what to run afterwards.
+    //
+    // The old form was `kidsMaxAge != null && kidsRequirePinToExit &&
+    // hasPin(profile)`, and that last term was the fail-open: a profile that
+    // asked for a PIN and had none was left ungated, while a LOCKED profile
+    // (veil up) let the kid walk to the picker and switch. The credential is now
+    // the profile's own PIN or the device's parent PIN (see KidsGate), and with
+    // neither set the gate CREATES the parent PIN rather than letting the press
+    // through.
+    val exitGateActive = KidsGate.leavingNeedsPin(active)
+    val exitGateHasCredential = KidsGate.hasCredential(active)
 
     Column(
         modifier = Modifier
@@ -115,15 +142,6 @@ fun ProfilePickerScreen(
                 // ring grows into scrollable space instead.
                 .padding(top = 40.dp, bottom = 12.dp)
         ) {
-            // Exit gate: when the CURRENTLY ACTIVE kids profile opts into
-            // "PIN to leave profile", leaving it (switching to any other
-            // profile, or opening Manage) first requires that profile's
-            // PIN. ExitGateAction records what to run after verification.
-            val exitGateActive = active?.let {
-                it.kidsMaxAge != null && it.kidsRequirePinToExit &&
-                    ProfileManager.hasPin(it)
-            } == true
-
             val tiles = profiles.map { profile ->
                 PickerTile(
                     name = profile.name,
@@ -143,12 +161,16 @@ fun ProfilePickerScreen(
                                 pinEntry = ""
                                 pinError = false
                             }
-                            // Leaving a gated kids profile asks for ITS pin.
+                            // Leaving a gated kids profile asks for ITS pin,
+                            // or the parent PIN (see the exit dialog).
                             exitGateActive -> {
                                 pinTarget = null
                                 exitGateAction = ExitGateAction.Switch(profile)
-                                pinEntry = ""
-                                pinError = false
+                                exitGateEntry = ""
+                                exitGateError = false
+                                exitGateNew = ""
+                                exitGateConfirm = ""
+                                exitGateCreateError = null
                             }
                             else -> {
                                 ProfileManager.setActive(pickerContext, profile)
@@ -169,8 +191,11 @@ fun ProfilePickerScreen(
                     if (exitGateActive) {
                         pinTarget = null
                         exitGateAction = ExitGateAction.Manage
-                        pinEntry = ""
-                        pinError = false
+                        exitGateEntry = ""
+                        exitGateError = false
+                        exitGateNew = ""
+                        exitGateConfirm = ""
+                        exitGateCreateError = null
                     } else {
                         onManage()
                     }
@@ -197,37 +222,24 @@ fun ProfilePickerScreen(
         }
     }
 
-    // PIN dialog target: the DESTINATION profile (enter gate) when
-    // pinTarget is set, or the CURRENT profile (kids exit gate) when
-    // exitGateAction is set.
-    val pinDialogProfile = pinTarget
-        ?: exitGateAction?.let { active }
-
-    pinDialogProfile?.let { pinProfile ->
-        val isExitGate = exitGateAction != null && pinTarget == null
+    // The ENTER gate: activating a profile that has a PIN of its own asks for
+    // THAT profile's code. The exit gate below is its own dialog, because it can
+    // also be answered by the parent PIN and can have to CREATE it.
+    pinTarget?.let { pinProfile ->
         androidx.compose.ui.window.Dialog(
             onDismissRequest = {
                 pinTarget = null
-                exitGateAction = null
                 pinEntry = ""
                 pinError = false
             }
         ) {
             // The shared dialog plate: heading, then the profile it is asking
-            // about. The exit-gate case keeps its own explanation line rather
-            // than encoding it in the heading, which has to stay short.
+            // about.
             KBDialogPanel(
-                title = if (isExitGate) "Profile PIN" else "Enter PIN",
+                title = "Enter PIN",
                 subtitle = pinProfile.name,
                 width = 420.dp
             ) {
-                if (isExitGate) {
-                    Text(
-                        text = "Enter this profile's PIN to leave it",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
                 KBTextField(
                     value = pinEntry,
                     onValueChange = {
@@ -250,7 +262,6 @@ fun ProfilePickerScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     pinTarget = null
-                    exitGateAction = null
                     pinEntry = ""
                     pinError = false
                 }
@@ -262,33 +273,161 @@ fun ProfilePickerScreen(
         LaunchedEffect(pinEntry, pinProfile) {
             if (pinEntry.length == 4) {
                 if (ProfileManager.verifyPin(pinProfile, pinEntry)) {
-                    val action = exitGateAction
-                    val wasExitGate = action != null && pinTarget == null
                     pinTarget = null
-                    exitGateAction = null
                     pinEntry = ""
                     pinError = false
-                    if (wasExitGate) {
-                        // Exit gate verified: run the held action (the
-                        // destination profile has no PIN of its own — that
-                        // case was routed to the enter gate above).
-                        // `action` is non-null by construction here
-                        // (wasExitGate checks it), so there is no null branch.
-                        when (action) {
-                            is ExitGateAction.Switch -> {
-                                ProfileManager.setActive(pickerContext, action.target)
-                                onSelect()
-                            }
-                            ExitGateAction.Manage -> onManage()
-                        }
-                    } else {
-                        // Enter gate verified: activate the destination.
-                        ProfileManager.setActive(pickerContext, pinProfile)
-                        onSelect()
-                    }
+                    // Enter gate verified: activate the destination.
+                    ProfileManager.setActive(pickerContext, pinProfile)
+                    onSelect()
                 } else {
                     pinError = true
                     pinEntry = ""
+                }
+            }
+        }
+    }
+
+    // The EXIT gate (audit C4/M2/M7): switching away from the kids profile, or
+    // opening Manage from it. Answered by the profile's own PIN or the parent
+    // PIN; with NEITHER set the panel creates the parent PIN and then runs the
+    // same action, so a gated profile can never be left unauthenticated.
+    exitGateAction?.let { action ->
+        val gateProfile = active
+        val creating = gateProfile != null && !exitGateHasCredential
+        val runGateAction = {
+            exitGateAction = null
+            exitGateEntry = ""
+            exitGateError = false
+            exitGateNew = ""
+            exitGateConfirm = ""
+            exitGateCreateError = null
+            when (action) {
+                is ExitGateAction.Switch -> {
+                    ProfileManager.setActive(pickerContext, action.target)
+                    onSelect()
+                }
+                ExitGateAction.Manage -> onManage()
+            }
+        }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                exitGateAction = null
+                exitGateEntry = ""
+                exitGateError = false
+                exitGateNew = ""
+                exitGateConfirm = ""
+                exitGateCreateError = null
+            }
+        ) {
+            KBDialogPanel(
+                title = "Parent PIN",
+                subtitle = gateProfile?.name,
+                width = 460.dp
+            ) {
+                Text(
+                    text = if (creating) {
+                        "This profile asks for a PIN before it can be left, and " +
+                            "no PIN is set on this TV yet. Set one now - it stays " +
+                            "with the device, not the profile."
+                    } else {
+                        "Enter this profile's PIN to leave it, or the parent PIN."
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (creating) {
+                    KBTextField(
+                        value = exitGateNew,
+                        onValueChange = {
+                            exitGateNew = it.filter(Char::isDigit).take(4)
+                            exitGateCreateError = null
+                        },
+                        placeholder = "New PIN (4 digits)",
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        visualTransformation =
+                            androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    KBTextField(
+                        value = exitGateConfirm,
+                        onValueChange = {
+                            exitGateConfirm = it.filter(Char::isDigit).take(4)
+                            exitGateCreateError = null
+                        },
+                        placeholder = "Confirm PIN",
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        visualTransformation =
+                            androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    exitGateCreateError?.let { message ->
+                        Text(
+                            text = message,
+                            color = KBDanger,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        KBButton(label = "SAVE", enabled = true) {
+                            val failure = when {
+                                !ProfileManager.isValidPin(exitGateNew) ->
+                                    "The parent PIN must be 4 digits"
+                                exitGateNew != exitGateConfirm -> "PINs don't match"
+                                else -> null
+                            }
+                            if (failure != null) {
+                                exitGateCreateError = failure
+                            } else {
+                                KidsTimeGuard.setParentPin(exitGateNew)
+                                runGateAction()
+                            }
+                        }
+                        KBButton(label = "CANCEL", enabled = true) {
+                            exitGateAction = null
+                            exitGateNew = ""
+                            exitGateConfirm = ""
+                            exitGateCreateError = null
+                        }
+                    }
+                } else {
+                    KBTextField(
+                        value = exitGateEntry,
+                        onValueChange = {
+                            exitGateEntry = it.filter(Char::isDigit).take(4)
+                            exitGateError = false
+                        },
+                        placeholder = "••••",
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        visualTransformation =
+                            androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    if (exitGateError) {
+                        Text(
+                            text = "Wrong PIN — try again",
+                            color = KBDanger,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    KBButton(
+                        label = "CANCEL",
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        exitGateAction = null
+                        exitGateEntry = ""
+                        exitGateError = false
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(exitGateEntry) {
+            if (!creating && exitGateEntry.length == 4) {
+                if (KidsGate.verifies(gateProfile, exitGateEntry)) {
+                    runGateAction()
+                } else {
+                    exitGateError = true
+                    exitGateEntry = ""
                 }
             }
         }

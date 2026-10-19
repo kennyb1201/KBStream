@@ -817,10 +817,14 @@ class HomeViewModel(
 
                     val heroArtwork = artworkDeferred.await()
 
-val resolvedLogo = heroArtwork?.logoUrl
-    ?.takeIf { it.isNotBlank() }
-    ?: resolvedAddonMeta?.logo?.takeIf { it.isNotBlank() }
-    ?: item.logo?.takeIf { it.isNotBlank() }
+// TMDB's English wordmark, and NOTHING else - the same rule
+// the screen was already fixed to (56e59c64): an add-on's art.logo is
+// whatever language that add-on's metadata carries, so falling back to it
+// put a localized wordmark back in the hero as a clearlogo beside the
+// title text. That commit removed the screen-side fallbacks and left these
+// two here, so the bug survived through _heroLogoUrl; a null simply draws
+// no brand mark, which is the intended state when TMDB has no logo.
+val resolvedLogo = heroArtwork?.logoUrl?.takeIf { it.isNotBlank() }
 
 Log.d(
     "HOME_HERO",
@@ -1140,14 +1144,31 @@ Log.d(
     private fun observeProfileSwitches() {
         viewModelScope.launch {
             var first = true
+            var lastProfileId: String? = null
             com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
                 .collect { profile ->
                     if (first) {
                         // Skip the initial emission: init already loads
                         // against whatever profile was active at creation.
                         first = false
+                        lastProfileId = profile?.id
                         return@collect
                     }
+                    // Editing a profile - rename, avatar, PIN, kids ceiling -
+                    // re-emits _activeProfile with the SAME id (see
+                    // ProfileManager.rename/setPin/setKids*), and this collector
+                    // treated every post-init emission as a switch. That was
+                    // already an over-broad trigger (a needless rail rebuild on
+                    // every edit) and the return-state reset below made it worse:
+                    // renaming a profile cleared homeEntered, so the next Back
+                    // from Detail was misread as a fresh entry - the restore
+                    // effect skipped and the Continue Watching head landing
+                    // re-armed. Only a genuinely different profile is a switch.
+                    if (profile?.id == lastProfileId) {
+                        Log.d("HOME_VM", "active profile re-emitted (edit) - no reset")
+                        return@collect
+                    }
+                    lastProfileId = profile?.id
                     // Note: profile may be null transiently during a switch
                     // (all profiles deleted); still refresh - the stores then
                     // resolve to the legacy namespace, which is the correct

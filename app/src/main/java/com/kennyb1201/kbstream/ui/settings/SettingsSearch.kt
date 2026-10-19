@@ -117,7 +117,7 @@ internal object SettingsSearchIndex {
             "profile switch rename viewing who is watching account"
         ),
         SettingSearchEntry(
-            "integrations.addons",
+            ADDONS_ENTRY_KEY,
             SettingsPane.INTEGRATIONS,
             "Add-ons",
             "addon add-on extension repository manifest collection import"
@@ -454,9 +454,25 @@ internal object SettingsSearchIndex {
      */
     fun entryForLabel(label: String): SettingSearchEntry? = byLabel[label]
 
-    /** The rows matching [query] (see [filterSettingsSearch]). */
-    fun search(query: String): List<SettingSearchEntry> =
-        filterSettingsSearch(entries, query)
+    /**
+     * The rows matching [query] (see [filterSettingsSearch]).
+     *
+     * [kidsAddonLock] drops the one entry that has no row to jump to under the
+     * kids profile's add-on lock: the Integrations pane does not compose its
+     * Add-ons row in that state, so a result naming it could only switch the
+     * pane and burn its whole scroll budget trying to bring an anchor into view
+     * that was never attached - a dead-end result, not a jump.
+     */
+    fun search(
+        query: String,
+        kidsAddonLock: Boolean = false
+    ): List<SettingSearchEntry> = filterSettingsSearch(
+        if (kidsAddonLock) entries.filterNot { it.key == ADDONS_ENTRY_KEY } else entries,
+        query
+    )
+
+    /** The search key of the Integrations "Add-ons" row (see [search]). */
+    internal const val ADDONS_ENTRY_KEY = "integrations.addons"
 }
 
 /** How many rows the rail lists for one query before it stops. */

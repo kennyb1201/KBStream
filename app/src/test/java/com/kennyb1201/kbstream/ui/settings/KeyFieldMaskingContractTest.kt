@@ -66,8 +66,9 @@ class KeyFieldMaskingContractTest {
     @Test
     fun `the reveal does not persist across a screen re-entry`() {
         assertTrue(
-            "it starts masked every time the composable is entered",
-            field.contains("var revealed by remember { mutableStateOf(false) }")
+            "it starts masked every time the composable is entered (keyed on " +
+                "revealable, so a field that must stay masked can never inherit a reveal)",
+            field.contains("var revealed by remember(revealable) { mutableStateOf(false) }")
         )
         assertFalse(
             "rememberSaveable would restore a revealed key after a rotation/re-entry",

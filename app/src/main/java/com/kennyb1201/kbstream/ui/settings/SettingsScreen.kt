@@ -198,13 +198,20 @@ internal enum class SettingsPane(
     PLAYBACK(
         "Playback",
         SettingsGroup.PLAYBACK,
-        "Auto-play, skipping, binge grouping and stream picks",
+        // Names the sections it owns that the old blurb left out: the audio
+        // tuning, the player engine and the Dolby Vision strip are all in this
+        // pane, not in the Video & Audio one it pointed at. Kept to the rail's
+        // one-line budget (see SettingsPaneTest).
+        "Auto-play, skipping, audio, engine and Dolby Vision",
         Icons.Filled.PlayArrow
     ),
     VIDEO(
         "Video & Audio",
         SettingsGroup.PLAYBACK,
-        "Buffer, player engine, Dolby Vision and picture-in-picture",
+        // What this pane actually holds. It used to name the player engine and
+        // Dolby Vision, which live in the PLAYBACK pane, so a viewer looking
+        // for them here was sent to the wrong page by the rail's own summary.
+        "Buffer, tunneling, aspect ratio and picture-in-picture",
         Icons.Filled.OndemandVideo
     ),
     LANGUAGE(
@@ -360,6 +367,16 @@ fun SettingsScreen(
         mutableStateOf(
             com.kennyb1201.kbstream.data.notifications.NotificationCenter.canPost(context)
         )
+    }
+    // Re-read on every return, not once: the blocked-state copy tells the viewer
+    // to allow notifications for the app in the system settings, and if they do
+    // and come back, a `remember`-once read left that same copy claiming
+    // "Blocked by the system" until the screen was left and re-entered.
+    androidx.lifecycle.compose.LifecycleEventEffect(
+        androidx.lifecycle.Lifecycle.Event.ON_RESUME
+    ) {
+        notificationsAllowed =
+            com.kennyb1201.kbstream.data.notifications.NotificationCenter.canPost(context)
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -703,6 +720,14 @@ fun SettingsScreen(
             scrollable = selectedPane != SettingsPane.HIDDEN,
             flashing = flashingSetting
         ) {
+                // m11 (audit): an API key is a secret, this pane is on a TV in a
+                // room, and a kids profile could read or copy the parent's key
+                // with the reveal chip in two presses. The key fields are not
+                // composed at all on a kids profile (see each card below), so
+                // there is nothing to reveal, copy, or focus.
+                val kidsKeysHidden = com.kennyb1201.kbstream.data.sync.ProfileManager
+                    .activeProfile.collectAsStateWithLifecycle().value
+                    ?.kidsMaxAge != null
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
                     // "(Beta)" rides on this caption rather than on a second
@@ -748,6 +773,15 @@ fun SettingsScreen(
                         onClick = onOpenSimkl
                     )
                 SettingsSectionHeader("API Keys")
+                if (kidsKeysHidden) {
+                    Text(
+                        text = "API keys are hidden on a kids profile. Switch to a parent " +
+                            "profile to view or change them.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
 
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
@@ -797,7 +831,7 @@ fun SettingsScreen(
                             // Masked by default with a reveal chip: the key is a
                             // secret, and this screen is on a TV in a room. The
                             // value itself is unchanged - see KBSecretField.
-                            KBSecretField(
+                            if (!kidsKeysHidden) KBSecretField(
                                 value = mdbListKeyInput,
                                 onValueChange = {
                                     mdbListKeyInput = it.trim()
@@ -820,7 +854,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = mdbListPaste)
+                            if (!kidsKeysHidden) KBPasteChip(onPaste = mdbListPaste)
                         }
 
                         if (mdbListKeySaved) {
@@ -927,7 +961,7 @@ fun SettingsScreen(
                             // Masked by default with a reveal chip: the key is a
                             // secret, and this screen is on a TV in a room. The
                             // value itself is unchanged - see KBSecretField.
-                            KBSecretField(
+                            if (!kidsKeysHidden) KBSecretField(
                                 value = omdbKeyInput,
                                 onValueChange = {
                                     omdbKeyInput = it.trim()
@@ -950,7 +984,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = omdbPaste)
+                            if (!kidsKeysHidden) KBPasteChip(onPaste = omdbPaste)
                         }
                         if (omdbKeySaved) {
                             Text(
@@ -1005,7 +1039,7 @@ fun SettingsScreen(
                             // Masked by default, reveal chip beside it - see
                             // KBSecretField; the saved/verify paths still read
                             // the real key string.
-                            KBSecretField(
+                            if (!kidsKeysHidden) KBSecretField(
                                 value = subsKeyInput,
                                 onValueChange = {
                                     subsKeyInput = it.trim()
@@ -1026,7 +1060,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = subsPaste)
+                            if (!kidsKeysHidden) KBPasteChip(onPaste = subsPaste)
                         }
                         if (subsKeySaved) {
                             Text(
@@ -1093,7 +1127,7 @@ fun SettingsScreen(
                         ) {
                             // Masked by default, reveal chip beside it - see
                             // KBSecretField.
-                            KBSecretField(
+                            if (!kidsKeysHidden) KBSecretField(
                                 value = torboxKeyInput,
                                 onValueChange = {
                                     torboxKeyInput = it.trim()
@@ -1114,7 +1148,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = torboxPaste)
+                            if (!kidsKeysHidden) KBPasteChip(onPaste = torboxPaste)
                         }
                         if (torboxKeySaved) {
                             Text(
@@ -1276,6 +1310,10 @@ fun SettingsScreen(
                 // One pref for both surfaces: this controls the chips in the
                 // player's source picker and in the streams screen, since both
                 // list the same sources. ON = above the file name (the default).
+                // The same 8dp beat every other ToggleRow in this pane gets:
+                // without it this row sat 4dp tighter to the one above than its
+                // neighbours did.
+                Spacer(modifier = Modifier.height(8.dp))
                 ToggleRow(
                     label = "Badges above the file name",
                     description = "Show a source's badge chips over its name instead of under " +
@@ -1361,7 +1399,15 @@ fun SettingsScreen(
                 backupStatus?.let { message ->
                     Text(
                         text = message,
-                        color = if (message.startsWith("Backup")) KBAccent else KBTextLo,
+                        // A failure is not neutral information: "Export failed: …"
+                        // rendered in the same gray as every caption. Success is
+                        // the accent, failure is the danger color, and anything
+                        // else (a count, an "Importing…") stays a caption.
+                        color = when {
+                            message.contains("failed", ignoreCase = true) -> KBDanger
+                            message.startsWith("Backup") -> KBAccent
+                            else -> KBTextLo
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                     )
@@ -1495,6 +1541,23 @@ fun SettingsScreen(
 
                 SettingsSectionHeader("Player Engine")
 
+                // C8 (audit): the External engine is not offered on a kids
+                // profile, because our time locks run inside the app's own player
+                // Activities - a title handed to VLC/MX plays on with bedtime and
+                // the daily budget unenforced. The stored pref is coerced too
+                // (see PlayerEngine.selected), so this is the UI half of one rule,
+                // not the rule itself.
+                val kidsProfile = com.kennyb1201.kbstream.data.sync.ProfileManager
+                    .activeProfile.collectAsStateWithLifecycle().value
+                    ?.kidsMaxAge != null
+                val shownEngine = if (
+                    kidsProfile && playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
+                ) {
+                    AppPreferences.PLAYER_ENGINE_EXO
+                } else {
+                    playerEngine
+                }
+
                 Text(
                     text = "Playback engine",
                     color = KBTextHi,
@@ -1516,7 +1579,11 @@ fun SettingsScreen(
                         AppPreferences.PLAYER_ENGINE_EXO_ONLY to "ExoPlayer only",
                         AppPreferences.PLAYER_ENGINE_MPV to "MPV",
                         AppPreferences.PLAYER_ENGINE_EXTERNAL to "External player"
-                    ).forEach { (value, label) ->
+                    )
+                        .filterNot { (value, _) ->
+                            kidsProfile && value == AppPreferences.PLAYER_ENGINE_EXTERNAL
+                        }
+                        .forEach { (value, label) ->
                         KBCard(onClick = {
                             playerEngine = value
                             AppPreferences.setPlayerEngine(context, value)
@@ -1530,13 +1597,13 @@ fun SettingsScreen(
                                 showExternalPlayerPicker = true
                             }
                         }) {
-                            PillChip(label, playerEngine == value)
+                            PillChip(label, shownEngine == value)
                         }
                     }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = when (playerEngine) {
+                    text = when (shownEngine) {
                         AppPreferences.PLAYER_ENGINE_EXO ->
                             "ExoPlayer, switching to MPV on its own when a stream cannot be decoded at " +
                                 "all \u2014 out of decoder resources, or a codec this TV has no decoder for."
@@ -1561,7 +1628,22 @@ fun SettingsScreen(
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
-                if (playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
+                if (kidsProfile &&
+                    playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
+                ) {
+                    // The stored choice can predate the restriction (or arrive
+                    // through a synced device): say why the title no longer goes
+                    // there instead of leaving the setting silently overridden.
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "This profile uses a kids lock, so titles open in ExoPlayer: " +
+                            "the time limits are enforced inside the app's own player and " +
+                            "cannot follow a title into another app.",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                if (shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
                     externalPlayers.isEmpty() &&
                     customExternalPackage == null
                 ) {
@@ -1580,9 +1662,10 @@ fun SettingsScreen(
                 // last case because a box whose probe found nothing is exactly
                 // where the hand-picked app is the only way into this engine,
                 // and the subsection would otherwise be unreachable there.
-                if (externalPlayers.isNotEmpty() ||
-                    customExternalPackage != null ||
-                    playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
+                if (!kidsProfile &&
+                    (externalPlayers.isNotEmpty() ||
+                        customExternalPackage != null ||
+                        playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL)
                 ) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
@@ -2624,7 +2707,12 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // The spacer goes WITH the row: on Fire TV the row is absent
+                // (the platform shows no third-party PiP windows at all) and
+                // the leading 8dp plus the trailing 10dp below stacked into an
+                // 18dp dead gap between "Tunneled Playback" and the "Picture"
+                // heading.
+                if (!isFireTv) Spacer(modifier = Modifier.height(8.dp))
 
                 if (!isFireTv) {
                     KBCard(
@@ -2669,7 +2757,7 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(if (isFireTv) 0.dp else 10.dp))
 
                 SettingsSectionHeader("Picture")
 
@@ -2692,7 +2780,11 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.LANGUAGE) {
-                SettingsSectionHeader("Audio", first = true)
+                // "Audio Language", not "Audio": the PLAYBACK pane already has a
+                // section headed AUDIO (decoder, output, downmix, boost), and two
+                // identically-headed sections in different panes is a search
+                // result that cannot be told apart from the heading alone.
+                SettingsSectionHeader("Audio Language", first = true)
 
                 Text(
                     text = "Preferred Audio Language",
@@ -3021,8 +3113,16 @@ private fun SettingsNavRail(
         Spacer(modifier = Modifier.height(6.dp))
 
         if (searchQuery.isNotBlank()) {
+            // Kids Mode's "Lock add-ons" removes the Integrations pane's Add-ons
+            // row (the same lock the pane checks), so the index has to be asked
+            // with it in hand rather than returning a result that jumps nowhere.
+            val kidsAddonLock = com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.collectAsStateWithLifecycle().value
+                ?.let { it.kidsMaxAge != null && it.kidsHideAddons } == true
             SettingsSearchResults(
-                results = remember(searchQuery) { SettingsSearchIndex.search(searchQuery) },
+                results = remember(searchQuery, kidsAddonLock) {
+                    SettingsSearchIndex.search(searchQuery, kidsAddonLock = kidsAddonLock)
+                },
                 onPick = onPickResult
             )
             return@Column
@@ -3401,9 +3501,19 @@ private fun AboutSection(modifier: Modifier = Modifier) {
         }
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            text = "Updates are published with every build. Check manually above — " +
-                "KBStream also checks on launch every 12 hours and installs " +
-                "without leaving the app.",
+            // On a Play build the Update row above is not composed at all (in
+            // place updates are not something a Play install can perform - see
+            // PLAY_BUILD), so "check manually above" pointed at nothing and the
+            // "installs without leaving the app" sentence described the wrong
+            // update path. The Play copy says where updates actually come from.
+            text = if (com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD) {
+                "Updates are delivered by the Play Store. Check for updates there — " +
+                    "the app itself never replaces its own build on this install."
+            } else {
+                "Updates are published with every build. Check manually above — " +
+                    "KBStream also checks on launch every 12 hours and installs " +
+                    "without leaving the app."
+            },
             color = KBTextLo.copy(alpha = 0.7f),
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 4.dp)
@@ -3882,8 +3992,13 @@ private fun SettingsClearHistoryDialog(
         // dialog in the app.
         KBDialogPanel(title = "Clear Continue Watching?") {
             Text(
+                // "on this device" understated it: onConfirm clears the SYNCED
+                // half first (SupabaseSync.clearWatchStateForActiveProfile), so
+                // every other TV signed into this account loses the same state -
+                // the copy promised less than the code does.
                 text = "This erases every resume position and watched marker " +
-                    "on this device. It cannot be undone.",
+                    "stored on this device, and for this profile on every other " +
+                    "device synced to this account. It cannot be undone.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )

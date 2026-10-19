@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.time.LocalDate
 import java.time.ZoneId
@@ -72,6 +74,19 @@ internal class NewEpisodeChecker(private val context: Context) {
 
             val detail = runCatchingCancellable { tmdb.fetchEnrichedMeta(showId, "series") }.getOrNull()
                 ?: continue
+            // M9 (audit): a kids profile is only told about shows it may watch.
+            // The followed set is built from watch history, which can carry an
+            // adult show watched before the ceiling was set (or reached through
+            // a gap since closed), and the alert names the show AND the episode
+            // in the system shade - visible to anyone holding the remote, and a
+            // tap away from Detail. Vetted before the baseline is recorded too,
+            // so the store never learns about titles this profile cannot see.
+            val ceiling = tmdb.kidsMaxAge()
+            if (ceiling != null &&
+                !KidsMode.allowed(ceiling, detail.certification(isMovie = false))
+            ) {
+                continue
+            }
             val last = detail.lastEpisodeToAir ?: continue
             val episodeKey = NewEpisodeRules.episodeKey(last.seasonNumber, last.episodeNumber)
                 ?: continue

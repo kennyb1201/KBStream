@@ -50,9 +50,19 @@ class SportsHubMatchLoadingContractTest {
             "the ordinary way out finishes the pass",
             resolve.contains("_matches.value = matches")
         )
+        // Five, not four: the unchanged-lineup skip is a way out too. It looks
+        // like it cannot need the flag (nothing was dropped when it returned
+        // early) - but a pass that was CANCELLED after dropping the flag leaves
+        // the cards reading "Finding channel…", and the next beat against the
+        // same lineup is the skip. Finishing there is what unsticks them. The
+        // fifth is the C7 case: a playlist that exists but holds nothing this
+        // profile may see. That is an answer about every card ("not in your
+        // playlist" is true of what the kid may play), so the pass must not sit
+        // on "Finding channel…" over it either.
         assertEquals(
-            "every way out finishes it too - an empty slate and a missing lineup are answers, not a wait",
-            3,
+            "every way out finishes it too - the skip, an empty slate, a missing lineup and " +
+                "a lineup with nothing visible are answers, not a wait",
+            5,
             Regex("_matchingDone\\.value = true").findAll(resolve).count()
         )
     }
@@ -112,6 +122,49 @@ class SportsHubMatchLoadingContractTest {
         assertTrue(
             "and the game card is told, through the row that builds them",
             hub.contains("lineupMissing = lineupMissing, matchingDone = matchingDone, onOpenDetail = onOpenDetail,")
+        )
+    }
+
+    @Test
+    fun `a beat over the same slate does not redo the channel lookups`() {
+        val resolve = slice(vm, "private suspend fun resolveMatches(", "private suspend fun cachedGuideIndex(")
+        assertTrue(
+            "the pass is keyed on which cards exist, not on their scores",
+            resolve.contains("val matchKey = matchKeyOf(games, events)")
+        )
+        assertTrue(
+            "and the same slate against the same lineup leaves it early, instead of flipping every " +
+                "card back to a loading line for the length of an EPG pass",
+            resolve.contains("if (matchKey == lastMatchKey &&") &&
+                resolve.contains("lastMatchLineupGeneration == lineupGeneration &&") &&
+                resolve.contains("_matches.value.isNotEmpty()")
+        )
+        val skip = resolve.indexOf("PerfTrace.record(\"sports.match.skipped\"")
+        assertTrue(
+            "the skip still finishes the pass: a pass cancelled after dropping the flag is the " +
+                "one way the flag can be down with nothing left to raise it",
+            skip >= 0 && resolve.indexOf("_matchingDone.value = true", skip) > skip
+        )
+        // The skip is only safe while the pass has nothing new to read. A
+        // remembered pick IS new, and it is read inside the pass - so both
+        // writers drop the key and the next beat runs in full.
+        val gamePick = slice(vm, "fun rememberChannel(game: SportsGame", "fun rememberTournamentChannel(")
+        assertTrue(
+            "a remembered game pick is written",
+            gamePick.contains("SportsChannelMemory.rememberPick(getApplication(), game, channelId)")
+        )
+        assertTrue(
+            "and it invalidates the skip, so the next beat reads it",
+            gamePick.contains("lastMatchKey = null")
+        )
+        val eventPick = slice(vm, "fun rememberTournamentChannel(", "fun clearChannelMemory(")
+        assertTrue(
+            "the tournament pick is written",
+            eventPick.contains("SportsChannelMemory.rememberTournamentPick(getApplication(), event, channelId)")
+        )
+        assertTrue(
+            "and invalidates the skip too",
+            eventPick.contains("lastMatchKey = null")
         )
     }
 

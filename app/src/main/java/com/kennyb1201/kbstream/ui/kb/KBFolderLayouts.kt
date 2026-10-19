@@ -642,9 +642,19 @@ private fun FolderRailPageHandler(
         }
     }
 
+    // The paging state the sentinel's own throttling depends on. Left at its
+    // defaults (hasMore = true, isLoadingMore = false), the runway fired
+    // onLoadMore on EVERY scroll delta - including after the ViewModel had
+    // marked the rail exhausted, where the only thing absorbing the calls was
+    // the VM's own guard. Tag/Studio/Decade pass both through their
+    // Infinite*RailHandler wrappers; this is the same call.
+    val paging = viewModel.state.collectAsStateWithLifecycle().value
+        .pagingStates[rail.sourceId]
     InfiniteScrollEffect(
         listState = listState,
         itemCount = rail.items.size,
+        hasMore = paging?.hasMore ?: true,
+        isLoadingMore = paging?.isLoadingMore == true,
         onLoadMore = { viewModel.loadMoreRail(rail.sourceId) }
     )
 }

@@ -17,7 +17,6 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -696,11 +695,19 @@ class LibraryViewModel(
             // one request per row at once - a thundering herd of TMDB calls on
             // a box this small the moment a large library was opened.
             val resolved = coroutineScope {
+                val resolvedRows = mutableListOf<Resolved>()
                 items.distinctBy { LocalLibraryStore.dedupeKey(it) }
                     .chunked(ENRICH_CONCURRENCY)
-                    .map { chunk -> async { chunk.map { resolve(it) } } }
-                    .awaitAll()
-                    .flatten()
+                    .forEach { chunk ->
+                        // One window at a time. `.map { async }` started every
+                        // chunk coroutine immediately, so only the INSIDE of a
+                        // window was serial - the effective concurrency was the
+                        // whole library again, which is the thundering herd the
+                        // kdoc above says this replaced. Awaiting each window
+                        // before opening the next is what actually bounds it.
+                        resolvedRows += async { chunk.map { resolve(it) } }.await()
+                    }
+                resolvedRows
             }
 
             if (version != requestVersion) return@launch
@@ -728,22 +735,27 @@ class LibraryViewModel(
     }
 
     /**
-     * Drops rows above the active kids profile's ceiling. Local rows the
-     * user (or parent) saved intentionally are kept; only remote rows are
-     * filtered, matching how Home treats account-wide Simkl items.
+     * Drops rows above the active kids profile's ceiling.
+     *
+     * EVERY source, local included (audit M8). Local rows used to be exempt on
+     * the argument that the user (or parent) had saved them deliberately - but
+     * a title saved while the ceiling was off, or before the profile became
+     * kids-restricted, then rendered on the kids profile with its poster, title
+     * and year. That is the one thing the ceiling exists to stop. It was also
+     * internally inconsistent: personal LOCAL_LIST rows were filtered while
+     * plain LOCAL rows were not. A local row whose TMDB id never resolved is
+     * treated like any other unrated title, by [KidsMode]'s known-unknown rule
+     * (kept on PG-13, dropped on the strict ceilings).
      */
     private suspend fun kidsFiltered(items: List<LibraryItem>): List<LibraryItem> {
-        if (tmdbRepository.kidsMaxAge() == null) return items
-        val remote = items.filter { it.source != LibrarySource.LOCAL }
-        if (remote.isEmpty()) return items
-        val allowed = tmdbRepository.kidsFilter(remote) { row ->
+        if (tmdbRepository.kidsMaxAge() == null || items.isEmpty()) return items
+        return tmdbRepository.kidsFilter(items) { row ->
             val type = when (row.mediaType.lowercase()) {
                 "tv", "series" -> "series"
                 else -> "movie"
             }
             (row.tmdbId ?: -1) to type
         }
-        return items.filter { it.source == LibrarySource.LOCAL || allowed.contains(it) }
     }
 
     /**

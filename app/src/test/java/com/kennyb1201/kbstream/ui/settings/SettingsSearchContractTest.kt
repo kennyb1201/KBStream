@@ -187,8 +187,10 @@ class SettingsSearchContractTest {
             rail.contains("if (searchQuery.isNotBlank())")
         )
         assertTrue(
-            "the results are filtered from the declared index",
-            rail.contains("SettingsSearchIndex.search(searchQuery)")
+            "the results are filtered from the declared index, and asked with the " +
+                "kids add-on lock in hand so the row it hides is not returned as a " +
+                "result that jumps nowhere",
+            rail.contains("SettingsSearchIndex.search(searchQuery, kidsAddonLock = kidsAddonLock)")
         )
         assertTrue(
             "the grouped pane list must not render underneath the results",

@@ -218,6 +218,15 @@ object BackupManager {
         // add-ons, and the reader cannot tell the two apart - so only a backup
         // that actually carries the key may replace them.
         if (addonsJson == null) return
+        // M11 (audit): a kids profile does not take add-ons from a file. The
+        // import pane is reachable from the kids Settings, and an add-on is an
+        // unfiltered catalog source - a crafted (or simply old, adult) backup
+        // would install one behind the ceiling. The profile's own add-on list
+        // is left exactly as it is; everything else in the backup still
+        // restores.
+        if (com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.kidsMaxAge != null) {
+            return
+        }
         scopedPrefs(context, ADDON_PREFS)
             .edit()
             .putString("installed_addons_json", addonsJson)

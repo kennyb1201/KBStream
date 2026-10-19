@@ -894,7 +894,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
         imdbId = id
         _streamRootId.value = ""
-        _meta.value = initialMeta
+        // m6 (audit): the caller's poster/title/blurb is published only when the
+        // profile has no ceiling. On a kids profile this pre-gate publish was a
+        // full-width adult-poster flash on the way to the blocked state - the
+        // page drew the art from `initialMeta` for as long as the load took
+        // (reachable from a notification tap, where nothing had been tapped to
+        // hint at what was coming). With a ceiling the page keeps its loading
+        // state until the gate above has answered and a merged meta is built
+        // from the result.
+        val ceilingAtLoad = tmdbRepository.kidsMaxAge()
+        _meta.value = initialMeta.takeIf { ceilingAtLoad == null }
         _tmdbDetail.value = null
         _isSyntheticDetail.value = false
         _airDateCorrections.value = AirDateCorrections.NONE
@@ -1098,16 +1107,27 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 // Kids Mode gate: once the TMDB detail (with US
                 // certifications) is in hand, a kids profile may not open a
-                // title rated above its ceiling. Fails OPEN like every
-                // other surface: an unresolvable rating keeps the title
-                // unless the ceiling is strict (PG/G hides unknowns).
+                // title rated above its ceiling.
+                //
+                // C6 (audit 2026-10-18): this used to read `ceiling != null &&
+                // gatedDetail != null`, and that second term was a hole big
+                // enough to walk a kid through - a title TMDB has no record for
+                // (an add-on-only entry) has no certification, so the gate was
+                // skipped ENTIRELY and the page drew the full poster, overview,
+                // episode list and trailer button for a title the lists had
+                // only kept because of the known-unknown rule. The rating is now
+                // read through the same rule as everywhere else, with null for
+                // a title that has no certification to read: strict ceilings
+                // (PG/G) DROP it, and PG-13 keeps it - which is that ceiling's
+                // documented unrated pass, made explicit here instead of
+                // arriving as a skipped check.
                 val ceiling = tmdbRepository.kidsMaxAge()
                 val gatedDetail = tmdbDetailResult.getOrNull()
-                if (ceiling != null && gatedDetail != null) {
+                if (ceiling != null) {
                     val isSeriesType = normalizedType == "series"
                     if (!KidsMode.allowed(
                             ceiling,
-                            gatedDetail.certification(isMovie = !isSeriesType)
+                            gatedDetail?.certification(isMovie = !isSeriesType)
                         )
                     ) {
                         _meta.value = null

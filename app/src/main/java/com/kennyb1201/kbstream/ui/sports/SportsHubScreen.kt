@@ -96,7 +96,6 @@ import coil3.compose.AsyncImage
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
@@ -299,12 +298,24 @@ fun SportsHubScreen(
     // here (see StandingsBody/StandingsColumn) and the fallback rides on it,
     // falling back to [listState] for the one-column body and the games list.
     val standingsColumnState = remember { mutableStateOf<LazyGridState?>(null) }
+    // Cleared when the league changes: the columns report themselves through
+    // onFocusChanged, which is not guaranteed to fire as one is disposed, so a
+    // switch could leave the outgoing league's column object held here - and the
+    // scroll fallback then rode a grid that is no longer on screen (a no-op
+    // press at a column edge rather than a scroll).
+    LaunchedEffect(selectedPath, leagueView) {
+        standingsColumnState.value = null
+    }
 
-    // A game the playlist cannot carry is deliberately NOT focusable - a run of
-    // dead cards should not cost the D-pad a stop - so focus alone cannot walk
-    // past one, and a section of them has no focus target below it for the
-    // list to scroll to. That is the "it won't scroll down into the
-    // games" the viewer hits on a slate their playlist only half covers.
+    // A card THAT CANNOT BE PLAYED has no press to give, so a run of them is a
+    // run of dead D-pad stops - and the fallback below is what stops a press at
+    // the bottom of one such run from appearing dead. (The comment here used to
+    // claim those cards were "deliberately NOT focusable", which stopped being
+    // true when they were made focusable so a press could open their sheet -
+    // see TournamentCard's non-playable branch. What matters to this fallback is
+    // only that a press has no target to move to.) That is the "it won't scroll
+    // down into the games" the viewer hits on a slate their playlist only half
+    // covers.
     //
     // So: Down/Up first gets the platform's own move - which is what a press
     // that HAS a target still does - and only when there is nothing to focus
@@ -722,6 +733,20 @@ fun SportsHubScreen(
                         lineupMissing = lineupMissing,
                         matchingDone = matchingDone,
                         onEditFavorites = { favoriteEditor = it },
+                    )
+
+                    // A failed ESPN fetch used to read as "your teams aren't
+                    // playing": the favourites section is built in the
+                    // ViewModel by flattening the league sections, and that
+                    // aggregate carries no failure flag of its own - so the
+                    // error state further down (which is keyed on the LEAGUE
+                    // section) could never apply to this tab. The sections it
+                    // was built from are right here, so ask them.
+                    sections.any { it.failed } -> KBStatusMessage(
+                        title = "Couldn't reach ESPN",
+                        message = "Scores are unavailable right now.",
+                        onRetry = { viewModel.refresh() },
+                        modifier = Modifier.fillMaxSize()
                     )
 
                     else -> KBStatusMessage(
@@ -2324,14 +2349,12 @@ private fun TournamentCard(
                 ) {
                     if (event.state == GameState.LIVE) LiveDot(pulse = livePulse)
                     Text(
-                        text = when {
-                            event.state == GameState.LIVE ->
-                                event.statusDetail.ifBlank { "LIVE" }
-                            event.state == GameState.FINAL -> "Final"
-                            event.dateMs > 0L ->
-                                DateFormats.time(event.dateMs, DateFormats.WEEKDAY_CLOCK_12H)
-                            else -> event.statusDetail
-                        },
+                        // The shared rule, which is what the GAME card and both
+                        // sheets draw. Spelled out here, an undated upcoming
+                        // event with no statusDetail (a TBD tee time) fell to
+                        // `event.statusDetail` and drew an EMPTY line - while
+                        // its own sheet said "Today" for the same event.
+                        text = SportsDetailRules.statusLine(event),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (event.state == GameState.LIVE) KBDanger else KBTextHi
                     )
@@ -2369,6 +2392,14 @@ private fun TournamentCard(
             // the player has no sheet to reopen and the hub is what it should
             // be - the hub. (The sheet's own WATCH is the path that carries
             // them; see Screen.Sports.)
+            //
+            // Deliberate divergence from the GAME card, which always raises its
+            // sheet on OK: a tournament field is not a matchup and its card has
+            // no score to read, so the press is spent on the one thing it can
+            // do - start the feed. A viewer who wants the sheet presses OK on a
+            // card the playlist cannot carry (the non-playable branch below
+            // opens it), or reads the card's own line, which is the same
+            // [SportsDetailRules.statusLine] the sheet draws.
             onClick = { onPlayChannels(null, null, channels) },
             focusedScale = KBFocusRow,
             shape = KBShapeCard,
@@ -2853,10 +2884,14 @@ private fun StandingsRow(
             StandingMark(entry = entry)
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-                text = entry.abbreviation,
+                // The star and the accent are what make the toggle visible: the
+                // row was wired to follow/unfollow and then drew nothing for the
+                // state, so OK looked like it had done nothing at all (the game
+                // cards signal a followed team exactly this way).
+                text = if (followed) "★ ${entry.abbreviation}" else entry.abbreviation,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = KBTextHi,
+                color = if (followed) KBAccent else KBTextHi,
                 maxLines = 1,
                 modifier = Modifier.width(STANDINGS_ABBREV_WIDTH)
             )
@@ -3086,58 +3121,6 @@ private fun TournamentDetailSheet(
                         matchingDone = matchingDone
                     )
 
-                    if (channel != null) {
-                        KBCard(
-                            // The whole ordered list, head first - the same
-                            // launch a matched card takes.
-                            onClick = { onPlay(channels) },
-                            focusedScale = KBFocusRow,
-                            shape = KBShapePill,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(watchButton)
-                                .focusDownTo(backupButtons.firstOrNull())
-                        ) {
-                            WatchButtonLabel(
-                                label = SportsDetailRules.watchLabel(true),
-                                enabled = true
-                            )
-                        }
-                        // WATCH is the sheet's default stop, and the plate it
-                        // sits on composes the footer a frame after the sheet
-                        // opens: the request is retried until the node is
-                        // attached and the ANSWER is what ends it, so a lost
-                        // race cannot leave the D-pad on the card behind the
-                        // scrim (see the hub entry focus).
-                        LaunchedEffect(Unit) {
-                            var landed = false
-                            var attempts = 0
-                            while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
-                                awaitFrame()
-                                landed = runCatching { watchButton.requestFocus() }
-                                    .getOrDefault(false)
-                                attempts++
-                            }
-                        }
-                    } else {
-                        // Not focusable: a disabled action must not be a D-pad
-                        // stop. It carries the reason instead of the action's
-                        // name, from the same shared rule the game sheet uses.
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = KBShapePill,
-                            colors = SurfaceDefaults.colors(
-                                containerColor = KBSurfaceRaised,
-                                contentColor = KBTextLo
-                            )
-                        ) {
-                            WatchButtonLabel(
-                                label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
-                                enabled = false
-                            )
-                        }
-                    }
-
                     // The other feeds the playlist holds for this tournament -
                     // the same rows the game sheet offers. Picking one is the
                     // viewer correcting the matcher, and the game sheet's own
@@ -3162,16 +3145,88 @@ private fun TournamentDetailSheet(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusRequester(backupButtons[index])
-                                    .focusDownTo(backupButtons.getOrNull(index + 1))
+                                    // Pill to pill, and the LAST pill hands Down to
+                                    // the pinned WATCH under this scroll body. The
+                                    // action is a sibling of the body, so the
+                                    // platform's own directional search cannot
+                                    // reach it from in here - the same reason the
+                                    // game sheet links its footer by hand.
+                                    .focusDownTo(
+                                        backupButtons.getOrNull(index + 1)
+                                            ?: watchButton.takeIf { channel != null }
+                                    )
                             ) {
                                 BackupChannelLabel(channel = backup)
                             }
                         }
                     }
                 }
-            }
-        }
-    }
+
+                 // ---- PINNED FOOTER: the WATCH action, always visible ----
+                 // This sheet was the last one drawing WATCH INSIDE the scroll
+                 // body, under the detail rows, the leaders and the channel
+                 // line - and focusing it on open scrolled the header away,
+                 // which is the exact fault the game sheet's pinned footer was
+                 // written to fix (see GameDetailSheet). Same remedy: the action
+                 // lives outside the scroll container, and Up hands to the LAST
+                 // backup pill because the pills are inside it.
+                 if (channel != null) {
+                     KBCard(
+                         // The whole ordered list, head first - the same
+                         // launch a matched card takes.
+                         onClick = { onPlay(channels) },
+                         focusedScale = KBFocusRow,
+                         shape = KBShapePill,
+                         modifier = Modifier
+                             .fillMaxWidth()
+                             .padding(top = 10.dp)
+                             .focusRequester(watchButton)
+                             .focusUpTo(backupButtons.lastOrNull())
+                     ) {
+                         WatchButtonLabel(
+                             label = SportsDetailRules.watchLabel(true),
+                             enabled = true
+                         )
+                     }
+                     // WATCH is the sheet's default stop, and the plate it sits
+                     // on composes the footer a frame after the sheet opens: the
+                     // request is retried until the node is attached and the
+                     // ANSWER is what ends it, so a lost race cannot leave the
+                     // D-pad on the card behind the scrim (see the hub entry
+                     // focus).
+                     LaunchedEffect(Unit) {
+                         var landed = false
+                         var attempts = 0
+                         while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                             awaitFrame()
+                             landed = runCatching { watchButton.requestFocus() }
+                                 .getOrDefault(false)
+                             attempts++
+                         }
+                     }
+                 } else {
+                     // Not focusable: a disabled action must not be a D-pad
+                     // stop. It carries the reason instead of the action's name,
+                     // from the same shared rule the game sheet uses.
+                     Surface(
+                         modifier = Modifier
+                             .fillMaxWidth()
+                             .padding(top = 10.dp),
+                         shape = KBShapePill,
+                         colors = SurfaceDefaults.colors(
+                             containerColor = KBSurfaceRaised,
+                             contentColor = KBTextLo
+                         )
+                     ) {
+                         WatchButtonLabel(
+                             label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                             enabled = false
+                         )
+                     }
+                 }
+             }
+         }
+     }
 }
 
 /**

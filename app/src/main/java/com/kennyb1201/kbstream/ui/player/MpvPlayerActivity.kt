@@ -3162,6 +3162,25 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     internal fun subtitleBackground(): Int = subtitleBackground
     internal fun subtitlePosition(): Int = subtitlePosition
     internal fun hardwareDecoding(): Boolean = surface?.isHardwareDecoding() != false
+
+    /**
+     * Whether this session's video output is the MediaCodec embed one — the
+     * workaround [MpvVideoOutput] sends the Fire TV Stick 4K Plus and the Onn 4K
+     * Plus to.
+     *
+     * It matters to the settings panel, twice over, because that output renders
+     * `IMGFMT_MEDIACODEC` frames straight to the Surface: it only accepts frames
+     * from the zero-copy `--hwdec=mediacodec` path (so a software fallback shows
+     * nothing at all) and it cannot draw subtitles. Both facts are properties of
+     * the RESOLVED output, hence this reader rather than a stored preference.
+     */
+    internal fun videoOutputIsMediaCodecEmbed(): Boolean =
+        MpvVideoOutput.resolve(
+            AppPreferences.getMpvVoMode(this),
+            android.os.Build.MANUFACTURER,
+            android.os.Build.MODEL,
+            android.os.Build.DEVICE
+        ).vo == AppPreferences.MPV_VO_MEDIACODEC_EMBED
     internal fun hasTitleMemory(): Boolean = titleKey != null
 
     // Audio tuning. The panel marks its pills with the OVERRIDE (-1 = follow the
@@ -4748,6 +4767,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 "stream_headers",
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
             )
+            // m9: pin the successor to THIS session's profile, exactly as the
+            // Native -> MPV handoff does. Without it the new session re-resolves
+            // whichever profile is active when it starts, so a switch made
+            // mid-session filed history and scrobbles under the wrong profile.
+            sessionProfileId?.let {
+                putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
+            }
             // Only when it is already resolved; otherwise the ExoPlayer session
             // canonicalizes it with the same rules (PlaybackHistoryIds).
             historyParentIdOverride?.let {
@@ -4822,6 +4848,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             )
             historyParentIdOverride?.let {
                 putExtra(EXTRA_HISTORY_PARENT_ID, it)
+            }
+            // m9: same profile pin as the ExoPlayer switch above - the wrapper
+            // is the session's third engine and must file where the first one
+            // did, not where the active profile happens to point by then.
+            sessionProfileId?.let {
+                putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
             }
         }
 
@@ -5732,7 +5764,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     private fun enterPipIfEnabled() {
-        enterPipMode(this)
+        // A handoff must not become a PiP window: `switchToExoPlayer` /
+        // `switchToExternal` stop mpv and launch the successor while this
+        // activity is still pausing, and PiP would keep `onStop` from running
+        // the surface release the successor's decoder needs (see PipSupport).
+        // `nextEpisodeHandoffStarted` owns the same shape: that path finishes
+        // this activity after filing the episode.
+        enterPipMode(this, handingOver = playerSwitchStarted || nextEpisodeHandoffStarted)
     }
 
     private fun exitPlayer() {

@@ -4,8 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,8 +74,13 @@ fun KBFolderScreen(
     // position in it, which is why the folder used to reopen at the top with
     // the D-pad on whatever the framework picked (see [BrowseReturnFocus]).
     val browseReturnKey = remember(folderId) { kbFolderBrowseScreenKey(folderId) }
-    val browseListState = rememberLazyListState()
-    val browseGridState = rememberLazyGridState()
+    // Keyed on the folder like every neighbour here (the return state, the
+    // records, the card registry): the plain `rememberLazy*State()` survived a
+    // route-argument swap IN PLACE - a folder opened from inside a folder - so
+    // the incoming folder inherited the outgoing one's scroll position. Same
+    // shape as the Library grid and BrowseBrowser, both of which key theirs.
+    val browseListState = remember(folderId) { LazyListState() }
+    val browseGridState = remember(folderId) { LazyGridState() }
     val returnFocusRequester = remember { FocusRequester() }
     var returnTarget by remember(folderId) {
         mutableStateOf<BrowseReturnTarget?>(null)

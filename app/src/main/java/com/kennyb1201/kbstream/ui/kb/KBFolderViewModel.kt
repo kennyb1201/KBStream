@@ -656,21 +656,45 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             val page = source.nextPage
-            val newItems = when (source.kind) {
-                TmdbRailPageSource.Kind.DISCOVER ->
-                    tmdbRepository.discoverKB(
-                        mediaType = source.mediaType,
-                        page = page,
-                        sortBy = source.sortBy,
-                        filters = source.filters
-                    )?.map { it.toContentItem(source.mediaType) }
+            // A page that did not land - a throw, or the null a failed fetch
+            // returns - is deliberately NOT a page that does not exist. The two
+            // used to be indistinguishable here: a repository throw skipped the
+            // state write entirely, leaving `isLoadingMore = true` forever, and
+            // the guard above (`if (!paging.hasMore || paging.isLoadingMore)
+            // return`) then rejected every later request - a folder rail has no
+            // retry UI, so it simply stopped where it was for the session. The
+            // null route was quieter still: `newItems.size >= PAGE_SIZE` read a
+            // failed fetch as an empty one and set `hasMore = false`, so one
+            // transient error ended the rail. Both now leave the rail open, the
+            // loading flag clear, and the sentinel free to re-ask on the next
+            // scroll delta (the Tag/Studio/Decade contract, which also keeps
+            // its own page pointer). Cancellation still propagates.
+            val newItems = runCatchingCancellable {
+                when (source.kind) {
+                    TmdbRailPageSource.Kind.DISCOVER ->
+                        tmdbRepository.discoverKB(
+                            mediaType = source.mediaType,
+                            page = page,
+                            sortBy = source.sortBy,
+                            filters = source.filters
+                        )?.map { it.toContentItem(source.mediaType) }
 
-                TmdbRailPageSource.Kind.LIST ->
-                    source.tmdbId?.let { listId ->
-                        tmdbRepository.getKBListItems(listId, page)
-                            ?.map { it.toContentItem(source.mediaType) }
-                    }
-            }.orEmpty()
+                    TmdbRailPageSource.Kind.LIST ->
+                        source.tmdbId?.let { listId ->
+                            tmdbRepository.getKBListItems(listId, page)
+                                ?.map { it.toContentItem(source.mediaType) }
+                        }
+                }
+            }.getOrNull()
+
+            if (newItems == null) {
+                Log.w("KB_FOLDER_VM", "loadMoreRail page $page did not land for $railId")
+                _state.value = _state.value.copy(
+                    pagingStates = _state.value.pagingStates +
+                        (railId to KBRailPagingState(hasMore = true))
+                )
+                return@launch
+            }
 
             source.nextPage = page + 1
             val hasMore = newItems.size >= PAGE_SIZE
@@ -678,7 +702,13 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             _state.value = _state.value.copy(
                 rails = _state.value.rails.map { rail ->
                     if (rail.sourceId == railId) {
-                        rail.copy(items = rail.items + newItems)
+                        rail.copy(
+                            // Deduped like every other append in the app
+                            // (Tag/Studio/Decade all do this): an overlapping
+                            // source page would otherwise put duplicate keys in
+                            // a keyed rail, which throws at composition.
+                            items = (rail.items + newItems).distinctBy { it.id }
+                        )
                     } else {
                         rail
                     }

@@ -88,6 +88,7 @@ import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
+import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
@@ -2447,7 +2448,12 @@ private fun ChannelRowCard(
                 // The row and the panel below it now say the same thing for the
                 // same absence: this one read "No program data" while the card
                 // read "No guide data".
+                // m7: a programme's title is unvetted text from the playlist,
+                // and the channel filter only vets channel/group NAMES. On a
+                // kid-locked-live-TV profile a rejected programme reads as
+                // absent rather than by name.
                 val nowTitle = item.now?.title
+                    ?.takeIf { !KidsLiveTvFilter.programHidden(it, item.now?.description) }
                     ?: if (guidePending) "Loading guide…" else "No guide data"
                 Text(
                     text = nowTitle,
@@ -2675,7 +2681,14 @@ private fun NowNextPanel(
     guidePending: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // m7: see the row's own note. A rejected programme is DROPPED rather than
+    // blanked to an empty line: "Nothing airing right now" is the same answer
+    // this panel already gives for a channel with no guide row, and it is true
+    // of what the profile may read.
     val nowProgram = item.now
+        ?.takeIf { !KidsLiveTvFilter.programHidden(it.title, it.description) }
+    val nextProgram = item.next
+        ?.takeIf { !KidsLiveTvFilter.programHidden(it.title, it.description) }
     val nowProgress: Float? = nowProgram?.let { program ->
         val duration = (program.endUtcMillis - program.startUtcMillis).coerceAtLeast(1L)
         val fraction = (nowMillis - program.startUtcMillis).toFloat() / duration
@@ -2688,22 +2701,22 @@ private fun NowNextPanel(
     ) {
         ProgramCard(
             label = "NOW",
-            title = item.now?.title
+            title = nowProgram?.title
                 ?: if (guidePending) "Loading guide…" else "Nothing airing right now",
-            time = item.now?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            time = nowProgram?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             badge = nowProgram?.let { formatRemainingLabel(it.endUtcMillis - nowMillis) },
             progress = nowProgress,
-            description = item.now?.description,
+            description = nowProgram?.description,
             modifier = Modifier.weight(1f)
         )
 
         ProgramCard(
             label = "NEXT",
-            title = item.next?.title
+            title = nextProgram?.title
                 ?: if (guidePending) "Loading guide…" else "No next program listed",
-            time = item.next?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
-            badge = item.next?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
-            description = item.next?.description,
+            time = nextProgram?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
+            badge = nextProgram?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
+            description = nextProgram?.description,
             modifier = Modifier.weight(1f)
         )
     }

@@ -461,12 +461,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun kidsFilterChannels(
         channels: List<IptvChannelWithEpg>
     ): List<IptvChannelWithEpg> {
+        // The rule itself moved to KidsLiveTvFilter so the SPORTS hub's WATCH
+        // can ask the same question (audit C7): it was the second door into the
+        // live player, and it used the raw playlist.
         val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
         if (profile?.kidsMaxAge == null || !profile.kidsLockLiveTv) return channels
         return channels.filter { ch ->
-            val group = ch.channel.groupTitle?.trim().orEmpty()
-            val haystack = "${ch.channel.displayName} $group".lowercase()
-            KID_TV_SIGNALS.any { haystack.contains(it) }
+            com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter.keep(
+                profile,
+                ch.channel.displayName,
+                ch.channel.groupTitle
+            )
         }
     }
 
@@ -1372,10 +1377,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             upcoming = emptyList()
         )
 
-    private fun buildMessage(t: Throwable): String = buildString {
-        append(t::class.java.simpleName)
-        t.message?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
-    }
+    /**
+     * A message for the SCREEN, not a log header.
+     *
+     * This used to lead with the exception's class name, so the stall chip the
+     * viewer reads on the TV said "EpgStalledException: EPG download stalled: no
+     * data for 3 minutes" — the failure's own text is already written for a
+     * viewer, and the class name told them nothing they could act on. Only a
+     * throwable with nothing to say falls back to its type.
+     */
+    private fun buildMessage(t: Throwable): String =
+        t.message?.takeIf { it.isNotBlank() } ?: t::class.java.simpleName
 
     private fun saveInputs() {
         prefs.edit()
@@ -1408,12 +1420,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val TAG = "IptvViewModel"
 
         /** Substrings that mark a channel/group as plausibly kid-focused. */
-        val KID_TV_SIGNALS = listOf(
-            "kid", "child", "cartoon", "nick", "disney", "junior", "jr",
-            "baby", "toddler", "family", "boomerang", "poko", "sprout",
-            "animation", "anime kids", "cbeebies", "cbbc", "boing",
-            "milk", "minimax", "gulli", "toon", "peppa", "paw"
-        )
         const val PREFS_NAME = "iptv_prefs"
         const val KEY_PLAYLIST_URL = "playlist_url"
         const val KEY_EPG_URL = "epg_url"

@@ -78,6 +78,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.browseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.browse.tagBrowseScreenKey
+import com.kennyb1201.kbstream.ui.components.KBRailAppendIndicator
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
@@ -886,6 +887,22 @@ private fun TagRailRow(
                         modifier = Modifier
                             .width(tileWidth)
                             .padding(top = 5.dp)
+                    )
+                }
+            }
+
+            // The rail's append state, drawn. `isLoadingMore` reached this
+            // function and only the sentinel ever read it, so a page in flight
+            // (or a page that failed - these view-models keep hasMore and wait
+            // for the next scroll delta) read as the list simply ending.
+            if (isLoadingMore) {
+                item(key = "rail_tail_loading") {
+                    // Read HERE: the rail's own size is declared inside each
+                    // card's scope, and this tail is a sibling of those cards.
+                    val tailSize = rememberPosterSize()
+                    KBRailAppendIndicator(
+                        width = tailSize.width,
+                        height = tailSize.height
                     )
                 }
             }

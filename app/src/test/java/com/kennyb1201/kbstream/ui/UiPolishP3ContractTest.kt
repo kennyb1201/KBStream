@@ -264,7 +264,8 @@ class UiPolishP3ContractTest {
         )
         assertTrue(
             "and DISCONNECT carries the danger affordance it was missing",
-            simkl.contains("label = \"DISCONNECT\",\n                            danger = true")
+            simkl.replace(Regex("\\s+"), " ")
+                .contains("label = \"DISCONNECT\", danger = true")
         )
     }
 

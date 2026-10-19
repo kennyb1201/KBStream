@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
 import com.kennyb1201.kbstream.data.tmdb.TmdbVideo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -147,6 +148,63 @@ class DetailMediaRowTest {
             "and with no thumbnail of its own there is no image, which the " +
                 "card renders as its own name",
             DetailMediaRow.trailers(listOf(video(site = "Vimeo"))).single().imageUrl
+        )
+    }
+
+    @Test
+    fun `a video on a site the player cannot speak becomes an unplayable card, not no card`() {
+        // Every video TMDB lists is a card of this page - that is the page's
+        // whole point, and the deliberate design a test below already pins. What
+        // this adds is the verdict the card needs to SAY: the trailer player
+        // resolves one shape of source (`youtube.com/watch?v=<key>`), so a Vimeo
+        // or Dailymotion entry can be drawn but not opened, and a press on it
+        // used to build a YouTube URL out of a foreign key and fail silently.
+        val cards = DetailMediaRow.trailers(
+            listOf(
+                video(key = "yt", site = "YouTube"),
+                video(key = "12345", site = "Vimeo"),
+                video(key = "x1y2z3", site = "Dailymotion"),
+                video(key = "", site = "YouTube")
+            )
+        )
+
+        assertEquals(
+            "the card is kept, in TMDB's order, site and all",
+            listOf("yt", "12345", "x1y2z3", ""),
+            cards.map { it.video?.key }
+        )
+        assertEquals(
+            "and only the YouTube one with a usable key is marked playable",
+            listOf(true, false, false, false),
+            cards.map { it.playable }
+        )
+    }
+
+    @Test
+    fun `the playability verdict is the site check the header's own pick makes`() {
+        assertTrue("a YouTube video with a key plays", DetailMediaRow.isPlayable(video()))
+        assertTrue(
+            "the site name is matched like every other site check in the app",
+            DetailMediaRow.isPlayable(video(key = "abcdef", site = "youtube"))
+        )
+        assertFalse(
+            "another host is not a source the player can resolve",
+            DetailMediaRow.isPlayable(video(site = "Vimeo"))
+        )
+        assertFalse(
+            "and neither is a blank key on YouTube itself",
+            DetailMediaRow.isPlayable(video(key = ""))
+        )
+    }
+
+    @Test
+    fun `artwork cards are not asked about playability`() {
+        assertTrue(
+            "a still carries no video, so the flag is never read for it: the " +
+                "press opens the artwork either way",
+            DetailMediaRow.backdrops(listOf(TmdbImageAsset(filePath = "/one.jpg"))).all {
+                it.video == null && it.playable
+            }
         )
     }
 

@@ -144,10 +144,13 @@ class VoiceSearchActivity : ComponentActivity() {
             }
             val fallback = parsed.title
             if (target == null) {
-                if (!fallback.isNullOrBlank()) {
-                    SearchSeed.set(fallback)
-                    openSearch(fallback)
-                }
+                // Search ALWAYS opens on a failed resolve, seeded when the link
+                // carried a title. `Parsed.title` is nullable and build() emits
+                // title-less links, and this used to `finish()` with nothing
+                // opened in that case - a voice action that silently did nothing,
+                // contradicting the kdoc's "still opens Search with it applied".
+                if (!fallback.isNullOrBlank()) SearchSeed.set(fallback)
+                openSearch(fallback.orEmpty())
             } else {
                 startActivity(detailIntent(target.type, target.id))
             }

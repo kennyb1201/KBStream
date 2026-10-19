@@ -187,13 +187,22 @@ class SportsTournamentCardDetailContractTest {
             sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
         )
         assertTrue(
-            "WATCH hands Down to the first pill",
-            sheet.contains(".focusRequester(watchButton) .focusDownTo(backupButtons.firstOrNull())")
+            "the pills chain downward in the order they are drawn",
+            sheet.contains("backups.forEachIndexed { index, backup ->") &&
+                sheet.contains("backupButtons.getOrNull(index + 1)")
+        )
+        // WATCH is the sheet's pinned footer, drawn UNDER the scroll body (see
+        // TournamentDetailSheet). The pills are inside that body, so the last
+        // one names the action below it by hand - the platform's directional
+        // search cannot walk out of a scrolling container to a sibling of it -
+        // and WATCH names the last pill on the way back up.
+        assertTrue(
+            "the last pill hands Down to the pinned WATCH under the body",
+            sheet.contains(": watchButton.takeIf { channel != null }")
         )
         assertTrue(
-            "and each pill to the next",
-            sheet.contains("backups.forEachIndexed { index, backup ->") &&
-                sheet.contains(".focusDownTo(backupButtons.getOrNull(index + 1))")
+            "and WATCH hands Up to the last pill",
+            sheet.contains(".focusUpTo(backupButtons.lastOrNull())")
         )
         assertTrue(
             "with the manual pick and the play unchanged",

@@ -166,10 +166,15 @@ class SportsHubLayoutContractTest {
                     ".joinToString(\" · \").let { if (favorite) \"★ \$it\" else it }"
             )
         )
+        val column = flat
+            .substringAfter("private fun TeamColumn(")
+            .substringBefore("private fun ScoreText(")
         assertEquals(
-            "the star is applied once - to the finished string, ranking and all",
+            "the star is applied once - to the finished string, ranking and all. Scoped to the " +
+                "column, because the standings row draws its own ★ over a followed team " +
+                "StandingsRow: a different surface, and not this line",
             1,
-            Regex("★ ").findAll(flat).count()
+            Regex("★ ").findAll(column).count()
         )
         assertEquals(
             "and the card and the sheet share the one column, so a ranking cannot land on only one",

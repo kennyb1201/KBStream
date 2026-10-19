@@ -45,14 +45,19 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.sync.KidsGate
 import com.kennyb1201.kbstream.data.sync.KidsMode
+import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusTile
@@ -201,6 +206,37 @@ fun ProfileEditScreen(
     var kidsBedtimeOn by remember(effectiveEditId) {
         mutableStateOf((editing?.kidsBedtimeMinutes ?: 0) > 0)
     }
+    // The app-level PARENT PIN (see [KidsTimeGuard.setParentPin]), managed here
+    // beside the locks it unlocks - and the credential that gates every
+    // protective action the editor can take (audit C2/C3/C5/M6/M7).
+    //
+    // `parentPinPrompt` is true while the dialog is up; `parentPinPromptGated`
+    // says the prompt is standing in FRONT of an action (backing out refuses it)
+    // rather than being the Parent PIN row's own set/change panel;
+    // `parentPinPromptWhy` is the one-line reason shown under the heading; and
+    // `parentPinAfterVerify` is the action that runs once the PIN is accepted -
+    // the save, the delete, or the switch to another profile's editor.
+    var parentPinPrompt by remember(effectiveEditId) { mutableStateOf(false) }
+    var parentPinPromptGated by remember(effectiveEditId) { mutableStateOf(false) }
+    var parentPinPromptWhy by remember(effectiveEditId) { mutableStateOf<String?>(null) }
+    var parentPinAfterVerify by remember(effectiveEditId) {
+        mutableStateOf<(() -> Unit)?>(null)
+    }
+    // Whose own PIN may answer the prompt: the profile being edited, unless the
+    // action targets ANOTHER one (the manage-mode chip row, which opens another
+    // profile's editor - M7). Null means "the profile on screen".
+    var parentPinGateTarget by remember(effectiveEditId) {
+        mutableStateOf<ProfileManager.Profile?>(null)
+    }
+    var parentPinCurrent by remember(effectiveEditId) { mutableStateOf("") }
+    var parentPinNew by remember(effectiveEditId) { mutableStateOf("") }
+    var parentPinConfirm by remember(effectiveEditId) { mutableStateOf("") }
+    var parentPinError by remember(effectiveEditId) { mutableStateOf<String?>(null) }
+    // Bumped whenever the parent PIN is written, so the row's own label re-reads
+    // it: KidsTimeGuard reads the prefs file directly and is not observable
+    // state, so a remember keyed on nothing would keep saying "SET".
+    var parentPinRevision by remember(effectiveEditId) { mutableStateOf(0) }
+    val parentPinFieldRequester = remember { FocusRequester() }
     // Tracks whether the custom photo is in effect; selecting a color tile
     // flips this off so a color choice actually replaces the photo on save.
     var useCustomAvatar by remember(effectiveEditId) {
@@ -224,6 +260,156 @@ fun ProfileEditScreen(
         avatarUrlInput.isNotBlank() -> avatarUrlInput.trim()
         useCustomAvatar -> pendingAvatarUrl ?: editing?.customAvatarUrl ?: editing?.avatarData
         else -> null
+    }
+
+    // Closing the parent-PIN prompt. `refused` is the GATED case: the editor
+    // asked for a credential because a protective action was about to happen
+    // without one, and the parent backed out - so the action is refused outright
+    // rather than applied with its protection quietly dropped (see the gates).
+    val closeParentPinPrompt: (Boolean) -> Unit = { refused ->
+        val wasGated = parentPinPromptGated
+        parentPinPrompt = false
+        parentPinPromptGated = false
+        parentPinPromptWhy = null
+        parentPinAfterVerify = null
+        parentPinCurrent = ""
+        parentPinNew = ""
+        parentPinConfirm = ""
+        parentPinError = null
+        if (refused && wasGated) {
+            feedback.show(
+                text = "A parent PIN is needed for that",
+                isError = true
+            )
+        }
+    }
+
+    // Raising the prompt for a GATED action. The action runs only after the PIN
+    // is accepted ([parentPinAfterVerify]), and `why` is what the parent reads.
+    val gateWithParentPin: (String, ProfileManager.Profile?, () -> Unit) -> Unit =
+        { why, target, action ->
+            parentPinPromptGated = true
+            parentPinPromptWhy = why
+            parentPinGateTarget = target
+            parentPinAfterVerify = action
+            parentPinPrompt = true
+        }
+
+    // The save itself, as its own lambda rather than inline in the SAVE button:
+    // the parent-PIN prompt has to run it too, once the PIN it asked for is set.
+    // The labelled return is the validation's early exit - on failure the screen
+    // stays open so the entry can be corrected.
+    val saveProfile: () -> Unit = save@{
+        // PIN validation before anything else.
+        val pinChanged = newPinInput.isNotBlank() || confirmPinInput.isNotBlank()
+        val wantsClear = newPinInput.isBlank() && confirmPinInput.isBlank() &&
+            currentPinInput.isNotBlank()
+        // Null until the profile exists: a NEW profile's PIN is set on the
+        // created row below, which is what makes the fields work at all on the
+        // create form. They used to be validated against `editing` (null) and
+        // dropped silently on the floor, so a parent could type a PIN on a new
+        // profile, save, and believe it was protected.
+        var pinTargetId = editing?.id
+        val hasExistingPin = editing?.pinHash != null
+        if (pinChanged || wantsClear) {
+            // Removing a PIN is a credentialed action like setting one: the
+            // CURRENT PIN has to be right either way. This read
+            // `clearOk = !wantsClear || currentPinInput.isNotBlank()`, and
+            // `wantsClear` already implies a non-blank entry - so the clear path
+            // never called verifyPin at all, and typing ANY four digits into
+            // "Current PIN" and saving stripped the lock.
+            val currentOk = !hasExistingPin ||
+                ProfileManager.verifyPin(requireNotNull(editing), currentPinInput)
+            // Validation runs whenever a PIN field is non-blank, whether or not
+            // the profile already has one. Gating it on `pinHash != null` meant a
+            // mismatch on a profile with no PIN yet was written straight through
+            // (the mistyped PIN became the PIN), and a blank-new + filled-confirm
+            // pair passed and called setPin("") - which CLEARS the lock,
+            // unverified.
+            val newPinOk = !pinChanged ||
+                (newPinInput.length == 4 && newPinInput == confirmPinInput)
+            if (!currentOk || !newPinOk) {
+                // Through the app's own channel rather than a system Toast: same
+                // wording, but it is styled like the rest of the app, readable
+                // from across the room, and read aloud by TalkBack.
+                feedback.show(
+                    text = when {
+                        !currentOk -> "Current PIN is incorrect"
+                        pinChanged && newPinInput.length != 4 ->
+                            "The new PIN must be 4 digits"
+                        else -> "PINs don't match"
+                    },
+                    isError = true
+                )
+                return@save
+            }
+        }
+        // Precedence: typed URL > uploaded image > color/clear.
+        val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
+        val kidsTargetId: String?
+        if (editing == null) {
+            val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
+            kidsTargetId = created.id
+            // The PIN applies to the row that now exists (see the validation
+            // block: it used to be silently dropped here).
+            pinTargetId = created.id
+            when {
+                typedUrl != null ->
+                    ProfileManager.finalizeAvatar(context, created.id, typedUrl)
+                pendingAvatarUrl != null ->
+                    ProfileManager.finalizeAvatar(context, created.id, pendingAvatarUrl)
+            }
+        } else {
+            kidsTargetId = editing.id
+            ProfileManager.rename(context, editing.id, name, avatarIndex)
+            when {
+                typedUrl != null ->
+                    ProfileManager.finalizeAvatar(context, editing.id, typedUrl)
+                pendingAvatarUrl != null ->
+                    ProfileManager.finalizeAvatar(context, editing.id, pendingAvatarUrl)
+                !useCustomAvatar &&
+                    (editing.customAvatarUrl != null || editing.avatarData != null) ->
+                    ProfileManager.setCustomAvatar(context, editing.id, null)
+            }
+        }
+        // Apply the guest flag after the profile itself is saved.
+        kidsTargetId?.let { id ->
+            ProfileManager.setGuest(context, id, guestProfile)
+        }
+        // Apply Kids Mode after the profile itself is saved.
+        kidsTargetId?.let { id ->
+            ProfileManager.setKidsMaxAge(
+                context,
+                id,
+                if (kidsModeOn) kidsLevel else null
+            )
+            ProfileManager.setKidsOptions(
+                context,
+                id,
+                hideAddons = kidsHideAddons,
+                lockLiveTv = kidsLockLiveTv,
+                requirePinToExit = kidsRequirePinToExit,
+                dailyLimitMinutes = kidsDailyLimitHours * 60,
+                bedtimeMinutes = if (kidsBedtimeOn) {
+                    bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
+                } else 0
+            )
+        }
+        // Apply the PIN after the profile itself is saved.
+        when {
+            pinTargetId != null && pinChanged ->
+                ProfileManager.setPin(context, pinTargetId, newPinInput)
+            pinTargetId != null && wantsClear ->
+                ProfileManager.setPin(context, pinTargetId, null)
+        }
+        onDone()
+    }
+
+    // The prompt's own field takes the D-pad when it opens, through the app's
+    // verified retry: the dialog enters the tree this same frame and a fresh
+    // FocusRequester answers false until it is attached.
+    LaunchedEffect(parentPinPrompt) {
+        if (parentPinPrompt) landFocusOn(parentPinFieldRequester)
     }
 
     Column(
@@ -258,7 +444,19 @@ fun ProfileEditScreen(
                         label = p.name,
                         selected = effectiveEditId == p.id,
                         onClick = {
-                            effectiveEditId = p.id
+                            // M7: this chip row is how a kid reaches ANOTHER
+                            // profile's editor - the enabler for clearing the
+                            // parent's PIN, deleting their profile or renaming
+                            // it to confuse the gates. A target that carries a
+                            // PIN, or that IS a kids sandbox, opens only for the
+                            // parent: its own PIN answers, or the parent PIN.
+                            if (KidsGate.hasOwnPin(p) || KidsGate.isKids(p)) {
+                                gateWithParentPin("Required to edit ${p.name}", p) {
+                                    effectiveEditId = p.id
+                                }
+                            } else {
+                                effectiveEditId = p.id
+                            }
                         }
                     )
                 }
@@ -501,7 +699,21 @@ fun ProfileEditScreen(
                 hint = "Locks this profile from bedtime until 4:00 AM. " +
                     "A PIN unlocks it early.",
                 options = (BEDTIME_CHIP_OFF..BEDTIME_CHIP_MIDNIGHT).map { h ->
-                    bedtimeChipLabel(h) to h
+                    // The stored MINUTE is preserved across an edit (nothing
+                    // clobbers it), so a boundary set as ":30" elsewhere or
+                    // synced in from another device used to be invisible here:
+                    // the row said "9 PM" while the guard actually locked at
+                    // 9:30. Shown on the chip it belongs to, and only there.
+                    val minute = kidsBedtimeMinute.coerceIn(0, 59)
+                    val label = when {
+                        !kidsBedtimeOn || h != kidsBedtime || minute == 0 ->
+                            bedtimeChipLabel(h)
+                        h == BEDTIME_CHIP_MIDNIGHT ->
+                            "12:${minute.toString().padStart(2, '0')} AM"
+                        h == BEDTIME_CHIP_OFF -> bedtimeChipLabel(h)
+                        else -> "$h:${minute.toString().padStart(2, '0')} PM"
+                    }
+                    label to h
                 },
                 selected = if (kidsBedtimeOn) kidsBedtime else BEDTIME_CHIP_OFF,
                 onSelect = { picked ->
@@ -513,6 +725,70 @@ fun ProfileEditScreen(
                     }
                 }
             )
+            // m3 (audit): the hour chips above only ever wrote :00, while the
+            // guard locks on the stored MINUTE - so a 9:30 boundary (synced in
+            // from another device, or set in an older build) locked at 9:30
+            // while this row said "9 PM", and there was no way to pick a half
+            // hour here at all. Shown only with a bedtime on, because "Off" has
+            // no minute to set.
+            if (kidsBedtimeOn) {
+                KidsOptionChipRow(
+                    title = "Bedtime minute",
+                    hint = "The exact boundary the lock uses, on top of the hour " +
+                        "above. A half hour here is what a 9:30 bedtime means.",
+                    options = listOf(":00" to 0, ":30" to 30),
+                    selected = if (kidsBedtimeMinute >= 30) 30 else 0,
+                    onSelect = { kidsBedtimeMinute = it }
+                )
+            }
+
+            // ── The app-level parent PIN ─────────────────────────────
+            // Beside the locks it unlocks, because this is the ONE credential
+            // that lifts a time limit on a profile with no PIN of its own - and
+            // therefore the only exit that veil has (see
+            // [KidsTimeGuard.setParentPin]). Device-local, hashed, asked for
+            // only at the veil: daily profile switching stays PIN-free. Also the
+            // recovery path for a lock saved before this existed.
+            val parentPinSet = remember(parentPinRevision) { KidsTimeGuard.hasParentPin() }
+            Text(
+                text = "Parent PIN",
+                style = MaterialTheme.typography.bodyLarge,
+                color = KBTextHi,
+                modifier = Modifier.padding(top = 16.dp)
+            )
+            Text(
+                text = if (parentPinSet) {
+                    "Set on this TV, and asked for only when a time limit has " +
+                        "locked a profile. It unlocks that session - and " +
+                        "re-engages when the app restarts."
+                } else {
+                    "One PIN for this TV, asked for only when a time limit has " +
+                        "locked a profile. A lock needs one, so kids profiles can " +
+                        "stay PIN-free for daily use."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = KBTextLo,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .padding(top = 10.dp)
+                    .focusGroup()
+            ) {
+                KBButton(
+                    label = if (parentPinSet) "CHANGE" else "SET",
+                    enabled = true
+                ) {
+                    // Not a gated action: backing out of THIS one changes
+                    // nothing, it just closes (see closeParentPinPrompt).
+                    parentPinPromptGated = false
+                    parentPinPromptWhy = null
+                    parentPinGateTarget = null
+                    parentPinAfterVerify = null
+                    parentPinPrompt = true
+                }
+            }
         }
 
         // Avatar row: custom upload tile first, then the 8 generic colors
@@ -694,89 +970,67 @@ fun ProfileEditScreen(
                 label = "SAVE",
                 enabled = name.isNotBlank()
             ) {
-                // PIN validation before anything else — on failure keep the
-                // screen open so the user can correct the entry.
-                val pinChanged = newPinInput.isNotBlank() || confirmPinInput.isNotBlank()
-                val wantsClear = newPinInput.isBlank() && confirmPinInput.isBlank() &&
-                    currentPinInput.isNotBlank()
-                val pinTargetId = editing?.id
-                if (editing != null && editing.pinHash != null) {
-                    val currentOk = newPinInput.isBlank() ||
-                        ProfileManager.verifyPin(editing, currentPinInput)
-                    val clearOk = !wantsClear || currentPinInput.isNotBlank()
-                    val matchOk = newPinInput.isBlank() || newPinInput == confirmPinInput
-                    if (!currentOk || !clearOk || !matchOk) {
-                        // Through the app's own channel rather than a system
-                        // Toast: same wording, but it is styled like the rest
-                        // of the app, readable from across the room, and read
-                        // aloud by TalkBack.
-                        feedback.show(
-                            text = when {
-                                !currentOk -> "Current PIN is incorrect"
-                                !clearOk -> "Enter the current PIN to remove the lock"
-                                else -> "PINs don't match"
-                            },
-                            isError = true
+                // ── The editor's gates (audit C2/C5/M6 + M11) ───────
+                //
+                // M6 first: a FIRST PIN on a profile that has none is how a kid
+                // locks the parent OUT of it, so it is refused unless a parent
+                // PIN already exists - deliberately no create-the-PIN fallback
+                // here (see KidsGate.firstPinNeedsParentPin).
+                val anyPinField = newPinInput.isNotBlank() ||
+                    confirmPinInput.isNotBlank() || currentPinInput.isNotBlank()
+                if (anyPinField && KidsGate.firstPinNeedsParentPin(editing)) {
+                    feedback.show(
+                        text = "Set a parent PIN first",
+                        isError = true
+                    )
+                    return@KBButton
+                }
+                // C2/C5: what this save would change. A kids profile's own
+                // configuration - its ceiling, its options, its locks - and the
+                // act of creating a profile once the device already holds a
+                // kids profile are the parent's to change, because the kid
+                // reaches this very screen from Settings. m3 is why the bedtime
+                // is compared through bedtimeMinutesFor: the :30 minute is part
+                // of the stored value, so a form that cannot express it must not
+                // read as an edit of it.
+                val storedBedtime = editing?.kidsBedtimeMinutes ?: 0
+                val formBedtime = if (kidsBedtimeOn) {
+                    bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
+                } else 0
+                val kidsChanged = (editing?.kidsMaxAge != null) != kidsModeOn ||
+                    (
+                        kidsModeOn && (
+                            kidsLevel != editing?.kidsMaxAge ||
+                                kidsHideAddons != (editing?.kidsHideAddons ?: true) ||
+                                kidsLockLiveTv != (editing?.kidsLockLiveTv ?: true) ||
+                                kidsRequirePinToExit != (editing?.kidsRequirePinToExit ?: false) ||
+                                kidsDailyLimitHours * 60 != (editing?.kidsDailyLimitMinutes ?: 0) ||
+                                formBedtime != storedBedtime
+                            )
                         )
-                        return@KBButton
-                    }
-                }
-                // Precedence: typed URL > uploaded image > color/clear.
-                val typedUrl = avatarUrlInput.trim().takeIf { it.startsWith("http") }
-                val kidsTargetId: String?
-                if (editing == null) {
-                    val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
-                    kidsTargetId = created.id
-                    when {
-                        typedUrl != null ->
-                            ProfileManager.finalizeAvatar(context, created.id, typedUrl)
-                        pendingAvatarUrl != null ->
-                            ProfileManager.finalizeAvatar(context, created.id, pendingAvatarUrl)
-                    }
-                } else {
-                    kidsTargetId = editing.id
-                    ProfileManager.rename(context, editing.id, name, avatarIndex)
-                    when {
-                        typedUrl != null ->
-                            ProfileManager.finalizeAvatar(context, editing.id, typedUrl)
-                        pendingAvatarUrl != null ->
-                            ProfileManager.finalizeAvatar(context, editing.id, pendingAvatarUrl)
-                        !useCustomAvatar &&
-                            (editing.customAvatarUrl != null || editing.avatarData != null) ->
-                            ProfileManager.setCustomAvatar(context, editing.id, null)
-                    }
-                }
-                // Apply the guest flag after the profile itself is saved.
-                kidsTargetId?.let { id ->
-                    ProfileManager.setGuest(context, id, guestProfile)
-                }
-                // Apply Kids Mode after the profile itself is saved.
-                kidsTargetId?.let { id ->
-                    ProfileManager.setKidsMaxAge(
-                        context,
-                        id,
-                        if (kidsModeOn) kidsLevel else null
+                val lockBeingSet = kidsModeOn &&
+                    (kidsDailyLimitHours > 0 || kidsBedtimeOn)
+                if (
+                    KidsGate.saveNeedsPin(
+                        kidsChanged = kidsChanged,
+                        creatingProfile = editing == null,
+                        pinChanging = anyPinField,
+                        anyKidsProfileExists = profiles.any { it.kidsMaxAge != null }
                     )
-                    ProfileManager.setKidsOptions(
-                        context,
-                        id,
-                        hideAddons = kidsHideAddons,
-                        lockLiveTv = kidsLockLiveTv,
-                        requirePinToExit = kidsRequirePinToExit,
-                        dailyLimitMinutes = kidsDailyLimitHours * 60,
-                        bedtimeMinutes = if (kidsBedtimeOn) {
-                            bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
-                        } else 0
-                    )
+                ) {
+                    // The parent PIN is asked for FIRST, and a parent who backs
+                    // out gets the save REFUSED - nothing is applied without it
+                    // (see closeParentPinPrompt). When a lock is what is being
+                    // set, the copy says so: a lock also needs a credential that
+                    // can lift it, which is the brick the parent PIN closes.
+                    gateWithParentPin(
+                        if (lockBeingSet) "Required to set this limit"
+                        else "Required to change this profile",
+                        editing
+                    ) { saveProfile() }
+                    return@KBButton
                 }
-                // Apply the PIN after the profile itself is saved.
-                when {
-                    pinTargetId != null && pinChanged ->
-                        ProfileManager.setPin(context, pinTargetId, newPinInput)
-                    pinTargetId != null && wantsClear ->
-                        ProfileManager.setPin(context, pinTargetId, null)
-                }
-                onDone()
+                saveProfile()
             }
 
             KBButton(
@@ -806,8 +1060,19 @@ fun ProfileEditScreen(
                     enabled = true,
                     danger = true
                 ) {
-                    ProfileManager.delete(context, editing.id)
-                    onDone()
+                    // C3: deleting a profile is a parental act whenever the
+                    // target carries a PIN of its own, the target IS the
+                    // sandbox, or a kid is the one holding the remote.
+                    val target = editing
+                    if (KidsGate.deleteNeedsPin(target, ProfileManager.activeProfile.value)) {
+                        gateWithParentPin("Required to delete this profile", target) {
+                            ProfileManager.delete(context, target.id)
+                            onDone()
+                        }
+                    } else {
+                        ProfileManager.delete(context, target.id)
+                        onDone()
+                    }
                 }
             }
         }
@@ -819,6 +1084,127 @@ fun ProfileEditScreen(
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 16.dp)
             )
+        }
+    }
+
+    // ── The parent-PIN prompt (audit C2/C3/C5/M6/M7 + M11) ─────────
+    // One dialog for every caller: the Parent PIN row above (set/change), and
+    // each GATED action - a kids configuration about to change, a profile about
+    // to be created, deleted, or opened in the editor. When any credential
+    // exists the CURRENT one is required first (the same contract the
+    // profile-PIN fields follow) and the action runs only once the new parent
+    // PIN is written; a gated action has no other way through.
+    if (parentPinPrompt) {
+        val gateTarget = parentPinGateTarget
+        val credentialExists = remember(parentPinRevision, gateTarget?.id, effectiveEditId) {
+            KidsGate.hasCredential(gateTarget)
+        }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { closeParentPinPrompt(true) }
+        ) {
+            KBDialogPanel(
+                title = "Parent PIN",
+                subtitle = parentPinPromptWhy,
+                width = 480.dp
+            ) {
+                Text(
+                    text = when {
+                        parentPinPromptGated && !credentialExists ->
+                            "This TV has no PIN yet, and the profile's settings " +
+                                "are the parent's to change. Set one now - it " +
+                                "stays with the device, not the profile."
+                        parentPinPromptGated ->
+                            "Enter the profile's PIN, or the parent PIN, to " +
+                                "continue. Without it nothing is changed."
+                        else ->
+                            "Asked for at the lock screen when a time limit has " +
+                                "locked a profile, and to change profile settings."
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (credentialExists) {
+                    KBTextField(
+                        value = parentPinCurrent,
+                        onValueChange = {
+                            parentPinCurrent = it.filter(Char::isDigit).take(4)
+                            parentPinError = null
+                        },
+                        placeholder = "Current PIN",
+                        openKeyboardOnFocus = false,
+                        keyboardType = KeyboardType.NumberPassword,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                }
+                KBTextField(
+                    value = parentPinNew,
+                    onValueChange = {
+                        parentPinNew = it.filter(Char::isDigit).take(4)
+                        parentPinError = null
+                    },
+                    placeholder = "New PIN (4 digits)",
+                    focusRequester = parentPinFieldRequester,
+                    openKeyboardOnFocus = false,
+                    keyboardType = KeyboardType.NumberPassword,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                KBTextField(
+                    value = parentPinConfirm,
+                    onValueChange = {
+                        parentPinConfirm = it.filter(Char::isDigit).take(4)
+                        parentPinError = null
+                    },
+                    placeholder = "Confirm PIN",
+                    openKeyboardOnFocus = false,
+                    keyboardType = KeyboardType.NumberPassword,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                parentPinError?.let { message ->
+                    Text(
+                        text = message,
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    KBButton(
+                        label = "SAVE",
+                        enabled = true
+                    ) {
+                        val failure = when {
+                            !ProfileManager.isValidPin(parentPinNew) ->
+                                "The PIN must be 4 digits"
+                            parentPinNew != parentPinConfirm -> "PINs don't match"
+                            // Either credential answers whosever gate this is:
+                            // the target's own PIN, or the parent PIN (see
+                            // KidsGate.verifies).
+                            credentialExists && !KidsGate.verifies(gateTarget, parentPinCurrent) ->
+                                "Current PIN is incorrect"
+                            else -> null
+                        }
+                        if (failure != null) {
+                            parentPinError = failure
+                        } else {
+                            // Written before the action that was waiting on it,
+                            // so the gate it already passed stays passed.
+                            KidsTimeGuard.setParentPin(parentPinNew)
+                            parentPinRevision += 1
+                            val after = parentPinAfterVerify
+                            closeParentPinPrompt(false)
+                            after?.invoke()
+                        }
+                    }
+                    KBButton(
+                        label = "CANCEL",
+                        enabled = true
+                    ) {
+                        closeParentPinPrompt(true)
+                    }
+                }
+            }
         }
     }
 }

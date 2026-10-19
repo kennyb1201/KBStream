@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
+import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
@@ -33,6 +34,7 @@ import com.kennyb1201.kbstream.data.sports.StandingGroup
 import com.kennyb1201.kbstream.data.sports.TeamVariants
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.work.SportsNotificationWorker
 import kotlinx.coroutines.Deferred
@@ -107,7 +109,8 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private val iptv = IptvRepository.shared(app)
     private val espn = EspnSportsRepository.shared()
-    private val prefs: SharedPreferences = app.getSharedPreferences(
+    // Var, not val: the prefs FILE is per-profile (see [onProfileSwitched]).
+    private var prefs: SharedPreferences = app.getSharedPreferences(
         ProfileStorage.prefsName(app, GuideFilesPrefs),
         Context.MODE_PRIVATE
     )
@@ -401,11 +404,101 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var guideIndexCache: Map<String, IptvChannel>? = null
 
+    /**
+     * The card ids the last completed match pass ran against, and the lineup it
+     * ran with. See [resolveMatches]' skip: a beat that moved only a score leaves
+     * both unchanged, so the EPG stage is not repeated and the cards never blink
+     * back to "Finding channel…".
+     */
+    private var lastMatchKey: String? = null
+    private var lastMatchLineupGeneration = -1
+
+    /**
+     * Which cards a pass is about, as one comparable string.
+     *
+     * Ids only, deliberately: a score or a game state changing is not a reason
+     * to redo the channel lookups - the cards read those from the sections
+     * themselves - while a game appearing or leaving the slate is, because the
+     * EPG searches are per card.
+     */
+    private fun matchKeyOf(
+        games: List<SportsGame>,
+        events: List<TournamentEvent>
+    ): String = buildString {
+        games.forEach { append(it.id).append(',') }
+        append('#')
+        events.forEach { append(it.id).append(',') }
+    }
+
     init {
         // The lineup read goes out NOW, alongside the refresh below rather than
         // behind it: the two are independent (a playlist cache and an ESPN
         // scoreboard), and serializing them added the lineup's whole read to the
         // time before the first card could be matched. See [channelsJob].
+        prewarmLineup()
+        refresh()
+        observeProfileSwitches()
+    }
+
+    /**
+     * Re-snapshots every profile-scoped fact when the active profile changes.
+     *
+     * The hub is activity-scoped (a plain `viewModel()` on the Sports route), so
+     * it outlives a trip to Home and a profile switch - and everything it reads
+     * at construction is per-profile: the enabled leagues, the follower's team
+     * keys, the reminder toggle, the guide prefs file the playlist URLs live in,
+     * and the lineup itself. Without this the next profile inherited the
+     * previous one's hub: an adult's followed teams and enabled leagues showing
+     * on a kid's screen is the same privacy class as the profile-switch leak
+     * HomeViewModel already answers. Same shape as that fix - skip the initial
+     * emission (init just loaded against this profile) and skip a re-emission of
+     * the SAME id, which is a profile EDIT, not a switch.
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            var lastProfileId: String? = null
+            ProfileManager.activeProfile.collect { profile ->
+                if (first) {
+                    first = false
+                    lastProfileId = profile?.id
+                    return@collect
+                }
+                if (profile?.id == lastProfileId) return@collect
+                lastProfileId = profile?.id
+                Log.d("SPORTS_VM", "profile switched -> ${profile?.id ?: "legacy"}")
+                onProfileSwitched()
+            }
+        }
+    }
+
+    /** The re-snapshot itself; see [observeProfileSwitches]. */
+    private fun onProfileSwitched() {
+        val app = getApplication<Application>()
+        prefs = app.getSharedPreferences(
+            ProfileStorage.prefsName(app, GuideFilesPrefs),
+            Context.MODE_PRIVATE
+        )
+        // Everything the previous profile had read or matched goes with it,
+        // including the unfinished lineup read (which would otherwise publish
+        // the old profile's channels - see [lineupGeneration]).
+        channelsJob?.cancel()
+        channelsJob = null
+        playlistChannels = null
+        guideIndexCache = null
+        _enabledLeagues.value = AppPreferences.getSportsEnabledLeagues(app)
+        _leagueOrder.value = AppPreferences.getSportsLeagueOrder(app)
+        _favoriteTeamKeys.value = AppPreferences.getSportsFavoriteTeams(app)
+        _gameReminders.value = AppPreferences.getSportsGameReminders(app)
+        _selectedLeaguePath.value = null
+        _view.value = LeagueView.GAMES
+        _standings.value = emptyMap()
+        _standingsLoading.value = emptySet()
+        _standingsFailed.value = emptySet()
+        // No return to answer for: this hub is being rebuilt, not resumed.
+        pollPaused = false
+        livePollJob?.cancel()
+        livePollJob = null
         prewarmLineup()
         refresh()
     }
@@ -654,6 +747,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun rememberChannel(game: SportsGame, channelId: String) {
         SportsChannelMemory.rememberPick(getApplication(), game, channelId)
+        // The next pass has to read that memory, and the unchanged-lineup skip
+        // would otherwise leave the pick unread until the slate itself changed
+        // (see resolveMatches' skip): dropping the key makes the very next beat
+        // a full pass again.
+        lastMatchKey = null
     }
 
     /**
@@ -669,6 +767,9 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun rememberTournamentChannel(event: TournamentEvent, channelId: String) {
         SportsChannelMemory.rememberTournamentPick(getApplication(), event, channelId)
+        // Same as [rememberChannel]: the correction is only worth writing if the
+        // next pass runs, and the skip would hold it back.
+        lastMatchKey = null
     }
 
     /** Drops every remembered team -> channel mapping. The settings panel's row. */
@@ -681,6 +782,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     /** Fetches every enabled league. What the screen's retry runs. */
     fun refresh() {
         refreshJob?.cancel()
+        // The tick is stopped for the duration of the full load, and re-aimed at
+        // the fresh sections by the [syncLivePoll] at the end of this call. It
+        // used to keep firing while the load ran: the beat called refreshLeagues
+        // on the stale sections, which ran its OWN resolveMatches pass over the
+        // whole slate - two concurrent passes, and two ESPN reads per league,
+        // for however long the manual refresh took.
+        livePollJob?.cancel()
+        livePollJob = null
         val leagues = leagues
         if (leagues.isEmpty()) {
             _sections.value = emptyList()
@@ -742,6 +851,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             sections = _sections.value,
             selectedPath = _selectedLeaguePath.value,
             favoriteKeys = _favoriteTeamKeys.value,
+            // The clock the kickoff arm reads (see [SportsLivePollRules.
+            // KICKOFF_ARM_MS]): without it a hub open on a slate that has not
+            // started yet was polled by nobody, so the card stayed UPCOMING
+            // through the kickoff until the viewer refreshed by hand.
+            nowMs = System.currentTimeMillis(),
         )
         if (paths.isEmpty()) return
         livePollJob = viewModelScope.launch {
@@ -775,8 +889,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         _sections.value = updated
         resolveMatches(updated)
         refreshDetailSummary()
+        // "Still worth polling" is live OR about to be: stopping on hasLive
+        // alone would end the tick the moment a poll landed the last beat
+        // before kickoff, which is the case the arm exists for.
+        val now = System.currentTimeMillis()
         return paths.any { path ->
-            SportsLivePollRules.hasLive(updated.firstOrNull { it.league.path == path })
+            val section = updated.firstOrNull { it.league.path == path }
+            SportsLivePollRules.hasLive(section) ||
+                SportsLivePollRules.hasKickoffArmed(section, now)
         }
     }
 
@@ -865,33 +985,76 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * no playable channel is still a useful hub.
      */
     private suspend fun resolveMatches(sections: List<LeagueSection>) {
+        val games = sections.flatMap { it.games }
+        val events = sections.flatMap { it.tournaments }
+        // What the EPG stage is keyed on: which cards exist. A beat that only
+        // moved a score changes nothing here, and re-running the searches for
+        // the whole slate (up to 200 FTS queries) flipped every unmatched card
+        // back to "Finding channel…" for the length of the pass. The per-pass
+        // cost and the blink were both real on a sixteen-league slate.
+        val matchKey = matchKeyOf(games, events)
+        if (games.isNotEmpty() || events.isNotEmpty()) {
+            // Only when the LAST pass finished against this same lineup: a new
+            // lineup (retryLineup, a profile switch) has to be matched from
+            // scratch, however unchanged the cards are.
+            if (matchKey == lastMatchKey &&
+                lastMatchLineupGeneration == lineupGeneration &&
+                _matches.value.isNotEmpty()
+            ) {
+                // Nothing new to look up. The map is left as it is, and
+                // `_matchingDone` is not moved: it is already true, so the
+                // cards never see a loading state at all.
+                PerfTrace.record("sports.match.skipped", 0L)
+                _matchingDone.value = true
+                return
+            }
+        }
         // Every pass starts by saying it is looking: the cards read "Finding
         // channel…" until the end of this function, which is what stops the
         // 40-60s match from looking exactly like a slate the playlist does not
         // carry. Set false here so a `refresh()` - or the live tick - that
         // re-runs matching starts the loading state over.
         _matchingDone.value = false
-        val games = sections.flatMap { it.games }
-        val events = sections.flatMap { it.tournaments }
         if (games.isEmpty() && events.isEmpty()) {
             _matches.value = emptyMap()
+            // No cards at all: nothing to skip against next time either.
+            lastMatchKey = null
             _matchingDone.value = true
             return
         }
         val channelsStarted = SystemClock.elapsedRealtime()
-        val channels = channelsOrEmpty()
+        // kids-proof C7: the guide hides channels from a kids profile with
+        // "Kid-safe Live TV" on, and the hub is the OTHER door into the live
+        // player - it matched against the raw playlist, so a card's WATCH
+        // button launched a channel the guide would not show. Filtered here,
+        // before any matching, so the channel a card NAMES and the channel it
+        // PLAYS come from the same visible set. (An empty result is handled
+        // below: no card gets a match, and the lineup is still reported READY
+        // because the playlist itself is there.)
+        val playlistChannelsNow = channelsOrEmpty()
+        val channels = KidsLiveTvFilter.visible(playlistChannelsNow)
         val channelsMs = SystemClock.elapsedRealtime() - channelsStarted
         // PerfTrace is the one sink: these samples are what the one-tap
         // diagnostics report carries (see [Diagnostics.sportsLine]), and the
         // match pass runs every 30 seconds, so nothing here is logged.
         PerfTrace.record("sports.match.channels", channelsMs)
-        if (channels.isEmpty()) {
+        if (playlistChannelsNow.isEmpty()) {
             _lineupStatus.value = LineupStatus.MISSING
             _matches.value = emptyMap()
             _matchingDone.value = true
             return
         }
         _lineupStatus.value = LineupStatus.READY
+        if (channels.isEmpty()) {
+            // A playlist with nothing this profile may see: every card is a
+            // plain "not in your playlist", which is true of what the kid is
+            // allowed to play, and nothing is offered to launch.
+            _matches.value = emptyMap()
+            _matchingDone.value = true
+            lastMatchKey = matchKey
+            lastMatchLineupGeneration = lineupGeneration
+            return
+        }
         // Off the main thread: building the guide index is one small object per
         // channel per guide source, and a provider playlist runs to five
         // figures - enough that doing it in the composition's own dispatcher
@@ -1010,6 +1173,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             found
         }
         _matches.value = matches
+        // Filed with the lineup this pass ran against, so the skip above can
+        // tell "the same cards, same lineup" from "the same cards, new lineup".
+        lastMatchKey = matchKey
+        lastMatchLineupGeneration = lineupGeneration
         _matchingDone.value = true
     }
 
@@ -1049,7 +1216,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // The read caches its own result (see [readPlaylistChannels]) - which is
         // what makes the prewarm share it with the matching pass instead of
         // reading the playlist twice.
-        return (channelsJob ?: startLineupRead()).await()
+        val read = channelsJob ?: startLineupRead()
+        val channels = read.await()
+        // An EMPTY read is not a result worth keeping. [readPlaylistChannels]
+        // publishes nothing when it finds nothing, and the read deliberately
+        // does not hold an empty result either - so the completed deferred was
+        // answering every later pass with the same empty list for the rest of
+        // the session. That is what made a playlist which arrived after the hub
+        // opened (the guide loading it in the background) invisible until the
+        // viewer pressed LOAD LINEUP. Dropped here, so the next pass reads
+        // again, which is what the read's own comment always claimed.
+        if (channels.isEmpty() && channelsJob === read) channelsJob = null
+        return channels
     }
 
     /** Starts the lineup read if none is in flight, and returns that read. */
