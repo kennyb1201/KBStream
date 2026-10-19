@@ -3272,12 +3272,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (controlsVisible) hideControls() else showControls()
         }
         playerView.setOnTouchListener { _, event ->
-            if (event.action == android.view.MotionEvent.ACTION_UP) {
-                if (controlsVisible) hideControls() else showControls()
+            if (com.kennyb1201.kbstream.FormFactor.isTv) {
+                // The remote's path, byte-for-byte what it was: a press on the
+                // picture toggles the chrome and every other event is swallowed.
+                if (event.action == android.view.MotionEvent.ACTION_UP) {
+                    if (controlsVisible) hideControls() else showControls()
+                }
+                true
+            } else {
+                // Phone: the gesture layer owns the picture (tap, drag, pinch,
+                // hold) and returns false only while a panel is up, so a press
+                // that lands on a panel is never eaten by the video behind it.
+                playerTouchGestures?.onTouch(playerView, event) ?: true
             }
-            true
         }
         playerView.setOnClickListener { if (controlsVisible) hideControls() else showControls() }
+        if (!com.kennyb1201.kbstream.FormFactor.isTv) attachPhoneTouchGestures()
+        playerView.post { applyPlayerPortraitStage() }
         // Back handling. The deprecated onBackPressed() override is replaced by
         // this OnBackPressedDispatcher callback (same behavior): it runs first,
         // and disabling it before re-dispatching lets Back fall through to the
@@ -4964,6 +4975,120 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             android.app.PendingIntent.FLAG_IMMUTABLE or
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT
         return android.app.PendingIntent.getActivity(this, 1001, intent, flags)
+    }
+
+    // --- Touch layer (phones only; the TV path never reaches any of it) ------
+    private var playerTouchGestures: PlayerTouchGestures? = null
+
+    /**
+     * The three gestures a phone viewer reaches for, attached only where there
+     * is no remote: tap toggles the chrome, a drag seeks or sets the brightness
+     * (left half) or volume (right half), a pinch walks the aspect modes and a
+     * hold flips the screen. All of it is [PlayerTouchGestures]; every decision
+     * is [PlayerTouchRules]; this is only what this engine answers with.
+     *
+     * Nothing here pauses: a seek commits through [commitSeek] without a play or
+     * a pause, because the state the viewer chose before the drag is the state
+     * it must end in - the same rule the D-pad scrub follows.
+     */
+    private fun attachPhoneTouchGestures() {
+        val gestures = PlayerTouchGestures(
+            this,
+            playerView,
+            object : PlayerTouchGestures.Callbacks {
+                override fun gesturesAllowed(): Boolean =
+                    !showSettingsPanel && !isPickerShowing && !isGuideShowing
+
+                override fun toggleChrome() {
+                    if (controlsVisible) hideControls() else showControls()
+                }
+
+                override fun toggleFullscreen() {
+                    PlayerTouchDevice.toggleFullscreen(this@NativePlayerActivity)
+                }
+
+                override fun cycleAspect() {
+                    val next = (resizeModeIndex + 1) % ASPECT_MODES.size
+                    resizeModeIndex = next
+                    applyAspectMode(next)
+                    updateControlsInfo()
+                    updateSettingsPanelState()
+                    PlayerTitlePrefs.remember(
+                        this@NativePlayerActivity,
+                        titleKey,
+                        (PlayerTitlePrefs.get(this@NativePlayerActivity, titleKey)
+                            ?: PlayerTitlePrefs.Prefs()).copy(aspectRatio = next)
+                    )
+                }
+
+                override fun positionMs(): Long =
+                    exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+
+                override fun durationMs(): Long {
+                    // A live channel has no end to seek towards, and the
+                    // window's unset duration arrives negative.
+                    if (isLiveChannel) return 0L
+                    val duration = exoPlayer?.duration ?: 0L
+                    return if (duration > 0L) duration else 0L
+                }
+
+                override fun showSeekHint(text: String) {
+                    val hint = ensureScrubHint()
+                    hint.text = text
+                    hint.visibility = View.VISIBLE
+                }
+
+                override fun hideSeekHint() {
+                    surfaceScrubHint?.visibility = View.GONE
+                }
+
+                override fun commitSeek(targetMs: Long) {
+                    exoPlayer?.seekTo(targetMs)
+                }
+
+                override fun brightnessFraction(): Float =
+                    PlayerTouchDevice.brightnessFraction(this@NativePlayerActivity)
+
+                override fun setBrightnessFraction(fraction: Float) {
+                    PlayerTouchDevice.setBrightness(this@NativePlayerActivity, fraction)
+                }
+
+                override fun volumeFraction(): Float =
+                    PlayerTouchDevice.volumeFraction(this@NativePlayerActivity)
+
+                override fun setVolumeFraction(fraction: Float) {
+                    PlayerTouchDevice.setVolume(this@NativePlayerActivity, fraction)
+                }
+            }
+        )
+        playerTouchGestures = gestures
+        gestures.attach()
+    }
+
+    /**
+     * Re-applies the portrait stage (video band on top, chrome below it).
+     *
+     * Called at first layout and on every rotation: orientation is declared in
+     * this activity's configChanges, so a rotation does not recreate it and
+     * nothing else would re-run the stage.
+     */
+    private fun applyPlayerPortraitStage() {
+        val root = findViewById<View>(R.id.player_root) ?: return
+        if (root.width == 0) {
+            root.post { applyPlayerPortraitStage() }
+            return
+        }
+        PlayerPortraitStage.apply(
+            this,
+            root,
+            listOf(playerView, subtitleText, subtitleAssImage, p5VideoGlesView),
+            findViewById(R.id.chrome_layer)
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyPlayerPortraitStage()
     }
 
     // --- Overlay-less surface scrubbing (LEFT/RIGHT with controls hidden) ---

@@ -37,6 +37,46 @@ of twenty screen files, gated on `FormFactor.isTv` so the TV layout is unchanged
 `imePadding()` still follows it, measured against the space the bars left.
 `MobileSafeAreaContractTest` pins the gate, the inset pair and that ordering.
 
+## Player touch UX (Phase 3)
+
+The chrome needed no widget port: both engines drive the same View/XML overlay
+(`player_chrome.xml`) and every control in it is a tap target already. What a
+phone was missing is the pointer vocabulary a remote does not have, so Phase 3
+is one gesture layer shared by both engines, attached **only** when
+`FormFactor.isTv` is false:
+
+| Gesture | Effect | Rule |
+|---|---|---|
+| Tap the picture | show/hide the chrome | `PlayerTouchGestures` reads it on the lift, so a drag never ends in a toggle |
+| Drag sideways | seek | full width = 30–120 s (`PlayerTouchRules.seekSpanMs`), clamped to the film, nothing on a live stream |
+| Drag up/down, left half | brightness | drags the window's own level, floor `MIN_BRIGHTNESS` |
+| Drag up/down, right half | volume | the music stream, 0–100 % |
+| Pinch | next aspect mode | one step per pinch, through each engine's own aspect cycle |
+| Hold | rotate portrait ↔ landscape | via `PlayerTouchDevice.toggleFullscreen`, never on TV |
+
+Two invariants, both pinned by tests:
+
+1. **A swipe never decides whether the film is playing.** The seek commits
+   without a play, a pause, or a `playWhenReady` read — the state the viewer
+   chose before the drag is the one it ends in (`PlayerTouchRules.playAfterSeek`,
+   and `PlayerTouchWiringContractTest` asserts the gesture file contains no
+   transport call at all).
+2. **TV is untouched.** The main player's D-pad touch arm is the same two lines
+   it was, behind the `FormFactor.isTv` branch; the MPV surface gained a listener
+   only on phones. Key handling (DPAD scrub, digit jump, MEDIA_*, long-press
+   centre, Bluetooth remotes) is not on this path.
+
+**Portrait stage.** In portrait the picture keeps its 16:9 shape as a band at the
+top and `chrome_layer` is moved below it (`PlayerPortraitStage`), instead of an
+entire landscape picture letterboxed into a sliver behind the controls. It is
+runtime layout, not a second XML file, and it restores the declared params on
+rotation because `configChanges` keeps the activity alive (both players now
+re-apply it from `onConfigurationChanged`).
+
+**PiP** is unchanged and not form-gated: `enterPipMode` already refuses when the
+activity is finishing, on Amazon devices, during an engine handoff, and when the
+setting is off. Unverified on hardware like everything else below.
+
 ## Screens
 
 | Screen | TV file | Phone file | Status |
@@ -604,16 +644,21 @@ Parity notes (not bugs to fix):
 
 - **Nothing has been rendered.** No device or emulator is available in the dev
   sandbox, and there is no compose-ui-test harness in this module, so every
-  phone screen so far is verified by compiler, ktlint, contract tests and code
-  review only. First real check is on hardware.
+  phone screen, the player gesture layer and the portrait stage are verified by
+  compiler, ktlint, contract tests and code review only. First real check is on
+  hardware - for Phase 3 that means a finger on the picture, not a D-pad.
 - The TV regression gates for the earlier phases have not been run on hardware.
 
 ## Next steps, in order
 
 1. Hardware verification of the ported screens, starting with the two that own
    playback: the sports hub's sheets and the settings that feed the player.
-2. Nothing else is queued: every screen in the table above is ported, and
-   Settings has no deferred controls left.
+2. Hardware verification of the Phase 3 gestures on the same pass: tap,
+   horizontal seek (including while paused), both vertical halves, pinch aspect,
+   hold-to-rotate, and that the portrait band and the chrome below it survive a
+   rotation in both directions.
+3. Nothing else is queued: every screen in the table above is ported, Settings
+   has no deferred controls left, and the player's touch vocabulary is written.
 
 ## Verifying a port
 

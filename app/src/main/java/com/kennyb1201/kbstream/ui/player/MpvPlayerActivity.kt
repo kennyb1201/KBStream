@@ -193,6 +193,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     private var surface: MpvPlayerView? = null
+
+    // --- Touch layer (phones only; the TV path never reaches any of it) ------
+    private var mpvTouchGestures: PlayerTouchGestures? = null
+    private var lastTouchHintAtMs = 0L
     // Panel refresh-rate matching (Settings → Playback → Match Content Frame
     // Rate), created the first time mpv reports a rate and null when the
     // setting is off — which is what makes the call sites no-ops.
@@ -985,6 +989,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
         val view = findViewById<MpvPlayerView>(R.id.mpv_surface)
         surface = view
+        if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+            attachPhoneTouchGestures(view)
+            view.post { applyPlayerPortraitStage() }
+        }
         view.onEngineFailed = { message ->
             Log.e(TAG, "MPV engine unavailable: $message")
             showError(
@@ -2045,6 +2053,104 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             }
         )
         finish()
+    }
+
+    /**
+     * The phone touch layer for this engine: tap for the chrome, drag for a seek
+     * or for the brightness/volume halves, pinch for the aspect modes, hold for
+     * fullscreen. Attached only off TV, and never replacing a key path - this
+     * engine's whole D-pad handling stays exactly as it was (see the
+     * `dispatchKeyEvent` block).
+     *
+     * Committing a seek here does not pause or play: mpv keeps whatever state it
+     * was in, which is the same promise the Exo player's gesture layer makes
+     * (see [PlayerTouchRules.playAfterSeek]).
+     */
+    private fun attachPhoneTouchGestures(target: View) {
+        val gestures = PlayerTouchGestures(
+            this,
+            target,
+            object : PlayerTouchGestures.Callbacks {
+                override fun gesturesAllowed(): Boolean =
+                    settingsContainer?.visibility != View.VISIBLE
+
+                override fun toggleChrome() {
+                    if (controlsVisible) setControlsVisible(View.GONE) else showControls()
+                }
+
+                override fun toggleFullscreen() {
+                    PlayerTouchDevice.toggleFullscreen(this@MpvPlayerActivity)
+                }
+
+                override fun cycleAspect() = this@MpvPlayerActivity.cycleAspect()
+
+                override fun positionMs(): Long =
+                    runCatching { surface?.positionMs() ?: 0L }
+                        .getOrDefault(0L)
+                        .coerceAtLeast(0L)
+
+                override fun durationMs(): Long {
+                    val duration = runCatching { surface?.durationMs() ?: 0L }
+                        .getOrDefault(0L)
+                    return if (duration > 0L) duration else 0L
+                }
+
+                override fun showSeekHint(text: String) {
+                    // A Toast is this engine's only feedback surface, and a drag
+                    // calls this on every move: one line per third of a second.
+                    val now = System.currentTimeMillis()
+                    if (now - lastTouchHintAtMs < 350L) return
+                    lastTouchHintAtMs = now
+                    showToast(text)
+                }
+
+                override fun hideSeekHint() = Unit
+
+                override fun commitSeek(targetMs: Long) = seekTo(targetMs)
+
+                override fun brightnessFraction(): Float =
+                    PlayerTouchDevice.brightnessFraction(this@MpvPlayerActivity)
+
+                override fun setBrightnessFraction(fraction: Float) {
+                    PlayerTouchDevice.setBrightness(this@MpvPlayerActivity, fraction)
+                }
+
+                override fun volumeFraction(): Float =
+                    PlayerTouchDevice.volumeFraction(this@MpvPlayerActivity)
+
+                override fun setVolumeFraction(fraction: Float) {
+                    PlayerTouchDevice.setVolume(this@MpvPlayerActivity, fraction)
+                }
+            }
+        )
+        mpvTouchGestures = gestures
+        gestures.attach()
+    }
+
+    /**
+     * The portrait stage: the picture keeps its 16:9 shape at the top of the
+     * screen and the chrome sits below it (see [PlayerPortraitStage]).
+     *
+     * Re-applied on every rotation, because orientation is declared in this
+     * activity's configChanges and a rotation therefore recreates nothing.
+     */
+    private fun applyPlayerPortraitStage() {
+        val root = findViewById<View>(R.id.mpv_root) ?: return
+        if (root.width == 0) {
+            root.post { applyPlayerPortraitStage() }
+            return
+        }
+        PlayerPortraitStage.apply(
+            this,
+            root,
+            listOf(surface),
+            findViewById(R.id.chrome_layer)
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyPlayerPortraitStage()
     }
 
     /** Cycles the aspect modes and remembers the choice, like the main player. */
