@@ -1315,11 +1315,21 @@ private fun LeagueBody(
     // here therefore starts at its own top: the LIVE NOW block and the games
     // the tab was opened for, rather than some offset into its upcoming games.
     //
-    // The null initial is load-bearing. A FRESH hub composition - Back from the
-    // player disposes this screen - begins with lastLeaguePath null, so the
-    // restore from hubScrollIndex/hubScrollOffset is never clobbered; only an
-    // in-place switch, the same composition node asking about a different path,
-    // scrolls.
+    // The null initial is load-bearing, but it is not a licence to skip the
+    // scroll outright. A FRESH hub composition - Back from the player disposes
+    // this screen - begins with lastLeaguePath null, and there the restore from
+    // hubScrollIndex/hubScrollOffset is honoured only when the league is NOT
+    // live: the remembered index describes an earlier visit, so when games are
+    // live now, "where I was reading" is stale and live outranks it (field,
+    // 2026-10-18: return to the hub on a live league and the LIVE NOW block
+    // sits above the viewport, with the stale index winning over the games in
+    // hand). Neither the sampler nor the arrival effect can repair that - the
+    // games were already present on the first composition, so there is no
+    // empty-to-non-empty transition to answer.
+    //
+    // Entry with no live games still restores exactly as before (return from a
+    // game mid-list, nothing live -> untouched), and a switch always starts at
+    // the new league's top.
     //
     // Keyed on the path and not on `section`, which is a new instance on every
     // 30-second poll and would yank the scroll mid-browse.
@@ -1343,12 +1353,17 @@ private fun LeagueBody(
     var gridHasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(leaguePath, listState) {
         val switched = lastLeaguePath != null && lastLeaguePath != leaguePath
+        // Fresh entry with live games in hand: live outranks the restored
+        // scroll. The restore is the ViewModel's memory of an earlier visit;
+        // when the league is live now, "where I was reading" is stale.
+        val freshWithLive = lastLeaguePath == null && live.isNotEmpty()
         lastLeaguePath = leaguePath
-        if (!switched) return@LaunchedEffect
+        if (!switched && !freshWithLive) return@LaunchedEffect
         // Read BEFORE the scroll and not after: a tab press comes from the tab
         // row, so that flag is false there and the cards are left alone - and
         // reading it here keeps the answer from depending on how much the
-        // scroll itself suspended for.
+        // scroll itself suspended for. A fresh composition never holds grid
+        // focus yet, so the repair no-ops there through this same gate.
         val repairFocus = gridHasFocus
         listState.scrollToItem(0)
         if (!repairFocus) return@LaunchedEffect

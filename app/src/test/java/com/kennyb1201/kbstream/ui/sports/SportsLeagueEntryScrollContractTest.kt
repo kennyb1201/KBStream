@@ -91,17 +91,49 @@ class SportsLeagueEntryScrollContractTest {
             entryEffect.contains("var lastLeaguePath by remember { mutableStateOf<String?>(null) }")
         )
         assertTrue(
-            "a FRESH composition (Back from the player) must not scroll: the restore has to survive",
+            "a switch is still the old null-guarded rule, so an in-place tab press always scrolls",
             entryEffect.contains("val switched = lastLeaguePath != null && lastLeaguePath != leaguePath")
         )
         assertTrue(
-            "always scroll on a switch, not only when the new league has live games",
+            "scroll on a switch, not only when the new league has live games",
             entryEffect.contains("listState.scrollToItem(0)")
         )
         assertTrue(
             "keyed on the path and the list state - never on `section`, which the 30s poll replaces",
             entryEffect.contains("LaunchedEffect(leaguePath, listState) {") &&
                 !entryEffect.contains("LaunchedEffect(section")
+        )
+    }
+
+    /**
+     * The amendment (field, 2026-10-18): the null initial used to suppress the
+     * entry scroll unconditionally, which let a STALE hubScrollIndex win over
+     * live games already in hand on a fresh hub composition. The restore is
+     * only honoured when there is nothing live to land on.
+     */
+    @Test
+    fun `a fresh entry with live games in hand lands on the live block`() {
+        assertTrue(
+            "the second reason to scroll is a fresh entry whose league is live now",
+            entryEffect.contains(
+                "val freshWithLive = lastLeaguePath == null && live.isNotEmpty()"
+            )
+        )
+        assertTrue(
+            "and the scroll is gated behind BOTH reasons, so entry with nothing live keeps " +
+                "the restored position",
+            entryEffect.contains("if (!switched && !freshWithLive) return@LaunchedEffect")
+        )
+        assertTrue(
+            "nothing scrolls before that gate - an early scroll would bypass it",
+            entryEffect.indexOf("listState.scrollToItem(0)") >
+                entryEffect.indexOf("if (!switched && !freshWithLive) return@LaunchedEffect")
+        )
+        assertTrue(
+            "the scroll is still keyed on the league path and the list state only, so a poll " +
+                "cannot re-read `live` and yank the scroll mid-browse",
+            entryEffect.contains("LaunchedEffect(leaguePath, listState) {") &&
+                !entryEffect.contains("LaunchedEffect(leaguePath, live")
         )
     }
 
