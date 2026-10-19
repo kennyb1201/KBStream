@@ -91,6 +91,12 @@ internal data class CaughtUpShowCandidate(
  *  - the air-date check covers the case the watched set cannot see - an
  *    episode that has aired but was never recorded watched here.
  *
+ * Only a date in the PAST condemns the episode. TMDB's episode dates are a
+ * calendar day with no time of day, so a date that merely equals today can be
+ * fifteen hours away - the schedule builder counts today as still to come, and
+ * an air-day card is the one the viewer most wants. This mirrors
+ * [isAiredOrUnknown], which also only treats a past date as aired.
+ *
  * A missing or unparseable air date fails OPEN (the episode is kept), matching
  * the rail's existing authority for "is this upcoming": the schedule builder's
  * second-source air-date correction drops a date it cannot place, and an
@@ -120,7 +126,7 @@ internal fun nextAirStillUpcoming(
             runCatching { LocalDate.parse(raw) }.getOrNull()
         }
 
-    if (date != null && !date.isAfter(today)) return false
+    if (date != null && date.isBefore(today)) return false
 
     return true
 }

@@ -2322,10 +2322,11 @@ Log.d(
      * source recorded watched. Whether the episode TMDB calls next is really
      * next is settled HERE, before anything is built (see
      * [nextAirStillUpcoming]): a cached detail whose next_episode_to_air went
-     * stale around air day must not become a card. The schedule builder still
-     * owns the rail's second-source air-date correction; this is the builder
-     * refusing to emit a "next" episode that is already watched or already
-     * aired.
+     * stale must not become a card. The schedule builder still owns the rail's
+     * second-source air-date correction; this is the builder refusing to emit
+     * a "next" episode that is already watched or has already gone by. An
+     * episode airing TODAY is kept - that is the card the viewer wants - so
+     * only a past date refuses.
      */
     private suspend fun buildCaughtUpUpcomingCard(
         candidate: CaughtUpShowCandidate
@@ -2339,11 +2340,12 @@ Log.d(
             detail.nextEpisodeToAir
                 ?: return null
 
-        // TMDB's next_episode_to_air goes stale around air day: the cached
-        // detail can still name an episode that has since aired (and that this
-        // viewer has since watched). A "next" episode that is already watched -
-        // or whose air date is already past - is not next; emitting it builds
-        // the phantom "Next up: S04E01" card for a finished show.
+        // TMDB's next_episode_to_air goes stale: the cached detail can still
+        // name an episode that has since aired (and that this viewer has since
+        // watched). A "next" episode that is already watched - or whose air
+        // date is already behind us - is not next; emitting it builds the
+        // phantom "Next up: S04E01" card for a finished show. An air date of
+        // TODAY is deliberately kept, matching the schedule builder.
         if (
             !nextAirStillUpcoming(
                 seasonNumber = air.seasonNumber,

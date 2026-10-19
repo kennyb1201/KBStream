@@ -17,9 +17,9 @@ import org.junit.Test
  *
  * What is pinned here is the two-sided guard, with `today` injected so the
  * boundary needs no clock: an episode already in the viewer's watched set is not
- * next no matter what the date says, a date that is not in the future is not
- * next, and anything the guard cannot prove - no date at all - keeps today's
- * behavior, because an unknown date must never be a reason to hide a card.
+ * next no matter what the date says, a date in the PAST is not next, and
+ * anything the guard cannot prove - no date at all - keeps today's behavior,
+ * because an unknown date must never be a reason to hide a card.
  */
 class UpcomingCaughtUpNextAirTest {
 
@@ -57,17 +57,33 @@ class UpcomingCaughtUpNextAirTest {
     }
 
     @Test
-    fun `an air date today is not next`() {
-        // TMDB's episode dates are a calendar day with no time of day, and the
-        // stale window is exactly around air day - so today is not proof that
-        // the episode is still ahead. The Upcoming rail's own schedule builder
-        // remains the surface that treats today as still to come.
-        assertFalse(
+    fun `an air date today is still next`() {
+        // TMDB's episode dates are a calendar day with no time of day, so an
+        // episode airing today may be hours away - and on that day the card is
+        // the one the viewer wants. Today is kept; only a past date condemns.
+        // This is the same side of the boundary as isAiredOrUnknown, and it
+        // agrees with the schedule builder, which counts today as to come.
+        assertTrue(
             nextAirStillUpcoming(
                 seasonNumber = 4,
                 episodeNumber = 2,
                 airDate = today.toString(),
                 watchedEpisodes = emptySet(),
+                today = today
+            )
+        )
+    }
+
+    @Test
+    fun `an episode that aired today and was watched today is not next`() {
+        // The watched half still wins on air day: finishing an episode the
+        // evening it drops must not leave a card for it in the morning.
+        assertFalse(
+            nextAirStillUpcoming(
+                seasonNumber = 4,
+                episodeNumber = 2,
+                airDate = today.toString(),
+                watchedEpisodes = setOf(4 to 2),
                 today = today
             )
         )
