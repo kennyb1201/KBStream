@@ -19,9 +19,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -808,9 +813,31 @@ private suspend fun recoveredEpisodeAlreadyWatched(
                 Surface(
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    // Safe area for a FINGER, not for a TV: the window is
+                    // edge-to-edge (setDecorFitsSystemWindows(false)) because
+                    // the TV shell wants the full panel, and a television has
+                    // no status or navigation bar for content to slide under.
+                    // A phone does: without this every phone screen drew its
+                    // first row under the clock and its last row under the
+                    // gesture bar. The padding is applied here, once, rather
+                    // than in twenty screen files - and only on the phone, so
+                    // the TV layout is byte-for-byte what it was.
+                    //
+                    // displayCutout is unioned in because systemBars does not
+                    // reserve the notch area in landscape.
+                    val mobileSafeArea = if (
+                        com.kennyb1201.kbstream.FormFactor.isTv
+                    ) {
+                        Modifier
+                    } else {
+                        Modifier.windowInsetsPadding(
+                            WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .then(mobileSafeArea)
                             // Insets-based IME handling app-wide: with
                             // adjustResize, every screen's fields (sign-in,
                             // API keys, addon URLs, profile names) stay above

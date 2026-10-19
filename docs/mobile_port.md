@@ -27,6 +27,16 @@ survives beyond a chat session — nothing here happens on its own.
    the dispatch, the touch widget layer, the ViewModel reads, and whatever
    play/navigation path the screen owns. Pure helpers are tested by behaviour.
 
+## Shell: the phone safe area
+
+The window is edge-to-edge (`setDecorFitsSystemWindows(window, false)`) because
+the TV shell wants the whole panel and a television has no status or navigation
+bar for content to slide under. A phone does, so the root Box in `MainActivity`
+reserves `systemBars ∪ displayCutout` **on the phone only** - one place instead
+of twenty screen files, gated on `FormFactor.isTv` so the TV layout is unchanged.
+`imePadding()` still follows it, measured against the space the bars left.
+`MobileSafeAreaContractTest` pins the gate, the inset pair and that ordering.
+
 ## Screens
 
 | Screen | TV file | Phone file | Status |
