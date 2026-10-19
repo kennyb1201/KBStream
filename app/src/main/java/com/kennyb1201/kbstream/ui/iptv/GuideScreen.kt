@@ -284,6 +284,25 @@ fun GuideScreen(
     // Hung on the search field to end its session when this screen decides a
     // Back belonged to the keyboard (see KBTextField.endEditingSignal).
     var searchEndEditingSignal by remember(showSearch) { mutableStateOf(0) }
+    // The window's own focus, and the moments it was lost / won back while the
+    // search overlay was up.
+    //
+    // On Fire TV the keyboard is a separate window that takes window focus, so
+    // the only trace of it the app can observe is the focus leaving and coming
+    // back (there are no IME insets for it). The field's editing session is
+    // exactly the signal that proves unreliable here: Done moves focus to the
+    // results, or a blur ends the session, long before the keyboard closes -
+    // and then the viewer's Back to close the keyboard looks like the viewer's
+    // Back to close the results. Arming on "lost while the search is up" rather
+    // than on editing keeps the two apart (see searchBackBelongsToKeyboard).
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    var windowLostAt by remember { mutableStateOf(0L) }      // 0 = never
+    var windowRefocusedAt by remember { mutableStateOf(0L) } // 0 = never
+    LaunchedEffect(windowFocused, showSearch) {
+        val now = System.currentTimeMillis()
+        if (!windowFocused && showSearch) windowLostAt = now
+        else if (windowFocused && windowLostAt != 0L) windowRefocusedAt = now
+    }
 
     // Last-viewed persistence: reopening the guide drops you back on the
     // group/channel you were on instead of "All" + top of the list. The
@@ -577,20 +596,29 @@ fun GuideScreen(
     /**
      * Whose Back a press is while the search overlay is up.
      *
-     * The keyboard's while its session is live or has just ended - in which
+     * The keyboard's while its session is live or has just ended, or while the
+     * window's focus says a keyboard window just closed over the app - in which
      * case the session is ended and the results stay up - and the overlay's
      * only once the keyboard is genuinely gone. Shared by the two places a Back
      * can arrive: the guide's own root handler (which sees the press when Fire
      * OS does not give it to the keyboard) and the dialog's onDismissRequest.
      */
     val handleSearchBack: () -> Unit = {
-        if (
-            searchBackClosesKeyboard(
-                editing = searchInputEditing,
-                sinceEditingChangeMs = System.currentTimeMillis() - searchInputChangedAt
-            )
-        ) {
+        val nowMs = System.currentTimeMillis()
+        val keyboards = searchBackBelongsToKeyboard(
+            editing = searchInputEditing,
+            sinceEditingChangeMs = nowMs - searchInputChangedAt,
+            windowLostAt = windowLostAt,
+            windowRefocusedAt = windowRefocusedAt,
+            nowMs = nowMs
+        ) || !windowFocused
+        if (keyboards) {
+            // The keyboard's Back: end the session, keep the results. Clearing
+            // the stamps disarms the echo, so a fast second Back - the viewer's
+            // exit - is not eaten as a second echo.
             searchEndEditingSignal += 1
+            windowLostAt = 0L
+            windowRefocusedAt = 0L
         } else {
             dismissSearch()
         }

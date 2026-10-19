@@ -685,4 +685,113 @@ class GuideRulesTest {
         assertFalse(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = neverReported))
         assertFalse(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = -5L))
     }
+
+    // ── the window's focus as the keyboard's trace ────────────────────────────
+
+    @Test
+    fun `a Back just after the app's window gets focus back belongs to the keyboard`() {
+        // Fire TV's keyboard takes window focus, and the field's session may
+        // have ended long before (Done, blur) - so the editing echo above has
+        // expired while the keyboard is still up. The refocus is the trace.
+        assertTrue(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 60_000L,
+                nowMs = 60_000L
+            )
+        )
+        assertTrue(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 60_000L,
+                nowMs = 60_000L + SEARCH_REFOCUS_ECHO_MS - 1
+            )
+        )
+    }
+
+    @Test
+    fun `a Back well after the refocus is the viewer's`() {
+        assertFalse(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 60_000L,
+                nowMs = 60_000L + SEARCH_REFOCUS_ECHO_MS
+            )
+        )
+    }
+
+    @Test
+    fun `a focus that was never lost is not a keyboard trace`() {
+        // windowLostAt == 0 is "never lost", not "lost at the epoch".
+        assertFalse(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 0L,
+                windowRefocusedAt = 60_000L,
+                nowMs = 60_000L
+            )
+        )
+        // Lost, but never refocused: the keyboard (or another app) still has it.
+        assertFalse(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 1_000L,
+                windowRefocusedAt = 0L,
+                nowMs = 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun `a refocus stamped before the loss is a clock skew, not an echo`() {
+        assertFalse(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = 30_000L,
+                windowLostAt = 60_000L,
+                windowRefocusedAt = 59_000L,
+                nowMs = 59_500L
+            )
+        )
+    }
+
+    @Test
+    fun `the existing editing echo still decides on its own`() {
+        // No window evidence at all: the untouched first arm still answers.
+        assertTrue(
+            searchBackBelongsToKeyboard(
+                editing = true,
+                sinceEditingChangeMs = 60_000L,
+                windowLostAt = 0L,
+                windowRefocusedAt = 0L,
+                nowMs = 60_000L
+            )
+        )
+        assertTrue(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = SEARCH_IME_ECHO_MS - 1,
+                windowLostAt = 0L,
+                windowRefocusedAt = 0L,
+                nowMs = 60_000L
+            )
+        )
+        assertFalse(
+            searchBackBelongsToKeyboard(
+                editing = false,
+                sinceEditingChangeMs = SEARCH_IME_ECHO_MS,
+                windowLostAt = 0L,
+                windowRefocusedAt = 0L,
+                nowMs = 60_000L
+            )
+        )
+    }
 }

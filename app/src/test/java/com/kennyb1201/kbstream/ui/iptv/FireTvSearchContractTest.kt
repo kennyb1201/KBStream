@@ -85,8 +85,10 @@ class FireTvSearchContractTest {
             guide.contains("val handleSearchBack: () -> Unit = {")
         )
         assertTrue(
-            "which asks the pure rule whose Back the press is",
-            guide.contains("searchBackClosesKeyboard(")
+            "which asks the pure rule whose Back the press is: the editing echo first, then " +
+                "the window's refocus (a Fire TV keyboard is a window the app cannot see)",
+            guide.contains("searchBackBelongsToKeyboard(") &&
+                guide.contains("|| !windowFocused")
         )
         assertTrue(
             "and ends the field's session rather than dismissing",

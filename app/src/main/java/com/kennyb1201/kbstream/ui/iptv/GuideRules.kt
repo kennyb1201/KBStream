@@ -443,3 +443,42 @@ internal fun searchBackClosesKeyboard(
     sinceEditingChangeMs: Long,
     echoMs: Long = SEARCH_IME_ECHO_MS
 ): Boolean = editing || sinceEditingChangeMs in 0 until echoMs
+
+/**
+ * How long after the app's window regains focus a Back is still read as the
+ * keyboard's.
+ *
+ * The Back belongs to the same physical press that closed the keyboard, so it
+ * arrives within a frame or two of the refocus. A considered second press is
+ * seconds away, never sub-second - which is why this is wider than
+ * [SEARCH_IME_ECHO_MS] and still cannot swallow one.
+ */
+internal const val SEARCH_REFOCUS_ECHO_MS = 1000L
+
+/**
+ * Whether a Back belongs to the Fire TV keyboard rather than the search dialog:
+ * the app's window just got focus back after losing it while the search was up,
+ * and the Back lands inside the echo. The keyboard is a window the app cannot
+ * see (no IME insets for it), so the refocus is the only observable trace of
+ * its close - the field's editing state may have ended long before (Done,
+ * blur) while the keyboard stayed up.
+ *
+ * [searchBackClosesKeyboard] stays the first arm and is unchanged; this only
+ * adds the case it cannot cover. A lost stamp of zero means "never lost", and a
+ * refocus stamped before the loss (a clock that moved back) is not an echo
+ * either.
+ */
+internal fun searchBackBelongsToKeyboard(
+    editing: Boolean,
+    sinceEditingChangeMs: Long,
+    windowLostAt: Long,
+    windowRefocusedAt: Long,
+    echoMs: Long = SEARCH_IME_ECHO_MS,
+    refocusEchoMs: Long = SEARCH_REFOCUS_ECHO_MS,
+    nowMs: Long = System.currentTimeMillis()
+): Boolean =
+    searchBackClosesKeyboard(editing, sinceEditingChangeMs, echoMs) ||
+        (
+            windowLostAt != 0L && windowRefocusedAt - windowLostAt >= 0 &&
+                nowMs - windowRefocusedAt in 0 until refocusEchoMs
+            )
