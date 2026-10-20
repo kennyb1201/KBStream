@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import com.kennyb1201.kbstream.BuildConfig
 import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -43,6 +44,59 @@ class IntroDbV4ContractTest {
     @Test
     fun `media lookups target v4`() {
         assertEquals("https://api.theintrodb.org/v4/media", INTRO_DB_MEDIA_URL)
+    }
+
+    /**
+     * Issue #79: without a `User-Agent` the API saw `okhttp/…` and could not
+     * attribute a single request to this app - which is why its developer could
+     * not warn anyone before changing the API.
+     *
+     * The header belongs to the request builder, so it is asserted on the
+     * request both hosts actually use: the v4 `/media` read and the legacy
+     * `/segments` first try.
+     */
+    @Test
+    fun `every IntroDB request names the app and its build version`() {
+        val expected = "KBStream/" + BuildConfig.VERSION_NAME
+
+        assertEquals(
+            "the constant is the app name plus the generated version",
+            expected,
+            INTRO_DB_USER_AGENT
+        )
+        assertTrue(
+            "a stale literal would misreport which release called: $INTRO_DB_USER_AGENT",
+            Regex("^KBStream/\\d+\\.\\d+").containsMatchIn(INTRO_DB_USER_AGENT)
+        )
+        listOf(
+            "$INTRO_DB_MEDIA_URL?imdb_id=tt0903747&season=1&episode=1",
+            "https://api.introdb.app/segments?imdb_id=tt0903747"
+        ).forEach { url ->
+            assertEquals(
+                "the request to $url must identify the app",
+                expected,
+                introDbRequest(url).header("User-Agent")
+            )
+        }
+    }
+
+    /**
+     * The header is only sent where the request is built. A second bare
+     * `Request.Builder()` in this file would be a silent `okhttp/…` path back
+     * into the API, so the fetch has to go through [introDbRequest].
+     */
+    @Test
+    fun `the fetch path uses the extracted request, not a bare builder`() {
+        val src = readSource(HELPERS)
+        assertTrue(
+            "fetchIntroDbJson must send introDbRequest(url), not build its own request",
+            src.contains("newCall(introDbRequest(url))")
+        )
+        assertEquals(
+            "one request builder, so every IntroDB call carries the header",
+            1,
+            Regex("Request\\.Builder\\(").findAll(src).count()
+        )
     }
 
     /**

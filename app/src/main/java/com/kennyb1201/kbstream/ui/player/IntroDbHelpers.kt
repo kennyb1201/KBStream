@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.net.Uri
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,6 +68,20 @@ internal val introDbHttpClient = BaseHttpClient.derived {
  * take the whole lookup down, so a guess would be strictly worse than silence.
  */
 internal const val INTRO_DB_MEDIA_URL = "https://api.theintrodb.org/v4/media"
+
+/**
+ * What every TheIntroDB request calls itself.
+ *
+ * The integration had no `User-Agent`, so OkHttp's own (`okhttp/5.x`) was all
+ * the API ever saw and the developer could not tell KBStream's traffic from any
+ * other client's - their ask in issue #79. `KBStream/<version>` is the form they
+ * named; the version comes from the build so a report from a user pins the
+ * release that made the request.
+ *
+ * Sent to the legacy `/segments` host too: it is the same courtesy, and a
+ * header costs nothing on a request already being made.
+ */
+internal const val INTRO_DB_USER_AGENT = "KBStream/" + BuildConfig.VERSION_NAME
 
 /**
  * Millisecond field. Accepts a JSON number (the API's normal shape), a numeric
@@ -146,8 +161,22 @@ internal fun JSONObject.readIntroDbStamp(type: IntroDbMarkerType): IntroDbStamp?
     return IntroDbStamp(startMs, endMs, type, readConfidence())
 }
 
+/**
+ * The one request every IntroDB read sends.
+ *
+ * Extracted so the `User-Agent` is part of the request's own definition rather
+ * than an argument at one call site, and so a JVM test can assert it without a
+ * socket: both hosts, one builder.
+ */
+internal fun introDbRequest(url: String): Request =
+    Request.Builder()
+        .url(url)
+        .get()
+        .header("User-Agent", INTRO_DB_USER_AGENT)
+        .build()
+
 internal fun fetchIntroDbJson(url: String): JSONObject? = runCatching {
-    introDbHttpClient.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+    introDbHttpClient.newCall(introDbRequest(url)).execute().use { response ->
         if (!response.isSuccessful) null else JSONObject(response.body?.string().orEmpty())
     }
 }.getOrElse { null }
