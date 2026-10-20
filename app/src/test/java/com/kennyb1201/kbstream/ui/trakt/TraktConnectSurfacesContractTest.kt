@@ -67,6 +67,54 @@ class TraktConnectSurfacesContractTest {
     }
 
     @Test
+    fun `the TV linking state keeps the QR and the code in one row`() {
+        listOf("Trakt" to traktTv, "Simkl" to simklTv).forEach { (name, source) ->
+            val qr = source.indexOf("KBQrCode(url = url, size = 140.dp)")
+            assertTrue("$name: the TV QR must be the compact 140dp panel", qr > 0)
+
+            val rowOpening = source.lastIndexOf("Row(", qr)
+            assertTrue("$name: the QR must be laid out in a Row", rowOpening in 0 until qr)
+            val rowSoFar = source.substring(rowOpening, qr)
+            assertTrue(
+                "$name: the Row is the QR-beside-code layout, not a stack",
+                rowSoFar.contains("Arrangement.spacedBy(12.dp)") &&
+                    rowSoFar.contains("verticalAlignment = Alignment.CenterVertically")
+            )
+            assertTrue(
+                "$name: and it is a focus target, so Down can land on the pair",
+                rowSoFar.contains(".focusable()")
+            )
+            assertTrue(
+                "$name: a non-button stop must show it holds the D-pad",
+                rowSoFar.contains(".onFocusChanged") && rowSoFar.contains(".border(")
+            )
+
+            val afterQr = source.substring(qr, (qr + 1400).coerceAtMost(source.length))
+            assertTrue(
+                "$name: the code shares that Row, weighted into the space beside the QR",
+                afterQr.contains(".weight(1f)") && afterQr.contains("\"CODE\"")
+            )
+            assertTrue(
+                "$name: directional search stays on the page, not in the nav rail",
+                source.contains(".focusGroup()")
+            )
+        }
+    }
+
+    @Test
+    fun `the QR panel is content sized so it can sit beside the code`() {
+        val qrPanel = source("ui/components/KBQrCode.kt")
+        assertFalse(
+            "a full-width panel would consume the row it has to share",
+            qrPanel.contains(".fillMaxWidth()")
+        )
+        assertTrue(
+            "the TV default is the compact size the Row budget assumes",
+            qrPanel.contains("size: Dp = 140.dp")
+        )
+    }
+
+    @Test
     fun `Trakt's counts row is hidden when the read answers nothing`() {
         listOf("TV" to traktTv, "mobile" to traktMobile).forEach { (name, source) ->
             assertTrue(

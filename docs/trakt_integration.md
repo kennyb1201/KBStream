@@ -220,12 +220,19 @@ and the badges still read the watched snapshot (`watchedSnapshot`), not these
 counts.
 
 While linking, both connect screens draw a QR of the verification address with
-`qrcodeBitmap()` (the add-on pairing helper, ZXing - no new dependency), at
-220dp on a white field so it scans from couch distance, under the label "SCAN
-TO OPEN" with the URL printed below. The user code stays large and separate:
-neither Trakt's nor Simkl's activation page pre-fills the code from a query
-parameter, so the QR only replaces typing the URL. The QR is drawn only in the
-linking state (`verificationUrl != null`); a connected account shows no code.
+`qrcodeBitmap()` (the add-on pairing helper, ZXing - no new dependency), on a
+white field under the label "SCAN TO OPEN" with the URL printed below in small
+text. On TV the QR is 140dp and sits in a Row beside the user code, not above
+it: at 200dp+ stacked, the code was pushed below the fold and the D-pad could
+not scroll to it. The linking Row is itself a focus target and the page is a
+`focusGroup`, so Down from the nav rail lands on the pair (scrolling it into
+view) and Down again reaches GENERATE CODE. The phone layouts keep the QR
+larger (200dp) and stacked, because their page scrolls by finger.
+
+The user code stays large and separate: neither Trakt's nor Simkl's activation
+page pre-fills the code from a query parameter, so the QR only replaces typing
+the URL. The QR is drawn only in the linking state (`verificationUrl != null`);
+a connected account shows no code.
 
 ## Not done (deliberately)
 

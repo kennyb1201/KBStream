@@ -188,8 +188,10 @@ fun SimklConnectScreenMobile(
                         )
 
                         // Linking only: no QR on the connected branch above.
+                        // Bigger than the TV panel: this page scrolls by
+                        // finger, so height is not the constraint.
                         uiState.verificationUrl?.let { url ->
-                            KBQrCode(url = url)
+                            KBQrCode(url = url, size = 200.dp)
                         }
 
                         uiState.userCode?.let { code ->

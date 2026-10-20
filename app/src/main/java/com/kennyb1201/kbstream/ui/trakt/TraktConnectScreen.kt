@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.ui.trakt
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -78,6 +83,9 @@ fun TraktConnectScreen(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+    // The pairing row is a focus stop of its own (it is not a button), so it
+    // needs to say when it holds the D-pad: without a ring, focus would look lost.
+    var pairingFocused by remember { mutableStateOf(false) }
 
     // Once per entry into the connected state - a recomposition must not spend
     // another pair of watched reads, and a screen opened already connected still
@@ -116,6 +124,10 @@ fun TraktConnectScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 760.dp)
+                    // Directional search stays on this page instead of drifting
+                    // into the nav rail, so Down walks the content and scrolls
+                    // it, rather than needing Right to get there first.
+                    .focusGroup()
                     .background(KBSurface, KBShapePanel)
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -166,32 +178,65 @@ fun TraktConnectScreen(
 
                     // Only while linking: the connected state above never draws
                     // a code for an address there is nothing left to enter on.
-                    uiState.verificationUrl?.let { url ->
-                        KBQrCode(url = url)
-                    }
-
-                    uiState.userCode?.let { code ->
-                        Column(
+                    // Side by side, not stacked: a tall QR above the code pushed
+                    // the code below the fold, and a D-pad cannot scroll to it.
+                    if (uiState.verificationUrl != null || uiState.userCode != null) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            // A landing target above the buttons: the view lands
+                            // here on Down and brings the code into view even
+                            // when the page is scrolled.
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(KBSurfaceRaised, KBShapeCard)
-                                .padding(horizontal = 18.dp, vertical = 20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .focusable()
+                                .onFocusChanged { pairingFocused = it.isFocused }
+                                .background(
+                                    if (pairingFocused) {
+                                        KBAccent.copy(alpha = 0.08f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    KBShapeCard
+                                )
+                                .border(
+                                    1.dp,
+                                    if (pairingFocused) {
+                                        KBAccent.copy(alpha = 0.55f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    KBShapeCard
+                                )
                         ) {
-                            Text(
-                                text = "CODE",
-                                color = KBAccent,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = code,
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.displaySmall,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(top = 6.dp)
-                            )
+                            uiState.verificationUrl?.let { url ->
+                                KBQrCode(url = url, size = 140.dp)
+                            }
+
+                            uiState.userCode?.let { code ->
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .background(KBSurfaceRaised, KBShapeCard)
+                                        .padding(horizontal = 18.dp, vertical = 20.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "CODE",
+                                        color = KBAccent,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = code,
+                                        color = KBTextHi,
+                                        style = MaterialTheme.typography.displaySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 6.dp)
+                                    )
+                                }
+                            }
                         }
                     }
 
