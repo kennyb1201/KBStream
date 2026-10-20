@@ -42,6 +42,19 @@ internal object PlayerTouchRules {
     /** How far a drag has to move before a lift is a tap rather than a drag. */
     const val TAP_SLOP_FRACTION = 0.005f
 
+    /**
+     * One double-tap step: the 10-second nudge every phone video app has, and
+     * the one seek a phone viewer can perform with one hand.
+     */
+    const val DOUBLE_TAP_STEP_MS = 10_000L
+
+    /**
+     * How long a session of double-taps keeps accumulating. Inside it, taps on
+     * the same side add up ("-30s"); the other side, or a pause longer than
+     * this, starts a new session at one step.
+     */
+    const val DOUBLE_TAP_ACCUMULATE_MS = 1_000L
+
     fun zoneFor(x: Float, widthPx: Int): Zone =
         if (x < widthPx / 2f) Zone.LEFT else Zone.RIGHT
 
@@ -58,6 +71,44 @@ internal object PlayerTouchRules {
         val ady = kotlin.math.abs(dy)
         if (adx < slop && ady < slop) return null
         return if (adx > ady) Axis.SEEK else Axis.VERTICAL
+    }
+
+    /**
+     * Whether a double-tap may seek at all. A live stream has no end to seek
+     * towards, so the gesture is a clean no-op: no seek, and (because the wiring
+     * asks this first) no indicator claiming otherwise. Brightness and volume
+     * are unaffected - they are not seeks.
+     */
+    fun doubleTapApplies(durationMs: Long): Boolean = durationMs > 0L
+
+    /** The move one double-tap on [side] asks for: back 10s, forward 10s. */
+    fun doubleTapStepMs(side: Zone): Long =
+        if (side == Zone.LEFT) -DOUBLE_TAP_STEP_MS else DOUBLE_TAP_STEP_MS
+
+    /**
+     * The running total after another double-tap: same side inside the window
+     * adds to what the session already asked for, anything else starts over.
+     *
+     * The total is what the side indicator names while the fingers keep tapping;
+     * the seeks themselves stay 10s apart, so the picture moves one step at a
+     * time and the label says where the session has taken it.
+     */
+    fun accumulateStep(
+        previousAccumMs: Long,
+        previousSide: Zone?,
+        side: Zone,
+        sinceLastStepMs: Long
+    ): Long {
+        val continues = previousSide == side &&
+            previousAccumMs != 0L &&
+            sinceLastStepMs <= DOUBLE_TAP_ACCUMULATE_MS
+        return if (continues) previousAccumMs + doubleTapStepMs(side) else doubleTapStepMs(side)
+    }
+
+    /** "-10s" / "+30s": the label a double-tap session shows on its half. */
+    fun seekStepLabel(accumulatedMs: Long): String {
+        val sign = if (accumulatedMs < 0L) "-" else "+"
+        return "$sign${kotlin.math.abs(accumulatedMs) / 1000L}s"
     }
 
     /** The film distance a drag across the whole width covers. */

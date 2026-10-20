@@ -2109,6 +2109,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
                 override fun commitSeek(targetMs: Long) = seekTo(targetMs)
 
+                override fun stepSeek(deltaMs: Long) {
+                    // The seek BUTTON's own step, so mpv applies whatever guard
+                    // it applies there and a live stream behaves as it does for
+                    // that button.
+                    seekStepBy(deltaMs)
+                }
+
                 override fun brightnessFraction(): Float =
                     PlayerTouchDevice.brightnessFraction(this@MpvPlayerActivity)
 

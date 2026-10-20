@@ -130,6 +130,68 @@ class PlayerTouchRulesTest {
     }
 
     @Test
+    fun `a double-tap steps ten seconds towards its half`() {
+        assertEquals(-10_000L, PlayerTouchRules.doubleTapStepMs(PlayerTouchRules.Zone.LEFT))
+        assertEquals(10_000L, PlayerTouchRules.doubleTapStepMs(PlayerTouchRules.Zone.RIGHT))
+    }
+
+    @Test
+    fun `repeated double-taps on one side accumulate`() {
+        val left = PlayerTouchRules.Zone.LEFT
+        val first = PlayerTouchRules.accumulateStep(
+            previousAccumMs = 0L,
+            previousSide = null,
+            side = left,
+            sinceLastStepMs = 0L
+        )
+        assertEquals(-10_000L, first)
+
+        val second = PlayerTouchRules.accumulateStep(first, left, left, sinceLastStepMs = 220L)
+        assertEquals(-20_000L, second)
+
+        val third = PlayerTouchRules.accumulateStep(second, left, left, sinceLastStepMs = 250L)
+        assertEquals("the label the session shows while it accumulates", -30_000L, third)
+    }
+
+    @Test
+    fun `the other half starts a new session`() {
+        val right = PlayerTouchRules.accumulateStep(
+            previousAccumMs = -30_000L,
+            previousSide = PlayerTouchRules.Zone.LEFT,
+            side = PlayerTouchRules.Zone.RIGHT,
+            sinceLastStepMs = 100L
+        )
+        assertEquals("a forward tap after three back taps is +10s, not +10s of a total", 10_000L, right)
+    }
+
+    @Test
+    fun `a pause longer than the window starts over`() {
+        val step = PlayerTouchRules.accumulateStep(
+            previousAccumMs = -30_000L,
+            previousSide = PlayerTouchRules.Zone.LEFT,
+            side = PlayerTouchRules.Zone.LEFT,
+            sinceLastStepMs = PlayerTouchRules.DOUBLE_TAP_ACCUMULATE_MS + 1L
+        )
+        assertEquals(-10_000L, step)
+    }
+
+    @Test
+    fun `a live stream makes the double-tap a no-op`() {
+        // No duration means no end to seek towards: the wiring asks this before
+        // it seeks or shows any indicator.
+        assertTrue(PlayerTouchRules.doubleTapApplies(60_000L))
+        assertFalse(PlayerTouchRules.doubleTapApplies(0L))
+        assertFalse(PlayerTouchRules.doubleTapApplies(-1L))
+    }
+
+    @Test
+    fun `the double-tap label names the running total`() {
+        assertEquals("-10s", PlayerTouchRules.seekStepLabel(-10_000L))
+        assertEquals("-30s", PlayerTouchRules.seekStepLabel(-30_000L))
+        assertEquals("+10s", PlayerTouchRules.seekStepLabel(10_000L))
+    }
+
+    @Test
     fun `a seek leaves the play state it found`() {
         assertTrue(PlayerTouchRules.playAfterSeek(true))
         assertFalse(PlayerTouchRules.playAfterSeek(false))

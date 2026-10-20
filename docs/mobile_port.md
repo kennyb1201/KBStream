@@ -47,7 +47,8 @@ is one gesture layer shared by both engines, attached **only** when
 
 | Gesture | Effect | Rule |
 |---|---|---|
-| Tap the picture | show/hide the chrome | `PlayerTouchGestures` reads it on the lift, so a drag never ends in a toggle |
+| Tap the picture | show/hide the chrome | read as a **confirmed** tap, not on the lift: the double-tap below owns the second finger-down, so a single tap lands after the system's double-tap timeout and a double-tap never also toggles the chrome |
+| Double-tap left / right half | seek back / forward 10s | one step per double-tap through the same ±seek button path (`stepSeekBy` / `seekStepBy`), so its live no-op and clamp apply; repeats on one side accumulate inside a 1s window and the ripple + label names the running total (`-30s`); a live/unseekable stream does nothing at all |
 | Drag sideways | seek | full width = 30–120 s (`PlayerTouchRules.seekSpanMs`), clamped to the film, nothing on a live stream |
 | Drag up/down, left half | brightness | drags the window's own level, floor `MIN_BRIGHTNESS` |
 | Drag up/down, right half | volume | the music stream, 0–100 % |
@@ -114,12 +115,28 @@ TV box. The risk left is behavioural, not numerical, and it needs the device.
 list. The graphics cannot be produced here - no device, no renderer - so they
 are a capture task.
 
+**The update popup was a dead end on a phone.** It is the one dialog the two
+form factors share, and it had never been branched: its buttons came from the TV
+`KBCard` (a focus surface - a finger cannot press it), `onDismissRequest = { }`
+swallowed Back and the scrim in every phase, and the panel was a fixed 560dp,
+wider than a portrait phone. The phone now draws the same six buttons
+(INSTALL NOW / LATER / HIDE / DONE / TRY AGAIN / CLOSE) from `TouchKBCard`,
+dismisses with the phase's own action on Back or a scrim tap (Offer -> exactly
+LATER, so the dismissal sticks for that version; Installed / Failed ->
+`acknowledge()`; Downloading / Installing -> nothing, so a download is never
+orphaned), and sizes the panel as the screen minus a 16dp gutter capped at
+560dp. The television renders and behaves exactly as before, barrier included.
+`UpdatePopupMobileInputContractTest` pins both halves.
+
 ### The device pass this phase ends on
 
 - [ ] Screenshots from the shot list, feature graphic at 1024 x 500, listing copy
       pasted (one icon, one banner, no TV UI in any phone shot)
 - [ ] Self-update on a phone: install an older build, check Settings -> Check for
       updates, confirm the same APK arrives (no form-factor fork in the feed)
+- [ ] Update popup on a phone: INSTALL NOW and LATER both respond to taps, Back
+      on the offer dismisses it as Later and it stays down for that version, and
+      the portrait panel fits with both buttons on-screen
 - [ ] Notification prompt appears once on a fresh Android 13+ install with an
       alert feature on; denying it does not re-prompt on the next launch
 - [ ] Both alert kinds actually arrive (new episode, guide reminder)
@@ -635,9 +652,14 @@ on-screen button) returns to the list first, then leaves Settings.
 Ported panes and what they write:
 
 - **Integrations** — Profiles, Add-ons (hidden when the active profile locks
-  them), Simkl and Viewing stats; the MDBList (with VERIFY), OMDb,
-  OpenSubtitles and TorBox key cards; auto-fetch subtitles and TorBox library
-  sync. Key fields are not composed at all on a kids profile, as on TV.
+  them) and Viewing stats; a **Trackers** section holding Simkl, Trakt, the
+  MDBList key card (with VERIFY) and Resume Source, in that order, between
+  Profiles & Accounts and API Keys; then the OMDb, OpenSubtitles and TorBox key
+  cards, auto-fetch subtitles and TorBox library sync. Key fields are not
+  composed at all on a kids profile, as on TV - the MDBList card in its new
+  section keeps that, while Resume Source is a behaviour pref and stays usable
+  on a kids profile. The TV pane has the same Trackers section in the same
+  order (`ui/settings/TrackersSectionContractTest`).
 - **Collections** — Home / Collections and the catalog builder, both through the
   screen's own navigation callbacks.
 - **Hidden Titles** — the store's entries with SHOW per row and "Show everything

@@ -5047,6 +5047,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     exoPlayer?.seekTo(targetMs)
                 }
 
+                override fun stepSeek(deltaMs: Long) {
+                    // The ±seek BUTTON path, not a bare seekTo: it owns the
+                    // live-duration no-op, the clamp to the film and the bar's
+                    // bookkeeping, so a double-tap gets every guard the button
+                    // beside it has.
+                    stepSeekBy(deltaMs)
+                }
+
                 override fun brightnessFraction(): Float =
                     PlayerTouchDevice.brightnessFraction(this@NativePlayerActivity)
 

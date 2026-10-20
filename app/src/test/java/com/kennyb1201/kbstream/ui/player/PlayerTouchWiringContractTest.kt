@@ -58,6 +58,12 @@ class PlayerTouchWiringContractTest {
                 src.contains("playerTouchGestures?.onTouch(playerView, event)")
         )
         assertTrue(
+            "the double-tap seeks through the ± button's own step, so its guard " +
+                "(live no-op, clamp, bar bookkeeping) applies",
+            src.contains("override fun stepSeek(deltaMs: Long)") &&
+                src.contains("stepSeekBy(deltaMs)")
+        )
+        assertTrue(
             "the gesture layer is constructed only off TV",
             src.contains(
                 "if (!com.kennyb1201.kbstream.FormFactor.isTv) attachPhoneTouchGestures()"
@@ -91,8 +97,29 @@ class PlayerTouchWiringContractTest {
                 src.contains("playWhenReady") || src.contains("setPaused")
         )
         assertTrue(
-            "a tap is read on the lift, so a drag can never end in a toggle",
-            src.contains("override fun onSingleTapUp")
+            "a tap is confirmed, not read on the lift: with a double-tap in the " +
+                "layer, onSingleTapUp would toggle the chrome on the first half of " +
+                "every double-tap. Confirmed waits out the system's double-tap " +
+                "timeout, which is the standard disambiguation",
+            src.contains("override fun onSingleTapConfirmed") &&
+                !src.contains("override fun onSingleTapUp")
+        )
+        assertTrue(
+            "a double-tap is the 10-second nudge, through the seek BUTTON path",
+            src.contains("override fun onDoubleTap") &&
+                src.contains("callbacks.stepSeek(PlayerTouchRules.doubleTapStepMs(side))")
+        )
+        assertTrue(
+            "and a stream with no duration is asked about first, so a live " +
+                "channel gets no seek and no indicator",
+            src.contains("PlayerTouchRules.doubleTapApplies(callbacks.durationMs())")
+        )
+        assertTrue(
+            "the side indicator is built on the surface's parent in code, never in " +
+                "the shared player chrome XML (which a television draws)",
+            src.contains("private class SeekStepIndicator") &&
+                src.contains("host.addView(") &&
+                !src.contains("R.layout.player_chrome")
         )
         assertTrue(
             "a hold is fullscreen, unless the finger was dragging",
@@ -136,6 +163,11 @@ class PlayerTouchWiringContractTest {
         assertTrue(
             "and its seek is the engine's own",
             src.contains("override fun commitSeek(targetMs: Long) = seekTo(targetMs)")
+        )
+        assertTrue(
+            "its double-tap step is the seek button's own step",
+            src.contains("override fun stepSeek(deltaMs: Long)") &&
+                src.contains("seekStepBy(deltaMs)")
         )
     }
 

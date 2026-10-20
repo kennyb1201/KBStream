@@ -4,8 +4,12 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.os.SystemClock
 import android.provider.Settings
+import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -14,6 +18,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.core.content.ContextCompat
+import com.kennyb1201.kbstream.R
 import kotlin.math.roundToInt
 
 /**
@@ -57,6 +64,13 @@ internal class PlayerTouchGestures(
         fun hideSeekHint()
         fun commitSeek(targetMs: Long)
 
+        /**
+         * One double-tap step through the engine's own ±seek BUTTON path, so
+         * every guard those buttons have applies here too: the live-duration
+         * no-op, the clamp to the film, and the bar's own bookkeeping.
+         */
+        fun stepSeek(deltaMs: Long)
+
         fun brightnessFraction(): Float
         fun setBrightnessFraction(fraction: Float)
 
@@ -76,14 +90,54 @@ internal class PlayerTouchGestures(
     private var seekToMs = 0L
     private var seeking = false
     private var pinched = false
+    // The second a seek hint was last built for. The hint is a formatted string,
+    // so rebuilding it on every MotionEvent would allocate tens of strings a
+    // second for a label that only changes once a second anyway.
+    private var hintSecond = -1L
+    // Double-tap session: what the last taps on one side have added up to.
+    private var stepAccumMs = 0L
+    private var stepSide: PlayerTouchRules.Zone? = null
+    private var lastStepAtMs = 0L
+    private var stepIndicator: SeekStepIndicator? = null
 
     private val tapDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean = true
 
-            override fun onSingleTapUp(e: MotionEvent): Boolean {
+            // Confirmed, not onSingleTapUp: the tap has to wait out the
+            // double-tap timeout, or every double-tap would ALSO toggle the
+            // chrome on its first finger-down. This is the standard
+            // disambiguation, and it is why a single tap now lands after
+            // roughly the system's double-tap delay.
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 if (callbacks.gesturesAllowed()) callbacks.toggleChrome()
+                return true
+            }
+
+            /**
+             * Double-tap: back 10s on the left half, forward 10s on the right.
+             *
+             * Accumulates while the taps keep coming on the same side, and the
+             * indicator names the session's running total. A live or
+             * unseekable stream does nothing at all - no seek and no indicator,
+             * because a "-10s" that lands nowhere is worse than silence.
+             */
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (!callbacks.gesturesAllowed()) return false
+                if (!PlayerTouchRules.doubleTapApplies(callbacks.durationMs())) return false
+                val side = PlayerTouchRules.zoneFor(e.x, target.width)
+                val now = SystemClock.uptimeMillis()
+                stepAccumMs = PlayerTouchRules.accumulateStep(
+                    previousAccumMs = stepAccumMs,
+                    previousSide = stepSide,
+                    side = side,
+                    sinceLastStepMs = now - lastStepAtMs
+                )
+                stepSide = side
+                lastStepAtMs = now
+                callbacks.stepSeek(PlayerTouchRules.doubleTapStepMs(side))
+                stepIndicator?.show(side, PlayerTouchRules.seekStepLabel(stepAccumMs))
                 return true
             }
 
@@ -112,10 +166,19 @@ internal class PlayerTouchGestures(
 
     fun attach() {
         target.setOnTouchListener(this)
+        // The double-tap indicator lives on the surface's own parent, built in
+        // code: the player chrome's XML is shared with the television, and this
+        // layer exists only on a phone, so it must not add a view there.
+        val host = target.parent as? ViewGroup
+        if (host != null && stepIndicator == null) {
+            stepIndicator = SeekStepIndicator(context, host)
+        }
     }
 
     fun detach() {
         target.setOnTouchListener(null)
+        stepIndicator?.release()
+        stepIndicator = null
     }
 
     override fun onTouch(v: View, event: MotionEvent): Boolean {
@@ -144,6 +207,7 @@ internal class PlayerTouchGestures(
                 startBrightness = callbacks.brightnessFraction()
                 startVolume = callbacks.volumeFraction()
                 seekFromMs = callbacks.positionMs()
+                hintSecond = -1L
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -184,7 +248,13 @@ internal class PlayerTouchGestures(
         ) ?: return
         seekToMs = target
         seeking = true
-        callbacks.showSeekHint(PlayerTouchRules.seekHint(target - seekFromMs, target))
+        // Only the label that CHANGED is rebuilt: the drag path runs per motion
+        // event, and a string built there would allocate on every pixel.
+        val second = target / 1000L
+        if (second != hintSecond) {
+            hintSecond = second
+            callbacks.showSeekHint(PlayerTouchRules.seekHint(target - seekFromMs, target))
+        }
     }
 
     private fun updateLevel(dy: Float, heightPx: Int) {
@@ -208,7 +278,100 @@ internal class PlayerTouchGestures(
     private fun resetDrag() {
         dragAxis = null
         seeking = false
+        hintSecond = -1L
     }
+}
+
+/**
+ * The double-tap feedback: a ripple and the running label on the half that was
+ * tapped ("-10s", then "-30s" while the session accumulates).
+ *
+ * Built in code on the video surface's parent rather than in `player_chrome.xml`,
+ * which is shared with the television: the gesture layer is phone-only, and a
+ * TV layout file must not grow a view it never shows. It is created once with
+ * the layer and reused, so showing it allocates nothing.
+ */
+private class SeekStepIndicator(
+    private val context: Context,
+    private val host: ViewGroup
+) {
+    private val accent = ContextCompat.getColor(context, R.color.kb_accent)
+    private val ripple = View(context).apply {
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.argb(64, Color.red(accent), Color.green(accent), Color.blue(accent)))
+        }
+    }
+    private val label = TextView(context).apply {
+        setTextColor(accent)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setShadowLayer(6f, 0f, 2f, Color.BLACK)
+    }
+    private val box = FrameLayout(context).apply {
+        addView(
+            ripple,
+            FrameLayout.LayoutParams(dp(112), dp(112), Gravity.CENTER)
+        )
+        addView(
+            label,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+        )
+        visibility = View.GONE
+    }
+    private val hide = Runnable {
+        box.animate().alpha(0f).setDuration(160).withEndAction {
+            box.visibility = View.GONE
+        }.start()
+    }
+
+    init {
+        host.addView(
+            box,
+            FrameLayout.LayoutParams(dp(180), dp(140), Gravity.CENTER_VERTICAL)
+        )
+    }
+
+    fun show(side: PlayerTouchRules.Zone, text: String) {
+        val params = box.layoutParams as? FrameLayout.LayoutParams ?: return
+        val gravity = if (side == PlayerTouchRules.Zone.LEFT) {
+            Gravity.START or Gravity.CENTER_VERTICAL
+        } else {
+            Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        if (params.gravity != gravity) {
+            params.gravity = gravity
+            params.leftMargin = dp(20)
+            params.rightMargin = dp(20)
+            box.layoutParams = params
+        }
+        label.text = text
+        box.visibility = View.VISIBLE
+        box.alpha = 1f
+        ripple.animate().cancel()
+        ripple.scaleX = 0.7f
+        ripple.scaleY = 0.7f
+        ripple.alpha = 0.9f
+        ripple.animate().scaleX(1.15f).scaleY(1.15f).alpha(0f).setDuration(420).start()
+        box.removeCallbacks(hide)
+        box.postDelayed(hide, 700L)
+    }
+
+    fun release() {
+        box.removeCallbacks(hide)
+        host.removeView(box)
+    }
+
+    private fun dp(value: Int): Int =
+        TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value.toFloat(),
+            context.resources.displayMetrics
+        ).roundToInt()
 }
 
 /**
