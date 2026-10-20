@@ -65,6 +65,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -1680,6 +1681,9 @@ private fun InterfacePaneMobile() {
     var hideUpcoming by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context))
     }
+    var resumeAuthority by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getResumeAuthority(context))
+    }
     var englishOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
     }
@@ -1760,6 +1764,15 @@ private fun InterfacePaneMobile() {
             onChange = {
                 use24h = it
                 AppPreferences.setUse24HourClock(context, it)
+            }
+        )
+
+        SettingsSectionMobile("Continue Watching")
+        ResumeAuthorityMobile(
+            selected = resumeAuthority,
+            onPick = { authority ->
+                resumeAuthority = authority
+                AppPreferences.setResumeAuthority(context, authority)
             }
         )
 
@@ -2562,6 +2575,41 @@ private fun HeroTrailerDelayMobile(
         "How long focus must rest on a title before the hero starts its trailer. A " +
             "longer wait means scrolling a rail never starts one by accident; \"Now\" " +
             "starts it the moment a title is focused."
+    )
+}
+
+/**
+ * The touch twin of `ui/settings/ResumeAuthorityRow.kt`: the same labels, and
+ * the same promise that the other trackers keep scrobbling.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ResumeAuthorityMobile(
+    selected: ResumeAuthority,
+    onPick: (ResumeAuthority) -> Unit
+) {
+    Text(
+        text = "Resume source",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+    )
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ResumeAuthority.entries.forEach { authority ->
+            SettingsPillMobile(
+                label = authority.label,
+                selected = authority == selected,
+                onClick = { onPick(authority) }
+            )
+        }
+    }
+    SettingsCaptionMobile(
+        "Which tracker's position Continue Watching shows when more than one knows a " +
+            "title. Every linked tracker still scrobbles and gets your watched marks; " +
+            "the others fill in titles this one has not seen."
     )
 }
 

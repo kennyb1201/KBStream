@@ -76,7 +76,9 @@ to:
 - store, per account and protected by row-level security, the data it syncs:
   **watch history and resume positions, watched state, your profiles (names,
   avatars, and any Kids-Mode settings), installed addons, collections, your
-  poster/backdrop artwork choices, and app settings.**
+  poster/backdrop artwork choices, and app settings**; plus the sessions of the
+  trackers you link (Simkl, Trakt) and the service API keys you paste (MDBList,
+  TorBox, OpenSubtitles), so a second device comes up already connected.
 
 This data is associated with your account and is what makes "continue watching"
 and setup follow you between devices. Password handling is done by Supabase Auth;
@@ -94,6 +96,7 @@ When a feature needs content or a service you asked for, the app contacts:
 | --- | --- | --- |
 | TMDB | Titles, artwork and metadata | Lookup queries (the build's API key) |
 | Simkl | Watch history / scrobbling, if you link it | Your Simkl token and what you watch |
+| Trakt | Watch history / scrobbling and reviews, if you link it | Your Trakt session (access and refresh tokens) and what you watch |
 | MDBList | Ratings, if you provide a key | Your key and the titles looked up |
 | TVmaze / ESPN | Air dates and sports scores | Lookup queries |
 | YouTube | Trailers (via NewPipeExtractor) | The trailer lookup |

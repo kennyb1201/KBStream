@@ -175,6 +175,29 @@ data class TraktWatchedMovie(
     @Json(name = "movie") val movie: TraktMediaEntry? = null
 )
 
+/**
+ * One row of `GET /sync/playback/{movies,episodes}`.
+ *
+ * [progress] is a percentage of the runtime, not a millisecond position -
+ * Trakt never reports where in the file the viewer stopped. A movie row carries
+ * [movie]; an episode row carries [show] and [episode].
+ */
+data class TraktPlaybackItem(
+    @Json(name = "id") val id: Long? = null,
+    @Json(name = "progress") val progress: Double? = null,
+    @Json(name = "paused_at") val pausedAt: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @Json(name = "movie") val movie: TraktMediaEntry? = null,
+    @Json(name = "show") val show: TraktMediaEntry? = null,
+    @Json(name = "episode") val episode: TraktPlaybackEpisode? = null
+)
+
+data class TraktPlaybackEpisode(
+    @Json(name = "season") val season: Int? = null,
+    @Json(name = "number") val number: Int? = null,
+    @Json(name = "title") val title: String? = null
+)
+
 /** One row of `GET /users/me/lists` (a personal list's summary). */
 data class TraktUserList(
     @Json(name = "name") val name: String? = null,

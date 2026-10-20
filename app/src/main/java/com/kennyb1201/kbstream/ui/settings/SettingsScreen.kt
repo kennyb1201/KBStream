@@ -458,6 +458,9 @@ fun SettingsScreen(
     var use24hClock by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUse24HourClock(context))
     }
+    var resumeAuthority by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getResumeAuthority(context))
+    }
     var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
     var railShowType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
@@ -2412,6 +2415,19 @@ fun SettingsScreen(
                     onToggle = {
                         use24hClock = it
                         AppPreferences.setUse24HourClock(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                SettingsSectionHeader("Continue Watching")
+
+                ResumeAuthorityRow(
+                    selected = resumeAuthority,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { authority ->
+                        resumeAuthority = authority
+                        AppPreferences.setResumeAuthority(context, authority)
                     }
                 )
 

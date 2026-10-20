@@ -164,6 +164,77 @@ internal object SimklAuthRules {
 }
 
 /**
+ * Publish/apply rules for the Trakt session blob.
+ *
+ * The shape is Simkl's ([SimklAuthRules]) because the failure modes are the
+ * same ones: the blob is account-wide FULL REPLACE, and a device that never
+ * connected Trakt must not publish its blanks over a live session. Two rules
+ * are therefore identical - publish only with a token or a deliberate
+ * disconnect, and only a tombstoned blank may clear a live session.
+ *
+ * Trakt adds a third: its tokens EXPIRE and its refresh tokens are
+ * single-use, so a session blob can be stale. Applying one blindly would let
+ * a device holding an expired session overwrite a sibling's freshly refreshed
+ * one on the next bulk push, and the viewer would be signed out everywhere
+ * until they refreshed again. [shouldAdopt] therefore refuses a remote session
+ * that has already expired when the local one is still live - except when the
+ * account slug differs, because a deliberate reconnect to another account
+ * must always win, however soon that account's token expires.
+ */
+internal object TraktAuthRules {
+
+    /** Payload field marking a blank session as a deliberate sign-out. */
+    const val SIGNED_OUT_FIELD = "signed_out"
+
+    /** Payload field carrying the account the session belongs to. */
+    const val ACCOUNT_SLUG_FIELD = "account_slug"
+
+    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
+        !accessToken.isNullOrBlank() || signedOut
+
+    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
+        accessToken.isNullOrBlank() && signedOut
+
+    /**
+     * Whether a pulled session may replace the local one.
+     *
+     * Same access token: yes, always - a refresh on the other device rotated
+     * the refresh token and pushed the new expiry, and this device needs it.
+     * Different account: yes, always - that is a deliberate reconnect.
+     * Otherwise adopt unless the incoming session has already expired and the
+     * local one has not: that is exactly the stale-overwrite race, and an
+     * expired remote carries nothing this device can use.
+     */
+    fun shouldAdopt(
+        incomingAccess: String?,
+        incomingExpiresAt: Long,
+        incomingAccountSlug: String?,
+        localAccess: String?,
+        localExpiresAt: Long,
+        localAccountSlug: String?,
+        nowMs: Long
+    ): Boolean {
+        if (incomingAccess.isNullOrBlank()) return false
+        if (localAccess == null) return true
+        if (localAccess == incomingAccess) return true
+        // A reconnect to another account wins even with a shorter expiry - but
+        // only when BOTH sides name an account. A slug this device has not
+        // recorded yet (an older session, or a profile that just adopted one)
+        // is not evidence of a different account.
+        if (
+            !incomingAccountSlug.isNullOrBlank() &&
+            !localAccountSlug.isNullOrBlank() &&
+            incomingAccountSlug != localAccountSlug
+        ) {
+            return true
+        }
+        val incomingLive = incomingExpiresAt > nowMs
+        val localLive = localExpiresAt > nowMs
+        return incomingLive || !localLive
+    }
+}
+
+/**
  * Merge rules for the display-prefs blob.
  *
  * That blob used to be WHOLE-BLOB last-write-wins with a timestamp stamped at

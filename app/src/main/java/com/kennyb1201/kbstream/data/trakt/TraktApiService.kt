@@ -4,6 +4,7 @@ import okhttp3.Interceptor
 import okhttp3.Response as OkHttpResponse
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
@@ -92,6 +93,32 @@ interface TraktApiService {
     suspend fun watchedMovies(
         @Header("Authorization") authorization: String
     ): Response<List<TraktWatchedMovie>>
+
+    /**
+     * Paused movie sessions, newest first - Trakt's own resume points.
+     *
+     * The read that lets Trakt be the authoritative resume source on another
+     * device (see [com.kennyb1201.kbstream.data.settings.ResumeAuthority]).
+     */
+    @GET("sync/playback/movies")
+    suspend fun playbackMovies(
+        @Header("Authorization") authorization: String,
+        @Query("limit") limit: Int = 100
+    ): Response<List<TraktPlaybackItem>>
+
+    /** Paused episode sessions, newest first. */
+    @GET("sync/playback/episodes")
+    suspend fun playbackEpisodes(
+        @Header("Authorization") authorization: String,
+        @Query("limit") limit: Int = 100
+    ): Response<List<TraktPlaybackItem>>
+
+    /** `DELETE /sync/playback/{id}` - drop one paused session. */
+    @DELETE("sync/playback/{id}")
+    suspend fun deletePlaybackSession(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: Long
+    ): Response<Unit>
 
     /**
      * The account's watchlist, newest first.

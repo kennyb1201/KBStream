@@ -152,10 +152,39 @@ are a capture task.
 | Actor | `ui/actor/ActorScreen.kt` | `ui/mobile/ActorScreenMobile.kt` | ported |
 | KB folder | `ui/kb/KBFolderScreen.kt` | `ui/mobile/KBFolderScreenMobile.kt` | ported |
 | Simkl connect | `ui/simkl/SimklConnectScreen.kt` | `ui/mobile/SimklConnectScreenMobile.kt` | ported |
+| Onboarding | `ui/onboarding/OnboardingScreen.kt` | `ui/mobile/OnboardingScreenMobile.kt` | ported |
+| Catalog grid ("Open in Grid") | `ui/home/CatalogGridScreen.kt` | `ui/mobile/CatalogGridScreenMobile.kt` | ported |
 
 Unported screens still compile and render on a phone, but they are D-pad
 Compose (`androidx.tv.material3`) — reachable by tap, awkward to use, and they
 are what the remaining work covers.
+
+## The last two gaps: onboarding and the catalog grid
+
+Both were found by audit after Phase 2 was called done, and both are ports like
+the rest - same ViewModel, same callbacks, a new file under `ui/mobile/`.
+
+**Onboarding** was the shipped blocker: a fresh phone install landed on the TV
+page, whose fixed 392dp account pane takes a phone's whole width (the three
+source rows were laid out past the right edge with nothing to scroll to them)
+and whose fields are the D-pad `KBTextField`, so a tap focused a field but no
+soft keyboard ever opened - the user could not get past sign-in. The phone page
+is one vertical scroll stacking every section in order (welcome copy, account,
+Add Add-ons, Live TV, Connect Simkl, START BROWSING, the skip note) and uses the
+touch text field, which is the keyboard fix. Completion still goes through
+`OnboardingPrefs`, so finishing on either form factor satisfies the other.
+
+**The catalog grid** ("Open in Grid" on a Home rail) rendered the TV D-pad grid
+on every form factor: no finger scrolling, and the case it is opened from is a
+rail, which on a phone is body scrolling. The phone page is a
+`LazyVerticalGrid` of the touch poster/landscape cards - the shape follows the
+rail's own landscape switch - over the same Home pager, hidden-title filter,
+append footer and poster menu.
+
+Both branches live at the **call site** in `MainActivity`, not inside the TV
+file, which is what keeps those two TV files byte-identical; the contract test
+asserts the branch order and that neither TV file gained a `FormFactor`
+reference. `OnboardingAndCatalogGridMobileContractTest` pins all of it.
 
 ## Deferred inside ported screens
 

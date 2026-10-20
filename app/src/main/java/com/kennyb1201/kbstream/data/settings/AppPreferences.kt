@@ -83,6 +83,13 @@ object AppPreferences {
     private const val KEY_HERO_TRAILER_AUTOPLAY = "hero_trailer_autoplay"
     private const val KEY_HERO_TRAILER_MUTED = "hero_trailer_muted"
     private const val KEY_HERO_TRAILER_DELAY_MS = "hero_trailer_delay_ms"
+
+    /**
+     * Which tracker's resume point Continue Watching believes. Synced, so the
+     * whole account agrees about what "continue watching" means; every linked
+     * tracker still scrobbles and receives watched marks either way.
+     */
+    private const val KEY_RESUME_AUTHORITY = "resume_authority"
     private const val KEY_USE_24H_CLOCK = "use_24h_clock"
     private const val KEY_NOTIFY_NEW_EPISODES = "new_episode_notifications"
     private const val KEY_LIVE_REMINDER_NOTIFICATIONS = "live_reminder_notifications"
@@ -1175,6 +1182,24 @@ object AppPreferences {
     fun setSpoilerFree(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SPOILER_FREE, enabled).apply()
         syncDisplayPrefsBlob(context)
+    }
+
+    // ── Resume authority (Continue Watching) ───────────────────────────
+    fun getResumeAuthority(context: Context): ResumeAuthority =
+        ResumeAuthority.fromStorage(
+            prefs(context).getString(KEY_RESUME_AUTHORITY, null)
+        )
+
+    fun setResumeAuthority(context: Context, authority: ResumeAuthority) {
+        prefs(context).edit()
+            .putString(KEY_RESUME_AUTHORITY, authority.storageValue)
+            .apply()
+        syncDisplayPrefsBlob(context)
+        // Re-merge the rail now: the toggle changes which source's position
+        // wins, and Home only rebuilds on its own triggers (resume, return,
+        // the 15-minute tick) otherwise.
+        com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
+            .requestRefresh()
     }
 
     // ── Hero trailer autoplay (Home hero) ─────────────────────────────

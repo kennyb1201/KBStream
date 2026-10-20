@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.trakt.TraktToken
+import com.kennyb1201.kbstream.data.trakt.TraktTokenStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -108,6 +110,14 @@ private fun simklAuthPrefs(context: Context, profileId: String? = null) =
  */
 private fun legacyStoreName(tail: String) = "kbstream_" + "nu" + "vio" + "_$tail"
 
+/**
+ * The Trakt session store, addressed exactly as [TraktTokenStore] resolves it
+ * for the ACTIVE profile (or for [profileId] when the cloud applier is writing
+ * a sibling profile's copy).
+ */
+private fun traktAuthStore(context: Context, profileId: String? = null) =
+    TraktTokenStore(context, profileId)
+
 // Prefs store + key holding the profile's Simkl session (owned by
 // SimklRepository; spelled out here so the blob and the repository agree).
 private const val SIMKL_AUTH_STORE = "simkl_auth"
@@ -174,8 +184,9 @@ private fun readDisplayTimestamps(
  * Builds and applies the keyed JSON blobs stored in sync_prefs.
  *
  * Sync scope (user request):
- *  - SYNCED: display prefs, addon install JSON, Simkl auth token,
- *    IPTV playlist/EPG config, watched-override set, and the player's
+ *  - SYNCED: display prefs, addon install JSON, Simkl auth token, Trakt
+ *    session (access + refresh token, expiry, account), IPTV playlist/EPG
+ *    config, watched-override set, and the player's
  *    subtitle appearance + preferred audio/subtitle language. The language
  *    setters already called syncDisplayPrefsBlob, but their keys were not in
  *    the synced set — so the push was a silent no-op ("language didn't
@@ -199,6 +210,9 @@ object PrefsPayloadBuilder {
         "hero_trailer_autoplay",
         "hero_trailer_muted",
         "hero_trailer_delay_ms",            // hero trailer dwell: a viewing preference
+        // What "continue watching" means to this account: every device should
+        // agree which tracker's resume point wins (all still scrobble).
+        "resume_authority",
         "use_24h_clock",
         "home_rail_show_catalog_type",
         "home_rail_show_addon_name",
@@ -306,6 +320,13 @@ object PrefsPayloadBuilder {
     const val KEY_DISPLAY_PREFS = "display_prefs"
     const val KEY_ADDONS = "addons"
     const val KEY_SIMKL_AUTH = "simkl_auth"
+
+    /**
+     * The Trakt session, the same shape (and the same "never publish a blank"
+     * rule) as [KEY_SIMKL_AUTH] - see [TraktAuthRules]. It carries the refresh
+     * token and expiry as well, because Trakt's access tokens expire.
+     */
+    const val KEY_TRAKT_AUTH = "trakt_auth"
     const val KEY_IPTV = "iptv_config"
 
     /**
@@ -337,6 +358,10 @@ object PrefsPayloadBuilder {
         // SupabaseSync.pushPrefsBlobs) — an empty Simkl blob published by a
         // device that never connected erases the account's session elsewhere.
         KEY_SIMKL_AUTH to buildSimklAuth(context),
+        // The Trakt session, on exactly the Simkl rule: a profile that never
+        // connected Trakt publishes nothing, and only a deliberate disconnect
+        // publishes a tombstone (see [TraktAuthRules]).
+        KEY_TRAKT_AUTH to buildTraktAuth(context),
         // Same rule as the Simkl blob: a device with no key of its own must not
         // publish its blanks (see SupabaseSync.pushPrefsBlobs).
         KEY_API_KEYS to buildApiKeys(context),
@@ -364,6 +389,16 @@ object PrefsPayloadBuilder {
         val signedOut = token.isNullOrBlank() &&
             prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
         return SimklAuthRules.shouldPublish(token, signedOut)
+    }
+
+    /**
+     * True when this profile has something to say about its Trakt session: a
+     * token to share, or a deliberate disconnect to propagate. A profile that
+     * never connected Trakt publishes nothing - see [TraktAuthRules].
+     */
+    fun hasTraktAuthToPublish(context: Context): Boolean {
+        val store = traktAuthStore(context)
+        return TraktAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
     }
 
     fun buildBadgePack(context: Context): JsonObject {
@@ -694,6 +729,31 @@ object PrefsPayloadBuilder {
     }
 
     /**
+     * The profile's Trakt session, as one blob.
+     *
+     * All four fields travel: the access token alone would be a session that
+     * works until it expires and then strands the sibling, because Trakt's
+     * refresh tokens are single-use and rotate on every refresh. [updatedAt]
+     * stays for older builds; the session fields are the contract.
+     */
+    fun buildTraktAuth(context: Context): JsonObject {
+        val store = traktAuthStore(context)
+        val session = store.read()
+        // Tombstone only for a DELIBERATE disconnect: a blank session with no
+        // marker is "this profile never connected Trakt", which must not
+        // erase a live session anywhere.
+        val signedOut = session == null && store.isSignedOut()
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(TraktTokenStore.KEY_ACCESS_TOKEN, session?.accessToken.orEmpty())
+            put(TraktTokenStore.KEY_REFRESH_TOKEN, session?.refreshToken.orEmpty())
+            put(TraktTokenStore.KEY_EXPIRES_AT, session?.expiresAtEpochMillis ?: 0L)
+            put(TraktTokenStore.KEY_ACCOUNT_SLUG, store.accountSlug().orEmpty())
+            put(TraktAuthRules.SIGNED_OUT_FIELD, signedOut)
+        }
+    }
+
+    /**
      * The service credentials this device holds an opinion about, each with the
      * time it was last edited here.
      *
@@ -1003,6 +1063,8 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload, profileId)
             PrefsPayloadBuilder.KEY_SIMKL_AUTH ->
                 applySimklAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_TRAKT_AUTH ->
+                applyTraktAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_API_KEYS ->
                 applyApiKeys(context, payload, profileId)
             PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload, profileId, live)
@@ -1440,6 +1502,94 @@ object PrefsPayloadApplier {
             repository.clearContinueWatchingDiskBlob()
         }.onFailure {
             android.util.Log.w(TAG, "simkl reset after synced token change failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Adopts the account's Trakt session.
+     *
+     * Full replace, like the Simkl blob, but with two extra guards: a blank
+     * only clears when it carries the sign-out tombstone (see
+     * [TraktAuthRules.clearsSession]), and a stale remote session never
+     * replaces a live local one (see [TraktAuthRules.shouldAdopt]). The whole
+     * session is written because a refresh on the other device rotated the
+     * single-use refresh token; adopting only the access token would leave this
+     * device unable to refresh once it expires.
+     */
+    private fun applyTraktAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val access = text(TraktTokenStore.KEY_ACCESS_TOKEN)
+        val refresh = text(TraktTokenStore.KEY_REFRESH_TOKEN)
+        val expiresAt = text(TraktTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
+        val slug = text(TraktTokenStore.KEY_ACCOUNT_SLUG).takeIf { it.isNotBlank() }
+        val signedOut = text(TraktAuthRules.SIGNED_OUT_FIELD) == "true"
+
+        val store = traktAuthStore(context, profileId)
+        val local = store.read()
+
+        if (access.isBlank()) {
+            if (!TraktAuthRules.clearsSession(access, signedOut)) return
+            if (local == null && !store.isSignedOut()) return
+            store.markSignedOut()
+            if (live) resetTraktStateAfterSessionChange(context)
+            return
+        }
+
+        val adopt = TraktAuthRules.shouldAdopt(
+            incomingAccess = access,
+            incomingExpiresAt = expiresAt,
+            incomingAccountSlug = slug,
+            localAccess = local?.accessToken,
+            localExpiresAt = local?.expiresAtEpochMillis ?: 0L,
+            localAccountSlug = store.accountSlug(),
+            nowMs = System.currentTimeMillis()
+        )
+        if (!adopt) return
+
+        val nextRefresh = refresh.takeIf { it.isNotBlank() } ?: local?.refreshToken
+        val unchanged = local?.accessToken == access &&
+            local.refreshToken == nextRefresh &&
+            local.expiresAtEpochMillis == expiresAt &&
+            store.accountSlug() == slug
+        if (unchanged) {
+            // Same session: just retire a lingering disconnect marker so it
+            // cannot be republished over the live token on the next push.
+            store.clearSignedOutMarker()
+            return
+        }
+
+        store.save(
+            TraktToken(
+                accessToken = access,
+                refreshToken = nextRefresh,
+                expiresAtEpochMillis = expiresAt
+            )
+        )
+        store.setAccountSlug(slug)
+        if (live) resetTraktStateAfterSessionChange(context)
+    }
+
+    /**
+     * The Trakt session just changed on the on-screen profile, so everything
+     * derived from the PREVIOUS account goes: the repository's watched snapshot
+     * and every watched set the shared repository cached. Local history, resume
+     * rows and watched markers are the viewer's and stay untouched - the same
+     * line [TraktRepository.revokeAndClear] draws.
+     */
+    private fun resetTraktStateAfterSessionChange(context: Context) {
+        runCatching {
+            com.kennyb1201.kbstream.data.trakt.TraktRepository.getInstance(context)
+                .onSyncedSessionChanged()
+            com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches()
+        }.onFailure {
+            android.util.Log.w(TAG, "trakt reset after synced session change failed: ${it.message}")
         }
     }
 

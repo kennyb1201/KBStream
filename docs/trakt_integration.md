@@ -1,9 +1,10 @@
 # Trakt integration — phases A–E1 and the Library tab landed
 
 Trakt is the app's third tracker, beside Simkl and MDBList, not a replacement.
-Auth, scrobbling, the watched-state union, KB list sources and the read side of
-reviews are in. Token sync across devices (D3), playback-progress import (D1) and
-comment posting (D2/E2) are deliberately not, and say so below.
+Auth, the session's cross-device sync, scrobbling, the watched-state union, KB
+list sources, the read side of reviews and playback-progress import as one of
+the resume-authority choices (D1) are in. Comment posting (D2/E2) is
+deliberately not, and says so below.
 
 ## What exists
 
@@ -156,6 +157,22 @@ flag mapped onto `TmdbReview`. Trakt accepts an IMDb id in the comments path;
 a TMDB-only title is resolved through `/search/tmdb/{id}` first. Read-only, and
 silent on failure: reviews must never block the page.
 
+## Cross-device session (D3)
+
+The session travels as its own `trakt_auth` sync blob, on the same rules the
+Simkl session uses (`SimklAuthRules`): it is a full replace, so a profile that
+never connected Trakt publishes nothing, and only a deliberate disconnect
+publishes a tombstone that may clear a session elsewhere. Trakt differs in two
+ways. The blob carries the **refresh token and expiry** as well as the access
+token - Trakt's refresh tokens are single-use and its access tokens expire, so an
+access-token-only blob would strand the sibling after one window. And the
+applier refuses a session that has already expired while the local one is still
+live (`TraktAuthRules.shouldAdopt`), which is the stale-overwrite race between a
+sibling that has not refreshed yet and one that just did; a reconnect to a
+different account always wins regardless. Connect, every refresh and the
+disconnect push the blob immediately; adopting one drops the old account's
+cached watched snapshot and watched sets, and touches no local history.
+
 ## What the build needs
 
 `TRAKT_CLIENT_ID` only, read from `local.properties` or the environment and
@@ -175,19 +192,28 @@ already fails the build on any `*SECRET*` `BuildConfig` field, and
 Without a client id the row still opens and the page says the build is not
 configured - it does not pretend to connect.
 
+## Resume authority (D1)
+
+`GET /sync/playback/{movies,episodes}` is read only when the viewer has chosen
+Trakt in Settings → Continue Watching → Resume Source. The rail merges every
+source it can reach (this device's history, Simkl, MDBList, Trakt) and the
+choice decides whose **position/episode** wins a title they all know - never
+which titles or order the rail shows. A source only speaks when it actually has
+a resume point (a tracker's NEXT_UP card cannot replace an in-progress
+position), and the other sources remain the fallback for titles the chosen one
+has not seen, so the rail cannot empty. Trakt reports a percentage rather than a
+position, so the millisecond start is derived from TMDB's runtime, exactly as it
+is for MDBList's sessions. The choice is a synced display pref, so every device
+in the account agrees; every linked tracker still scrobbles and receives watched
+marks regardless.
+
 ## Not done (deliberately)
 
-- **D1 — playback-progress import (`/sync/playback` → local resume rows).**
-  v1 scrobbles outward and reads watched history; it does not import another
-  client's pause point. Local and Simkl-derived resume rows stay authoritative.
 - **D2/E2 — posting comments.** There is no submission UI for any provider; the
   read side is E1. Posting needs its own compose surface and is a separate
   change.
-- **D3 — token sync across devices.** The session is local to the device. Simkl's
-  blob is a bespoke key in `PrefsPayloadBuilder`/`SyncPrefsPayload` with its own
-  apply and tombstone path; adding a second one is a cross-cutting change to
-  shared sync code. This is the one departure from the plan's default and it is
-  visible here rather than implied.
+
+D3 (token sync across devices) is done - see the section above.
 
 ## Verifying it
 

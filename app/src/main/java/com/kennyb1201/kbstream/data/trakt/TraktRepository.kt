@@ -25,6 +25,27 @@ data class TraktPollResult(
 )
 
 /**
+ * One paused Trakt session, flattened for the Continue Watching merge.
+ *
+ * [progressPercent] is Trakt's `progress` as-is (0-100): the account has no
+ * access to the viewer's runtime here, so the rail converts it against TMDB's
+ * runtime exactly as it does for MDBList's sessions.
+ */
+data class TraktPlaybackSession(
+    val sessionId: Long,
+    val progressPercent: Double,
+    val pausedAt: String?,
+    val isMovie: Boolean,
+    val imdbId: String?,
+    val tmdbId: Int?,
+    val title: String?,
+    val year: Int?,
+    val season: Int?,
+    val episode: Int?,
+    val episodeTitle: String?
+)
+
+/**
  * Trakt, as this app speaks to it.
  *
  * The device-code grant, the proactive refresh and the disconnect; the
@@ -188,6 +209,10 @@ class TraktRepository private constructor(private val context: Context?) {
             )
         )
         store.save(token)
+        // Cross-device sync: share the new session so a sibling comes up
+        // already connected (see
+        // [com.kennyb1201.kbstream.data.sync.TraktAuthRules]).
+        publishAuthToSync()
         return TraktPollResult(TraktDeviceFlowRules.Poll.APPROVED, token)
     }
 
@@ -228,6 +253,10 @@ class TraktRepository private constructor(private val context: Context?) {
                 )
             )
         )
+        // A refresh ROTATES the single-use refresh token, so the account copy
+        // is now stale: push the new pair or a sibling will be signed out as
+        // soon as its own copy expires.
+        publishAuthToSync()
         return true
     }
 
@@ -273,8 +302,32 @@ class TraktRepository private constructor(private val context: Context?) {
                 )
             }
         }
-        store.clear()
+        // Tombstone, not a bare clear: a deliberate disconnect is the only
+        // thing that may end the session on another device, and a blank blob
+        // is indistinguishable from "this profile never connected Trakt"
+        // (see TraktAuthRules).
+        store.markSignedOut()
         invalidateWatchedSnapshot()
+        publishAuthToSync()
+    }
+
+    /**
+     * Publishes this profile's Trakt session immediately, bypassing the bulk
+     * push's "nothing to publish" skip. Connect and refresh need it so a
+     * sibling adopts the new (rotated) pair without waiting for a full sync,
+     * and disconnect needs it because a tombstone has no token to trigger the
+     * ordinary gate.
+     */
+    private fun publishAuthToSync() {
+        val appContext = context ?: return
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_TRAKT_AUTH,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
+                    .buildTraktAuth(appContext)
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -584,6 +637,76 @@ class TraktRepository private constructor(private val context: Context?) {
      */
     suspend fun watchedEpisodesForShow(showKeys: List<String>): Set<Pair<Int, Int>> =
         watchedSnapshot().watchedEpisodesFor(showKeys)
+
+    /**
+     * Another device's session was adopted (see
+     * [com.kennyb1201.kbstream.data.sync.TraktAuthRules]). The snapshot belongs
+     * to the OLD account, so it must not answer the next badge read; the local
+     * history and watched markers are untouched.
+     */
+    internal fun onSyncedSessionChanged() {
+        invalidateWatchedSnapshot()
+    }
+
+    /**
+     * The account's paused sessions, flattened into resume candidates.
+     *
+     * Read only when the viewer has made Trakt the authoritative resume source
+     * - there is no point spending a request on every Home rebuild otherwise.
+     * Failures answer an empty list: a tracker outage may never empty the rail
+     * (the other sources still speak).
+     */
+    suspend fun playbackSessions(): List<TraktPlaybackSession> {
+        if (!TraktConfig.isConfigured) return emptyList()
+        val token = validAccessToken() ?: return emptyList()
+        if (!guard.tryAcquire()) return emptyList()
+        val authorization = "Bearer $token"
+        val movies = runCatchingCancellable {
+            api.playbackMovies(authorization)
+        }.getOrNull()
+        val episodes = runCatchingCancellable {
+            api.playbackEpisodes(authorization)
+        }.getOrNull()
+        return buildList {
+            movies?.body().orEmpty().forEach { row ->
+                row.asPlaybackSession(isMovie = true)?.let(::add)
+            }
+            episodes?.body().orEmpty().forEach { row ->
+                row.asPlaybackSession(isMovie = false)?.let(::add)
+            }
+        }
+    }
+
+    /**
+     * Drops one of this account's paused sessions, so "Remove from Continue
+     * Watching" on a Trakt card does not resurface on the next merge.
+     */
+    suspend fun removePlaybackSession(id: Long): Boolean {
+        if (id <= 0L || !TraktConfig.isConfigured) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        return runCatchingCancellable {
+            api.deletePlaybackSession("Bearer $token", id)
+        }.getOrNull()?.isSuccessful == true
+    }
+
+    private fun TraktPlaybackItem.asPlaybackSession(isMovie: Boolean): TraktPlaybackSession? {
+        if (progress == null) return null
+        val media = (if (isMovie) movie else show) ?: return null
+        return TraktPlaybackSession(
+            sessionId = id ?: 0L,
+            progressPercent = progress.coerceIn(0.0, 100.0),
+            pausedAt = pausedAt,
+            isMovie = isMovie,
+            imdbId = media.ids?.imdb,
+            tmdbId = media.ids?.tmdb,
+            title = media.title,
+            year = media.year,
+            season = if (isMovie) null else episode?.season,
+            episode = if (isMovie) null else episode?.number,
+            episodeTitle = if (isMovie) null else episode?.title
+        )
+    }
 
     /** Drops the cached snapshot so the next read re-downloads it. */
     private fun invalidateWatchedSnapshot() {

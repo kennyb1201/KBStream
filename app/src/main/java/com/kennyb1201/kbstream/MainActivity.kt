@@ -65,6 +65,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
@@ -100,6 +101,8 @@ import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
+import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
+import com.kennyb1201.kbstream.ui.mobile.OnboardingScreenMobile
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
@@ -1747,14 +1750,34 @@ fun AppRoot(
     // genuinely hand off, and backing out to Home brings the guide back
     // until "Start Browsing" is tapped.
     if (!onboardingComplete && screen is Screen.Home) {
-        OnboardingScreen(                onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
+        // The phone gets its own onboarding. The TV page is a two-column Row
+        // whose fixed 392dp account pane takes a phone's whole width (the
+        // source rows were laid out past the edge with nothing to scroll to
+        // them), and its fields are the D-pad KBTextField, which a tap cannot
+        // get a soft keyboard out of - so onboarding was a dead end on touch.
+        // The branch is here rather than inside OnboardingScreen so that file
+        // stays untouched; both halves hand their completion to the same
+        // OnboardingPrefs, so finishing on either form factor satisfies the
+        // other.
+        val finishOnboarding = {
+            OnboardingPrefs.setComplete(context, true)
+            onboardingComplete = true
+            screen = Screen.Home
+        }
+        if (!FormFactor.isTv) {
+            OnboardingScreenMobile(
+                onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
+                onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
+                onOpenGuide = { screen = Screen.Guide },
+                onFinish = finishOnboarding
+            )
+            return
+        }
+        OnboardingScreen(
+            onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
             onOpenGuide = { screen = Screen.Guide },
-            onFinish = {
-                OnboardingPrefs.setComplete(context, true)
-                onboardingComplete = true
-                screen = Screen.Home
-            }
+            onFinish = finishOnboarding
         )
         return
     }
@@ -2058,20 +2081,35 @@ fun AppRoot(
         }
 
         is Screen.CatalogGrid -> {
-            CatalogGridScreen(
-                title = current.title,
-                addonName = current.addonName,
-                onItemClick = { meta ->
-                    screen = Screen.Detail(
-                        meta.type,
-                        meta.id,
-                        returnTo = current
-                    )
-                },
-                onBack = {
-                    screen = stableBackDestination(current.returnTo)
-                }
-            )
+            // The TV grid is a D-pad grid of focusable cards with no touch
+            // scrolling; the phone gets the same pager, ViewModel and menu over
+            // a finger-scrolled touch grid. Same branch rule as onboarding:
+            // here, not inside CatalogGridScreen, so the TV file is untouched.
+            val openGridItem: (MetaPreview) -> Unit = { meta ->
+                screen = Screen.Detail(
+                    meta.type,
+                    meta.id,
+                    returnTo = current
+                )
+            }
+            val closeGrid = {
+                screen = stableBackDestination(current.returnTo)
+            }
+            if (!FormFactor.isTv) {
+                CatalogGridScreenMobile(
+                    title = current.title,
+                    addonName = current.addonName,
+                    onItemClick = openGridItem,
+                    onBack = closeGrid
+                )
+            } else {
+                CatalogGridScreen(
+                    title = current.title,
+                    addonName = current.addonName,
+                    onItemClick = openGridItem,
+                    onBack = closeGrid
+                )
+            }
         }
 
         is Screen.KBFolder -> {

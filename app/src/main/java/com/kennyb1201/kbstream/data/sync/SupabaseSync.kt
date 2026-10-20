@@ -59,7 +59,8 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  *  - watch history / resume positions / completion   → sync_watch_history
  *  - watched markers (overrides + cache)             → sync_watched_status
  *  - poster / backdrop overrides (long-press, Media) → sync_image_overrides
- *  - display prefs, addons, Simkl token, IPTV config → sync_prefs (keyed JSON blobs)
+ *  - display prefs, addons, Simkl token, Trakt session, IPTV config → sync_prefs
+ *    (keyed JSON blobs)
  *    (playback/decoder settings deliberately EXCLUDED — those are per-device)
  *
  * How:
@@ -2177,6 +2178,15 @@ object SupabaseSync {
             // disconnect publishes through SimklRepository.clearAuth().
             if (key == PrefsPayloadBuilder.KEY_SIMKL_AUTH &&
                 !PrefsPayloadBuilder.hasSimklAuthToPublish(context)
+            ) {
+                return@forEach
+            }
+            // And the Trakt session on exactly the same rule: a profile that
+            // has never connected Trakt publishes nothing, so it cannot blank
+            // the account's session; a deliberate disconnect publishes through
+            // TraktRepository.revokeAndClear (see [TraktAuthRules]).
+            if (key == PrefsPayloadBuilder.KEY_TRAKT_AUTH &&
+                !PrefsPayloadBuilder.hasTraktAuthToPublish(context)
             ) {
                 return@forEach
             }

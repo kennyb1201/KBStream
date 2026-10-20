@@ -22,24 +22,45 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
  *     history, resume rows and watched markers are the viewer's, not Trakt's;
  *     Simkl's disconnect wiping them was the bug this store is shaped to avoid
  *     (see [TraktRepository.revokeAndClear]).
+ *  4. **The whole session syncs, not just the access token.** Trakt's refresh
+ *     tokens are single-use and its access tokens expire, so a sibling that
+ *     adopted only the access token would work for a while and then strand the
+ *     viewer. The sync blob carries all of it (see
+ *     [com.kennyb1201.kbstream.data.sync.TraktAuthRules]), and this store is
+ *     the one place the field names are spelled.
  */
-internal class TraktTokenStore(private val context: Context?) {
+internal class TraktTokenStore(
+    private val context: Context?,
+    /**
+     * A SPECIFIC profile's session, for the cloud applier. Null reads the
+     * active profile, which is what every in-app caller wants.
+     */
+    private val profileId: String? = null
+) {
 
     companion object {
         /** The logical name; [ProfileManager.prefsName] adds the profile scope. */
         const val PREFS_NAME = "trakt_auth"
 
-        private const val KEY_ACCESS_TOKEN = "access_token"
-        private const val KEY_REFRESH_TOKEN = "refresh_token"
-        private const val KEY_EXPIRES_AT = "expires_at_ms"
-        private const val KEY_ACCOUNT_SLUG = "account_slug"
+        const val KEY_ACCESS_TOKEN = "access_token"
+        const val KEY_REFRESH_TOKEN = "refresh_token"
+        const val KEY_EXPIRES_AT = "expires_at_ms"
+        const val KEY_ACCOUNT_SLUG = "account_slug"
+
+        /**
+         * Tombstone for a DELIBERATE disconnect. Only this marker may clear a
+         * live session on another device; a blank store (a profile that never
+         * connected) must never do it.
+         */
+        const val KEY_SIGNED_OUT = "signed_out"
     }
 
     private val prefs
         get() = context?.applicationContext?.let { appContext ->
             SecureTokenStore.prefs(
                 appContext,
-                ProfileStorage.prefsName(appContext, PREFS_NAME),
+                profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
+                    ?: ProfileStorage.prefsName(appContext, PREFS_NAME),
                 legacyPlaintext = false
             )
         }
@@ -49,7 +70,32 @@ internal class TraktTokenStore(private val context: Context?) {
             ?.putString(KEY_ACCESS_TOKEN, token.accessToken)
             ?.putString(KEY_REFRESH_TOKEN, token.refreshToken)
             ?.putLong(KEY_EXPIRES_AT, token.expiresAtEpochMillis)
+            // A fresh session retires a lingering disconnect marker, so it
+            // cannot be republished over the live token on the next push.
+            ?.putBoolean(KEY_SIGNED_OUT, false)
             ?.apply()
+    }
+
+    /** True when the last thing this profile did was deliberately disconnect. */
+    fun isSignedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
+
+    /**
+     * Drops the session and leaves the sign-out tombstone for the sync blob.
+     * Local watch data is not this store's to touch.
+     */
+    fun markSignedOut() {
+        prefs?.edit()
+            ?.remove(KEY_ACCESS_TOKEN)
+            ?.remove(KEY_REFRESH_TOKEN)
+            ?.remove(KEY_EXPIRES_AT)
+            ?.remove(KEY_ACCOUNT_SLUG)
+            ?.putBoolean(KEY_SIGNED_OUT, true)
+            ?.apply()
+    }
+
+    /** Retires a tombstone once a live session is present again. */
+    fun clearSignedOutMarker() {
+        if (isSignedOut()) prefs?.edit()?.putBoolean(KEY_SIGNED_OUT, false)?.apply()
     }
 
     fun read(): TraktToken? {

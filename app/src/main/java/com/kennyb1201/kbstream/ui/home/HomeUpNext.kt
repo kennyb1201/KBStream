@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import kotlinx.coroutines.flow.map
 
@@ -130,6 +131,22 @@ enum class UpNextBadge {
     NEW_SEASON
 }
 
+/**
+ * Where a card's resume point came from.
+ *
+ * The rail always merges all of them; the viewer's
+ * [com.kennyb1201.kbstream.data.settings.ResumeAuthority] decides which one wins
+ * a title they all know (see [resumeAuthorityWinner]). [LOCAL] also covers the
+ * Upcoming rail's computed next episodes, which carry no tracker session at
+ * all.
+ */
+enum class ResumeSource {
+    LOCAL,
+    SIMKL,
+    MDBLIST,
+    TRAKT
+}
+
 data class UpNextItem(
     val id: String,
     val title: String,
@@ -173,6 +190,9 @@ data class UpNextItem(
      * uses it to fall back when parentId is unavailable.
      */
     val historyRowId: String? = null,
+
+    /** Which source produced this card's resume point (see [ResumeSource]). */
+    val resumeSource: ResumeSource = ResumeSource.LOCAL,
 
     /**
      * Simkl /sync/playback session id when this card came from a paused
@@ -893,8 +913,10 @@ internal fun upNextEpisodeKeys(item: UpNextItem): Set<String> {
  * its title, which matches nothing (see [upNextIdentityKeys]).
  */
 internal fun collapseDuplicateUpNextCards(
-    items: List<UpNextItem>
+    items: List<UpNextItem>,
+    authority: ResumeAuthority = ResumeAuthority.DEFAULT
 ): List<UpNextItem> {
+    val authoritativeSource = authority.toResumeSource()
 
     fun hasSomethingToResume(item: UpNextItem): Boolean =
         item.badge == UpNextBadge.CONTINUE_WATCHING ||
@@ -929,8 +951,18 @@ internal fun collapseDuplicateUpNextCards(
             !hasSomethingToResume(item) &&
                 matchesAnInProgressShow
 
+        // A remote card that is the authoritative resume source is NOT a
+        // redundant twin of this device's card for the same episode: the
+        // viewer asked for its position to win, so it has to survive the
+        // collapse to reach [resumeAuthorityWinner].
+        val authoritativeRemoteResume =
+            authority != ResumeAuthority.LOCAL &&
+                item.resumeSource == authoritativeSource &&
+                hasSomethingToResume(item)
+
         val remoteTwinOfALocalEpisode =
             !isLocal(item) &&
+                !authoritativeRemoteResume &&
                 upNextEpisodeKeys(item)
                     .any { key -> key in localEpisodeKeys }
 

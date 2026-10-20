@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
+import com.kennyb1201.kbstream.data.settings.ResumeAuthority
+
 /**
  * How the up-next rail picks and ranks its cards.
  *
@@ -12,13 +14,15 @@ package com.kennyb1201.kbstream.ui.home
  */
 
 internal fun dedupeAndSortUpNext(
-    items: List<UpNextItem>
+    items: List<UpNextItem>,
+    authority: ResumeAuthority = ResumeAuthority.DEFAULT
 ): List<UpNextItem> {
 
     return mergeTitleTwinClusters(
         clusterByIdentityKeys(
             collapseDuplicateUpNextCards(
-                items
+                items,
+                authority
             )
         ) { item ->
             upNextGroupingKeys(item)
@@ -26,23 +30,14 @@ internal fun dedupeAndSortUpNext(
     )
         .mapNotNull { candidates ->
 
+            // The viewer's resume authority picks which source's position or
+            // episode this title shows; see [resumeAuthorityWinner]. Everything
+            // else still merges, so a title the authority does not know keeps
+            // whichever card the ordinary order would have picked.
             val winner =
-                candidates.maxWithOrNull(
-
-                    compareBy<UpNextItem> {
-                        winnerScore(it)
-                    }
-                        .thenByDescending {
-                            it.recencyTimestamp
-                        }
-
-                        .thenBy {
-                            targetPrecisionScore(it)
-                        }
-
-                        .thenBy {
-                            it.title.lowercase()
-                        }
+                resumeAuthorityWinner(
+                    candidates,
+                    authority
                 )
                     ?: return@mapNotNull null
 

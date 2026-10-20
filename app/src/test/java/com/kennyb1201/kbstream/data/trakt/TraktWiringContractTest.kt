@@ -65,8 +65,9 @@ class TraktWiringContractTest {
                 )
             }
         assertTrue(
-            "the disconnect ends in the store's own clear",
-            src.contains("store.clear()")
+            "the disconnect ends in the store's own clear, and leaves the " +
+                "sign-out tombstone the session sync needs",
+            src.contains("store.markSignedOut()")
         )
     }
 

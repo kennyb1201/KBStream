@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
+import com.kennyb1201.kbstream.data.trakt.TraktPlaybackSession
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
@@ -47,6 +48,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtFor
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -1631,6 +1633,22 @@ Log.d(
                     "HOME_UPNEXT",
                     "MDBList scrobble/clear failed: ${it.message}"
                 )
+            }
+        }
+
+        // Trakt's paused sessions are addressed by their own id, which only a
+        // Trakt card carries. A local twin has none, and sweeping the whole
+        // account's playback list to find it would cost a read per removal.
+        if (traktRepository.isConfigured() && traktRepository.hasToken()) {
+            item.id.removePrefix("trakt:").toLongOrNull()?.let { sessionId ->
+                runCatchingCancellable {
+                    traktRepository.removePlaybackSession(sessionId)
+                }.onFailure {
+                    Log.w(
+                        "HOME_UPNEXT",
+                        "Trakt playback removal failed: ${it.message}"
+                    )
+                }
             }
         }
     }
@@ -4482,6 +4500,12 @@ Log.d(
                         // just left (its history DB stays readable through
                         // the retire grace period). Gate this publish
                         // exactly like the merged one below.
+                        // Read once per merge: the authority decides which
+                        // source's position wins a title, and a change made
+                        // mid-merge must not split one pass in two.
+                        val resumeAuthority =
+                            AppPreferences.getResumeAuthority(getApplication())
+
                         if (
                             localCards.isNotEmpty() &&
                             isLatestUpNextRequest(requestVersion)
@@ -4492,7 +4516,8 @@ Log.d(
                                         localCards +
                                             withoutLocallyFinishedTrackerCards(
                                                 previousSimklUpNextItems()
-                                            )
+                                            ),
+                                        resumeAuthority
                                     )
                                 )
                             // Warm hero art for the resume rows too: their
@@ -4514,6 +4539,17 @@ Log.d(
                                 }
                             )
                         }
+
+                        // Only the chosen tracker is read here; the others stay
+                        // in the merge from their own loaders (MDBList's cache
+                        // and Simkl's feed cost nothing extra). See
+                        // ResumeAuthorityRules.
+                        val traktItems =
+                            if (resumeAuthority == ResumeAuthority.TRAKT) {
+                                loadTraktUpNextItems()
+                            } else {
+                                emptyList()
+                            }
 
                         val simklResult =
                             loadSimklUpNextItems()
@@ -4545,8 +4581,10 @@ Log.d(
                                             localCards +
                                                 withoutLocallyFinishedTrackerCards(
                                                     previousSimklUpNextItems() +
-                                                        mdbListItems
-                                                )
+                                                        mdbListItems +
+                                                        traktItems
+                                                ),
+                                            resumeAuthority
                                         )
                                     )
                             }
@@ -4570,8 +4608,9 @@ Log.d(
                             dedupeAndSortUpNext(
                                 localCards +
                                     withoutLocallyFinishedTrackerCards(
-                                        simklItems + mdbListItems
-                                    )
+                                        simklItems + mdbListItems + traktItems
+                                    ),
+                                resumeAuthority
                             )
 
                         if (!isLatestUpNextRequest(requestVersion)) {
@@ -4586,7 +4625,8 @@ Log.d(
                             } else if (localCards.isNotEmpty()) {
 
                                 dedupeAndSortUpNext(
-                                    localCards
+                                    localCards,
+                                    resumeAuthority
                                 )
 
                             } else {
@@ -5078,6 +5118,7 @@ Log.d(
             title = displayTitle,
             poster = posterUrl,
             badge = badge,
+            resumeSource = ResumeSource.MDBLIST,
             showTitle = if (session.isMovie) null
             else showTitle ?: displayTitle,
             episodeTitle = episodeTitle,
@@ -5110,6 +5151,131 @@ Log.d(
             nextEpisodeAir = detail?.nextEpisodeToAir,
             tmdbId = tmdbShowId.takeIf { it > 0 } ?: session.tmdbId,
             playbackId = null
+        )
+    }
+
+    /**
+     * Trakt's paused sessions, for when the viewer has chosen Trakt as the
+     * authoritative resume source. Unlike Simkl's feed there is no watchlist
+     * half here: Trakt's playback read is exactly the resume points.
+     */
+    private suspend fun loadTraktUpNextItems(): List<UpNextItem> {
+        if (!traktRepository.isConfigured() || !traktRepository.hasToken()) {
+            return emptyList()
+        }
+        val sessions =
+            runCatchingCancellable { traktRepository.playbackSessions() }
+                .getOrDefault(emptyList())
+        if (sessions.isEmpty()) return emptyList()
+
+        val semaphore = Semaphore(TRAKT_UP_NEXT_CONCURRENCY)
+        return coroutineScope {
+            sessions
+                .take(MAX_TRAKT_UP_NEXT_ITEMS)
+                .map { session ->
+                    async {
+                        semaphore.withPermit {
+                            runCatchingCancellable { buildTraktUpNextItem(session) }
+                                .getOrNull()
+                        }
+                    }
+                }
+                .toList()
+                .awaitAll()
+                .filterNotNull()
+        }
+    }
+
+    /**
+     * One Continue Watching card from a paused Trakt session.
+     *
+     * Trakt reports a percentage, never a position, so the millisecond start is
+     * derived from TMDB's runtime exactly as it is for MDBList's sessions. A
+     * session for an episode this device has already completed is dropped (and
+     * not mirrored back to Trakt - this app never writes progress on a read).
+     */
+    private suspend fun buildTraktUpNextItem(
+        session: TraktPlaybackSession
+    ): UpNextItem? {
+        val navigationId = session.imdbId
+            ?: session.tmdbId?.let { "tmdb:$it" }
+            ?: return null
+
+        if (!session.isMovie && session.season != null && session.episode != null) {
+            val stale = listOfNotNull(
+                session.imdbId,
+                session.tmdbId?.let { "tmdb:$it" }
+            ).any { parentId ->
+                runCatchingCancellable {
+                    historyDao.getCompletedForParent(parentId).any { row ->
+                        row.season == session.season && row.episode == session.episode
+                    }
+                }.getOrDefault(false)
+            }
+            if (stale) return null
+        }
+
+        val detail = runCatchingCancellable {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.fetchEnrichedMetaCached(
+                    navigationId,
+                    if (session.isMovie) "movie" else "series"
+                )
+            }
+        }.getOrNull()
+
+        val posterUrl = detail?.posterPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "${TmdbRepository.POSTER_BASE}$it" }
+        val backdropUrl = detail?.backdropPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "https://image.tmdb.org/t/p/w780$it" }
+        val runtimeMinutes = detail?.displayRuntimeMinutes()
+
+        val progressFraction = (session.progressPercent / 100.0).coerceIn(0.0, 1.0)
+        val durationMs = runtimeMinutes?.takeIf { it > 0 }?.times(60_000L) ?: 0L
+
+        val badge = UpNextBadge.CONTINUE_WATCHING
+        val subtitle = if (session.isMovie) {
+            "Resume movie"
+        } else {
+            upNextTrackerSubtitle(
+                prefix = upNextBadgePrefix(badge),
+                season = session.season,
+                episode = session.episode,
+                fallback = null
+            )
+        }
+
+        val displayTitle = upNextDisplayTitleOrNull(detail?.name, !posterUrl.isNullOrBlank())
+            ?: upNextDisplayTitleOrNull(detail?.title, !posterUrl.isNullOrBlank())
+            ?: upNextDisplayTitleOrNull(session.title, !posterUrl.isNullOrBlank())
+            ?: return null
+
+        return UpNextItem(
+            id = "trakt:${session.sessionId}",
+            title = displayTitle,
+            poster = posterUrl,
+            badge = badge,
+            resumeSource = ResumeSource.TRAKT,
+            showTitle = if (session.isMovie) null else detail?.name ?: displayTitle,
+            episodeTitle = session.episodeTitle,
+            tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
+            runtimeMinutes = runtimeMinutes,
+            remainingMinutes = calculateRemainingMinutesFromProgress(
+                runtimeMinutes = runtimeMinutes,
+                progress = session.progressPercent.toFloat()
+            ),
+            subtitle = subtitle,
+            progressPercent = progressFraction.toFloat(),
+            parentId = navigationId,
+            parentType = if (session.isMovie) "movie" else "series",
+            season = if (session.isMovie) null else session.season,
+            episode = if (session.isMovie) null else session.episode,
+            startPositionMs = (durationMs * progressFraction).toLong(),
+            recencyTimestamp = parseTimestampMillis(session.pausedAt),
+            backdrop = backdropUrl,
+            tmdbId = detail?.id ?: session.tmdbId
         )
     }
 
@@ -5425,6 +5591,11 @@ episodesTotal =
 
             badge =
                 badge,
+
+            // Picks which source wins this title when the viewer has chosen a
+            // resume authority (see ResumeAuthorityRules).
+            resumeSource =
+                ResumeSource.SIMKL,
 
             // Display metadata
             showTitle =
@@ -9139,6 +9310,12 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val MAX_MDBLIST_UP_NEXT_ITEMS =
             30
+
+        private const val MAX_TRAKT_UP_NEXT_ITEMS =
+            30
+
+        private const val TRAKT_UP_NEXT_CONCURRENCY =
+            4
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L
