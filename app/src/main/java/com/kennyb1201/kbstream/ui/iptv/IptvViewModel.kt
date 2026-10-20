@@ -852,6 +852,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 applyPlaylist(loadedPlaylist)
                 markUpdated(KEY_PLAYLIST_UPDATED_AT)
                 Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=${Redaction.url(url)}")
+                // The cache-MISS path (fresh install, cleared storage, a
+                // profile switch before the first load) ends up here, and the
+                // synced EPG URLs are already configured — so opening the
+                // Guide used to show channels with "No program data" until
+                // IMPORT EPG was pressed. The cache-HIT path above already
+                // asks, and this is the same ask after the fresh channel list
+                // is in place. refreshIfNeeded's own guards make it safe: it
+                // no-ops with no EPG URL, with a fresh guide, while an import
+                // is in flight, and during the stall cooldown.
+                refreshIfNeeded()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 reportFailure(_error, t)
