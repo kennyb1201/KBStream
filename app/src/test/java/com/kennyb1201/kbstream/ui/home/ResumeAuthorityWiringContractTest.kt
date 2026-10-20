@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -128,18 +129,33 @@ class ResumeAuthorityWiringContractTest {
     }
 
     @Test
-    fun `both settings surfaces offer the toggle`() {
+    fun `both settings surfaces offer the toggle in the Trackers section`() {
+        // It moved out of a "Continue Watching" section of its own into
+        // Trackers (2026-10-20): the picker is the tie-break BETWEEN the
+        // trackers, so it belongs beside them, and its old section is gone
+        // rather than left behind as an orphaned header.
+        val tvTrackers = tvSettings.indexOf("SettingsSectionHeader(\"Trackers\")")
+        val tvRow = tvSettings.indexOf("ResumeAuthorityRow(")
         assertTrue(
-            "TV: a Continue Watching section with the row",
-            tvSettings.contains("SettingsSectionHeader(\"Continue Watching\")") &&
-                tvSettings.contains("ResumeAuthorityRow(") &&
+            "TV: the Trackers section holds the row",
+            tvTrackers >= 0 && tvRow > tvTrackers &&
                 tvSettings.contains("AppPreferences.setResumeAuthority(context, authority)")
         )
+        assertFalse(
+            "TV: no orphaned Continue Watching section header",
+            tvSettings.contains("SettingsSectionHeader(\"Continue Watching\")")
+        )
+
+        val mobileTrackers = mobileSettings.indexOf("SettingsSectionMobile(\"Trackers\")")
+        val mobileRow = mobileSettings.indexOf("ResumeAuthorityMobile(")
         assertTrue(
             "phone: the same section and choice",
-            mobileSettings.contains("SettingsSectionMobile(\"Continue Watching\")") &&
-                mobileSettings.contains("ResumeAuthorityMobile(") &&
+            mobileTrackers >= 0 && mobileRow > mobileTrackers &&
                 mobileSettings.contains("AppPreferences.setResumeAuthority(context, authority)")
+        )
+        assertFalse(
+            "phone: and no orphaned Continue Watching header either",
+            mobileSettings.contains("SettingsSectionMobile(\"Continue Watching\")")
         )
     }
 

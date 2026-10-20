@@ -788,6 +788,14 @@ fun SettingsScreen(
                         )
                     }
 
+                    // ── Trackers ──────────────────────────────────────────
+                    // The three services that hold this account's viewing
+                    // state, plus the resume tie-break they feed. One home for
+                    // "where do I connect/settle my tracking", instead of two
+                    // rows here, a key card under API Keys and the resume
+                    // picker in a section of its own.
+                    SettingsSectionHeader("Trackers")
+
                     NavigationRow(
                         label = "Simkl",
                         description = "Connect your Simkl account for scrobbling",
@@ -801,16 +809,7 @@ fun SettingsScreen(
                         description = "Connect your Trakt account to scrobble playback and sync watched state",
                         onClick = onOpenTrakt
                     )
-                SettingsSectionHeader("API Keys")
-                if (kidsKeysHidden) {
-                    Text(
-                        text = "API keys are hidden on a kids profile. Switch to a parent " +
-                            "profile to view or change them.",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
@@ -942,6 +941,32 @@ fun SettingsScreen(
                             }
                         }
                     }
+                }
+
+                // Resume Source: which tracker's resume point wins when two of
+                // them both have one. A behaviour preference, not a secret, so
+                // it stays visible on a kids profile - it must never inherit
+                // the key cards' kidsKeysHidden treatment.
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ResumeAuthorityRow(
+                    selected = resumeAuthority,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { authority ->
+                        resumeAuthority = authority
+                        AppPreferences.setResumeAuthority(context, authority)
+                    }
+                )
+
+                SettingsSectionHeader("API Keys")
+                if (kidsKeysHidden) {
+                    Text(
+                        text = "API keys are hidden on a kids profile. Switch to a parent " +
+                            "profile to view or change them.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                 }
 
                 // ── OMDB KEY (awards on the detail screen) ────────────
@@ -2415,19 +2440,6 @@ fun SettingsScreen(
                     onToggle = {
                         use24hClock = it
                         AppPreferences.setUse24HourClock(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                SettingsSectionHeader("Continue Watching")
-
-                ResumeAuthorityRow(
-                    selected = resumeAuthority,
-                    chip = { text, isSelected -> PillChip(text, isSelected) },
-                    onPick = { authority ->
-                        resumeAuthority = authority
-                        AppPreferences.setResumeAuthority(context, authority)
                     }
                 )
 

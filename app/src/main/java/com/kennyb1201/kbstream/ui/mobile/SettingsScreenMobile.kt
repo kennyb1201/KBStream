@@ -551,6 +551,12 @@ private fun IntegrationsPaneMobile(
     val kidsAddonLock =
         activeProfile?.kidsMaxAge != null && activeProfile?.kidsHideAddons == true
     val keysHidden = activeProfile?.kidsMaxAge != null
+    // Resume Source is a behaviour pref, not a secret: it re-seeds on the sync
+    // revision like every other synced row, and it is NOT gated by keysHidden.
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    var resumeAuthority by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getResumeAuthority(context))
+    }
 
     PaneScroll {
         SettingsSectionMobile("Profiles & Accounts", first = true)
@@ -567,6 +573,16 @@ private fun IntegrationsPaneMobile(
             )
         }
         SettingsNavRowMobile(
+            label = "Viewing stats",
+            description = "Finished episodes, movies, runtime and your streak",
+            onClick = onOpenStats
+        )
+
+        // ── Trackers ─────────────────────────────────────────────
+        // The three services that hold this account's viewing state, plus the
+        // resume tie-break they feed - the TV pane's section, in the same order.
+        SettingsSectionMobile("Trackers")
+        SettingsNavRowMobile(
             label = "Simkl",
             description = "Connect your Simkl account for scrobbling",
             onClick = onOpenSimkl
@@ -576,17 +592,12 @@ private fun IntegrationsPaneMobile(
             description = "Connect your Trakt account to scrobble playback and sync watched state",
             onClick = onOpenTrakt
         )
-        SettingsNavRowMobile(
-            label = "Viewing stats",
-            description = "Finished episodes, movies, runtime and your streak",
-            onClick = onOpenStats
-        )
-
-        SettingsSectionMobile("API Keys")
+        // The card hides its own field on a kids profile, exactly as it did in
+        // API Keys: the key is a secret, the row is not.
         if (keysHidden) {
             SettingsCaptionMobile(
-                "API keys are hidden on a kids profile. Switch to a parent profile " +
-                    "to view or change them."
+                "The MDBList key is hidden on a kids profile. Switch to a parent " +
+                    "profile to view or change it."
             )
         } else {
             KeyCardMobile(
@@ -600,6 +611,22 @@ private fun IntegrationsPaneMobile(
                 savedHint = "Connected as",
                 savedDescription = "Key saved — ratings appear on the next title you open."
             )
+        }
+        ResumeAuthorityMobile(
+            selected = resumeAuthority,
+            onPick = { authority ->
+                resumeAuthority = authority
+                AppPreferences.setResumeAuthority(context, authority)
+            }
+        )
+
+        SettingsSectionMobile("API Keys")
+        if (keysHidden) {
+            SettingsCaptionMobile(
+                "API keys are hidden on a kids profile. Switch to a parent profile " +
+                    "to view or change them."
+            )
+        } else {
             KeyCardMobile(
                 title = "OMDb API Key",
                 description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +
@@ -1681,9 +1708,6 @@ private fun InterfacePaneMobile() {
     var hideUpcoming by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context))
     }
-    var resumeAuthority by remember(syncedRevision) {
-        mutableStateOf(AppPreferences.getResumeAuthority(context))
-    }
     var englishOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
     }
@@ -1764,15 +1788,6 @@ private fun InterfacePaneMobile() {
             onChange = {
                 use24h = it
                 AppPreferences.setUse24HourClock(context, it)
-            }
-        )
-
-        SettingsSectionMobile("Continue Watching")
-        ResumeAuthorityMobile(
-            selected = resumeAuthority,
-            onPick = { authority ->
-                resumeAuthority = authority
-                AppPreferences.setResumeAuthority(context, authority)
             }
         )
 
