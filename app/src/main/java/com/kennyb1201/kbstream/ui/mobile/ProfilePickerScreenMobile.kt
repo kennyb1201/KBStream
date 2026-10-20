@@ -35,7 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -408,61 +410,13 @@ private fun ProfileAvatarTileMobile(
                 .padding(10.dp),
             contentAlignment = Alignment.Center
         ) {
-            when {
-                customAvatarUrl != null -> AsyncImage(
-                    model = customAvatarUrl,
-                    contentDescription = name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(76.dp)
-                        .clip(CircleShape)
-                        .border(
-                            width = if (selected) 3.dp else 0.dp,
-                            color = KBTextHi,
-                            shape = CircleShape
-                        )
-                )
-
-                avatarIndex >= 0 -> {
-                    val (bg, fg) = ProfileManager.AVATAR_COLORS[
-                        avatarIndex.coerceIn(0, ProfileManager.AVATAR_COUNT - 1)
-                    ]
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .background(Color(bg))
-                            .border(
-                                width = if (selected) 3.dp else 0.dp,
-                                color = KBTextHi,
-                                shape = CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = name.take(1).uppercase(),
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(fg)
-                        )
-                    }
-                }
-
-                else -> Box(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .clip(CircleShape)
-                        .background(KBSurfaceRaised),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_profile_manage),
-                        contentDescription = "Manage profiles",
-                        tint = KBTextLo,
-                        modifier = Modifier.size(30.dp)
-                    )
-                }
-            }
+            ProfileAvatarCircleMobile(
+                name = name,
+                avatarIndex = avatarIndex,
+                customAvatarUrl = customAvatarUrl,
+                size = 76.dp,
+                ringWidth = if (selected) 3.dp else 0.dp
+            )
         }
 
         Text(
@@ -473,5 +427,78 @@ private fun ProfileAvatarTileMobile(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp)
         )
+    }
+}
+
+/**
+ * One profile's avatar, as a circle - the single place the phone draws it.
+ *
+ * The picker uses it at 76dp with the selected tile's light ring and the bottom
+ * bar at 30dp with no ring, but the resolution is one implementation: an
+ * uploaded/custom image first, then the generic palette plus the initial, then
+ * a manage glyph when there is no avatar at all. A profile therefore cannot
+ * show one face in Who's Watching and another in the bar. Callers resolve the
+ * image themselves - the pickers hand in `customAvatarUrl ?: avatarData`.
+ */
+@Composable
+internal fun ProfileAvatarCircleMobile(
+    name: String,
+    avatarIndex: Int,
+    customAvatarUrl: String?,
+    size: Dp,
+    ringWidth: Dp = 0.dp
+) {
+    when {
+        customAvatarUrl != null -> AsyncImage(
+            model = customAvatarUrl,
+            contentDescription = name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .border(width = ringWidth, color = KBTextHi, shape = CircleShape)
+        )
+
+        avatarIndex >= 0 -> {
+            val (bg, fg) = ProfileManager.AVATAR_COLORS[
+                avatarIndex.coerceIn(0, ProfileManager.AVATAR_COUNT - 1)
+            ]
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(Color(bg))
+                    .border(width = ringWidth, color = KBTextHi, shape = CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = name.take(1).uppercase(),
+                    // Scaled from the circle instead of fixed: this one avatar
+                    // is a 76dp tile in the picker and a 30dp dot in the bar,
+                    // and a single type size cannot fit both.
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontSize = (size.value * 0.36f).sp
+                    ),
+                    fontWeight = FontWeight.Bold,
+                    color = Color(fg),
+                    maxLines = 1
+                )
+            }
+        }
+
+        else -> Box(
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(KBSurfaceRaised),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_profile_manage),
+                contentDescription = "Manage profiles",
+                tint = KBTextLo,
+                modifier = Modifier.size(size * 0.4f)
+            )
+        }
     }
 }

@@ -20,14 +20,19 @@ import org.junit.Test
  *  2. **One visibility rule.** [mobileNavSelection] answers for the five
  *     top-level destinations and for nothing else, and it is *derived* from the
  *     screen - so Back cannot leave the wrong item lit.
- *  3. **The header gave the icons up.** Home's top bar carries branding and
- *     profile identity only.
+ *  3. **The header gave it all up.** Home's top bar carries branding only; the
+ *     profile switcher is the bar's avatar, so it exists on all five screens.
  *  4. **The bar is the app's**, not a stock Material strip: brand surface,
  *     accent when selected, labels under the icons, the bottom inset reserved.
  *
- * The layout itself (the bar sitting below the screen switch's Box, so no
- * top-level screen's last row lands under it) is source-checked here and needs
- * Kenny's eyes on a phone; there is no device in this workspace.
+ * The layout itself is checked here twice over: that the bar is emitted after
+ * the screen switch's Box, and - by brace depth, because token order cannot see
+ * it - that the bar is the shell Column's own last child rather than a sibling
+ * of the Column. That second one is not pedantry: the first version of this bar
+ * passed every substring check in this file and still drew its five items along
+ * the TOP of the phone, because a `}` one line early closed the screen Box
+ * before the bar's container. What still needs eyes on a device is how the bar
+ * looks and feels; there is none in this workspace.
  */
 class MobileBottomNavContractTest {
 
@@ -55,6 +60,89 @@ class MobileBottomNavContractTest {
     }
 
     private fun activity(): String = source("com/kennyb1201/kbstream/MainActivity.kt")
+
+    /**
+     * A source file exactly as written.
+     *
+     * [source] flattens whitespace, which is right for a substring check and
+     * wrong for anything that walks the brace structure: a flattened `//`
+     * comment would swallow the rest of the file.
+     */
+    private fun rawSource(path: String): String {
+        val file = File(sourceRoot, path)
+        assertTrue("source missing: $file", file.isFile)
+        return file.readText()
+    }
+
+    private fun rawActivity(): String =
+        rawSource("com/kennyb1201/kbstream/MainActivity.kt")
+
+    /**
+     * The open-brace depth at each of [markers], over real Kotlin braces only.
+     *
+     * Which composable call is a *child* of which is the whole difference
+     * between a bar at the bottom of the window and a bar across the top of it,
+     * and a substring check cannot see it. So this walks the source once and
+     * measures: string and char literals, line comments and block comments are
+     * skipped (a brace in a log line is not a block), and the walk must end at
+     * depth zero - a lexing mistake fails the assertion below instead of quietly
+     * making a nesting claim pass. [markers] are matched at their first
+     * occurrence, so each must be unique in the file.
+     */
+    private fun braceDepths(text: String, markers: List<String>): Map<String, Int> {
+        val targets = markers
+            .map { marker ->
+                val at = text.indexOf(marker)
+                assertTrue("marker not found in the shell: $marker", at >= 0)
+                at to marker
+            }
+            .sortedBy { it.first }
+        val found = mutableMapOf<String, Int>()
+        var next = 0
+        var depth = 0
+        var i = 0
+        var inLineComment = false
+        var inBlockComment = false
+        var inString = false
+        var inChar = false
+        while (i < text.length) {
+            while (next < targets.size && targets[next].first == i) {
+                found[targets[next].second] = depth
+                next++
+            }
+            val c = text[i]
+            val following = text.getOrNull(i + 1)
+            when {
+                inLineComment -> if (c == '\n') inLineComment = false
+                inBlockComment -> if (c == '*' && following == '/') {
+                    inBlockComment = false
+                    i++
+                }
+                inString -> if (c == '\\') i++ else if (c == '"') inString = false
+                inChar -> if (c == '\\') i++ else if (c == '\'') inChar = false
+                c == '/' && following == '/' -> {
+                    inLineComment = true
+                    i++
+                }
+                c == '/' && following == '*' -> {
+                    inBlockComment = true
+                    i++
+                }
+                c == '"' -> inString = true
+                c == '\'' -> inChar = true
+                c == '{' -> depth++
+                c == '}' -> depth--
+            }
+            i++
+        }
+        assertEquals(
+            "the brace walk must consume the whole file, or a depth above is meaningless",
+            0,
+            depth
+        )
+        assertEquals("every marker must have been measured", markers.size, found.size)
+        return found
+    }
 
     private fun bar(): String =
         source("com/kennyb1201/kbstream/ui/mobile/MobileBottomNav.kt")
@@ -192,6 +280,64 @@ class MobileBottomNavContractTest {
         )
     }
 
+    /**
+     * The nesting, not the ordering. This is the check whose absence shipped a
+     * bar across the top of the phone: every substring assertion above passed
+     * while `MobileBottomNav` sat outside the shell Column, because the brace
+     * that was supposed to close the screen Box closed it one line too early.
+     */
+    @Test
+    fun `the bar is the shell column's last child, so the column puts it at the bottom`() {
+        val host = "mobileNavDestination?.let { destination ->"
+        val depths = braceDepths(
+            rawActivity(),
+            listOf(
+                "Column(modifier = Modifier.fillMaxSize())",
+                "Box(modifier = Modifier.weight(1f).fillMaxWidth())",
+                "LaunchSplash()",
+                host,
+                "MobileBottomNav("
+            )
+        )
+        val column = depths.getValue("Column(modifier = Modifier.fillMaxSize())")
+        val screenBox = depths.getValue("Box(modifier = Modifier.weight(1f).fillMaxWidth())")
+        val splash = depths.getValue("LaunchSplash()")
+        val barHost = depths.getValue(host)
+        val bar = depths.getValue("MobileBottomNav(")
+
+        // A column's children are one level deeper than the line that opens it
+        // (the extra levels are wrapping lambdas, a Box child, etc.).
+        assertEquals(
+            "the screen switch's Box must be the column's own child, so weight(1f) " +
+                "hands the bar the space it does not use",
+            column + 1,
+            screenBox
+        )
+        // Deeper than the Box itself: the splash is inside the Box (and inside
+        // its `if (splashVisible)` block), which is what makes it cover the
+        // screen and appear without re-laying out the screen.
+        assertTrue(
+            "the launch splash must overlay inside that Box, as its last child, so " +
+                "it covers the screen instead of taking a slot in the column (its " +
+                "depth $splash must be inside the Box at depth $screenBox)",
+            splash > screenBox
+        )
+        assertEquals(
+            "the bar's host must be the column's own child - the sibling of the " +
+                "weighted screen Box - so the column hands it the bottom of the " +
+                "window. Measured at the column's own level instead, the bar is " +
+                "OUTSIDE the column: a sibling of it in the shell's stacking host, " +
+                "which is what drew the five items across the TOP of the phone",
+            column + 1,
+            barHost
+        )
+        assertEquals(
+            "and the bar itself is composed inside that host's lambda",
+            barHost + 1,
+            bar
+        )
+    }
+
     @Test
     fun `the five items call the very same wiring the header icons called`() {
         val main = activity()
@@ -266,18 +412,39 @@ class MobileBottomNavContractTest {
 
     // -------------------------------------------------------------------- header
 
-    @Test
-    fun `Home's header no longer carries the four icons`() {
+    /**
+     * The header's own source, so "the header no longer draws X" is a claim
+     * about the header and not about some rail card that shares a word with it.
+     */
+    private fun mobileHeader(): String {
         val mobile = mobileHome()
-        assertTrue(
-            "the header must keep branding and profile identity only",
-            mobile.contains("private fun MobileTopBar( onSwitchProfile: () -> Unit )")
-        )
-        assertTrue(
-            "the wordmark and the profile chip are still drawn",
-            mobile.contains("\"KBSTREAM\"") &&
-                mobile.contains("clickable(onClick = onSwitchProfile)")
-        )
+        val start = mobile.indexOf("private fun MobileTopBar()")
+        assertTrue("the header must exist, with no parameters left to carry a door", start >= 0)
+        val end = mobile.indexOf("A full-width hero", start)
+        assertTrue("the header body must be bounded by the next composable", end > start)
+        return mobile.substring(start, end)
+    }
+
+    /** The avatar button's own source - the last function in the bar file. */
+    private fun profileButton(): String {
+        val bar = bar()
+        val start = bar.indexOf("private fun MobileProfileButton")
+        assertTrue("the bar must draw a profile button", start >= 0)
+        return bar.substring(start)
+    }
+
+    @Test
+    fun `the Home header is the wordmark alone`() {
+        val header = mobileHeader()
+        assertTrue("the wordmark is still drawn", header.contains("\"KBSTREAM\""))
+        listOf("onSwitchProfile", "activeProfile", "clickable(", "PROFILES").forEach { gone ->
+            assertTrue(
+                "the header must no longer draw $gone: the switcher is the bar's " +
+                    "avatar now, and that is reachable from all five top-level screens",
+                !header.contains(gone)
+            )
+        }
+        val mobile = mobileHome()
         listOf("IconButton", "Icons.Filled.Search", "Icons.Filled.LiveTv", "Icons.Filled.VideoLibrary", "Icons.Filled.Settings").forEach { gone ->
             assertTrue(
                 "the header's $gone must be gone; that destination lives in the bar",
@@ -291,6 +458,88 @@ class MobileBottomNavContractTest {
                 !mobile.contains(param)
             )
         }
+        assertTrue(
+            "and it must not keep the profile callback either, now that the bar " +
+                "owns the door",
+            !mobile.contains("onSwitchProfile")
+        )
+    }
+
+    // ------------------------------------------------------------------- profile
+
+    @Test
+    fun `the profile avatar is a door beside the five destinations, never a sixth`() {
+        assertEquals(
+            "the bar still navigates to exactly the five top-level screens",
+            5,
+            MobileNavDestination.entries.size
+        )
+        val bar = bar()
+        val button = profileButton()
+        assertTrue(
+            "the bar takes a profile callback separate from destination selection",
+            bar.contains("onSwitchProfile: () -> Unit") &&
+                bar.contains("MobileProfileButton(onClick = onSwitchProfile)")
+        )
+        assertTrue(
+            "the five items keep equal shares of what the avatar leaves",
+            bar.contains("NavigationBar( modifier = Modifier.weight(1f)")
+        )
+        assertTrue(
+            "the avatar takes a fixed slot of its own - a share would make it a sixth item",
+            button.contains(".width(56.dp)") && button.contains(".height(80.dp)")
+        )
+        assertTrue(
+            "it is not a destination: no NavigationBarItem, no selected state, no label",
+            !button.contains("NavigationBarItem") && !button.contains("selected")
+        )
+        assertTrue(
+            "it draws the active profile's avatar at the bar's scale",
+            button.contains("ProfileAvatarCircleMobile(") &&
+                button.contains("size = 30.dp")
+        )
+    }
+
+    @Test
+    fun `the avatar reads the active profile and resolves it like the picker`() {
+        val button = profileButton()
+        assertTrue(
+            "it observes the same flow Home's chip did, so a switch re-renders it " +
+                "on every top-level screen at once",
+            button.contains("ProfileManager.activeProfile.collectAsStateWithLifecycle()")
+        )
+        assertTrue(
+            "the image resolution is the picker's: a custom avatar first, then the " +
+                "uploaded blob",
+            button.contains(
+                "customAvatarUrl = activeProfile?.customAvatarUrl ?: activeProfile?.avatarData"
+            )
+        )
+        assertTrue(
+            "and the circle itself is the picker's composable, not a second drawing",
+            source("com/kennyb1201/kbstream/ui/mobile/ProfilePickerScreenMobile.kt")
+                .contains("internal fun ProfileAvatarCircleMobile(") &&
+                button.contains("ProfileAvatarCircleMobile(")
+        )
+    }
+
+    @Test
+    fun `the shell points the avatar at the picker and comes back to the screen it left`() {
+        val main = activity()
+        assertTrue(
+            "the bar's avatar is handed a callback",
+            main.contains("onSwitchProfile = onMobileSwitchProfile")
+        )
+        assertTrue(
+            "that callback opens the same picker Home's chip opened, returning to " +
+                "the screen the viewer is on rather than always to Home",
+            main.contains("screen = Screen.ProfilePicker(returnTo = screen)")
+        )
+        assertTrue(
+            "TV is untouched: the shell still hands Home the chip's callback",
+            main.contains("onSwitchProfile = {") &&
+                main.contains("Screen.ProfilePicker(returnTo = Screen.Home)")
+        )
     }
 
     // ------------------------------------------------------------------- styling

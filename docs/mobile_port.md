@@ -68,24 +68,68 @@ The phone now has one persistent bottom bar, owned by the shell:
   a pushed screen can never wear it. The answer is *derived from the screen
   being drawn* rather than stored, which is what keeps the right item lit after
   Back.
-- **Layout, not padding.** The bar is a sibling below the screen switch's Box
-  (a `Column`), so the switch is measured with the space that is left and no
-  top-level screen's last rail can sit under the bar. That is the same rule the
-  spec states as "pad every screen", implemented once instead of five times -
-  and it cannot drift when a sixth top-level screen is added. On a television
-  the bar is null and the column holds the single child it always had.
+- **Layout, not padding.** The bar is the shell `Column`'s own last child,
+  after the screen switch's Box, so the switch is measured with the space that
+  is left and no top-level screen's last rail can sit under the bar. That is the
+  same rule the spec states as "pad every screen", implemented once instead of
+  five times - and it cannot drift when a sixth top-level screen is added. On a
+  television the bar is null and the column holds the single child it always
+  had.
+  Being a sibling *of the Box* is not the same thing: it has to be a child of
+  that same `Column`. The shell is a stacking host (`SharedTransitionLayout`),
+  and a sibling of the column is laid out at the top of the stack - which is
+  exactly where the five items drew the first time the bar shipped, because a
+  `}` closed the screen Box one line early and took the column's close with it.
+  `MobileBottomNavContractTest` measures brace depth for this: token order
+  cannot see nesting, and every substring check it had passed while the bar was
+  across the top of the phone.
 - **Styling.** The brand plate (`KBSurface`) under a hairline, `MaterialTheme`
   (the phone theme), labels under the icons, the selected item's icon, label and
   indicator in `KBAccent`, the rest in `KBTextLo`. The bottom system inset is
   already reserved by the shell's safe area; `navigationBarsPadding()` on the
   bar is a guard for the day it is composed anywhere else.
-- **Home's header** is branding and profile identity only now - the wordmark
-  (weighted, ellipsised) and the profile chip that opens the profile picker.
-  `HomeScreenMobile` no longer takes the four destination callbacks at all, so a
-  header icon cannot come back by accident.
+- **Home's header** is the wordmark alone now (ellipsised, full width).
+  `HomeScreenMobile` no longer takes the four destination callbacks or the
+  profile one at all, so a header door cannot come back by accident.
+- **The profile door** is the active profile's avatar at the bar's right end:
+  a circle drawn by the picker's own `ProfileAvatarCircleMobile` (custom avatar,
+  then the palette and initial), observing `ProfileManager.activeProfile` the
+  way Home's chip did. It is not a sixth destination - no selected state, no
+  label, a fixed 56dp slot beside the five equal shares - and tapping it opens
+  the same picker Home's chip opened, returning to the screen it left. The
+  picker's own gates (PIN/exit, kids) are untouched by the move.
 
-`MobileBottomNavContractTest` pins the host, the visibility rule, the shared
-wiring, the re-tap-to-top path, the header change and the bar's styling.
+`MobileBottomNavContractTest` pins the host, its nesting inside the shell column
+(by brace depth), the visibility rule, the shared wiring, the re-tap-to-top
+path, the header change, the profile avatar as a door (not a destination, with
+the picker's resolution and a return to the screen it left) and the bar's
+styling.
+
+## Shell: coming back from another app
+
+The launch gate used to be keyed on the process: the first activity create of a
+process was a launch, and with profiles on the device a launch discards the
+saved screen and opens on Who's Watching. That is the designed TV rule (each
+session starts under a chosen identity) and the wrong phone one - Android kills
+a backgrounded process routinely here, so switching to another app and coming
+back was a NEW process, the flag was false again, and the viewer landed on the
+picker although they had never left.
+
+`isColdLaunch` (in `NavStateSerialization.kt`) now decides, and the saved state
+is the evidence: on a phone, a create handed `savedInstanceState` is a return
+and restores what was saved under the profile `ProfileManager.init` has already
+re-established. A rebuild in the same process was already not a launch; a fresh
+task with no saved state still is, so swiping the app away and reopening it
+still asks who is watching. A television ignores the saved state entirely, so
+its gate is unchanged.
+
+The time lock is not a casualty of this: the veil is composed by the shell for
+every screen and answers to the guard's evaluation of the ACTIVE profile, which
+`KidsTimeGuard.start` has before the first composition and re-evaluates on
+foregrounding - so a restored Detail page under a spent budget is veiled
+exactly like one reached through the picker. `LaunchScreenGateTest` pins all
+four launch decisions, the wiring, and that the launch flag is not a key to the
+veil.
 
 ## Player touch UX (Phase 3)
 
@@ -322,7 +366,14 @@ Each item is a real gap on a phone, not a stylistic choice.
 **Finished on the phone.** The screen is arranged by the same slot builder the
 TV reads (`KBHomeSlots.buildMergedEntries`), so imported KB collections, the
 mirrored Browse-chip rows and the catalog rails appear in the home manager's
-order (pin / reorder / hide included). Collections open their folder screen and
+order (pin / reorder / hide included), and a rail's *name* comes from the same
+arrangement: the two app rows (Continue Watching, Upcoming) and the
+add-on-keyed rails (a Top Today row, a built catalog) resolve their section
+title through `arrangement.renames` exactly as the TV screen does, so a rename
+made on either device reaches this Home and clearing it restores the default.
+That last part was a real gap - the phone drew its two rows from string
+literals and dropped `titleOverride`, so renames showed in the builder and on
+the TV and nowhere on a phone. Collections open their folder screen and
 size their tiles by the folder's own `tileShape`; Browse chips open their
 discover screen and can be removed from Home with a long press; the synced
 landscape pref draws backdrop+clearlogo cards with their rank; spoiler-free mode
@@ -406,6 +457,26 @@ entire series, View on Simkl) and the collection / More Like This posters (go to
 details, watched toggle, add to library, hide). Spoiler-free mode hides an
 unstarted episode's name on the row and in the menu, and an unaired episode in a
 trusted season is marked UNAVAILABLE.
+
+Both field reports from 2026-10-20 are closed here. A cast tile draws the
+character under the actor's name, in the TV card's own slot and type
+(`KBTextLo`, `labelSmall`, one line, centred) - the tile was reading
+`member.name` alone, so a phone showed a row of names and nothing about who
+they played.
+
+A season can also be browsed sideways. The right end of the season row carries
+a **LIST | RAIL** switch (list is the default), and RAIL draws the television's
+episode cards through the shared touch twin `ui/components/touch/
+KBEpisodeTouch.kt` (`KBEpisodeRailTouch` / `KBEpisodeRailCardTouch`): episode
+badge, watched tick, resume bar, UNAVAILABLE mark and the spoiler-free mask,
+with the caption beneath the still rather than over it. Both layouts read ONE
+`episodeVisual` derivation (watched, progress, unaired, hidden title), so the
+two shapes cannot disagree about an episode, and both call the same
+`openEpisode` and raise the same `EpisodeMenuTarget`. The choice is the
+`detail_episode_rail` pref: device-local screen geometry like Poster Size - no
+Settings row, nothing published to the sync blob, and the TV page does not read
+it (`DeviceLocalDisplayPrefsTest`, `SyncScopeTest`,
+`DetailEpisodeRailMobileContractTest`).
 
 Parity notes (not bugs to fix):
 - The season mark/unmark arithmetic lives in `ui/mobile/MobileDetailRules.kt`
@@ -800,6 +871,11 @@ the buffer mode, PiP and the aspect ratio.
 Parity notes (not bugs to fix):
 - The TV's focus plumbing (rail focus, dialog focus retries) has no touch twin;
   a pane is a pushed page and its controls are ordinary Material 3 controls.
+- The Dolby Vision chips are the TV page's, word for word: Auto / None / Strip
+  All, each with its own explanation underneath the selected mode. A phone does
+  not get a shortened copy of that - the mode behaves the same there, and the
+  only word adapted is the audience ("DV TVs" reads "DV displays").
+  `DvCompatCopyMobileContractTest` holds the two screens to the same text.
 
 ### KB folder (imported collections)
 

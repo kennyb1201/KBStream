@@ -124,6 +124,10 @@ object AppPreferences {
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_LANDSCAPE_POSTERS = "landscape_posters"
+    // The phone Detail page's episode layout: false = the vertical list
+    // (default), true = the horizontal episode rail. Screen geometry like the
+    // two switches above it - see notifyDisplayPrefChanged.
+    private const val KEY_DETAIL_EPISODE_RAIL = "detail_episode_rail"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
     private const val KEY_POSTER_EDGE = "poster_edge" // 0=straight, 1=rounded (default), 2=pill
@@ -1760,6 +1764,26 @@ object AppPreferences {
      */
     fun homeLandscapeActive(context: Context): Boolean =
         getLandscapePosters(context) || getHomeLandscapeCards(context)
+
+    // ── Detail: the episode area's layout, vertical list or sideways rail ──
+    //
+    // Screen geometry, not identity, and device-local on purpose: how a season
+    // is best browsed on a 6.7" phone says nothing about what a 65" television
+    // should draw - and the TV page does not read this pref at all, so the two
+    // cannot drift onto each other's answer. It stops at
+    // [notifyDisplayPrefChanged] rather than [syncDisplayPrefsBlob] for the
+    // same reason as Poster Size and the landscape pair (see
+    // PrefsPayloadBuilder.SYNCED_PREF_KEYS).
+    //
+    // Default false - the vertical list - so an install that never touches the
+    // switch is exactly the screen it was before the switch existed.
+    fun getDetailEpisodeRail(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DETAIL_EPISODE_RAIL, false)
+
+    fun setDetailEpisodeRail(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DETAIL_EPISODE_RAIL, enabled).apply()
+        notifyDisplayPrefChanged()
+    }
 
     // ── Poster eye badge: shows started-but-not-finished shows ────────
     fun getPosterPartialWatchBadge(context: Context): Boolean =

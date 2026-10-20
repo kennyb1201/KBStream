@@ -1,0 +1,178 @@
+package com.kennyb1201.kbstream.ui.mobile
+
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The two field reports on the phone's Detail page, and the rules behind them:
+ *
+ *  1. **The cast tile says who the actor plays.** The TV card has always drawn
+ *     the character under the name; the phone's tile never read the field, so a
+ *     phone showed a row of names and nothing else.
+ *  2. **A season can be browsed sideways.** The page listed episodes
+ *     vertically and offered no other shape; the switch on the season row now
+ *     flips it to the television's episode rail, drawn by the shared touch twin
+ *     (`ui/components/touch/KBEpisodeTouch.kt`) so the phone cannot grow a
+ *     second episode-card design.
+ *
+ * What a JVM test can hold here is the wiring and the arithmetic: the state an
+ * episode is drawn with is derived ONCE and read by both layouts, so a watched
+ * tick, a resume bar, an unaired mark or a spoiler-free mask cannot be right in
+ * one shape and missing from the other. The layout itself is exercised on a
+ * device - this module has no compose-ui-test harness.
+ */
+class DetailEpisodeRailMobileContractTest {
+
+    private val sourceRoot: File by lazy { findSourceRoot() }
+
+    private fun findSourceRoot(): File {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java")
+                if (candidate.isDirectory) return candidate
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "main source root not found walking up from " + System.getProperty("user.dir")
+        )
+    }
+
+    /** Whitespace-collapsed source, so a wrapped call still matches. */
+    private fun source(path: String): String {
+        val file = File(sourceRoot, path)
+        assertTrue("source missing: $file", file.isFile)
+        return file.readText().replace(Regex("\\s+"), " ")
+    }
+
+    private fun mobileDetail(): String =
+        source("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt")
+
+    private fun episodeTwin(): String =
+        source("com/kennyb1201/kbstream/ui/components/touch/KBEpisodeTouch.kt")
+
+    /** How many times [text] occurs in [haystack] - no regex, so no escapes. */
+    private fun occurrences(haystack: String, text: String): Int =
+        haystack.split(text).size - 1
+
+    @Test
+    fun `the cast tile shows who the actor plays`() {
+        // The line is the TV card's own: the same slot, colour and type. A
+        // second design for the same fact is how the two screens drifted.
+        val mobile = mobileDetail()
+        assertTrue(
+            "the character must be read off the cast member, and a blank one is " +
+                "not a name",
+            mobile.contains("member.character?.takeIf { it.isNotBlank() }")
+        )
+        val tile = mobile.substringAfter("private fun CastTile(")
+            .substringBefore("private fun RecommendationTile(")
+        assertTrue("the tile must still name the actor", tile.contains("text = member.name"))
+        assertTrue(
+            "the character sits under the name in the muted colour",
+            tile.contains("text = character") && tile.contains("KBTextLo")
+        )
+        assertTrue(
+            "in the TV card's label type",
+            tile.contains("MaterialTheme.typography.labelSmall")
+        )
+        assertTrue(
+            "one line, ellipsised, centred",
+            tile.contains("maxLines = 1") &&
+                tile.contains("TextOverflow.Ellipsis") &&
+                tile.contains("TextAlign.Center")
+        )
+        assertTrue(
+            "and the tap still opens the actor's page",
+            tile.contains("clickable(onClick = onClick)")
+        )
+    }
+
+    @Test
+    fun `the episode area switches between the list and the shared rail card`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the switch must be on the page, in the season row",
+            mobile.contains("EpisodeLayoutSwitch(") &&
+                mobile.contains("label = \"LIST\"") &&
+                mobile.contains("label = \"RAIL\"")
+        )
+        assertTrue(
+            "it must open on the device-local pref, not a synced one",
+            mobile.contains("AppPreferences.getDetailEpisodeRail(context)")
+        )
+        assertTrue(
+            "and every press must write that pref through",
+            mobile.contains("AppPreferences.setDetailEpisodeRail(context, next)")
+        )
+        assertTrue(
+            "the rail must be the shared touch twin, not a card drawn here",
+            mobile.contains("KBEpisodeRailTouch(episodes = episodes)") &&
+                mobile.contains("KBEpisodeRailCardTouch(")
+        )
+        assertTrue(
+            "both layouts must read ONE derivation of an episode's state",
+            mobile.contains("fun episodeVisual(episode: ResolvedEpisode): EpisodeVisual") &&
+                mobile.contains(
+                    "EpisodeRow( episode = episode, hiddenTitle = visual.hiddenTitle"
+                ) &&
+                mobile.contains(
+                    "KBEpisodeRailCardTouch( episode = episode, " +
+                        "hiddenTitle = visual.hiddenTitle"
+                )
+        )
+        assertEquals(
+            "the same long-press menu must be reachable from both layouts",
+            2,
+            occurrences(mobile, "episodeMenu = EpisodeMenuTarget(episode, currentSeason)")
+        )
+        assertEquals(
+            "and the same tap",
+            2,
+            occurrences(mobile, "onClick = { openEpisode(episode, currentSeason) }")
+        )
+    }
+
+    @Test
+    fun `the rail card takes every state from the screen instead of re-deriving it`() {
+        // "Same states in both layouts" is a property of the DATA, not of two
+        // screens that happen to word it the same way.
+        val twin = episodeTwin()
+        listOf(
+            "episode: ResolvedEpisode",
+            "hiddenTitle: Boolean",
+            "isWatched: Boolean",
+            "unavailable: Boolean",
+            "progress: Float?"
+        ).forEach { input ->
+            assertTrue("the card must take $input from the caller", twin.contains(input))
+        }
+        assertTrue(
+            "the twin must not re-derive an episode's state - the screen owns it, " +
+                "or the two layouts drift",
+            !twin.contains("hidesIdentity(") &&
+                !twin.contains("completedEpisodeIds") &&
+                !twin.contains("inProgressByStreamId")
+        )
+        assertTrue(
+            "a masked episode's label comes from the shared spoiler rule",
+            twin.contains("SpoilerFree.episodeLabel(")
+        )
+        assertTrue(
+            "a masked episode drops its synopsis, as the list row does",
+            twin.contains("if (!hiddenTitle)")
+        )
+        assertTrue(
+            "the card carries the episode badge, the watched tick, the resume bar " +
+                "and the UNAVAILABLE mark",
+            twin.contains("EPISODE \$number") &&
+                twin.contains("contentDescription = \"Watched\"") &&
+                twin.contains("fraction.coerceIn") &&
+                twin.contains("\"UNAVAILABLE\"")
+        )
+    }
+}

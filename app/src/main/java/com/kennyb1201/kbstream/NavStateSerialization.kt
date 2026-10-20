@@ -64,6 +64,34 @@ internal fun launchScreen(profilesExist: Boolean): Screen =
     if (profilesExist) Screen.ProfilePicker() else Screen.Home
 
 /**
+ * Whether this activity create is a LAUNCH or a return.
+ *
+ * A launch is the one case the picker gates: with profiles on the device it
+ * deliberately discards whatever was saved and opens on Who's Watching. A
+ * rebuild is not a launch - a configuration change re-creates the activity in
+ * the same process, and handing back the picker threw the viewer out of
+ * whatever they were doing every time the phone turned.
+ *
+ * [hasSavedState] is the third case, and it is the phone's: Android kills a
+ * backgrounded process routinely, so switching to another app and coming back
+ * is a NEW process carrying the kept task's state. The viewer never left, an
+ * active profile is already re-established by `ProfileManager.init`, and the
+ * saved screen is the one they were on - so that create is a return, not a
+ * launch, or every app switch reopens Who's Watching. [shellStarted] cannot
+ * tell those apart (it is process-scoped, and the process is new), which is
+ * why the saved state is the evidence.
+ *
+ * A television keeps the older rule exactly: `coldLaunch` is only relaxed on a
+ * phone, because "each session starts under a chosen identity" is the
+ * designed TV behaviour and its gate must stay byte-identical.
+ */
+internal fun isColdLaunch(
+    shellStarted: Boolean,
+    isTv: Boolean,
+    hasSavedState: Boolean
+): Boolean = !shellStarted && (isTv || !hasSavedState)
+
+/**
  * [ScreenSaver] with the launch gate folded into the restore path.
  *
  * The picker used to be forced by a `LaunchedEffect(Unit)` sitting beside the
@@ -84,8 +112,13 @@ internal fun launchScreen(profilesExist: Boolean): Screen =
  * rebuilt instance restores this state — but that restore is not a launch, so
  * handing back Who's Watching threw the viewer out of whatever they were doing
  * every time the device turned. Only the process's first activity create is
- * gated; a rebuild keeps the screen it saved. Process death still starts a new
- * process, so a restored app still opens on the picker.
+ * gated; a rebuild keeps the screen it saved.
+ *
+ * That last sentence used to end "process death still starts a new process, so
+ * a restored app still opens on the picker" - which is the right TV rule and
+ * the wrong phone one. On a phone the process dies from an app switch, and the
+ * viewer did not leave: [isColdLaunch] decides which creates are launches, and
+ * only those reach the picker branch below.
  */
 internal fun launchScreenSaver(
     profilesExist: Boolean,

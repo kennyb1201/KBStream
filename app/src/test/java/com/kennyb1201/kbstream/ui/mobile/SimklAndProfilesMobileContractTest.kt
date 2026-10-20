@@ -219,8 +219,8 @@ class SimklAndProfilesMobileContractTest {
                 mobile.contains("name.take(1).uppercase()")
         )
         assertTrue(
-            "the selected profile keeps its light ring",
-            mobile.contains("width = if (selected) 3.dp else 0.dp")
+            "the selected profile keeps its light ring, handed to the shared avatar",
+            mobile.contains("ringWidth = if (selected) 3.dp else 0.dp")
         )
     }
 }

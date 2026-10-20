@@ -1,11 +1,16 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
@@ -19,11 +24,15 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.Screen
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -125,8 +134,12 @@ object MobileHomeTopRequest {
  *
  * Styling follows the phone theme: [KBSurface] plate under a hairline, labels
  * under the icons, and the selected item's icon, label and indicator pill in
- * [KBAccent] while the rest stay [KBTextLo]. Every item is a full-width fifth of
- * the bar, so each is well past the 48dp minimum touch target.
+ * [KBAccent] while the rest stay [KBTextLo]. Every item gets an equal share of
+ * the width the profile avatar leaves, so each is well past the 48dp minimum
+ * touch target.
+ *
+ * The right end carries the active profile's avatar: a door to the picker, not
+ * a sixth destination (see [MobileProfileButton]).
  *
  * The bottom system inset is reserved by the shell already (the root Box pads
  * `systemBars` on a phone), which means [NavigationBar]'s own inset is zero
@@ -137,6 +150,7 @@ object MobileHomeTopRequest {
 fun MobileBottomNav(
     selected: MobileNavDestination,
     onSelect: (MobileNavDestination) -> Unit,
+    onSwitchProfile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     MobileTheme {
@@ -155,44 +169,95 @@ fun MobileBottomNav(
                 thickness = 1.dp,
                 color = KBTextLo.copy(alpha = 0.14f)
             )
-            NavigationBar(
-                containerColor = KBSurface,
-                contentColor = KBTextLo,
-                tonalElevation = 0.dp,
-                // The Column above already reserved the navigation bar; letting
-                // the component reserve it again would double the gap.
-                windowInsets = WindowInsets(0, 0, 0, 0)
+            // The item row: the five destinations, then the profile door in a
+            // fixed slot of its own. The NavigationBar keeps `weight(1f)` so
+            // the five still split what the avatar does not take - adding the
+            // sixth element must not squeeze them or give one of them the
+            // avatar's width.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                MobileNavDestination.entries.forEach { destination ->
-                    NavigationBarItem(
-                        selected = destination == selected,
-                        onClick = { onSelect(destination) },
-                        icon = {
-                            Icon(
-                                imageVector = destination.icon,
-                                // The label below is the item's accessible name;
-                                // a description here would read it twice.
-                                contentDescription = null,
-                                modifier = Modifier.size(22.dp)
+                NavigationBar(
+                    modifier = Modifier.weight(1f),
+                    containerColor = KBSurface,
+                    contentColor = KBTextLo,
+                    tonalElevation = 0.dp,
+                    // The Column above already reserved the navigation bar; letting
+                    // the component reserve it again would double the gap.
+                    windowInsets = WindowInsets(0, 0, 0, 0)
+                ) {
+                    MobileNavDestination.entries.forEach { destination ->
+                        NavigationBarItem(
+                            selected = destination == selected,
+                            onClick = { onSelect(destination) },
+                            icon = {
+                                Icon(
+                                    imageVector = destination.icon,
+                                    // The label below is the item's accessible name;
+                                    // a description here would read it twice.
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = destination.label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = KBAccent,
+                                selectedTextColor = KBAccent,
+                                indicatorColor = KBAccent.copy(alpha = 0.16f),
+                                unselectedIconColor = KBTextLo,
+                                unselectedTextColor = KBTextLo
                             )
-                        },
-                        label = {
-                            Text(
-                                text = destination.label,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = KBAccent,
-                            selectedTextColor = KBAccent,
-                            indicatorColor = KBAccent.copy(alpha = 0.16f),
-                            unselectedIconColor = KBTextLo,
-                            unselectedTextColor = KBTextLo
                         )
-                    )
+                    }
                 }
+                MobileProfileButton(onClick = onSwitchProfile)
             }
         }
+    }
+}
+
+/**
+ * The profile door at the bar's right end.
+ *
+ * Deliberately NOT a sixth destination: it has no selected state and no label,
+ * it sits in a fixed slot rather than a share of the row, and `selected` never
+ * reaches it - switching identity is not somewhere the app goes. What it shows
+ * is the active profile's avatar, read from the same [ProfileManager] flow the
+ * Home top bar used to read, so a switch re-renders it on every top-level
+ * screen at once.
+ *
+ * Tapping it opens the picker, whose rules (the PIN and exit gates, the kids
+ * restrictions) are untouched by this move: the button only reaches the door
+ * Home's chip already opened.
+ */
+@Composable
+private fun MobileProfileButton(onClick: () -> Unit) {
+    val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
+    val name = activeProfile?.name?.takeIf { it.isNotBlank() } ?: "PROFILES"
+
+    Box(
+        modifier = Modifier
+            // A fixed 56dp slot with the bar's own height, so the touch target
+            // is the full height rather than the 30dp circle drawn inside it.
+            .width(56.dp)
+            .height(80.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        ProfileAvatarCircleMobile(
+            name = name,
+            // -1 is the picker's "no avatar" value: the manage glyph, which is
+            // also what this door means when no profile is active yet.
+            avatarIndex = activeProfile?.avatarIndex ?: -1,
+            customAvatarUrl = activeProfile?.customAvatarUrl ?: activeProfile?.avatarData,
+            size = 30.dp
+        )
     }
 }

@@ -74,7 +74,12 @@ class SyncScopeTest {
         listOf(
             "poster_size",
             "home_landscape_cards",
-            "landscape_posters"
+            "landscape_posters",
+            // The phone Detail page's episode layout joined the family on
+            // 2026-10-20 for the same reason: how a season is best browsed on
+            // a phone says nothing about a television's page, which does not
+            // read the key at all.
+            "detail_episode_rail"
         ).forEach { key ->
             assertFalse(
                 "$key is per-device screen geometry and must not sync",

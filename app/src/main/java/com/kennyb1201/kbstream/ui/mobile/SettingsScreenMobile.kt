@@ -514,6 +514,39 @@ private fun SettingsLanguageChoiceMobile(
     }
 }
 
+/**
+ * The Dolby Vision mode copy, shared with the TV page's wording.
+ *
+ * These chips used to read "P7 → 8.1" for the AUTO mode, which named a
+ * conversion the mode only performs on some displays - the TV page calls the
+ * same value "Auto" because that is what it is: the mode chooses by display.
+ * The pairs below are the TV page's own, with only the audience noun adapted
+ * ("TVs" reads "displays" on a phone), so the two screens cannot drift apart
+ * again without a test failing.
+ */
+internal fun dvCompatChipLabel(mode: Int): String =
+    when (mode) {
+        AppPreferences.DV_COMPAT_AUTO -> "Auto"
+        AppPreferences.DV_COMPAT_OFF -> "None"
+        AppPreferences.DV_COMPAT_ALL -> "Strip All"
+        else -> ""
+    }
+
+/** The explanation of the SELECTED mode, exactly as the TV page explains it. */
+internal fun dvCompatDescription(mode: Int): String =
+    when (mode) {
+        AppPreferences.DV_COMPAT_AUTO ->
+            "Chooses by your display: Dolby Vision passthrough on DV displays " +
+                "(P7 → 8.1 for compatibility); HDR10 with HDR10+ removed on non-DV " +
+                "displays. P5 follows its toggle below"
+        AppPreferences.DV_COMPAT_OFF ->
+            "Play files exactly as provided (device must handle DV)"
+        AppPreferences.DV_COMPAT_ALL ->
+            "Strips every DV profile (P4/P5/P7/P8) → HDR10/HEVC for non-DV " +
+                "displays. P5 colors are corrected on the GPU automatically"
+        else -> ""
+    }
+
 @Composable
 private fun SettingsPillMobile(label: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(
@@ -1033,17 +1066,18 @@ private fun PlaybackPaneMobile() {
         SettingsChoiceMobile(
             label = "Dolby Vision compatibility",
             options = listOf(
-                "P7 → 8.1" to AppPreferences.DV_COMPAT_AUTO,
-                "Off" to AppPreferences.DV_COMPAT_OFF,
-                "Strip all" to AppPreferences.DV_COMPAT_ALL
-            ),
+                AppPreferences.DV_COMPAT_AUTO,
+                AppPreferences.DV_COMPAT_OFF,
+                AppPreferences.DV_COMPAT_ALL
+            ).map { mode -> dvCompatChipLabel(mode) to mode },
             selected = dvMode,
             onSelect = { value ->
                 dvMode = value
                 AppPreferences.setDvCompatMode(context, value)
             },
-            description = "P7 → 8.1 converts Profile 7 to a form players accept; " +
-                "Strip all removes Dolby Vision metadata."
+            // Per-mode, like the TV page: one static sentence could only ever
+            // describe some of the three modes, and described Auto wrongly.
+            description = dvCompatDescription(dvMode)
         )
         SettingsToggleMobile(
             label = "Convert Profile 5 to 8.1",

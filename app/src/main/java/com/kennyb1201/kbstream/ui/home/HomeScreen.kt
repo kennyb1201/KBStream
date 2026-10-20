@@ -3330,7 +3330,11 @@ fun HomeScreen(
             // phone screen any more: they are the shell's bottom bar items, and
             // the shell calls the very same callbacks this screen holds. TV
             // still uses all four below, which is why they stay parameters.
-            onSwitchProfile = onSwitchProfile,
+            //
+            // Profile switching left the phone screen too: its door is the
+            // bottom bar's avatar now (hosted by the shell, so it also exists
+            // on the four screens Home does not own). The TV header keeps the
+            // chip this callback draws there.
             onOpenCatalogGrid = onOpenCatalogGrid,
             onOpenKBFolder = onOpenKBFolder,
             onOpenBrowseShortcut = onOpenBrowseShortcut,

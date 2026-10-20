@@ -50,6 +50,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -79,6 +80,8 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
+import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -526,6 +529,38 @@ fun DetailScreenMobile(
         // ---- long-press subjects ----
         var episodeMenu by remember { mutableStateOf<EpisodeMenuTarget?>(null) }
         var seasonMenu by remember { mutableStateOf<SeasonMenuTarget?>(null) }
+
+        // ---- the episode area's layout ----
+        // Device-local screen geometry (see AppPreferences.getDetailEpisodeRail):
+        // this page's shape says nothing about the television's, so the choice
+        // never syncs. Held as state so the switch repaints the page at once,
+        // and written through on every press so leaving and coming back keeps
+        // it.
+        var episodeRail by remember {
+            mutableStateOf(AppPreferences.getDetailEpisodeRail(context))
+        }
+
+        // One episode's state, derived once. BOTH layouts read this - the
+        // vertical row and the rail card - so a watched tick, a progress
+        // fraction, an unaired badge or a spoiler-free mask cannot be right in
+        // one and missing from the other. These are the derivations the list
+        // row already made; they moved here rather than being copied.
+        fun episodeVisual(episode: ResolvedEpisode): EpisodeVisual {
+            val started = inProgressByStreamId[episode.streamId] != null ||
+                resumeInfo?.episodeStreamId == episode.streamId
+            return EpisodeVisual(
+                hiddenTitle = SpoilerFree.hidesIdentity(
+                    enabled = spoilerFreeEnabled,
+                    watched = completedEpisodeIds.contains(episode.streamId),
+                    started = started
+                ),
+                isWatched = completedEpisodeIds.contains(episode.streamId),
+                unavailable = currentSeason !in staleSeasons &&
+                    isEpisodeUnavailable(episode.airDate, today),
+                progress = inProgressByStreamId[episode.streamId]
+                    ?.let { progressOf(it.positionMs, it.durationMs) }
+            )
+        }
         var posterMenu by remember { mutableStateOf<PosterMenuTarget?>(null) }
         var mediaImageMenu by remember { mutableStateOf<MediaCardItem?>(null) }
         var selectedBackdrop by remember { mutableStateOf<String?>(null) }
@@ -686,7 +721,21 @@ fun DetailScreenMobile(
                     item(key = "seasons") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle(if (episodesLoading) "Episodes…" else "Episodes")
+                            // The season chips and the layout switch share one
+                            // row: the switch sits at the right end, where the
+                            // thumb is after picking a season, and the chips
+                            // scroll in the space that is left. It is here
+                            // rather than in Settings because it applies to
+                            // this page only (see AppPreferences: a
+                            // device-local, non-synced choice).
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(end = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                             LazyRow(
+                                modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -709,29 +758,53 @@ fun DetailScreenMobile(
                                     )
                                 }
                             }
+                            EpisodeLayoutSwitch(
+                                rail = episodeRail,
+                                onChange = { next ->
+                                    episodeRail = next
+                                    AppPreferences.setDetailEpisodeRail(context, next)
+                                }
+                            )
+                            }
                         }
                     }
 
-                    items(episodes, key = { "ep:" + it.streamId }) { episode ->
-                        val started = inProgressByStreamId[episode.streamId] != null ||
-                            resumeInfo?.episodeStreamId == episode.streamId
-                        EpisodeRow(
-                            episode = episode,
-                            hiddenTitle = SpoilerFree.hidesIdentity(
-                                enabled = spoilerFreeEnabled,
-                                watched = completedEpisodeIds.contains(episode.streamId),
-                                started = started
-                            ),
-                            isWatched = completedEpisodeIds.contains(episode.streamId),
-                            unavailable = currentSeason !in staleSeasons &&
-                                isEpisodeUnavailable(episode.airDate, today),
-                            progress = inProgressByStreamId[episode.streamId]
-                                ?.let { progressOf(it.positionMs, it.durationMs) },
-                            onClick = { openEpisode(episode, currentSeason) },
-                            onLongClick = {
-                                episodeMenu = EpisodeMenuTarget(episode, currentSeason)
+                    if (episodeRail) {
+                        // The sideways rail: the television's episode card,
+                        // the touch twin of it, filled from the same
+                        // `episodeVisual` the list row below reads.
+                        item(key = "episodeRail") {
+                            KBEpisodeRailTouch(episodes = episodes) { episode ->
+                                val visual = episodeVisual(episode)
+                                KBEpisodeRailCardTouch(
+                                    episode = episode,
+                                    hiddenTitle = visual.hiddenTitle,
+                                    isWatched = visual.isWatched,
+                                    unavailable = visual.unavailable,
+                                    progress = visual.progress,
+                                    onClick = { openEpisode(episode, currentSeason) },
+                                    onLongClick = {
+                                        episodeMenu =
+                                            EpisodeMenuTarget(episode, currentSeason)
+                                    }
+                                )
                             }
-                        )
+                        }
+                    } else {
+                        items(episodes, key = { "ep:" + it.streamId }) { episode ->
+                            val visual = episodeVisual(episode)
+                            EpisodeRow(
+                                episode = episode,
+                                hiddenTitle = visual.hiddenTitle,
+                                isWatched = visual.isWatched,
+                                unavailable = visual.unavailable,
+                                progress = visual.progress,
+                                onClick = { openEpisode(episode, currentSeason) },
+                                onLongClick = {
+                                    episodeMenu = EpisodeMenuTarget(episode, currentSeason)
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -1377,6 +1450,37 @@ private fun MobileDetailHeader(
 }
 
 /**
+ * The episodes area's layout switch: LIST (the vertical rows) or RAIL (the
+ * television's sideways episode cards).
+ *
+ * Two chips rather than one button that flips: the state is a choice between
+ * two named layouts, and the app's other small controls (the season row, the
+ * Media tabs) are the same pill - so the selected half is readable at a glance
+ * instead of having to be inferred from which way a toggle leans.
+ */
+@Composable
+private fun EpisodeLayoutSwitch(
+    rail: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TouchChoiceChip(
+            label = "LIST",
+            selected = !rail,
+            onClick = { onChange(false) }
+        )
+        TouchChoiceChip(
+            label = "RAIL",
+            selected = rail,
+            onClick = { onChange(true) }
+        )
+    }
+}
+
+/**
  * One episode row: still, number and name, overview, runtime, watched state,
  * and - when the season's dates can be trusted - an UNAVAILABLE mark on an
  * episode that has not aired yet. The name is replaced with
@@ -1538,6 +1642,21 @@ private fun CastTile(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
+        // Who they play, under the name: the TV cast card's own line, in the
+        // same slot and type. A blank character is TMDB answering with an
+        // empty string, which is not a name - the field report was a cast row
+        // that showed only the actor, and an empty line here would be the same
+        // row with a gap under it.
+        member.character?.takeIf { it.isNotBlank() }?.let { character ->
+            Text(
+                text = character,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -1842,6 +1961,18 @@ private data class SeasonMenuTarget(
 private data class EpisodeMenuTarget(
     val episode: ResolvedEpisode,
     val season: Int
+)
+
+/**
+ * What one episode's card needs from the page's state, resolved in one place
+ * ([com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile]'s own `episodeVisual`)
+ * so the vertical list and the sideways rail cannot disagree about an episode.
+ */
+private data class EpisodeVisual(
+    val hiddenTitle: Boolean,
+    val isWatched: Boolean,
+    val unavailable: Boolean,
+    val progress: Float?
 )
 
 /** One collection part / More Like This poster's long-press subject. */

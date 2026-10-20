@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.trakt.TraktConfig
 import com.kennyb1201.kbstream.data.trakt.TraktDeviceFlowRules
+import com.kennyb1201.kbstream.data.trakt.TraktFlowEvidence
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.Job
@@ -248,6 +249,10 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
         pollJob = viewModelScope.launch {
             var interval = intervalSeconds
             var consecutiveFailures = 0
+            // The FLOW's evidence, not the last poll's: a 404 after anything
+            // in this flow threw is the spent code being read again, not the
+            // viewer's code expiring (see [TraktFlowEvidence]).
+            val evidence = TraktFlowEvidence()
             while (isActive) {
                 delay(TraktDeviceFlowRules.intervalMillis(interval))
                 val elapsed = (SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L
@@ -263,6 +268,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                     // evidence at all, so the next poll into an already-spent
                     // code was the only thing a report could show.
                     TraktPollTrace.recordPollError(error)
+                    evidence.recordThrow()
                     consecutiveFailures++
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                         fail("Could not reach Trakt. Try again.")
@@ -270,6 +276,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     continue
                 }
+                evidence.recordPoll(result.statusCode)
                 when (result.state) {
                     TraktDeviceFlowRules.Poll.APPROVED -> {
                         // Trakt granted the token but this device could not keep
@@ -315,7 +322,18 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                     }
 
                     TraktDeviceFlowRules.Poll.EXPIRED -> {
-                        fail("That code expired. Start again for a fresh one.")
+                        // "Expired" is only the honest answer when no poll in
+                        // this flow threw. After one did, the code was probably
+                        // spent by that very request, and a 404 here is this
+                        // app failing to read Trakt's reply.
+                        if (evidence.expiredOutcome() == TraktDeviceFlowRules.Poll.FAILED) {
+                            fail(
+                                "Something went wrong reading Trakt's reply. " +
+                                    "Try connecting again."
+                            )
+                        } else {
+                            fail("That code expired. Start again for a fresh one.")
+                        }
                         return@launch
                     }
 

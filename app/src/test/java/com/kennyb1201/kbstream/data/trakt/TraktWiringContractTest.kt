@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -124,6 +125,76 @@ class TraktWiringContractTest {
         val flowAt = rest.indexOf("beginDeviceFlow()")
         assertTrue("the PIN is verified", verifyAt >= 0)
         assertTrue("and the flow starts after it, in the same block", flowAt > verifyAt)
+    }
+
+    /**
+     * The R8 failure of 0.9.4 was a model WITHOUT a generated adapter, so a
+     * release build's reflective path threw on a defaulted constructor. A test
+     * cannot run R8, but it can hold every wire model to codegen - which is the
+     * property that made the reflective path unreachable - and hold the loop to
+     * the evidence that stops a parse throw from being reported as an expiry.
+     */
+    @Test
+    fun `every Trakt wire model has a generated adapter`() {
+        val models = main("com/kennyb1201/kbstream/data/trakt/TraktModels.kt")
+        val annotated = Regex("@JsonClass\\(generateAdapter = true\\)\\s*data class (\\w+)")
+            .findAll(models)
+            .map { it.groupValues[1] }
+            .toSet()
+        val declared = Regex("^data class (\\w+)", RegexOption.MULTILINE)
+            .findAll(models)
+            .map { it.groupValues[1] }
+            .toSet()
+        // The app's own stored pair: it is built from a parsed response, never
+        // read from or written to the wire by Moshi.
+        val local = setOf("TraktToken")
+
+        assertTrue("no models were found, so this test proves nothing", declared.size > 20)
+        assertEquals(
+            "these wire models would fall back to reflection in a release build",
+            emptySet<String>(),
+            declared - annotated - local
+        )
+        assertTrue(
+            "and the reflection factory stays registered as the fallback for " +
+                "anything a later model forgets",
+            main(repoPath).contains("addLast(KotlinJsonAdapterFactory())")
+        )
+    }
+
+    @Test
+    fun `a poll that threw in the flow cannot be reported as an expired code`() {
+        val vm = main("com/kennyb1201/kbstream/ui/trakt/TraktViewModel.kt")
+        val exchange = main("com/kennyb1201/kbstream/data/trakt/TraktPollExchange.kt")
+
+        assertTrue(
+            "the loop keeps the whole flow's evidence, not just the last read",
+            vm.contains("val evidence = TraktFlowEvidence()")
+        )
+        assertTrue(
+            "a poll that threw is recorded as such",
+            vm.contains("evidence.recordThrow()")
+        )
+        assertTrue(
+            "and every completed read records the status Trakt answered",
+            vm.contains("evidence.recordPoll(result.statusCode)")
+        )
+        assertTrue(
+            "the result must carry that status for the loop to record it",
+            exchange.contains("statusCode = http.statusCode")
+        )
+        assertTrue(
+            "the expired message is chosen from the flow, not from the last poll",
+            vm.contains("if (evidence.expiredOutcome() == TraktDeviceFlowRules.Poll.FAILED)")
+        )
+        assertTrue(
+            "and the honest outcome says the reply could not be read",
+            vm.contains("Something went wrong reading Trakt's reply.")
+        )
+        assertTrue(
+            "a 404 with no throw in the flow still means the code expired",
+            vm.contains("fail(\"That code expired. Start again for a fresh one.\")")
+        )
     }
 
     @Test

@@ -158,7 +158,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 fun HomeScreenMobile(
     onItemClick: (MetaPreview) -> Unit,
     onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
-    onSwitchProfile: () -> Unit,
     onOpenCatalogGrid: (Rail) -> Unit,
     onOpenKBFolder: (String) -> Unit = {},
     onOpenBrowseShortcut: (BrowseHomeShortcut) -> Unit = {},
@@ -293,6 +292,26 @@ fun HomeScreenMobile(
             KBHomeSlots.buildMergedEntries(context, rails, kbState, builtinWithContent)
         }
 
+        // The two rows this screen draws itself, titled the way the television
+        // titles them (see `HomeScreen.builtinRailTitle`): the name the home
+        // manager stored for the rail beats the default, and a cleared name
+        // falls back to it. Reading the renames from the collected
+        // arrangement is what makes a rename arriving by sync re-title the row
+        // instead of waiting for Home to be rebuilt - and it is the whole
+        // reason these two literals could not stay literals: the manager
+        // renames them like any other rail, and the phone kept drawing
+        // "Continue Watching" / "Upcoming" regardless.
+        val continueWatchingTitle = mobileBuiltinRailTitle(
+            renames = kbState.arrangement.renames,
+            key = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+            fallback = "Continue Watching"
+        )
+        val upcomingTitle = mobileBuiltinRailTitle(
+            renames = kbState.arrangement.renames,
+            key = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+            fallback = "Upcoming"
+        )
+
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
 
@@ -329,7 +348,7 @@ fun HomeScreenMobile(
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
                 item(key = "topBar") {
-                    MobileTopBar(onSwitchProfile = onSwitchProfile)
+                    MobileTopBar()
                 }
 
                 heroMeta?.let { hero ->
@@ -352,7 +371,7 @@ fun HomeScreenMobile(
                             KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING -> {
                                 if (upNext.isNotEmpty()) {
                                     item(key = "continueWatching") {
-                                        MobileSection(title = "Continue Watching") {
+                                        MobileSection(title = continueWatchingTitle) {
                                             LazyRow(
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
@@ -384,7 +403,7 @@ fun HomeScreenMobile(
                             KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE -> {
                                 if (upcomingVisible) {
                                     item(key = "upcoming") {
-                                        MobileSection(title = "Upcoming") {
+                                        MobileSection(title = upcomingTitle) {
                                             LazyRow(
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
@@ -442,7 +461,15 @@ fun HomeScreenMobile(
                             ) {
                                 MobileSection(
                                     title = mobileRailTitle(
-                                        catalogName = rail.catalogName,
+                                        // A rename from the home manager (a Top
+                                        // Today row, a built catalog) beats
+                                        // the rail's own name - the same
+                                        // argument the TV rail passes. Without
+                                        // it the manager's name reached both
+                                        // platforms' builders and the TV's
+                                        // Home, and not this one.
+                                        catalogName = entry.titleOverride
+                                            ?: rail.catalogName,
                                         addonName = rail.addonName,
                                         type = rail.type,
                                         showType = showRailType,
@@ -1001,25 +1028,17 @@ private data class RailMenuTarget(
 )
 
 /**
- * The phone top bar: the wordmark and the profile it is browsing as.
+ * The phone top bar: the wordmark, and nothing else.
  *
- * It carries branding and identity only. The four places it used to lead to
- * (search, live TV, library, settings) are the bottom bar's items now, hosted
- * by the shell so they are one tap away from every top-level screen instead of
- * only from the top of this one - see [MobileBottomNav]. The profile chip stays
- * here because switching identity is not one of the bar's five destinations.
+ * It has given up both of its old jobs. The four destinations it led to
+ * (search, live TV, library, settings) are the bottom bar's items, hosted by
+ * the shell so they are one tap away from every top-level screen; the profile
+ * chip followed them for the same reason - the switcher is reachable from all
+ * five screens there, and from nowhere on the other four while it lived here
+ * (see [MobileBottomNav]). One switcher, in one place.
  */
 @Composable
-private fun MobileTopBar(
-    onSwitchProfile: () -> Unit
-) {
-    val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
-    val profileName = activeProfile?.name?.takeIf { it.isNotBlank() } ?: "PROFILES"
-
-    // The wordmark and the profile chip are all that is left, so the bar no
-    // longer has to shrink itself to fit four icon buttons at 360dp - but the
-    // chip still caps its width, or a long profile name would push the wordmark
-    // out of view.
+private fun MobileTopBar() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1034,19 +1053,7 @@ private fun MobileTopBar(
             style = MaterialTheme.typography.titleLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = profileName,
-            color = KBAccent,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .widthIn(max = 140.dp)
-                .clip(KBShapeCard)
-                .clickable(onClick = onSwitchProfile)
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -1510,6 +1517,29 @@ private fun heroMetaLine(meta: Meta): String =
         meta.imdbRating?.takeIf { it.isNotBlank() }?.let { "★ $it" },
         meta.type.replaceFirstChar { it.uppercase() }
     ).joinToString("  ·  ")
+
+/**
+ * The title one of the app's own Home rows draws: the viewer's rename from the
+ * home manager, else the key's default title, else [fallback].
+ *
+ * The phone's spelling of the television's `builtinRailTitle`
+ * ([com.kennyb1201.kbstream.ui.home.HomeScreen]), and deliberately the same
+ * order of precedence: a blank name is not a name (the manager never stores
+ * one, so this is defensive), and a rail the manager has no default for keeps
+ * the title the screen has always drawn.
+ *
+ * Extracted from the composition so the rule has a behavioural test - the
+ * field report this fixes was a row whose title "could not" be renamed because
+ * the screen passed a string literal, and a source-only check of the call site
+ * would not have caught a fallback that swallowed the override.
+ */
+internal fun mobileBuiltinRailTitle(
+    renames: Map<String, String>,
+    key: String,
+    fallback: String
+): String = renames[key]?.takeIf { it.isNotBlank() }
+    ?: KBHomeOrderPrefs.builtinDefaultTitle(key)
+    ?: fallback
 
 /** The TV rail header's rule, spelled for the phone (see `homeRailTitle`). */
 private fun mobileRailTitle(

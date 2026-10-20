@@ -160,6 +160,47 @@ class DeviceLocalDisplayPrefsTest {
         }
     }
 
+    @Test
+    fun `the detail episode layout is local, defaults to the list and never publishes`() {
+        // The same decision as the three keys above: how a season is browsed on
+        // a phone is screen geometry, not identity. It defaults to the vertical
+        // list, so an install that never touches the switch keeps the page it
+        // always had, and it never rides the display blob.
+        assertFalse(
+            "the list is the default",
+            AppPreferences.getDetailEpisodeRail(context)
+        )
+        AppPreferences.setDetailEpisodeRail(context, true)
+        assertTrue(AppPreferences.getDetailEpisodeRail(context))
+
+        store.edit()
+            .putBoolean("detail_episode_rail", true)
+            .putBoolean("poster_caption_year", false)
+            .commit()
+        assertNull(
+            "a phone's episode layout must not leave the device",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["detail_episode_rail"]
+        )
+        assertNotNull(
+            "the rest of the display prefs still sync",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["poster_caption_year"]
+        )
+
+        val body = functionBody(readAppPreferences(), "fun setDetailEpisodeRail(")
+        assertTrue(
+            "the setter must write its own key: $body",
+            body.contains("KEY_DETAIL_EPISODE_RAIL")
+        )
+        assertTrue(
+            "and tick the local revision, so the page it changed re-reads it: $body",
+            body.contains("notifyDisplayPrefChanged()")
+        )
+        assertFalse(
+            "but never push the display blob - this key does not sync: $body",
+            body.contains("syncDisplayPrefsBlob") || body.contains("enqueuePrefs")
+        )
+    }
+
     /** A top-level member's body: [signature] up to its 4-space-indented brace. */
     private fun functionBody(source: String, signature: String): String {
         val start = source.indexOf(signature)

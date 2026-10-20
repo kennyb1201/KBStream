@@ -827,10 +827,22 @@ private suspend fun recoveredEpisodeAlreadyWatched(
             false
         )
 
-        // Launch, or rebuild? Read before anything composes, because the app
-        // shell's saveable state has to know which one it is restoring into
-        // (see AppRoot's `coldLaunch`).
-        val coldLaunch = !shellStarted
+        // Launch, rebuild - or a RETURN from another app? Read before anything
+        // composes, because the app shell's saveable state has to know which
+        // one it is restoring into (see AppRoot's `coldLaunch`, and
+        // [isColdLaunch] for the decision itself).
+        //
+        // `savedInstanceState` is the phone's half: a create handed the kept
+        // task's state is the system having killed this process while the app
+        // was backgrounded, not the viewer starting it. Gating that restore to
+        // Who's Watching is what made every app switch reopen the picker. A
+        // television ignores the argument (see isColdLaunch), so its launch
+        // gate is unchanged.
+        val coldLaunch = isColdLaunch(
+            shellStarted = shellStarted,
+            isTv = FormFactor.isTv,
+            hasSavedState = savedInstanceState != null
+        )
         shellStarted = true
 
         // Establish the active profile BEFORE the first composition. The
@@ -1853,6 +1865,16 @@ fun AppRoot(
             MobileNavDestination.Library -> navToLibrary()
             MobileNavDestination.Settings -> navToSettings()
         }
+    }
+    // The bar's profile door. Same picker Home's top-bar chip opened, and the
+    // same return rule: the picker hands back the screen it was opened from, so
+    // a switch on Search lands back on Search under the new profile instead of
+    // dropping the viewer on Home. The rules behind the door (PIN/exit gates,
+    // kids restrictions) are the picker's and are untouched - this only moves
+    // the button. Only the five top-level screens ever show the bar, which is
+    // why `screen` here is always one of them.
+    val onMobileSwitchProfile: () -> Unit = {
+        screen = Screen.ProfilePicker(returnTo = screen)
     }
     // Which item is lit - and whether the bar exists at all. Derived from the
     // screen being drawn, so it cannot disagree with what is on screen (Back
@@ -3408,8 +3430,7 @@ fun AppRoot(
             subtitle = null,
             tmdbId = splashTmdbId(playerSplash.parentType, playerSplash.parentId)
         )
-    }
-    }
+    } // closes the splash picker's `when`
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
 
     // Emitted LAST - after the screen-transition container, so it is the
@@ -3420,19 +3441,29 @@ fun AppRoot(
     if (splashVisible) {
         LaunchSplash()
     }
+    // The Box closes AFTER the splash, because the splash is its last child.
+    // Closing it a line early - which is what this used to do - left the
+    // splash and the bottom bar as children of the column's PARENT instead:
+    // the shell is a stacking host there, so the bar drew across the top of
+    // the window rather than at the bottom of it, and the launch splash took
+    // a layout slot instead of covering the screen.
     } // closes the screen Box above the bottom bar
 
     // The bar, on the phone's five top-level destinations and nowhere else.
-    // Drawn after the screen (and after the launch splash), so it is the last
-    // thing in the column and nothing can compose over it.
+    // It is a CHILD of this column and the column's last one: the screen above
+    // holds `weight(1f)`, so the bar takes its own height off the bottom of
+    // the window instead of being stacked over the screen. Emitting it outside
+    // this column is what drew the five items along the top of the display.
     mobileNavDestination?.let { destination ->
         MobileBottomNav(
             selected = destination,
-            onSelect = onMobileNavSelect
+            onSelect = onMobileNavSelect,
+            onSwitchProfile = onMobileSwitchProfile
         )
     }
-    } // closes the shell Column
+    } // closes the shell Column - after the bar, so the bar is inside it
     } // closes HeroTransitionHost
+    } // closes AppRoot
 }
 
 @Composable

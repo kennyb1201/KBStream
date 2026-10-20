@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.mobile
 
+import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -308,6 +310,98 @@ class HomeScreenMobileContractTest {
         assertTrue(
             "hosting the phone's own manager, not the TV dialog",
             addons.contains("HomeManagerDialogMobile(")
+        )
+    }
+
+    // ------------------------------------------------------- rail renames
+
+    /**
+     * A rail renamed in the home manager reached both builders and the TV's
+     * Home while the phone went on drawing the original name, so the rule is
+     * asserted as behaviour: the override wins, and a cleared name restores
+     * the default.
+     */
+    @Test
+    fun `a rename decides a built-in row's phone title`() {
+        assertEquals(
+            "a rename from the manager must win on a phone",
+            "What I'm Watching",
+            mobileBuiltinRailTitle(
+                renames = mapOf(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to "What I'm Watching"
+                ),
+                key = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                fallback = "Continue Watching"
+            )
+        )
+        assertEquals(
+            "and on the Upcoming row",
+            "Next Up",
+            mobileBuiltinRailTitle(
+                renames = mapOf(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE to "Next Up"),
+                key = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+                fallback = "Upcoming"
+            )
+        )
+        assertEquals(
+            "clearing a rename restores the key's default title",
+            "Continue Watching",
+            mobileBuiltinRailTitle(
+                renames = mapOf(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING to "  "),
+                key = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                fallback = "What I'm Watching"
+            )
+        )
+        assertEquals(
+            "an unrenamed rail keeps the key's default, not the caller's fallback",
+            "Upcoming",
+            mobileBuiltinRailTitle(
+                renames = emptyMap(),
+                key = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+                fallback = "Something Else"
+            )
+        )
+        assertEquals(
+            "a key the manager has no default for keeps the caller's title",
+            "Watchlist",
+            mobileBuiltinRailTitle(
+                renames = emptyMap(),
+                key = "not-a-builtin",
+                fallback = "Watchlist"
+            )
+        )
+    }
+
+    @Test
+    fun `the phone takes its built-in titles and add-on names from the arrangement`() {
+        val mobile = mobileHome()
+        assertTrue(
+            "the built-in rows must read the home manager's renames - the same " +
+                "arrangement the merge is built from, so a rename that arrives by " +
+                "sync re-titles the row",
+            mobile.contains("renames = kbState.arrangement.renames")
+        )
+        assertTrue(
+            "and the resolved titles must be the ones the sections draw",
+            mobile.contains("title = continueWatchingTitle") &&
+                mobile.contains("title = upcomingTitle")
+        )
+        // The literals that were the bug: a section titled by a constant cannot
+        // show a rename, however correct the arrangement is.
+        listOf("Continue Watching", "Upcoming").forEach { literal ->
+            assertFalse(
+                "no built-in section may be titled by the \"$literal\" literal",
+                mobile.contains("title = \"$literal\"")
+            )
+        }
+        assertTrue(
+            "an add-on rail must draw the manager's name over the rail's own, " +
+                "exactly as the TV rail does (a Top Today row, a built catalog)",
+            mobile.contains("catalogName = entry.titleOverride ?: rail.catalogName")
+        )
+        assertTrue(
+            "and the name must still be composed through the shared header rule",
+            mobile.contains("title = mobileRailTitle(")
         )
     }
 

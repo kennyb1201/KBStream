@@ -149,13 +149,64 @@ class LaunchScreenGateTest {
         )
     }
 
+    // ── launch, rebuild, or return from another app ──────────────────
+
+    @Test
+    fun `a phone create carrying saved state is a return, not a launch`() {
+        // The field report: Android killed the process during an app switch and
+        // handed the re-created activity its saved state. The viewer never
+        // left, so the restore must be honoured instead of gated to the picker.
+        assertFalse(
+            isColdLaunch(shellStarted = false, isTv = false, hasSavedState = true)
+        )
+    }
+
+    @Test
+    fun `a phone create with no saved state is still a launch`() {
+        // A fresh task - swiped away in recents, or a first install - has
+        // nothing to restore, so Who's Watching still gates it.
+        assertTrue(
+            isColdLaunch(shellStarted = false, isTv = false, hasSavedState = false)
+        )
+    }
+
+    @Test
+    fun `a television ignores the saved state`() {
+        // TV is unchanged: each session starts under a chosen identity, whether
+        // or not the system kept a task's state.
+        assertTrue(isColdLaunch(shellStarted = false, isTv = true, hasSavedState = false))
+        assertTrue(isColdLaunch(shellStarted = false, isTv = true, hasSavedState = true))
+    }
+
+    @Test
+    fun `a rebuild in the same process is never a launch`() {
+        // A rotation, the theme recreate, coming back from the player: all of
+        // them re-create this same process's activity, so none is a launch.
+        listOf(false, true).forEach { isTv ->
+            listOf(false, true).forEach { saved ->
+                assertFalse(
+                    "a rebuild must never reopen the picker (isTv=$isTv saved=$saved)",
+                    isColdLaunch(shellStarted = true, isTv = isTv, hasSavedState = saved)
+                )
+            }
+        }
+    }
+
     @Test
     fun `the cold-launch flag is claimed once per process and reaches the gate`() {
         val main = source(MAIN)
 
         assertTrue(
             "the first create of the process claims the launch; later ones are rebuilds",
-            main.contains("val coldLaunch = !shellStarted")
+            main.contains("shellStarted = true")
+        )
+        assertTrue(
+            "and the decision is the shared one, made from the process flag, the " +
+                "form factor and whatever the system restored",
+            main.contains("val coldLaunch = isColdLaunch(") &&
+                main.contains("shellStarted = shellStarted") &&
+                main.contains("isTv = FormFactor.isTv") &&
+                main.contains("hasSavedState = savedInstanceState != null")
         )
         assertTrue(
             "and the shell is told which one it is",
@@ -164,6 +215,45 @@ class LaunchScreenGateTest {
         assertTrue(
             "the gate reads that flag",
             main.contains("launchScreenSaver(profilesExist, coldLaunch)")
+        )
+    }
+
+    @Test
+    fun `a restored screen cannot walk around the kids time lock`() {
+        // The change above lets a phone restore into a live profile instead of
+        // the picker. That must not become a way past the time lock: the veil
+        // answers to the guard's evaluation of the ACTIVE profile, not to how
+        // the screen was reached, and the guard is live before the first
+        // composition on every create - a process-death return included.
+        val main = source(MAIN)
+        assertTrue(
+            "the shell composes the veil for every screen",
+            main.contains("KidsTimeLockOverlay()")
+        )
+        assertTrue(
+            "and it opens only on the guard's locked state",
+            main.contains("if (!lockState.locked) return")
+        )
+        assertFalse(
+            "the launch flag must not be a key to the veil: a restored screen is " +
+                "veiled exactly like one reached through the picker",
+            main.substringAfter("private fun KidsTimeLockOverlay()")
+                .substringBefore("\n@Composable")
+                .contains("coldLaunch")
+        )
+        assertTrue(
+            "the guard is started before anything composes, so a restored process " +
+                "already has an answer for the active profile at the first frame",
+            main.indexOf("KidsTimeGuard.start(applicationContext)") in
+                0 until main.indexOf("setContent {")
+        )
+        val guard = source(GUARD)
+        assertTrue(
+            "and foregrounding re-evaluates it - which is exactly what a return " +
+                "from another app is",
+            guard.contains("fun onAppStart() {") &&
+                guard.contains("foregrounded = true") &&
+                guard.contains("evaluate()")
         )
     }
 
@@ -203,5 +293,6 @@ class LaunchScreenGateTest {
 
     private companion object {
         const val MAIN = "com/kennyb1201/kbstream/MainActivity.kt"
+        const val GUARD = "com/kennyb1201/kbstream/data/sync/KidsTimeGuard.kt"
     }
 }

@@ -23,12 +23,17 @@ import retrofit2.converter.moshi.MoshiConverterFactory
  * device could not keep it. The code was consumed by that very exchange, so
  * re-polling can only read 404 - the caller must say "approved, but not saved"
  * and stop, not retry ([TraktPollExchange]).
+ *
+ * [statusCode] is the HTTP status the read carried (null when there was none),
+ * because [state] alone loses the one distinction the flow's ending needs: a
+ * 404 after a poll threw is the spent code being read again, not an expiry.
  */
 data class TraktPollResult(
     val state: TraktDeviceFlowRules.Poll,
     val token: TraktToken? = null,
     val retryAfterSeconds: Long? = null,
-    val saveError: String? = null
+    val saveError: String? = null,
+    val statusCode: Int? = null
 )
 
 /**

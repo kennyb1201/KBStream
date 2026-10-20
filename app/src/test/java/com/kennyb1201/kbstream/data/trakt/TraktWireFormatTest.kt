@@ -4,6 +4,8 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,9 +23,90 @@ class TraktWireFormatTest {
         .addLast(KotlinJsonAdapterFactory())
         .build()
 
+    /**
+     * The same builder WITHOUT the reflection fallback.
+     *
+     * Moshi's built-in factory resolves a `@JsonClass(generateAdapter = true)`
+     * class by the generated `<Name>JsonAdapter`; with no Kotlin factory behind
+     * it, a model that lost its annotation cannot parse at all. That is what
+     * makes the two tests below evidence of codegen rather than of Moshi's
+     * ability to reflect.
+     */
+    private val codegenOnly: Moshi = Moshi.Builder().build()
+
     private fun <T> listAdapter(type: Class<T>) = moshi.adapter<List<T>>(
         Types.newParameterizedType(List::class.java, type)
     )
+
+    /**
+     * The failure this pins was invisible here and fatal in the release APK: the
+     * token response's optional `error` fields rely on a defaulted constructor
+     * call, and in an R8 build the reflective adapter threw "This callable does
+     * not support a default call" instead. Trakt had already consumed the code
+     * by then, so the next poll read 404 and the screen said "expired".
+     *
+     * A generated adapter does not call the constructor reflectively at all, so
+     * the assertion is that Moshi resolves the CODEGEN class by name rather than
+     * falling through to [KotlinJsonAdapterFactory].
+     */
+    @Test
+    fun `every wire model resolves to its generated adapter, not the reflective one`() {
+        listOf(
+            TraktTokenResponse::class.java,
+            TraktDeviceCodeResponse::class.java,
+            TraktWatchedShow::class.java,
+            TraktListItem::class.java,
+            TraktComment::class.java,
+            // Request bodies too: reflective serialization carries the same R8 risk.
+            TraktScrobbleRequest::class.java,
+            TraktRefreshRequest::class.java,
+            TraktDeviceTokenRequest::class.java,
+            TraktRevokeRequest::class.java,
+            TraktSyncHistoryRequest::class.java
+        ).forEach { type ->
+            // The generated class is the one Moshi looks up by name.
+            val generated = Class.forName("${type.name}JsonAdapter")
+            assertTrue(
+                "${type.simpleName} must ship a codegen adapter, or a release " +
+                    "build reflects into a defaulted constructor",
+                com.squareup.moshi.JsonAdapter::class.java.isAssignableFrom(generated)
+            )
+            // And Moshi must actually find it, with nothing to reflect with.
+            codegenOnly.adapter(type)
+        }
+    }
+
+    /**
+     * The exact 200 body the live flow returns after approval: the token fields
+     * are all there and `error`/`error_description` are absent. That combination
+     * is what the reflective adapter could not construct.
+     */
+    @Test
+    fun `the live 200 token body parses with its error fields absent`() {
+        val json = """
+            {
+              "access_token": "live-access-token",
+              "token_type": "bearer",
+              "expires_in": 7776000,
+              "refresh_token": "live-refresh-token",
+              "scope": "public",
+              "created_at": 1761000000
+            }
+        """.trimIndent()
+
+        // Codegen ONLY: this is the path the minified release build takes.
+        val body = codegenOnly.adapter(TraktTokenResponse::class.java).fromJson(json)
+
+        assertNotNull("a 200 with a token must construct, not throw", body)
+        assertEquals("live-access-token", body?.accessToken)
+        assertEquals("live-refresh-token", body?.refreshToken)
+        assertEquals("bearer", body?.tokenType)
+        assertEquals("public", body?.scope)
+        assertEquals(7_776_000L, body?.expiresInSeconds)
+        assertEquals(1_761_000_000L, body?.createdAtEpochSeconds)
+        assertNull("the grant carries no OAuth error", body?.error)
+        assertNull(body?.errorDescription)
+    }
 
     @Test
     fun `a watched-shows page parses its nested seasons and episodes`() {

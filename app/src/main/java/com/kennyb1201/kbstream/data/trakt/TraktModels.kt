@@ -1,8 +1,10 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
 
 /** `POST /oauth/device/code` - what the viewer is shown and what we poll with. */
+@JsonClass(generateAdapter = true)
 data class TraktDeviceCodeResponse(
     @Json(name = "device_code") val deviceCode: String,
     @Json(name = "user_code") val userCode: String,
@@ -12,6 +14,7 @@ data class TraktDeviceCodeResponse(
 )
 
 /** A granted token pair. Trakt's access tokens last 7 days. */
+@JsonClass(generateAdapter = true)
 data class TraktTokenResponse(
     @Json(name = "access_token") val accessToken: String? = null,
     @Json(name = "refresh_token") val refreshToken: String? = null,
@@ -38,21 +41,25 @@ data class TraktToken(
 )
 
 /** `GET /users/settings`, only for the account line on the connect screen. */
+@JsonClass(generateAdapter = true)
 data class TraktUserSettings(
     @Json(name = "user") val user: TraktUser? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktUser(
     @Json(name = "username") val username: String? = null,
     @Json(name = "name") val name: String? = null,
     @Json(name = "ids") val ids: TraktUserIds? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktUserIds(
     @Json(name = "slug") val slug: String? = null
 )
 
 /** Body of `POST /oauth/device/code`. */
+@JsonClass(generateAdapter = true)
 data class TraktDeviceCodeRequest(
     @Json(name = "client_id") val clientId: String
 )
@@ -63,12 +70,14 @@ data class TraktDeviceCodeRequest(
  * No `client_secret`: the device flow is a public-client flow and this app
  * cannot ship a secret (see [TraktConfig]).
  */
+@JsonClass(generateAdapter = true)
 data class TraktDeviceTokenRequest(
     @Json(name = "code") val code: String,
     @Json(name = "client_id") val clientId: String
 )
 
 /** Body of `POST /oauth/token` (the refresh grant). */
+@JsonClass(generateAdapter = true)
 data class TraktRefreshRequest(
     @Json(name = "refresh_token") val refreshToken: String,
     @Json(name = "client_id") val clientId: String,
@@ -77,6 +86,7 @@ data class TraktRefreshRequest(
 )
 
 /** Body of `POST /oauth/revoke`. */
+@JsonClass(generateAdapter = true)
 data class TraktRevokeRequest(
     @Json(name = "token") val token: String,
     @Json(name = "client_id") val clientId: String
@@ -92,6 +102,7 @@ data class TraktRevokeRequest(
  * own numeric id, so all four forms travel together and Trakt resolves the one
  * it needs.
  */
+@JsonClass(generateAdapter = true)
 data class TraktIds(
     @Json(name = "trakt") val trakt: Int? = null,
     @Json(name = "slug") val slug: String? = null,
@@ -101,6 +112,7 @@ data class TraktIds(
 )
 
 /** A movie (or show) as a write body or an extended list row. */
+@JsonClass(generateAdapter = true)
 data class TraktMediaEntry(
     @Json(name = "title") val title: String? = null,
     @Json(name = "year") val year: Int? = null,
@@ -109,12 +121,14 @@ data class TraktMediaEntry(
 )
 
 /** Artwork, only present when a list read asks for `extended=images`. */
+@JsonClass(generateAdapter = true)
 data class TraktImages(
     @Json(name = "poster") val poster: List<String> = emptyList(),
     @Json(name = "fanart") val fanart: List<String> = emptyList()
 )
 
 /** `POST /scrobble/{start,pause,stop}`. */
+@JsonClass(generateAdapter = true)
 data class TraktScrobbleRequest(
     @Json(name = "movie") val movie: TraktMediaEntry? = null,
     @Json(name = "show") val show: TraktMediaEntry? = null,
@@ -122,11 +136,13 @@ data class TraktScrobbleRequest(
     @Json(name = "progress") val progress: Int
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktEpisodeNumber(
     @Json(name = "season") val season: Int,
     @Json(name = "number") val number: Int
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktScrobbleResponse(
     @Json(name = "action") val action: String? = null,
     @Json(name = "progress") val progress: Double? = null,
@@ -134,22 +150,26 @@ data class TraktScrobbleResponse(
 )
 
 /** `POST /sync/history` (and `/sync/history/remove`, which shares the shape). */
+@JsonClass(generateAdapter = true)
 data class TraktSyncHistoryRequest(
     @Json(name = "movies") val movies: List<TraktMediaEntry>? = null,
     @Json(name = "shows") val shows: List<TraktShowHistoryEntry>? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktShowHistoryEntry(
     @Json(name = "ids") val ids: TraktIds? = null,
     @Json(name = "seasons") val seasons: List<TraktSeasonHistoryEntry>? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktSeasonHistoryEntry(
     @Json(name = "number") val number: Int,
     @Json(name = "episodes") val episodes: List<TraktEpisodeNumber>? = null
 )
 
 /** One row of `GET /sync/watched/shows`. */
+@JsonClass(generateAdapter = true)
 data class TraktWatchedShow(
     @Json(name = "plays") val plays: Int? = null,
     @Json(name = "last_watched_at") val lastWatchedAt: String? = null,
@@ -157,11 +177,13 @@ data class TraktWatchedShow(
     @Json(name = "seasons") val seasons: List<TraktWatchedSeason> = emptyList()
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktWatchedSeason(
     @Json(name = "number") val number: Int,
     @Json(name = "episodes") val episodes: List<TraktWatchedEpisode>? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktWatchedEpisode(
     @Json(name = "number") val number: Int,
     @Json(name = "plays") val plays: Int? = null,
@@ -169,6 +191,7 @@ data class TraktWatchedEpisode(
 )
 
 /** One row of `GET /sync/watched/movies`. */
+@JsonClass(generateAdapter = true)
 data class TraktWatchedMovie(
     @Json(name = "plays") val plays: Int? = null,
     @Json(name = "last_watched_at") val lastWatchedAt: String? = null,
@@ -182,6 +205,7 @@ data class TraktWatchedMovie(
  * Trakt never reports where in the file the viewer stopped. A movie row carries
  * [movie]; an episode row carries [show] and [episode].
  */
+@JsonClass(generateAdapter = true)
 data class TraktPlaybackItem(
     @Json(name = "id") val id: Long? = null,
     @Json(name = "progress") val progress: Double? = null,
@@ -192,6 +216,7 @@ data class TraktPlaybackItem(
     @Json(name = "episode") val episode: TraktPlaybackEpisode? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktPlaybackEpisode(
     @Json(name = "season") val season: Int? = null,
     @Json(name = "number") val number: Int? = null,
@@ -199,6 +224,7 @@ data class TraktPlaybackEpisode(
 )
 
 /** One row of `GET /users/me/lists` (a personal list's summary). */
+@JsonClass(generateAdapter = true)
 data class TraktUserList(
     @Json(name = "name") val name: String? = null,
     @Json(name = "description") val description: String? = null,
@@ -207,12 +233,14 @@ data class TraktUserList(
     @Json(name = "ids") val ids: TraktListIds? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktListIds(
     @Json(name = "trakt") val trakt: Int? = null,
     @Json(name = "slug") val slug: String? = null
 )
 
 /** One row of `GET /users/{user}/lists/{list}/items/{type}`. */
+@JsonClass(generateAdapter = true)
 data class TraktListItem(
     @Json(name = "rank") val rank: Int? = null,
     @Json(name = "type") val type: String? = null,
@@ -221,6 +249,7 @@ data class TraktListItem(
 )
 
 /** One row of `GET /search/{id_type}/{id}` (TMDB id resolution). */
+@JsonClass(generateAdapter = true)
 data class TraktSearchResult(
     @Json(name = "type") val type: String? = null,
     @Json(name = "movie") val movie: TraktMediaEntry? = null,
@@ -234,6 +263,7 @@ data class TraktSearchResult(
  * present under `extended=full`, which is what makes an author name available
  * to the review card.
  */
+@JsonClass(generateAdapter = true)
 data class TraktComment(
     @Json(name = "id") val id: Long = 0L,
     @Json(name = "comment") val comment: String? = null,
@@ -245,6 +275,7 @@ data class TraktComment(
     @Json(name = "user") val user: TraktCommentUser? = null
 )
 
+@JsonClass(generateAdapter = true)
 data class TraktCommentUser(
     @Json(name = "username") val username: String? = null,
     @Json(name = "name") val name: String? = null

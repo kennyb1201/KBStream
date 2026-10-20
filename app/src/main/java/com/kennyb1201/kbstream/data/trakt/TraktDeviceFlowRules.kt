@@ -92,6 +92,22 @@ object TraktDeviceFlowRules {
         }
     }
 
+    /**
+     * What an `EXPIRED` read really is, given the whole flow so far.
+     *
+     * A 404 means "that code expired" on its own, and it stays that way when
+     * every poll in the flow produced a status. After a poll THREW, it does not:
+     * the request that threw may have been the 200 that traded the code for a
+     * token (Trakt deletes the code on exchange), so the 404 is that spent code
+     * being read again and the fault is this app's, not the viewer's timeout.
+     * Reported as [Poll.FAILED] so the screen can be honest about it.
+     *
+     * Only 404 moves: 409/410 are Trakt stating the code is gone, which a local
+     * throw cannot explain away.
+     */
+    fun expiredOutcome(sawPollError: Boolean, statusCode: Int?): Poll =
+        if (sawPollError && statusCode == 404) Poll.FAILED else Poll.EXPIRED
+
     /** OAuth errors that mean "this client is not accepted", not "not yet". */
     private val CREDENTIAL_ERRORS = setOf(
         "invalid_client",
@@ -141,4 +157,39 @@ object TraktDeviceFlowRules {
         if (expiresAtEpochMillis <= 0L) return true
         return nowMs >= expiresAtEpochMillis - skewMs
     }
+}
+
+/**
+ * The two facts about one device flow's polls that its ending depends on.
+ *
+ * A single poll cannot answer "did this flow already go wrong?". The loop used
+ * to decide from the last read alone, so `[400, throw, 404]` read as a timeout:
+ * the throw was counted as one more failed poll, the retry hit a code that the
+ * throwing poll had already spent, and the screen blamed the viewer's clock.
+ * The loop records both facts here instead, and [TraktDeviceFlowRules.expiredOutcome]
+ * turns them into the outcome it reports. Pure, so the sequence is a test rather
+ * than a field report.
+ */
+class TraktFlowEvidence {
+
+    private var sawPollError = false
+
+    private var lastStatusCode: Int? = null
+
+    /** One completed read: the status is what Trakt answered (null for none). */
+    fun recordPoll(statusCode: Int?) {
+        lastStatusCode = statusCode
+    }
+
+    /** A poll that threw before any status could be read. */
+    fun recordThrow() {
+        sawPollError = true
+    }
+
+    /** What the flow's `EXPIRED` read may be reported as. */
+    fun expiredOutcome(): TraktDeviceFlowRules.Poll =
+        TraktDeviceFlowRules.expiredOutcome(
+            sawPollError = sawPollError,
+            statusCode = lastStatusCode
+        )
 }

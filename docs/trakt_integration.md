@@ -47,30 +47,47 @@ TV page and the touch twin, both routed through `Screen.Trakt` and reached from 
    of retrying a spent code. The poll is also written to the diagnostics before
    any storage work, so a 200 is never missing from the evidence. See
    `TraktPollExchange`.
-4. **Refresh is proactive.** Access tokens last 7 days; the token is refreshed
+4. **Nothing on the wire is read by reflection.** Every model in
+   `TraktModels.kt` carries `@JsonClass(generateAdapter = true)` (request bodies
+   included), so Moshi uses the KSP-generated adapter and never constructs a
+   Kotlin class reflectively. That is not tidiness: in 0.9.4's minified release
+   build, the reflective adapter for `TraktTokenResponse` threw "This callable
+   does not support a default call" on the 200 that carried no `error` fields -
+   after Trakt had consumed the code - and the next poll's `404` was reported as
+   an expired code. `KotlinJsonAdapterFactory` stays registered last as a
+   fallback, and `TraktWireFormatTest` resolves every model with a
+   reflection-free `Moshi` so a model that loses its annotation fails the
+   build's tests rather than a release.
+5. **A poll that threw cannot be called an expiry.** `TraktFlowEvidence`
+   records whether anything in this attempt threw and what the last status was;
+   a `404` after a throw is reported as "Something went wrong reading Trakt's
+   reply" (the throwing poll may have been the 200 that spent the code), while a
+   `404` with no throw keeps the old "that code expired" meaning. `409/410` are
+   Trakt saying the code is gone either way.
+6. **Refresh is proactive.** Access tokens last 7 days; the token is refreshed
    with a day in hand, never on a 401 in front of the first scrobble. Trakt's
    refresh tokens are single-use, so the stored pair is always replaced.
-5. **The store is its own file, and encrypted.** `<profile>.trakt_auth` cannot
+7. **The store is its own file, and encrypted.** `<profile>.trakt_auth` cannot
    collide with `<profile>.simkl_auth` (Diagnostics and the cloud readers
    address stores by name), and there is no plaintext migration path because
    nothing predates it. A file that will not open at all (a keyset an earlier
    build left behind, a restored backup) is deleted and rebuilt ONCE before the
    save is allowed to fail; Simkl's store is untouched by that path.
-6. **Disconnect clears Trakt only.** `revokeAndClear()` revokes the grant and
+8. **Disconnect clears Trakt only.** `revokeAndClear()` revokes the grant and
    drops the session keys. Local history, resume rows, watched markers and
    badges are untouched - Simkl's unlink wiping them was audit m10, and the
    contract test asserts this repository cannot reach that data layer at all.
-7. **A kids profile needs the parent PIN.** `startConnect()` refuses without
+9. **A kids profile needs the parent PIN.** `startConnect()` refuses without
    one, and the flow only begins after `verifyParentPin`; a parentless
    (PIN-less) kids profile is told to set one.
-8. **The budget exists before the traffic does.** `TraktRateGuard` is the
+10. **The budget exists before the traffic does.** `TraktRateGuard` is the
    MDBList lesson stated up front: bounded calls per window, `Retry-After`
    honoured, and exhaustion reports "no answer" rather than an empty result.
-9. **Watched state is a union, and a union only adds.** Home reads Trakt's
+11. **Watched state is a union, and a union only adds.** Home reads Trakt's
    watched episodes beside Simkl's and MDBList's; the badges test membership in
    all three snapshots. Watched anywhere is watched everywhere, with no
    conflict resolution.
-10. **A tracker failure is not "nothing watched".** Every read is guarded on
+12. **A tracker failure is not "nothing watched".** Every read is guarded on
    `isConfigured()` + `hasToken()` and sets `trackerReadFailed` when it throws;
    budget exhaustion keeps the previous snapshot. A blank rail is the one
    outcome the integration must never cause.
@@ -268,8 +285,10 @@ The Trakt tests cover the pure rules (`TraktDeviceFlowRulesTest`,
 the phase-A invariants (`TraktWiringContractTest`), and the poll's monotonic
 clock plus its diagnostics (`TraktPollClockContractTest`, `TraktPollTraceTest`),
 the terminal-200 / approved-but-unsaved outcome
-(`TraktPollExchangeTest`, `TraktApprovedButUnsavedContractTest`), the store's
-one-shot rebuild (`TraktTokenStoreRebuildTest`),
+(`TraktPollExchangeTest`, `TraktApprovedButUnsavedContractTest`), the codegen
+adapters and the live 200 fixture (`TraktWireFormatTest`), the flow-level rule
+that stops a parse throw reading as an expiry (`TraktFlowEvidenceTest`), the
+store's one-shot rebuild (`TraktTokenStoreRebuildTest`),
 the WATCHED tile rule (`TraktWatchedCountsTest`), and the QR/counts placement on
 both connect layouts (`TraktConnectSurfacesContractTest`). `QrCodeEncodingTest`
 encodes both activation URLs through the shared helper under Robolectric.

@@ -86,9 +86,16 @@ internal class TraktPollExchange(
             )
         }
         if (state != TraktDeviceFlowRules.Poll.APPROVED) {
-            return TraktPollResult(state, retryAfterSeconds = http.retryAfterSeconds)
+            return TraktPollResult(
+                state,
+                retryAfterSeconds = http.retryAfterSeconds,
+                statusCode = http.statusCode
+            )
         }
-        val granted = http.body ?: return TraktPollResult(TraktDeviceFlowRules.Poll.FAILED)
+        val granted = http.body ?: return TraktPollResult(
+            TraktDeviceFlowRules.Poll.FAILED,
+            statusCode = http.statusCode
+        )
         val token = TraktToken(
             accessToken = granted.accessToken.orEmpty(),
             refreshToken = granted.refreshToken,
@@ -102,7 +109,11 @@ internal class TraktPollExchange(
         // so there is no second chance to read this token pair.
         return try {
             save(token)
-            TraktPollResult(TraktDeviceFlowRules.Poll.APPROVED, token)
+            TraktPollResult(
+                TraktDeviceFlowRules.Poll.APPROVED,
+                token,
+                statusCode = http.statusCode
+            )
         } catch (cancellation: CancellationException) {
             // The screen is leaving; this is not a storage fault to report and
             // not a poll worth repeating either.
@@ -111,7 +122,8 @@ internal class TraktPollExchange(
             TraktPollTrace.recordSaveFailure(error)
             TraktPollResult(
                 state = TraktDeviceFlowRules.Poll.APPROVED,
-                saveError = TraktPollTrace.describe(error)
+                saveError = TraktPollTrace.describe(error),
+                statusCode = http.statusCode
             )
         }
     }

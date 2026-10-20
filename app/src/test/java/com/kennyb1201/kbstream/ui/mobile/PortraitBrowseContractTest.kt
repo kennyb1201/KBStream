@@ -173,20 +173,23 @@ class PortraitBrowseContractTest {
     // ── 3. The browse screens' portrait shape ────────────────────────────────
 
     @Test
-    fun `home's top bar fits a 360dp portrait phone without the four icons`() {
+    fun `home's top bar fits a 360dp portrait phone as the wordmark alone`() {
         // The bar used to fit five controls at 360dp by shrinking the four icon
         // buttons to 40dp. Those four destinations are the bottom bar's items
-        // now (see MobileBottomNav), so the header is branding and profile
-        // identity only - and it no longer has anything to squeeze.
+        // now (see MobileBottomNav), and the profile chip followed them there -
+        // so the header has a single child and nothing left to squeeze.
         val topBar = flat(mobile("HomeScreenMobile.kt"))
         assertTrue(
-            "the wordmark takes the leftover width and ellipsises instead of " +
+            "the wordmark takes the width it is given and ellipsises instead of " +
                 "overflowing",
-            topBar.contains("text = \"KBSTREAM\"") && topBar.contains("Modifier.weight(1f)")
+            topBar.contains("text = \"KBSTREAM\"") &&
+                topBar.contains("maxLines = 1") &&
+                topBar.contains("Modifier.fillMaxWidth()")
         )
         assertTrue(
-            "the profile chip is capped, so a long name cannot push the wordmark out",
-            topBar.contains(".widthIn(max = 140.dp)")
+            "the profile chip is gone: its door is the bottom bar's avatar",
+            !topBar.contains(".widthIn(max = 140.dp)") &&
+                !topBar.contains("onSwitchProfile")
         )
         assertTrue(
             "the four icon buttons are gone from the header; that is what makes it fit",
