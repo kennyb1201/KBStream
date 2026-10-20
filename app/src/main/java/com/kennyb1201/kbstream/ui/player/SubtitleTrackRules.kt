@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
+import com.kennyb1201.kbstream.data.player.LanguageMatch
 
 /**
  * Which text track a session should land on, and what this engine can actually
@@ -69,12 +70,20 @@ internal object SubtitleTrackRules {
     }
 
     /**
-     * A language tag, normalized: blank and the "und" (undetermined) code both
-     * mean the file does not say, which is what makes an untagged track
-     * untagged.
+     * A language tag in the form the rest of the player compares (see
+     * [LanguageMatch]): "eng" and "EN-us" both become "en", and a tag that
+     * states no language at all - blank, "und", "unknown", "mul", "zxx" -
+     * becomes null, which is what makes such a track untagged.
+     *
+     * The strict string compare this used to be is the "picked a random,
+     * non-English subtitle" report: the preference is stored as the two-letter
+     * code ("en") while the container tags its tracks with the three-letter
+     * one ("eng"), so the English track read as "some other language" and the
+     * other-language fallback armed whichever track came first. Every other
+     * language path in the player already goes through [LanguageMatch] - this
+     * was the one that did not, and it decides the track the session opens on.
      */
-    private fun normalize(language: String?): String? =
-        language?.trim()?.lowercase()?.takeIf { it.isNotEmpty() && it != "und" }
+    private fun normalize(language: String?): String? = LanguageMatch.canonical(language)
 
     /** Formats no text renderer can draw: these are bitmaps, not text. */
     fun isBitmapFormat(mimeType: String?): Boolean = when (mimeType) {

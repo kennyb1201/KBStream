@@ -282,6 +282,56 @@ class SubtitleTrackRulesTest {
         assertEquals(Choice.Show(0), choice)
     }
 
+    // ── The two spellings of a language ────────────────────────────────────
+    //
+    // The preference is stored two-letter and the container tags its tracks
+    // three-letter, so a strict compare read the English track as "some other
+    // language" and armed the other-language fallback - the field report of a
+    // random, non-English track on a file with several.
+
+    @Test
+    fun `the three-letter track tag is the two-letter preference`() {
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(listOf(srt("eng")), "en"))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(listOf(srt("en")), "eng"))
+    }
+
+    @Test
+    fun `the preferred track wins across spellings instead of the other-language fallback`() {
+        val tracks = listOf(srt("spa"), srt("eng"), srt("fre"))
+        assertEquals(
+            "the English track is the preference, so nothing else may be armed",
+            Choice.Show(1),
+            SubtitleTrackRules.choose(tracks, "en")
+        )
+    }
+
+    @Test
+    fun `a region or script subtag does not hide the language`() {
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(listOf(srt("en-US")), "eng"))
+        assertEquals(
+            "and it ranks as the preference, above an untagged track",
+            Choice.Show(0),
+            SubtitleTrackRules.choose(listOf(srt("en-GB"), srt(null)), "en")
+        )
+    }
+
+    @Test
+    fun `a track that names no language is untagged in every spelling muxers use`() {
+        listOf("und", "unknown", "mul", "zxx").forEach { tag ->
+            assertEquals(
+                "$tag states no language, so it ranks as untagged above another language",
+                Choice.Show(1),
+                SubtitleTrackRules.choose(listOf(srt("fra"), srt(tag)), "en")
+            )
+        }
+    }
+
+    @Test
+    fun `forced mode matches the language across spellings too`() {
+        val tracks = listOf(srt("spa", forced = true), srt("eng", forced = true))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.chooseForced(tracks, "en"))
+    }
+
     // ── Format badges ──────────────────────────────────────────────────────
 
     @Test
