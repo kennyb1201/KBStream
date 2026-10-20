@@ -167,18 +167,51 @@ class TraktConnectSurfacesContractTest {
     }
 
     @Test
-    fun `the repository spends one budget slot on the pair and hides half answers`() {
+    fun `the counts read walks every page and hides a failed one`() {
         val body = repository
             .substringAfter("suspend fun watchedCounts()")
             .substringBefore("suspend fun playbackSessions()")
 
-        assertTrue(body.contains("api.watchedMovies(authorization)"))
-        assertTrue(body.contains("api.watchedShows(authorization)"))
-        assertEquals("one slot for the pair", 1, occurrences(body, "guard.tryAcquire()"))
-        assertTrue(
-            "a failed response must be passed as null, not as an empty list",
-            body.contains("isSuccessful == true")
+        assertEquals(
+            "both halves go through the one paging helper, not a single call",
+            2,
+            occurrences(body, "readAllWatchedPages(")
         )
+        assertTrue(
+            "the movie read asks for a page and the Trakt page size",
+            body.contains("api.watchedMovies(authorization, page = page, limit = limit)")
+        )
+        assertTrue(
+            "and so does the show read",
+            body.contains("api.watchedShows(authorization, page = page, limit = limit)")
+        )
+        assertEquals(
+            "a failed page hides the row instead of counting what arrived",
+            2,
+            occurrences(body, "\n        ) ?: return null")
+        )
+        assertTrue(
+            "the tiles are the complete lists' sizes",
+            body.contains("traktWatchedCounts(movies = movies, shows = shows)")
+        )
+    }
+
+    @Test
+    fun `both watched reads carry page and limit`() {
+        val api = source("data/trakt/TraktApiService.kt")
+        listOf("watchedShows", "watchedMovies").forEach { name ->
+            val call = api
+                .substringAfter("suspend fun $name(")
+                .substringBefore("): Response<")
+            assertTrue(
+                "$name must ask for a page, or Trakt answers page 1 forever",
+                call.contains("@Query(\"page\") page: Int = 1")
+            )
+            assertTrue(
+                "$name must name the page size the loop assumes",
+                call.contains("@Query(\"limit\") limit: Int = 100")
+            )
+        }
     }
 
     @Test

@@ -82,16 +82,26 @@ interface TraktApiService {
         @Body body: TraktSyncHistoryRequest
     ): Response<Unit>
 
-    /** The account's watched shows, with their watched episodes nested. */
+    /**
+     * The account's watched shows, with their watched episodes nested.
+     *
+     * Trakt pages this read at [limit] per page (100 when the caller says
+     * nothing), so a single call is page 1 only: the repository walks the
+     * pages rather than trusting one answer to be the whole history.
+     */
     @GET("sync/watched/shows")
     suspend fun watchedShows(
-        @Header("Authorization") authorization: String
+        @Header("Authorization") authorization: String,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 100
     ): Response<List<TraktWatchedShow>>
 
-    /** The account's watched movies. */
+    /** The account's watched movies, one page at a time (see [watchedShows]). */
     @GET("sync/watched/movies")
     suspend fun watchedMovies(
-        @Header("Authorization") authorization: String
+        @Header("Authorization") authorization: String,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 100
     ): Response<List<TraktWatchedMovie>>
 
     /**

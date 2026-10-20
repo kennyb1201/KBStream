@@ -119,7 +119,15 @@ record.
 - One snapshot read serves both: `/sync/watched/shows` and
   `/sync/watched/movies` are cached for 15 minutes and keyed by the access
   token, so a profile switch cannot be served the previous profile's history.
-  A half-failed refresh keeps the half it did not hear about.
+- Both watched reads walk **every page**. Trakt pages them at 100, so the old
+  single call was page 1 and every title past the newest 100 read as
+  unwatched. The loop is driven by `X-Pagination-Page-Count` (then
+  `X-Pagination-Item-Count`, then "a short page ends it"), one page per
+  `TraktRateGuard` slot.
+- The refresh is **all-or-nothing**: a failure on any page - a non-2xx, a
+  transport error, an exhausted budget - keeps the previous snapshot rather
+  than publishing a partial history. There is no half-merge any more: a list
+  cut short would read as unwatched beyond the cut.
 
 ## Phase D — Trakt lists for KB folders
 
@@ -241,12 +249,14 @@ marks regardless.
 The connect page now shows the same two tiles Simkl's does, labelled
 "MOVIES WATCHED" / "SHOWS WATCHED" (Trakt's own noun, not Simkl's "series").
 They are the list sizes of `GET /sync/watched/movies` and
-`GET /sync/watched/shows`, read once per entry into the connected state under a
-single `TraktRateGuard` slot. Any failure - a non-2xx, a transport error, no
-token, an exhausted budget, or only one of the two answering - stores null and
-hides the row; "Connected to Trakt." is unaffected. This is display-only: Home
-and the badges still read the watched snapshot (`watchedSnapshot`), not these
-counts.
+`GET /sync/watched/shows`, read once per entry into the connected state, one
+`TraktRateGuard` slot per page. Both reads go through the repository's paging
+helper - the same one `watchedSnapshot()` uses - so the tiles show the real
+totals past 100 instead of the size of page 1. Any failure - a non-2xx, a
+transport error, no token, an exhausted budget on any page, or only one of the
+two answering - stores null and hides the row; "Connected to Trakt." is
+unaffected. This is display-only: Home and the badges still read the watched
+snapshot (`watchedSnapshot`), not these counts.
 
 While linking, both connect screens draw a QR of the verification address with
 `qrcodeBitmap()` (the add-on pairing helper, ZXing - no new dependency), on a

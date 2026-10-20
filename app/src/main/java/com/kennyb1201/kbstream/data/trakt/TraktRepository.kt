@@ -61,6 +61,75 @@ internal fun traktWatchedCounts(
 }
 
 /**
+ * Every page of one watched read, in page order - or null when ANY page failed.
+ *
+ * The spec of this helper is deliberately not [readAllPages]'s: the list reads
+ * may stop early and keep what they have (a half rail beats no rail), but this
+ * feeds the watched snapshot, where a short list is read as "unwatched". So a
+ * failure on page 2 must not publish page 1: a non-2xx, a transport error and
+ * an exhausted [TraktRateGuard] all answer null, and the caller keeps the
+ * previous snapshot / hides the tiles.
+ *
+ * Trakt pages both watched reads at [pageSize] and names the page count in
+ * `X-Pagination-Page-Count`; `X-Pagination-Item-Count` is the fallback for a
+ * response that carries only the total. If neither header arrives, a page
+ * shorter than [pageSize] ends the read - otherwise a full page means "ask for
+ * the next one".
+ *
+ * One budget slot is spent per page, "as today's single calls" did per read, so
+ * the free tier's accounting is unchanged in kind. [acquire] and
+ * [noteRetryAfter] are parameters rather than reads of the private [guard] and
+ * clock because that is exactly what makes the loop testable without a token or
+ * a network (the same reason [traktWatchedCounts] is a top-level function).
+ */
+internal suspend fun <T> readAllWatchedPages(
+    pageSize: Int,
+    acquire: () -> Boolean,
+    noteRetryAfter: (Response<*>?) -> Unit,
+    fetch: suspend (page: Int, limit: Int) -> Response<List<T>>
+): List<T>? {
+    require(pageSize > 0) { "page size must be positive" }
+    val rows = mutableListOf<T>()
+    var page = 1
+    var pageCount: Int? = null
+
+    while (true) {
+        if (!acquire()) return null
+        val response = runCatchingCancellable {
+            fetch(page, pageSize)
+        }.getOrNull() ?: return null
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return null
+        val body = response.body() ?: return null
+        rows += body
+
+        val headers = response.headers()
+        headers["X-Pagination-Page-Count"]
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?.let { pageCount = it }
+        if (pageCount == null) {
+            headers["X-Pagination-Item-Count"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?.let { pageCount = (it + pageSize - 1) / pageSize }
+        }
+
+        // Nothing left to accumulate: a header claiming more pages cannot make
+        // an empty page mean anything else, and following it would spin.
+        if (body.isEmpty()) break
+        val lastPage = pageCount
+        if (lastPage != null) {
+            if (page >= lastPage) break
+        } else if (body.size < pageSize) {
+            break
+        }
+        page += 1
+    }
+    return rows
+}
+
+/**
  * One paused Trakt session, flattened for the Continue Watching merge.
  *
  * [progressPercent] is Trakt's `progress` as-is (0-100): the account has no
@@ -613,11 +682,13 @@ class TraktRepository private constructor(private val context: Context?) {
      * The account's watched history, cached for [SNAPSHOT_TTL_MS].
      *
      * Two reads (`/sync/watched/shows` and `/sync/watched/movies`) answer one
-     * snapshot. Anything that goes wrong returns the snapshot already in hand -
-     * never an empty one, which downstream would read as "nothing watched" -
-     * and a spent budget returns the cache without touching the network, the
-     * same rule [TraktRateGuard] states. The cache is keyed by the access token
-     * so a profile switch (a different profile's token) can never be served the
+     * snapshot, and both read EVERY page: Trakt pages them at 100, so page 1 is
+     * not the history. Anything that goes wrong - including a failure on a page
+     * past the first - returns the snapshot already in hand, never a partial or
+     * empty one: beyond the cut a short list would read as "unwatched". A spent
+     * budget returns the cache without touching the network, the same rule
+     * [TraktRateGuard] states. The cache is keyed by the access token so a
+     * profile switch (a different profile's token) can never be served the
      * previous profile's history.
      */
     suspend fun watchedSnapshot(forceRefresh: Boolean = false): TraktWatchedSnapshot {
@@ -641,40 +712,29 @@ class TraktRepository private constructor(private val context: Context?) {
             ) {
                 return@withLock previous
             }
-            if (!guard.tryAcquire()) return@withLock previous ?: TraktWatchedSnapshot()
+            val authorization = "Bearer $token"
+            val shows = readAllWatchedPages(
+                pageSize = TRAKT_PAGE_SIZE,
+                acquire = guard::tryAcquire,
+                noteRetryAfter = ::noteRetryAfter,
+                fetch = { page, limit ->
+                    api.watchedShows(authorization, page = page, limit = limit)
+                }
+            ) ?: return@withLock previous ?: TraktWatchedSnapshot()
+            val movies = readAllWatchedPages(
+                pageSize = TRAKT_PAGE_SIZE,
+                acquire = guard::tryAcquire,
+                noteRetryAfter = ::noteRetryAfter,
+                fetch = { page, limit ->
+                    api.watchedMovies(authorization, page = page, limit = limit)
+                }
+            ) ?: return@withLock previous ?: TraktWatchedSnapshot()
 
-            val showsResponse = runCatchingCancellable {
-                api.watchedShows("Bearer $token")
-            }.getOrNull()
-            noteRetryAfter(showsResponse)
-            val moviesResponse = if (showsResponse != null && showsResponse.isSuccessful) {
-                runCatchingCancellable {
-                    api.watchedMovies("Bearer $token")
-                }.getOrNull()
-            } else {
-                null
-            }
-            moviesResponse?.let(::noteRetryAfter)
-
-            val showsOk = showsResponse?.isSuccessful == true
-            val moviesOk = moviesResponse?.isSuccessful == true
-            if (!showsOk && !moviesOk) return@withLock previous ?: TraktWatchedSnapshot()
-
-            val built = TraktWatchRules.snapshot(
-                shows = showsResponse?.body().takeIf { showsOk },
-                movies = moviesResponse?.body().takeIf { moviesOk }
-            )
-            // A half-answered refresh keeps the half it did not hear about,
-            // rather than clearing that half's badges until the next TTL.
-            val merged = when {
-                !showsOk && previous != null -> built.copy(shows = previous.shows)
-                !moviesOk && previous != null -> built.copy(movieKeys = previous.movieKeys)
-                else -> built
-            }
-            cachedSnapshot = merged
+            val built = TraktWatchRules.snapshot(shows = shows, movies = movies)
+            cachedSnapshot = built
             cachedSnapshotAt = System.currentTimeMillis()
             cachedSnapshotKey = token
-            merged
+            built
         }
     }
 
@@ -701,21 +761,33 @@ class TraktRepository private constructor(private val context: Context?) {
     /**
      * The account's watched movie/show totals for the connect screen.
      *
-     * Two reads under one budget slot (see [TraktRateGuard]); any failure - a
-     * non-2xx, a transport error, no token, an exhausted budget - answers null,
-     * and the screen hides the row rather than blocking the connected state.
+     * The same two paged reads the snapshot uses, through the same helper: a
+     * count of page 1 is the bug this replaces, not a cheap approximation. Any
+     * failure - a non-2xx, a transport error, no token, an exhausted budget,
+     * on ANY page - answers null, and the screen hides the row rather than
+     * showing a total that is short.
      */
     suspend fun watchedCounts(): TraktWatchedCounts? {
         if (!TraktConfig.isConfigured) return null
         val token = validAccessToken() ?: return null
-        if (!guard.tryAcquire()) return null
         val authorization = "Bearer $token"
-        val movies = runCatchingCancellable { api.watchedMovies(authorization) }.getOrNull()
-        val shows = runCatchingCancellable { api.watchedShows(authorization) }.getOrNull()
-        return traktWatchedCounts(
-            movies = movies?.body().takeIf { movies?.isSuccessful == true },
-            shows = shows?.body().takeIf { shows?.isSuccessful == true }
-        )
+        val movies = readAllWatchedPages(
+            pageSize = TRAKT_PAGE_SIZE,
+            acquire = guard::tryAcquire,
+            noteRetryAfter = ::noteRetryAfter,
+            fetch = { page, limit ->
+                api.watchedMovies(authorization, page = page, limit = limit)
+            }
+        ) ?: return null
+        val shows = readAllWatchedPages(
+            pageSize = TRAKT_PAGE_SIZE,
+            acquire = guard::tryAcquire,
+            noteRetryAfter = ::noteRetryAfter,
+            fetch = { page, limit ->
+                api.watchedShows(authorization, page = page, limit = limit)
+            }
+        ) ?: return null
+        return traktWatchedCounts(movies = movies, shows = shows)
     }
 
     /**
