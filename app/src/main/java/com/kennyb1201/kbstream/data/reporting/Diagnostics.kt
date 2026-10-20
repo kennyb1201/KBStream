@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -103,6 +104,12 @@ object Diagnostics {
         // watched". Absent until something has played (see
         // PlaybackSessionTrace).
         PlaybackSessionTrace.lines().forEach { report.appendLine("session: $it") }
+        // The tail of the last Trakt device-flow attempt: HTTP status, elapsed
+        // seconds, code lifetime and resolved state. The release APK carries no
+        // debug log and a TV has no logcat, so this is the only way a "code
+        // expired" report travels with what Trakt actually answered. Status
+        // and state only - never the device code, the user code or a token.
+        TraktPollTrace.lines().forEach { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->

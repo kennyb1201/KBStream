@@ -72,6 +72,42 @@ class TraktPollClockContractTest {
     }
 
     @Test
+    fun `a release build still records the poll for the diagnostics report`() {
+        val poll = repository.substringAfter("suspend fun pollOnce(")
+            .substringBefore("suspend fun refreshIfDue(")
+        val recorded = poll.substringAfter("TraktPollTrace.record(")
+            .substringBefore("\n        )")
+
+        listOf(
+            "statusCode = response.code()",
+            "elapsedSeconds = elapsedSeconds",
+            "expiresInSeconds = expiresInSeconds",
+            "state = state"
+        ).forEach { field ->
+            assertTrue("the trace has to carry $field: $recorded", recorded.contains(field))
+        }
+        listOf("deviceCode", "userCode", "accessToken", "token").forEach { secret ->
+            assertFalse(
+                "the trace must never carry $secret",
+                recorded.contains(secret)
+            )
+        }
+
+        val diagnostics = source("com/kennyb1201/kbstream/data/reporting/Diagnostics.kt")
+        assertTrue(
+            "and the in-app report is what prints it",
+            diagnostics.contains("TraktPollTrace.lines()")
+        )
+
+        val connect = viewModel.substringAfter("private fun beginDeviceFlow()")
+            .substringBefore("val code =")
+        assertTrue(
+            "a new attempt clears the previous run's tail",
+            connect.contains("TraktPollTrace.clear()")
+        )
+    }
+
+    @Test
     fun `the expiry rule itself is untouched`() {
         val rules = source("com/kennyb1201/kbstream/data/trakt/TraktDeviceFlowRules.kt")
         assertTrue(

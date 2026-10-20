@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.trakt.TraktConfig
 import com.kennyb1201.kbstream.data.trakt.TraktDeviceFlowRules
+import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -169,6 +170,9 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun beginDeviceFlow() {
         stopPolling()
+        // This attempt owns the Diagnostics tail: an old run's polls must not be
+        // read as evidence for the new one.
+        TraktPollTrace.clear()
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,

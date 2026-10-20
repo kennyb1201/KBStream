@@ -221,6 +221,16 @@ class TraktRepository private constructor(private val context: Context?) {
             expiresInSeconds = expiresInSeconds,
             error = oauthError
         )
+        // Every poll's outcome, for the in-app Diagnostics report. A viewer's
+        // TV runs the signed release APK, where the debug log below is compiled
+        // out and logcat is not reachable, so the same four facts have to travel
+        // with the app's own report (see [TraktPollTrace]).
+        TraktPollTrace.record(
+            statusCode = response.code(),
+            elapsedSeconds = elapsedSeconds,
+            expiresInSeconds = expiresInSeconds,
+            state = state
+        )
         // Debug builds only: one failed connect has to say whether Trakt
         // answered 404/409/410 or the local math is wrong. Never the device
         // code, the user code or a token - those are live credentials.

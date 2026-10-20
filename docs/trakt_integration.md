@@ -254,14 +254,18 @@ The Trakt tests cover the pure rules (`TraktDeviceFlowRulesTest`,
 `TraktRateGuardTest`, `TraktWatchStateTest`), the wire field names
 (`TraktWireFormatTest`), the phase wiring (`TraktIntegrationContractTest`) and
 the phase-A invariants (`TraktWiringContractTest`), and the poll's monotonic
-clock plus its debug diagnostic (`TraktPollClockContractTest`), the WATCHED tile
-rule (`TraktWatchedCountsTest`), and the QR/counts placement on both connect
-layouts (`TraktConnectSurfacesContractTest`). `QrCodeEncodingTest` encodes both
-activation URLs through the shared helper under Robolectric.
+clock plus its diagnostics (`TraktPollClockContractTest`, `TraktPollTraceTest`),
+the WATCHED tile rule (`TraktWatchedCountsTest`), and the QR/counts placement on
+both connect layouts (`TraktConnectSurfacesContractTest`). `QrCodeEncodingTest`
+encodes both activation URLs through the shared helper under Robolectric.
 
-If a connect fails on a debug build, logcat tag `TraktPoll` records the HTTP
-status Trakt answered, the elapsed/expires seconds the app computed, and the
-resulting poll state. It never logs the device code, the user code or a token.
+If a connect fails, its last polls travel in the in-app Diagnostics report
+(Settings -> diagnostics): one `trakt.poll: status=… elapsed=…s expiresIn=…s
+state=…` line per poll, newest last, capped at eight and cleared when a new code
+is requested. That is the release-safe channel - the signed APK has no debug log
+and a TV has no logcat within reach. A debug build additionally prints the same
+fields to logcat tag `TraktPoll`. Neither ever logs the device code, the user
+code or a token.
 
 On a device: Settings -> Trakt -> GENERATE CODE, scan the QR (or open the
 address it prints), type the code, and the page should flip to "Signed in as
