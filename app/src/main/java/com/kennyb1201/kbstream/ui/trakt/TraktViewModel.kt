@@ -96,6 +96,30 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * The screen's entry check: the store is the truth, not the last state.
+     *
+     * A ViewModel outlives a visit to the page, so a screen opened after an
+     * earlier attempt - including one that saved the session and then died - can
+     * otherwise come back showing that attempt's failure. Reading hasToken() on
+     * every entry means a session that IS on disk is shown as Connected, which
+     * is what the viewer's account actually is. Runs from the screens'
+     * `LaunchedEffect(Unit)`, never from composition.
+     */
+    fun refreshConnectionState() {
+        val connected = repository.hasToken()
+        if (connected == _uiState.value.isConnected) return
+        stopPolling()
+        countsJob?.cancel()
+        _uiState.value = TraktUiState(
+            isConfigured = repository.isConfigured(),
+            isConnected = connected,
+            accountSlug = if (connected) repository.accountSlug() else null,
+            statusMessage = if (connected) "Connected to Trakt." else null
+        )
+        if (connected) refreshAccount()
+    }
+
+    /**
      * Reads the two WATCHED totals once for the screen entry that asks for
      * them. Deliberately not called from composition: the screen runs this in a
      * `LaunchedEffect`, so a recomposition cannot spend another pair of reads.
@@ -233,7 +257,12 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                         elapsedSeconds = elapsed,
                         expiresInSeconds = expiresInSeconds
                     )
-                }.getOrElse {
+                }.getOrElse { error ->
+                    // Recorded, never swallowed: a throw between "Trakt answered
+                    // 200" and "the state reached the screen" used to leave no
+                    // evidence at all, so the next poll into an already-spent
+                    // code was the only thing a report could show.
+                    TraktPollTrace.recordPollError(error)
                     consecutiveFailures++
                     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                         fail("Could not reach Trakt. Try again.")
@@ -243,6 +272,22 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 when (result.state) {
                     TraktDeviceFlowRules.Poll.APPROVED -> {
+                        // Trakt granted the token but this device could not keep
+                        // it. The code is spent, so retrying can only read 404:
+                        // say what actually happened and stop.
+                        if (result.saveError != null) {
+                            _uiState.value = _uiState.value.copy(
+                                isPolling = false,
+                                isLoading = false,
+                                userCode = null,
+                                verificationUrl = null,
+                                expiresInSeconds = null,
+                                statusMessage = "Trakt approved this device.",
+                                errorMessage = "Trakt approved, but the token couldn't " +
+                                    "be saved on this device. Try connecting again."
+                            )
+                            return@launch
+                        }
                         val slug = runCatchingCancellable { repository.loadAccountSlug() }
                             .getOrNull()
                         _uiState.value = _uiState.value.copy(

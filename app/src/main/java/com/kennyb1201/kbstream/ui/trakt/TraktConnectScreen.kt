@@ -87,6 +87,11 @@ fun TraktConnectScreen(
     // needs to say when it holds the D-pad: without a ring, focus would look lost.
     var pairingFocused by remember { mutableStateOf(false) }
 
+    // The store is the truth on entry: a session saved by an earlier attempt
+    // (even one that died right after saving) shows as Connected, not as that
+    // attempt's failure.
+    LaunchedEffect(Unit) { vm.refreshConnectionState() }
+
     // Once per entry into the connected state - a recomposition must not spend
     // another pair of watched reads, and a screen opened already connected still
     // asks for its tiles. Failure just leaves watchedCounts null (row hidden).

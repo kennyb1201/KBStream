@@ -23,7 +23,7 @@ import org.junit.Test
 class TraktPollClockContractTest {
 
     private val viewModel = source("com/kennyb1201/kbstream/ui/trakt/TraktViewModel.kt")
-    private val repository = source("com/kennyb1201/kbstream/data/trakt/TraktRepository.kt")
+    private val exchange = source("com/kennyb1201/kbstream/data/trakt/TraktPollExchange.kt")
 
     @Test
     fun `the poll interval is measured on the monotonic clock`() {
@@ -52,8 +52,9 @@ class TraktPollClockContractTest {
 
     @Test
     fun `the poll logs what Trakt returned in debug builds only`() {
-        val poll = repository.substringAfter("suspend fun pollOnce(")
-            .substringBefore("suspend fun refreshIfDue(")
+        // The HTTP call and its diagnostics moved into the exchange when the
+        // save-failure outcome was added; the properties asserted are the same.
+        val poll = exchange
         assertTrue("the diagnostic exists", poll.contains("if (BuildConfig.DEBUG) {"))
         listOf(
             "status=",
@@ -73,13 +74,12 @@ class TraktPollClockContractTest {
 
     @Test
     fun `a release build still records the poll for the diagnostics report`() {
-        val poll = repository.substringAfter("suspend fun pollOnce(")
-            .substringBefore("suspend fun refreshIfDue(")
+        val poll = exchange
         val recorded = poll.substringAfter("TraktPollTrace.record(")
             .substringBefore("\n        )")
 
         listOf(
-            "statusCode = response.code()",
+            "statusCode = http.statusCode",
             "elapsedSeconds = elapsedSeconds",
             "expiresInSeconds = expiresInSeconds",
             "state = state"
@@ -104,6 +104,17 @@ class TraktPollClockContractTest {
         assertTrue(
             "a new attempt clears the previous run's tail",
             connect.contains("TraktPollTrace.clear()")
+        )
+    }
+
+    @Test
+    fun `the poll's evidence is written before any storage work`() {
+        val recordedAt = exchange.indexOf("TraktPollTrace.record(")
+        val savedAt = exchange.indexOf("save(token)")
+        assertTrue("both exist: $exchange", recordedAt > 0 && savedAt > 0)
+        assertTrue(
+            "a 200 has to be in the report even when the save is what throws",
+            recordedAt < savedAt
         )
     }
 

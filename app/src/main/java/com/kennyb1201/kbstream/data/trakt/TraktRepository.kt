@@ -1,8 +1,6 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
-import android.util.Log
-import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -19,11 +17,18 @@ import retrofit2.converter.moshi.MoshiConverterFactory
  *
  * [retryAfterSeconds] is set only where Trakt asked for a pause, so the caller
  * can widen its interval without parsing headers of its own.
+ *
+ * [saveError] is the third kind of answer, and the one the "code expired"
+ * report came from: Trakt granted the token (`state` is APPROVED) but this
+ * device could not keep it. The code was consumed by that very exchange, so
+ * re-polling can only read 404 - the caller must say "approved, but not saved"
+ * and stop, not retry ([TraktPollExchange]).
  */
 data class TraktPollResult(
     val state: TraktDeviceFlowRules.Poll,
     val token: TraktToken? = null,
-    val retryAfterSeconds: Long? = null
+    val retryAfterSeconds: Long? = null,
+    val saveError: String? = null
 )
 
 /**
@@ -164,7 +169,16 @@ class TraktRepository private constructor(private val context: Context?) {
     /** A build with a client id can talk to Trakt; one without says so. */
     fun isConfigured(): Boolean = TraktConfig.isConfigured
 
-    fun hasToken(): Boolean = store.accessToken() != null
+    /**
+     * True when this profile holds a Trakt session.
+     *
+     * A store that cannot be opened at all answers false instead of throwing:
+     * this is the first thing the connect screen asks, and a damaged prefs file
+     * must show "not connected" rather than crash the page
+     * ([TraktTokenStore.save] rebuilds the file on the first write).
+     */
+    fun hasToken(): Boolean =
+        runCatching { store.accessToken() }.getOrNull() != null
 
     /** The connected account's slug, as recorded at connect time. */
     fun accountSlug(): String? = store.accountSlug()
@@ -181,6 +195,11 @@ class TraktRepository private constructor(private val context: Context?) {
     /**
      * Step 2: one poll. Never throws for a state Trakt reports as a status.
      *
+     * The exchange itself ([TraktPollExchange]) owns the two rules that matter
+     * here - a 200 is terminal, and a token that cannot be saved is its own
+     * outcome rather than a retry. This method adds only the app's budget and
+     * the cross-device publish.
+     *
      * @param elapsedSeconds how long ago the code was issued
      * @param expiresInSeconds the code's lifetime from [requestDeviceCode]
      */
@@ -196,6 +215,26 @@ class TraktRepository private constructor(private val context: Context?) {
                 retryAfterSeconds = guard.blockedForMs() / 1_000L
             )
         }
+        val result = TraktPollExchange(
+            fetch = { code -> fetchPoll(code) },
+            save = { token -> store.save(token) }
+        ).pollOnce(
+            deviceCode = deviceCode,
+            elapsedSeconds = elapsedSeconds,
+            expiresInSeconds = expiresInSeconds
+        )
+        // Cross-device sync: share the new session so a sibling comes up
+        // already connected (see
+        // [com.kennyb1201.kbstream.data.sync.TraktAuthRules]). Only a session
+        // that actually reached this device is worth publishing.
+        if (result.state == TraktDeviceFlowRules.Poll.APPROVED && result.saveError == null) {
+            publishAuthToSync()
+        }
+        return result
+    }
+
+    /** The single HTTP request behind one poll, flattened for the exchange. */
+    private suspend fun fetchPoll(deviceCode: String): TraktPollHttp {
         val response = api.pollDeviceToken(
             TraktDeviceTokenRequest(
                 code = deviceCode,
@@ -214,52 +253,12 @@ class TraktRepository private constructor(private val context: Context?) {
         } else {
             null
         }
-        val state = TraktDeviceFlowRules.poll(
+        return TraktPollHttp(
             statusCode = response.code(),
-            hasToken = !body?.accessToken.isNullOrBlank(),
-            elapsedSeconds = elapsedSeconds,
-            expiresInSeconds = expiresInSeconds,
-            error = oauthError
+            retryAfterSeconds = retryAfter,
+            body = body,
+            oauthError = oauthError
         )
-        // Every poll's outcome, for the in-app Diagnostics report. A viewer's
-        // TV runs the signed release APK, where the debug log below is compiled
-        // out and logcat is not reachable, so the same four facts have to travel
-        // with the app's own report (see [TraktPollTrace]).
-        TraktPollTrace.record(
-            statusCode = response.code(),
-            elapsedSeconds = elapsedSeconds,
-            expiresInSeconds = expiresInSeconds,
-            state = state
-        )
-        // Debug builds only: one failed connect has to say whether Trakt
-        // answered 404/409/410 or the local math is wrong. Never the device
-        // code, the user code or a token - those are live credentials.
-        if (BuildConfig.DEBUG) {
-            Log.d(
-                "TraktPoll",
-                "status=${response.code()} elapsed=${elapsedSeconds}s " +
-                    "expiresIn=${expiresInSeconds}s state=$state"
-            )
-        }
-        if (state != TraktDeviceFlowRules.Poll.APPROVED) {
-            return TraktPollResult(state, retryAfterSeconds = retryAfter)
-        }
-        val granted = body ?: return TraktPollResult(TraktDeviceFlowRules.Poll.FAILED)
-        val token = TraktToken(
-            accessToken = granted.accessToken.orEmpty(),
-            refreshToken = granted.refreshToken,
-            expiresAtEpochMillis = TraktDeviceFlowRules.expiresAtEpochMillis(
-                createdAtEpochSeconds = granted.createdAtEpochSeconds,
-                expiresInSeconds = granted.expiresInSeconds,
-                nowMs = System.currentTimeMillis()
-            )
-        )
-        store.save(token)
-        // Cross-device sync: share the new session so a sibling comes up
-        // already connected (see
-        // [com.kennyb1201.kbstream.data.sync.TraktAuthRules]).
-        publishAuthToSync()
-        return TraktPollResult(TraktDeviceFlowRules.Poll.APPROVED, token)
     }
 
     /**

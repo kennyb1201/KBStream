@@ -16,6 +16,7 @@ deliberately not, and says so below.
 | `TraktModels.kt` | device-code/token, scrobble, history, watched, list and comment wire shapes |
 | `TraktApiService.kt` | OAuth, `scrobble/*`, `sync/history[/remove]`, `sync/watched/*`, `sync/watchlist[/remove]`, user-list reads/removals, comments; header interceptor |
 | `TraktDeviceFlowRules.kt` | the poll state machine, expiry, interval widening, refresh window (pure) |
+| `TraktPollExchange.kt` | one poll: the terminal 200, the save-first ordering and the approved-but-unsaved outcome |
 | `TraktWatchState.kt` | id canonicalisation, the watched snapshot/index and scrobble progress rules (pure) |
 | `TraktListRef.kt` | KB list reference parsing and the typed list row (pure) |
 | `TraktTokenStore.kt` | per-profile `SecureTokenStore` under `<profile>.trakt_auth` |
@@ -37,28 +38,39 @@ TV page and the touch twin, both routed through `Screen.Trakt` and reached from 
 2. **A rejected client is not a pending poll.** `400 invalid_client` stops the
    flow with its own message; only a plain/`authorization_pending` 400 keeps
    waiting (`TraktDeviceFlowRules.MISCONFIGURED`).
-3. **Refresh is proactive.** Access tokens last 7 days; the token is refreshed
+3. **A 200-with-token is terminal.** Trakt deletes the device code at the
+   moment it answers with a token pair, so that code is never polled again: a
+   second request reads `404`, and the flow would report "that code expired"
+   over a grant that succeeded. A token that cannot be persisted is therefore
+   its own result - `APPROVED` plus `TraktPollResult.saveError` - and the screen
+   says "Trakt approved, but the token couldn't be saved on this device" instead
+   of retrying a spent code. The poll is also written to the diagnostics before
+   any storage work, so a 200 is never missing from the evidence. See
+   `TraktPollExchange`.
+4. **Refresh is proactive.** Access tokens last 7 days; the token is refreshed
    with a day in hand, never on a 401 in front of the first scrobble. Trakt's
    refresh tokens are single-use, so the stored pair is always replaced.
-4. **The store is its own file, and encrypted.** `<profile>.trakt_auth` cannot
+5. **The store is its own file, and encrypted.** `<profile>.trakt_auth` cannot
    collide with `<profile>.simkl_auth` (Diagnostics and the cloud readers
    address stores by name), and there is no plaintext migration path because
-   nothing predates it.
-5. **Disconnect clears Trakt only.** `revokeAndClear()` revokes the grant and
+   nothing predates it. A file that will not open at all (a keyset an earlier
+   build left behind, a restored backup) is deleted and rebuilt ONCE before the
+   save is allowed to fail; Simkl's store is untouched by that path.
+6. **Disconnect clears Trakt only.** `revokeAndClear()` revokes the grant and
    drops the session keys. Local history, resume rows, watched markers and
    badges are untouched - Simkl's unlink wiping them was audit m10, and the
    contract test asserts this repository cannot reach that data layer at all.
-6. **A kids profile needs the parent PIN.** `startConnect()` refuses without
+7. **A kids profile needs the parent PIN.** `startConnect()` refuses without
    one, and the flow only begins after `verifyParentPin`; a parentless
    (PIN-less) kids profile is told to set one.
-7. **The budget exists before the traffic does.** `TraktRateGuard` is the
+8. **The budget exists before the traffic does.** `TraktRateGuard` is the
    MDBList lesson stated up front: bounded calls per window, `Retry-After`
    honoured, and exhaustion reports "no answer" rather than an empty result.
-8. **Watched state is a union, and a union only adds.** Home reads Trakt's
+9. **Watched state is a union, and a union only adds.** Home reads Trakt's
    watched episodes beside Simkl's and MDBList's; the badges test membership in
    all three snapshots. Watched anywhere is watched everywhere, with no
    conflict resolution.
-9. **A tracker failure is not "nothing watched".** Every read is guarded on
+10. **A tracker failure is not "nothing watched".** Every read is guarded on
    `isConfigured()` + `hasToken()` and sets `trackerReadFailed` when it throws;
    budget exhaustion keeps the previous snapshot. A blank rail is the one
    outcome the integration must never cause.
@@ -255,6 +267,9 @@ The Trakt tests cover the pure rules (`TraktDeviceFlowRulesTest`,
 (`TraktWireFormatTest`), the phase wiring (`TraktIntegrationContractTest`) and
 the phase-A invariants (`TraktWiringContractTest`), and the poll's monotonic
 clock plus its diagnostics (`TraktPollClockContractTest`, `TraktPollTraceTest`),
+the terminal-200 / approved-but-unsaved outcome
+(`TraktPollExchangeTest`, `TraktApprovedButUnsavedContractTest`), the store's
+one-shot rebuild (`TraktTokenStoreRebuildTest`),
 the WATCHED tile rule (`TraktWatchedCountsTest`), and the QR/counts placement on
 both connect layouts (`TraktConnectSurfacesContractTest`). `QrCodeEncodingTest`
 encodes both activation URLs through the shared helper under Robolectric.

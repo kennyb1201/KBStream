@@ -112,9 +112,13 @@ class TraktAuthSyncWiringContractTest {
 
     @Test
     fun `connect, refresh and disconnect all publish the session`() {
+        val poll = repository.substringAfter("suspend fun pollOnce(")
+            .substringBefore("private suspend fun fetchPoll(")
         assertTrue(
-            "a fresh connect shares itself without waiting for a full sync",
-            repository.contains("store.save(token)\n        // Cross-device sync")
+            "a fresh connect shares itself without waiting for a full sync, and " +
+                "only once the token actually reached this device",
+            poll.contains("result.saveError == null") &&
+                poll.contains("publishAuthToSync()")
         )
         assertTrue(
             "a refresh rotates the single-use refresh token, so it republishes",

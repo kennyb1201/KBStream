@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 
@@ -35,10 +37,21 @@ internal class TraktTokenStore(
      * A SPECIFIC profile's session, for the cloud applier. Null reads the
      * active profile, which is what every in-app caller wants.
      */
-    private val profileId: String? = null
+    private val profileId: String? = null,
+    /**
+     * How this store's encrypted file is opened. A parameter rather than a
+     * direct call so [open]'s rebuild path can be pinned with a store that
+     * throws on its first open - a corrupt KeyStore cannot be reproduced on
+     * demand on a real device.
+     */
+    private val openPrefs: (Context, String) -> SharedPreferences = { appContext, name ->
+        SecureTokenStore.prefs(appContext, name, legacyPlaintext = false)
+    }
 ) {
 
     companion object {
+        private const val TAG = "TraktTokenStore"
+
         /** The logical name; [ProfileManager.prefsName] adds the profile scope. */
         const val PREFS_NAME = "trakt_auth"
 
@@ -55,16 +68,51 @@ internal class TraktTokenStore(
         const val KEY_SIGNED_OUT = "signed_out"
     }
 
-    private val prefs
-        get() = context?.applicationContext?.let { appContext ->
-            SecureTokenStore.prefs(
-                appContext,
-                profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
-                    ?: ProfileStorage.prefsName(appContext, PREFS_NAME),
-                legacyPlaintext = false
-            )
-        }
+    /** The file name this profile's session lives in. */
+    private fun storeName(appContext: Context): String =
+        profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
+            ?: ProfileStorage.prefsName(appContext, PREFS_NAME)
 
+    /**
+     * This store, with ONE rebuild allowed when it will not open.
+     *
+     * A store can be left unreadable by an earlier build or a restored backup:
+     * the ciphertext outlives the KeyStore entry that decrypts it, and from then
+     * on every open throws. A Trakt session is worth less than a usable Trakt:
+     * the file holds nothing the account cannot hand out again, so the second
+     * attempt deletes it and starts a fresh store. One retry, never a loop - a
+     * device where even a fresh file will not open reports the failure to its
+     * caller instead of spinning.
+     *
+     * Scoped to this store's own file: Simkl's session lives in a different one
+     * and is not touched by a Trakt fault.
+     */
+    private fun open(): SharedPreferences? {
+        val appContext = context?.applicationContext ?: return null
+        val name = storeName(appContext)
+        return try {
+            openPrefs(appContext, name)
+        } catch (first: Exception) {
+            Log.w(
+                TAG,
+                "trakt store '$name' would not open " +
+                    "(${first.javaClass.simpleName}: ${first.message}); rebuilding it"
+            )
+            SecureTokenStore.discard(appContext, name)
+            openPrefs(appContext, name)
+        }
+    }
+
+    private val prefs: SharedPreferences?
+        get() = open()
+
+    /**
+     * Writes a granted session.
+     *
+     * Throws when the store cannot be written even after [open]'s single
+     * rebuild: the caller ([TraktPollExchange]) turns that into "approved, but
+     * the token could not be saved" rather than polling a spent code again.
+     */
     fun save(token: TraktToken) {
         prefs?.edit()
             ?.putString(KEY_ACCESS_TOKEN, token.accessToken)

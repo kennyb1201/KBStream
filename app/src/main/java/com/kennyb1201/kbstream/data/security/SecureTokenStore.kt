@@ -129,6 +129,31 @@ object SecureTokenStore {
     }
 
     /**
+     * Drops one cached store belonging to [name] and deletes its file.
+     *
+     * The recovery half of a store that will not open: the ciphertext on disk
+     * outlives the KeyStore entry that decrypts it (a restored backup, a
+     * re-flashed device, a keyset an earlier build left half-written), and a
+     * store like that throws on every open forever. Deleting the file is the
+     * only way back for a caller that can accept the loss - a session it is
+     * about to write fresh anyway. Evicting first matters: a cached instance
+     * would otherwise keep serving the deleted file's contents.
+     *
+     * Returns true when there was a file to delete.
+     */
+    fun discard(context: Context, name: String): Boolean {
+        cache.remove(name)
+        return runCatching {
+            val dir = prefsDir(context.applicationContext)
+            val primary = File(dir, "$name.xml")
+            val existed = primary.exists()
+            if (existed) primary.delete()
+            File(dir, "$name.xml.bak").delete()
+            existed
+        }.getOrDefault(false)
+    }
+
+    /**
      * Renames a pre-encryption plaintext file for [name] to
      * `<name>.legacy.xml`, freeing the original name for the encrypted store.
      *

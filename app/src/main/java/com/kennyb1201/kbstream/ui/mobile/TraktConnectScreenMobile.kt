@@ -65,6 +65,11 @@ fun TraktConnectScreenMobile(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
 
+    // The store is the truth on entry, exactly as on the TV page: a session
+    // saved by an earlier attempt shows as Connected rather than as that
+    // attempt's failure.
+    LaunchedEffect(Unit) { vm.refreshConnectionState() }
+
     // Once per entry into the connected state, never per recomposition.
     LaunchedEffect(uiState.isConnected) {
         if (uiState.isConnected) vm.refreshWatchedCounts()
