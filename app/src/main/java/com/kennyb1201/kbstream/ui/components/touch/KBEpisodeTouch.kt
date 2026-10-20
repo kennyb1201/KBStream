@@ -88,8 +88,13 @@ fun KBEpisodeRailTouch(
 /**
  * One episode in the touch rail, drawn like the television's card: the still,
  * a legibility gradient, the EPISODE badge and name over the frame, and a
- * bottom line carrying the runtime (`42m`, or `12m left` while part-watched)
- * and the episode's IMDb score.
+ * bottom line carrying the runtime (`42m`, or `12m left` while part-watched),
+ * the episode's IMDb score and its air date.
+ *
+ * [airDate] is the formatted label, not the raw TMDB/ISO stamp: the screen
+ * formats it through `ui/detail/DetailScreen.kt`'s own rule, so the phone and
+ * the TV cannot print one date two ways, and this shared card keeps no
+ * dependency on a screen package.
  *
  * The still carries the marks the list row puts on its own thumbnail - the
  * EPISODE number, the watched tick and the resume progress - plus the
@@ -111,6 +116,7 @@ fun KBEpisodeRailCardTouch(
     isWatched: Boolean,
     unavailable: Boolean,
     progress: Float?,
+    airDate: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null
@@ -205,6 +211,14 @@ fun KBEpisodeRailCardTouch(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 rating?.let { EpisodeRatingChip(rating = it) }
+                airDate?.takeIf { it.isNotBlank() }?.let { label ->
+                    Text(
+                        text = label,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
             }
         }
 

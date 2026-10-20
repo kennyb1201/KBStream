@@ -96,6 +96,7 @@ import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.ui.home.formatTimeLeft
+import com.kennyb1201.kbstream.ui.home.upNextEpisodeLabel as tvUpNextEpisodeLabel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
 import com.kennyb1201.kbstream.ui.kb.HomeEntry
 import com.kennyb1201.kbstream.ui.kb.KBHomeSlots
@@ -1492,23 +1493,21 @@ private fun rememberHidesEpisodeTitle(inProgress: Boolean): Boolean {
     )
 }
 
-/** `S2 E5 · Episode name`, from the fields the Up Next item actually has. */
-private fun upNextEpisodeLabel(item: UpNextItem): String? {
-    item.subtitle?.takeIf { it.isNotBlank() }?.let { return it }
-    val season = item.season
-    val episode = item.episode
-    return if (season != null && episode != null) {
-        buildString {
-            append("S").append(season)
-            append(" E").append(episode)
-            item.episodeTitle?.takeIf { it.isNotBlank() }?.let {
-                append(" · ").append(it)
-            }
-        }
-    } else {
-        item.episodeTitle?.takeIf { it.isNotBlank() }
-    }
-}
+/**
+ * `S02 · E08` for a Continue Watching card, from the fields the item has.
+ *
+ * The episode pair ONLY. The tracker subtitle carries the same state the card
+ * already draws as its top-left chip ("Resume - S1 E2", "Up Next - ..."), so
+ * leading this line with it printed the state twice and pushed the numbers off
+ * the line on a phone. The pair comes from the television's own rule
+ * ([tvUpNextEpisodeLabel]), so the card and the TV rail cannot number the same
+ * episode differently; a card the sources named no pair for keeps the episode
+ * title, then the tracker's own text ("Paused 34%"), rather than an empty line.
+ */
+private fun upNextEpisodeLabel(item: UpNextItem): String? =
+    tvUpNextEpisodeLabel(item.season, item.episode)
+        ?: item.episodeTitle?.takeIf { it.isNotBlank() }
+        ?: item.subtitle?.takeIf { it.isNotBlank() }
 
 /** The one-line meta under the hero's title. */
 private fun heroMetaLine(meta: Meta): String =

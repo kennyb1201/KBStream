@@ -105,6 +105,11 @@ class SyncScopeTest {
             "force_software_decoder must be excluded",
             "force_software_decoder" in excluded
         )
+        assertTrue(
+            "max_auto_play_quality must be excluded too: a decode ceiling is " +
+                "the box's, not the account's",
+            "max_auto_play_quality" in excluded
+        )
     }
 
     @Test
@@ -122,6 +127,21 @@ class SyncScopeTest {
         assertFalse(
             "mpv_vo must not sync",
             "mpv_vo" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+    }
+
+    @Test
+    fun `the launch picker switch stays per-device`() {
+        // Whether a launch opens on Who's Watching is about how this device is
+        // shared, not about the account: turning it off on a phone must not
+        // remove the picker from the TV in the living room.
+        assertTrue(
+            "show_profile_picker must be excluded",
+            "show_profile_picker" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+        assertFalse(
+            "show_profile_picker must not sync",
+            "show_profile_picker" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
         )
     }
 

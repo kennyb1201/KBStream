@@ -1148,11 +1148,28 @@ fun AppRoot(
     val profilesExist = remember {
         com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)
     }
-    val entrySaver = remember(profilesExist, coldLaunch) {
-        launchScreenSaver(profilesExist, coldLaunch)
+    // Whether a launch opens on Who's Watching, or goes straight into the last
+    // used profile (Settings → Profiles → "Who's Watching on launch").
+    // Device-local, read once: this is a launch-time decision, and flipping the
+    // row from Settings re-creates nothing by itself.
+    //
+    // A PIN still forces the picker: the code is entered THERE (see
+    // ProfilePickerScreen), so skipping it would silently unlock a protected
+    // profile. The toggle only decides the no-PIN case.
+    val launchProfileHasPin = remember {
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+            ?.let { com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(it) } == true
+    }
+    val showProfilePicker = remember(launchProfileHasPin) {
+        launchProfileHasPin ||
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getShowProfilePicker(applicationContext)
+    }
+    val entrySaver = remember(profilesExist, coldLaunch, showProfilePicker) {
+        launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)
     }
     var screen by rememberSaveable(stateSaver = entrySaver) {
-        mutableStateOf<Screen>(launchScreen(profilesExist))
+        mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker))
     }
 
     // Re-mirror the theme toggles on every active-profile change: AMOLED /
@@ -1205,9 +1222,9 @@ fun AppRoot(
     // Deliberately NOT saveable: `splashArmed` is the latch, and it is restored
     // across a re-create, so a restored target could never show anything. It is
     // re-derived from the launch gate below and set outright by a profile pick.
-    var splashTarget by remember(coldLaunch) {
+    var splashTarget by remember(coldLaunch, showProfilePicker) {
         mutableStateOf(
-            if (profilesExist && coldLaunch) {
+            if (profilesExist && coldLaunch && showProfilePicker) {
                 LaunchSplashTarget.PROFILE_PICKER
             } else {
                 LaunchSplashTarget.HOME

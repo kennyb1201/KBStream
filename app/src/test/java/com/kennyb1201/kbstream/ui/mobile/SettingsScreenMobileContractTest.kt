@@ -512,4 +512,49 @@ class SettingsScreenMobileContractTest {
             mobile.contains("!BuildConfig.PLAY_BUILD && !BuildConfig.DEBUG")
         )
     }
+
+    @Test
+    fun `the mobile quality ceiling names the top tier 4K`() {
+        val mobile = mobileSettings()
+        val options = mobile
+            .substringAfter("label = \"Maximum auto-play quality\"")
+            .substringBefore("description =")
+
+        assertTrue(
+            "the top tier must read 4K, not its pixel count",
+            options.contains("\"4K\" to AutoPlayQuality.CAP_2160")
+        )
+        assertFalse(
+            "2160p must not be offered as the label on a phone",
+            options.contains("\"2160p\" to")
+        )
+        assertTrue(
+            "the stored cap is unchanged, so the ranking rule still sees CAP_2160",
+            options.contains("AutoPlayQuality.CAP_2160") &&
+                options.contains("AutoPlayQuality.CAP_1080") &&
+                options.contains("AutoPlayQuality.CAP_720")
+        )
+    }
+
+    @Test
+    fun `the About pane ends on the author credit`() {
+        val mobile = mobileSettings()
+        val about = mobile
+            .substringAfter("private fun AboutPaneMobile()")
+            .substringBefore("private fun SyncedToggleMobile(")
+
+        assertTrue(
+            "the phone's About pane must carry the TV pane's author credit: $about",
+            about.contains("Made with ❤️ by Kenny B")
+        )
+        assertTrue(
+            "centred and muted, as on the TV",
+            about.contains("textAlign = TextAlign.Center") &&
+                about.contains("KBTextLo.copy(alpha = 0.7f)")
+        )
+        assertTrue(
+            "and the TV pane must keep the same line, so the two cannot drift",
+            settingsScreen().contains("Made with ❤️ by Kenny B")
+        )
+    }
 }

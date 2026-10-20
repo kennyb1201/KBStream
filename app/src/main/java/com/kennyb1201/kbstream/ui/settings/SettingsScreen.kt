@@ -321,6 +321,12 @@ fun SettingsScreen(
         .revision.collectAsStateWithLifecycle()
 
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
+    // Device-local, and bare for that reason: whether a launch opens on Who's
+    // Watching describes how this screen is shared, not the account (see
+    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    var showProfilePickerOnLaunch by remember {
+        mutableStateOf(AppPreferences.getShowProfilePicker(context))
+    }
     var subtitleSize by remember(syncedRevision) {
         mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context))
     }
@@ -431,7 +437,10 @@ fun SettingsScreen(
     var useStreamRanker by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUseStreamRanker(context))
     }
-    var maxAutoPlayQuality by remember(syncedRevision) {
+    // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on
+    // nothing, like the decoder toggles above and below, so another device's
+    // display push never re-reads a ceiling it does not share.
+    var maxAutoPlayQuality by remember {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
@@ -764,6 +773,25 @@ fun SettingsScreen(
                         label = "Profiles",
                         description = "Create, rename, and switch viewing profiles",
                         onClick = onOpenProfiles
+                    )
+
+                    // Whether a LAUNCH opens on the picker. On (the default)
+                    // keeps "every session starts under a chosen identity";
+                    // off goes straight into the last used profile, which is
+                    // what a TV that only ever runs one profile wants. A
+                    // PIN-protected profile still gets the picker either way.
+                    ToggleRow(
+                        label = "Who's Watching on Launch",
+                        description = if (showProfilePickerOnLaunch) {
+                            "Open Who's Watching every time the app starts."
+                        } else {
+                            "Start in the last used profile instead."
+                        },
+                        checked = showProfilePickerOnLaunch,
+                        onToggle = { enabled ->
+                            showProfilePickerOnLaunch = enabled
+                            AppPreferences.setShowProfilePicker(context, enabled)
+                        }
                     )
 
                     // Kids Mode "Lock add-ons": hide the management entry

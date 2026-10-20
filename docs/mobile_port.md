@@ -99,6 +99,13 @@ The phone now has one persistent bottom bar, owned by the shell:
   the same picker Home's chip opened, returning to the screen it left. The
   picker's own gates (PIN/exit, kids) are untouched by the move.
 
+The Continue Watching card's episode line prints the episode pair only
+(`S02 · E08`, from the same rule the TV rail uses). It used to lead with the
+tracker's subtitle — "Resume - S1 E2", "Up Next - ..." — which repeated the
+state the card already draws as its top-left chip and pushed the numbers off
+the line on a phone; a card the sources named no pair for falls back to the
+episode title, then the tracker's own text ("Paused 34%").
+
 `MobileBottomNavContractTest` pins the host, its nesting inside the shell column
 (by brace depth), the visibility rule, the shared wiring, the re-tap-to-top
 path, the header change, the profile avatar as a door (not a destination, with
@@ -122,6 +129,18 @@ re-established. A rebuild in the same process was already not a launch; a fresh
 task with no saved state still is, so swiping the app away and reopening it
 still asks who is watching. A television ignores the saved state entirely, so
 its gate is unchanged.
+
+**"Who's Watching on Launch" (Settings → Profiles & Accounts, TV and phone).**
+A device-local switch, on by default, that decides whether a launch opens on the
+picker at all: off sends the launch straight into the last used profile, which
+`ProfileManager.init` has already re-established before the first composition.
+It is `show_profile_picker` in `AppPreferences`, listed in
+`PrefsPayloadBuilder.EXCLUDED_PREF_KEYS` and out of the synced set, because how a
+tv in a living room is shared says nothing about a phone that only ever signs in
+as one person. A PIN-protected active profile still gets the picker either way —
+the code is entered there, so skipping it would silently unlock the profile.
+`LaunchScreenGateTest` pins the gate both as a value and as MainActivity wiring;
+`SyncScopeTest` and `DeviceLocalDisplayPrefsTest` pin that it never travels.
 
 The time lock is not a casualty of this: the veil is composed by the shell for
 every screen and answers to the guard's evaluation of the ACTIVE profile, which
@@ -291,8 +310,8 @@ the phone kept its captions. Those tiles now draw
 `components.touch.TouchPosterCaptions`, the touch twin of `PosterCaptions` -
 the same three synced prefs, the same "emit nothing when every enabled part is
 blank" rule - in the browse sections, the catalog grid, Library, Search, actor
-credits and collection parts. Lines that are not the caption (Library's source
-label) are not gated by it.
+credits, collection parts, and Detail's collection and More Like This rails.
+Lines that are not the caption (Library's source label) are not gated by it.
 
 **A Settings change now reaches the screen it changes.** The synced-pref
 revision (`PrefsPayloadApplier.revision`) used to tick only when a PULLED blob
@@ -329,6 +348,15 @@ reshapes the tiles on that device exactly as before; what they no longer do is
 enqueue a display blob. The rest of the display blob keeps syncing. Pinned by
 `data/sync/DeviceLocalDisplayPrefsTest` and the absence assertion in
 `SyncScopeTest`.
+
+**The auto-play quality ceiling joined them (2026-10-20).**
+`max_auto_play_quality` is what the box itself can decode and stream, not a
+viewing preference for the account: a Fire TV Stick capped at 1080p must not
+cap the phone on the same profile. It is out of
+`PrefsPayloadBuilder.SYNCED_PREF_KEYS` and named in `EXCLUDED_PREF_KEYS`; its
+setter still writes the key and ticks the local revision but no longer enqueues
+a display blob, so picking a ceiling on one device leaves every other device
+where it was.
 
 ## The last two gaps: onboarding and the catalog grid
 
@@ -471,8 +499,9 @@ episode cards through the shared touch twin `ui/components/touch/
 KBEpisodeTouch.kt` (`KBEpisodeRailTouch` / `KBEpisodeRailCardTouch`): the TV
 card's 260x170 frame and gradient, the caption over the still, the episode
 badge, watched tick, resume bar, UNAVAILABLE mark, spoiler-free mask, and the
-the TV card's bottom line - runtime (`42m`, or `12m left` while part-watched)
-and the yellow IMDb chip with the episode's score. The vertical row draws the
+TV card's bottom line - runtime (`42m`, or `12m left` while part-watched),
+the yellow IMDb chip with the episode's score, and the air date (formatted by
+the TV page's own `formatEpisodeAirDate`, so one date cannot print two ways). The vertical row draws the
 same runtime rule and the same `EpisodeRatingChip`, and suppresses the score on
 an unaired episode for the TV card's reason (early votes read as a real score).
 Both layouts read ONE `episodeVisual` derivation (watched, progress, unaired,
@@ -484,6 +513,18 @@ Size - nothing published to the sync blob, and the TV page does not read it
 `DetailEpisodeRailMobileContractTest`). The Detail page collects
 `PrefsPayloadApplier.revision`, so a Settings change repaints it even when it
 is still on the back stack.
+
+**Detail's poster captions and ratings (2026-10-20).** The collection and More
+Like This rails were the two phone surfaces still drawing a bare poster: their
+title/year/rating toggles looked broken because the shared
+`TouchPosterCaptions` block was never added. Both now draw it under the card,
+with the tile width from `rememberPosterTileWidth` so a landscape card's
+caption follows its width. The page also collects
+`DetailViewModel.mdbListRatings` and draws `MobileRatingsStrip` under the
+overview - the same `mdbListRatingSources` order and brand colours as the TV
+RATINGS row, with TMDB's own score as the fallback chip - so an MDBList
+account sees its IMDb/RT/Metacritic/Trakt/Letterboxd/MAL scores on the phone
+too, not only on the television.
 
 Parity notes (not bugs to fix):
 - The season mark/unmark arithmetic lives in `ui/mobile/MobileDetailRules.kt`

@@ -164,7 +164,8 @@ class DetailEpisodeRailMobileContractTest {
             "hiddenTitle: Boolean",
             "isWatched: Boolean",
             "unavailable: Boolean",
-            "progress: Float?"
+            "progress: Float?",
+            "airDate: String?"
         ).forEach { input ->
             assertTrue("the card must take $input from the caller", twin.contains(input))
         }
@@ -223,6 +224,30 @@ class DetailEpisodeRailMobileContractTest {
         assertFalse(
             "the vertical row must not fall back to the old bare-minutes label",
             mobileRow().contains("\"\$minutes min\"")
+        )
+    }
+
+    @Test
+    fun `both mobile episode layouts print the air date`() {
+        val card = railCard()
+        val mobile = mobileDetail()
+        assertTrue(
+            "the card's bottom line carries the date",
+            card.contains("airDate?.takeIf { it.isNotBlank() }")
+        )
+        assertTrue(
+            "the vertical row carries it too, so a card and a row cannot " +
+                "disagree about whether an episode is out",
+            mobileRow().contains("episode.airDate") &&
+                mobileRow().contains("formatEpisodeAirDate(")
+        )
+        assertTrue(
+            "the screen formats it with the TV card's own rule",
+            mobile.contains("formatEpisodeAirDate(it)")
+        )
+        assertTrue(
+            "and hands the formatted label to the card",
+            mobile.contains("airDate = episode.airDate")
         )
     }
 

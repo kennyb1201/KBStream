@@ -590,6 +590,12 @@ private fun IntegrationsPaneMobile(
     var resumeAuthority by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getResumeAuthority(context))
     }
+    // Device-local, so bare: whether a launch opens on Who's Watching is about
+    // how this phone is shared, not the account (see
+    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    var showProfilePickerOnLaunch by remember {
+        mutableStateOf(AppPreferences.getShowProfilePicker(context))
+    }
 
     PaneScroll {
         SettingsSectionMobile("Profiles & Accounts", first = true)
@@ -597,6 +603,22 @@ private fun IntegrationsPaneMobile(
             label = "Profiles",
             description = "Create, rename, and switch viewing profiles",
             onClick = onOpenProfiles
+        )
+        // The TV row's twin: on keeps "every session starts under a chosen
+        // identity", off goes straight into the last used profile. A
+        // PIN-protected profile still gets the picker either way.
+        SettingsToggleMobile(
+            label = "Who's Watching on Launch",
+            description = if (showProfilePickerOnLaunch) {
+                "Open Who's Watching every time the app starts."
+            } else {
+                "Start in the last used profile instead."
+            },
+            checked = showProfilePickerOnLaunch,
+            onChange = { enabled ->
+                showProfilePickerOnLaunch = enabled
+                AppPreferences.setShowProfilePicker(context, enabled)
+            }
         )
         if (!kidsAddonLock) {
             SettingsNavRowMobile(
@@ -950,7 +972,10 @@ private fun PlaybackPaneMobile() {
     var useStreamRanker by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUseStreamRanker(context))
     }
-    var qualityCap by remember(syncedRevision) {
+    // NOT keyed on the sync revision: the cap is device-local (see
+    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS), so a pull from another device
+    // must not re-read it here. The picker's own tap updates the state.
+    var qualityCap by remember {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
 
@@ -1127,7 +1152,7 @@ private fun PlaybackPaneMobile() {
             label = "Maximum auto-play quality",
             options = listOf(
                 "Auto" to AutoPlayQuality.CAP_AUTO,
-                "2160p" to AutoPlayQuality.CAP_2160,
+                "4K" to AutoPlayQuality.CAP_2160,
                 "1080p" to AutoPlayQuality.CAP_1080,
                 "720p" to AutoPlayQuality.CAP_720
             ),
@@ -1136,8 +1161,11 @@ private fun PlaybackPaneMobile() {
                 qualityCap = value
                 AppPreferences.setMaxAutoPlayQuality(context, value)
             },
-            description = "A ceiling on what auto-play may start, so a box never opens " +
-                "a stream it cannot decode."
+            // Device-local, and the description says so: a ceiling picked here
+            // does not follow the profile onto a TV (see
+            // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+            description = "A ceiling on what auto-play may start on this device only, " +
+                "so it never opens a stream it cannot decode."
         )
         SettingsToggleMobile(
             label = "Auto-play next episode",
@@ -2957,6 +2985,18 @@ private fun AboutPaneMobile() {
             "This product uses the TMDB API but is not endorsed or certified by TMDB."
         )
         SettingsCaptionMobile("Movie, TV and anime data from Simkl.")
+
+        // The credit the pane ends on, exactly as the TV About pane does:
+        // centred because it is about the app's author rather than the install,
+        // and read-only like every other line in this pane.
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            text = "Made with ❤️ by Kenny B",
+            color = KBTextLo.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

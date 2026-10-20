@@ -7497,7 +7497,14 @@ private fun formatDisplayDate(
     }.getOrDefault(trimmed)
 }
 
-private fun formatEpisodeAirDate(
+/**
+ * An episode's air date as the cards print it.
+ *
+ * Internal rather than private because the phone's episode rail draws the same
+ * line: the two surfaces must format one date the same way, and the TV page is
+ * where every episode-card rule lives (see [episodeAirDate]).
+ */
+internal fun formatEpisodeAirDate(
     raw: String
 ): String =
     episodeAirDate(raw)

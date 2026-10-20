@@ -51,17 +51,24 @@ private fun encodeScreenJson(value: Screen): String =
 /**
  * The screen a launch opens on.
  *
- * Who's Watching is the entry screen whenever the device holds profiles, so
- * every session starts under a chosen identity; only a profile-less install —
- * a fresh one, or one whose profiles were all deleted — falls through to Home,
- * where first-run onboarding lives.
+ * Who's Watching is the entry screen whenever the device holds profiles AND
+ * the viewer has left the launch picker on ([showProfilePicker], the default),
+ * so every session starts under a chosen identity. Turning the row off skips
+ * the picker: `ProfileManager.init` has already re-established the last used
+ * profile before the first composition, so the launch goes straight to Home as
+ * that profile. Only a profile-less install — a fresh one, or one whose
+ * profiles were all deleted — falls through to Home either way, where first-run
+ * onboarding lives.
  *
  * A named function rather than a read inline at the state, because both halves
  * of the gate have to agree: the value the state starts on ([launchScreenSaver]'s
  * entry screen) and the value a restore is allowed to hand back.
  */
-internal fun launchScreen(profilesExist: Boolean): Screen =
-    if (profilesExist) Screen.ProfilePicker() else Screen.Home
+internal fun launchScreen(
+    profilesExist: Boolean,
+    showProfilePicker: Boolean = true
+): Screen =
+    if (profilesExist && showProfilePicker) Screen.ProfilePicker() else Screen.Home
 
 /**
  * Whether this activity create is a LAUNCH or a return.
@@ -122,9 +129,10 @@ internal fun isColdLaunch(
  */
 internal fun launchScreenSaver(
     profilesExist: Boolean,
-    coldLaunch: Boolean = true
+    coldLaunch: Boolean = true,
+    showProfilePicker: Boolean = true
 ): Saver<Screen, String> =
-    if (!profilesExist || !coldLaunch) {
+    if (!profilesExist || !coldLaunch || !showProfilePicker) {
         ScreenSaver
     } else {
         Saver(

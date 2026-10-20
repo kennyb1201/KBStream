@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
@@ -193,6 +194,95 @@ class DeviceLocalDisplayPrefsTest {
         )
         assertTrue(
             "and tick the local revision, so the page it changed re-reads it: $body",
+            body.contains("notifyDisplayPrefChanged()")
+        )
+        assertFalse(
+            "but never push the display blob - this key does not sync: $body",
+            body.contains("syncDisplayPrefsBlob") || body.contains("enqueuePrefs")
+        )
+    }
+
+    @Test
+    fun `the auto-play quality ceiling is local and never publishes`() {
+        // Decided 2026-10-20: what a box can decode is a property of that box,
+        // so a cap chosen for a stick must not travel to the phone beside it.
+        assertEquals(
+            "Auto is the default",
+            AutoPlayQuality.CAP_AUTO,
+            AppPreferences.getMaxAutoPlayQuality(context)
+        )
+        AppPreferences.setMaxAutoPlayQuality(context, AutoPlayQuality.CAP_1080)
+        assertEquals(
+            AutoPlayQuality.CAP_1080,
+            AppPreferences.getMaxAutoPlayQuality(context)
+        )
+
+        store.edit()
+            .putInt("max_auto_play_quality", AutoPlayQuality.CAP_720)
+            .putBoolean("poster_caption_year", false)
+            .commit()
+        assertNull(
+            "a decode ceiling must not leave the device",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["max_auto_play_quality"]
+        )
+        assertNotNull(
+            "the rest of the display prefs still sync",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["poster_caption_year"]
+        )
+
+        // The push is what had to go, and it is not observable from a test
+        // (sign-in state + singleton outbox), so pin the setter body instead.
+        val body = functionBody(readAppPreferences(), "fun setMaxAutoPlayQuality(")
+        assertTrue(
+            "the setter must still write its own key: $body",
+            body.contains("KEY_MAX_AUTO_PLAY_QUALITY")
+        )
+        assertTrue(
+            "and tick the local revision, so the page it changed re-reads it: $body",
+            body.contains("notifyDisplayPrefChanged()")
+        )
+        assertFalse(
+            "but never push the display blob - this key does not sync: $body",
+            body.contains("syncDisplayPrefsBlob") || body.contains("enqueuePrefs")
+        )
+    }
+
+    @Test
+    fun `the launch picker switch is local and never publishes`() {
+        // How a device is shared is a property of that device: a living-room TV
+        // wants Who's Watching on every launch, a phone that only ever uses one
+        // profile does not. Picking one answer on the TV must not change the
+        // phone, so the key is device-local like the geometry above.
+        assertTrue(
+            "Who's Watching stays the default: the app's behaviour before the row",
+            AppPreferences.getShowProfilePicker(context)
+        )
+        AppPreferences.setShowProfilePicker(context, false)
+        assertFalse(
+            "and the pick is stored",
+            AppPreferences.getShowProfilePicker(context)
+        )
+
+        store.edit()
+            .putBoolean("show_profile_picker", false)
+            .putBoolean("poster_caption_year", false)
+            .commit()
+        assertNull(
+            "the launch picker switch must not leave the device",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["show_profile_picker"]
+        )
+        assertNotNull(
+            "the rest of the display prefs still sync",
+            PrefsPayloadBuilder.buildDisplayPrefs(context)["poster_caption_year"]
+        )
+
+        val body = functionBody(readAppPreferences(), "fun setShowProfilePicker(")
+        assertTrue(
+            "the setter must write its own key: $body",
+            body.contains("KEY_SHOW_PROFILE_PICKER")
+        )
+        assertTrue(
+            "and tick the local revision, so the row it changed re-reads it: $body",
             body.contains("notifyDisplayPrefChanged()")
         )
         assertFalse(

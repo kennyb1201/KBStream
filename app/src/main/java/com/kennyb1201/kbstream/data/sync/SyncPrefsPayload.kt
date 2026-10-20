@@ -207,7 +207,6 @@ object PrefsPayloadBuilder {
     internal val SYNCED_PREF_KEYS = setOf(
         "auto_play_next",                    // convenience behavior, not device-specific
         "use_stream_ranker",
-        "max_auto_play_quality",            // auto-play ceiling: a viewing preference, not device-specific
         "hero_trailer_autoplay",
         "hero_trailer_muted",
         "hero_trailer_delay_ms",            // hero trailer dwell: a viewing preference
@@ -219,6 +218,11 @@ object PrefsPayloadBuilder {
         "home_rail_show_addon_name",
         "search_rail_show_catalog_type",
         "search_rail_show_addon_name",
+        // `max_auto_play_quality` is deliberately absent too (decision,
+        // 2026-10-20): a decode ceiling is a property of the box that has to
+        // decode the source, so a stick's 1080p answer must not become the
+        // phone's. It is device-local exactly like the three keys below.
+        //
         // `poster_size`, `home_landscape_cards` and `landscape_posters` are
         // deliberately NOT here (decision, 2026-10-20): the useful tile size
         // and card shape depend on the screen — a 65" TV and a 6.7" phone want
@@ -297,6 +301,10 @@ object PrefsPayloadBuilder {
     internal val EXCLUDED_PREF_KEYS = setOf(
         "default_buffer_mode",
         "auto_select_stream",
+        // The auto-play ceiling can only be honoured by the box that decodes
+        // the source: a stick capped at 1080p must not cap the phone on the
+        // same profile. Device-local, decided 2026-10-20.
+        "max_auto_play_quality",
         "force_software_decoder",
         "enable_tunneling",
         "enable_pip",
@@ -321,7 +329,12 @@ object PrefsPayloadBuilder {
         // configuration must never be armed on another, which is exactly what a
         // synced value would do.
         "mpv_vo",
-        "match_frame_rate"                 // which refresh rates this panel can do
+        "match_frame_rate",                // which refresh rates this panel can do
+        // Whether a launch opens on Who's Watching. How a device is shared is a
+        // property of that device: a living-room TV wants the picker every
+        // time, a phone that only ever uses one profile does not - so picking
+        // one answer on the TV must not remove the picker from the phone.
+        "show_profile_picker"
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"

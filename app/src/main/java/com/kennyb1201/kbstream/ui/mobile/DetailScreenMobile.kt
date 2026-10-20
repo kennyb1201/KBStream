@@ -2,14 +2,18 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,8 +50,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,16 +82,20 @@ import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.components.RatingChipSource
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
 import com.kennyb1201.kbstream.ui.components.touch.episodeRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
@@ -95,9 +105,11 @@ import com.kennyb1201.kbstream.ui.detail.DetailViewModel
 import com.kennyb1201.kbstream.ui.detail.MediaCardItem
 import com.kennyb1201.kbstream.ui.detail.MediaTab
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
+import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -234,6 +246,7 @@ fun DetailScreenMobile(
         val resolvedPosterIds by
             viewModel.resolvedPosterIds.collectAsStateWithLifecycle()
         val collection by viewModel.collection.collectAsStateWithLifecycle()
+        val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
         val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
@@ -602,6 +615,14 @@ fun DetailScreenMobile(
                 null -> emptyList()
             }
         }
+        // The same strip the TV page draws under the overview: MDBList's
+        // sources when it answered, TMDB's own score as the fallback chip.
+        val ratingSources = remember(mdbListRatings, tmdbDetail?.voteAverage) {
+            mdbListRatingSources(
+                ratings = mdbListRatings,
+                tmdbFallback = tmdbDetail?.voteAverage?.takeIf { it > 0.0 }
+            )
+        }
 
         fun openCollectionPart(part: TmdbCollectionPart) {
             scope.launch {
@@ -720,6 +741,19 @@ fun DetailScreenMobile(
                     }
                 }
 
+                // Critic/audience scores, right under the overview exactly as
+                // on the TV page. The phone page never read this flow, so an
+                // MDBList account's ratings were missing here while the TV
+                // showed them.
+                if (ratingSources.isNotEmpty()) {
+                    item(key = "ratings") {
+                        MobileRatingsStrip(
+                            sources = ratingSources,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
+
                 if (normalizedType != "movie" && seasons.isNotEmpty()) {
                     item(key = "seasons") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -769,6 +803,10 @@ fun DetailScreenMobile(
                                     isWatched = visual.isWatched,
                                     unavailable = visual.unavailable,
                                     progress = visual.progress,
+                                    // The TV card's own formatter, so the
+                                    // date reads the same on both screens.
+                                    airDate = episode.airDate
+                                        ?.let { formatEpisodeAirDate(it) },
                                     onClick = { openEpisode(episode, currentSeason) },
                                     onLongClick = {
                                         episodeMenu =
@@ -850,26 +888,43 @@ fun DetailScreenMobile(
                                     // switch, as it does on every catalog row -
                                     // and its size follows Settings' Poster Size.
                                     val partSize = rememberTouchPosterSize()
-                                    TouchGlobalPosterCard(
-                                        posterUrl = part.posterPath
-                                            ?.let { TmdbRepository.POSTER_BASE + it },
-                                        contentDescription = part.title,
-                                        isWatched = isPosterWatched(part.id, "movie"),
-                                        isPartiallyWatched =
-                                            isPosterPartiallyWatched(part.id, "movie"),
-                                        onClick = { openCollectionPart(part) },
-                                        onLongClick = {
-                                            posterMenu = PosterMenuTarget(
-                                                tmdbId = part.id,
-                                                mediaType = "movie",
-                                                name = part.title.orEmpty()
-                                            )
-                                        },
-                                        artId = part.id.toString(),
-                                        artType = "movie",
-                                        posterWidth = partSize.width,
-                                        posterHeight = partSize.height
-                                    )
+                                    val tileWidth = rememberPosterTileWidth(partSize.width)
+                                    Column(
+                                        modifier = Modifier.width(tileWidth),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        TouchGlobalPosterCard(
+                                            posterUrl = part.posterPath
+                                                ?.let { TmdbRepository.POSTER_BASE + it },
+                                            contentDescription = part.title,
+                                            isWatched = isPosterWatched(part.id, "movie"),
+                                            isPartiallyWatched =
+                                                isPosterPartiallyWatched(part.id, "movie"),
+                                            onClick = { openCollectionPart(part) },
+                                            onLongClick = {
+                                                posterMenu = PosterMenuTarget(
+                                                    tmdbId = part.id,
+                                                    mediaType = "movie",
+                                                    name = part.title.orEmpty()
+                                                )
+                                            },
+                                            artId = part.id.toString(),
+                                            artType = "movie",
+                                            posterWidth = partSize.width,
+                                            posterHeight = partSize.height
+                                        )
+                                        // The caption block every other poster
+                                        // row on the phone has always drawn;
+                                        // this rail was the one that omitted
+                                        // it, so its title/rating/year toggles
+                                        // looked broken.
+                                        TouchPosterCaptions(
+                                            title = part.title ?: part.name ?: "Untitled",
+                                            year = part.releaseDate?.take(4),
+                                            rating = part.voteAverage,
+                                            modifier = Modifier.width(tileWidth)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1438,10 +1493,11 @@ private fun MobileDetailHeader(
 
 /**
  * One episode row: still, number and name, overview, runtime, the episode's
- * IMDb score, watched state, and - when the season's dates can be trusted - an
- * UNAVAILABLE mark on an episode that has not aired yet. The runtime and score
- * come from the same helpers the sideways rail card uses, so the two layouts
- * cannot word or format the same episode differently. The name is replaced with
+ * IMDb score and air date, watched state, and - when the season's dates can be
+ * trusted - an UNAVAILABLE mark on an episode that has not aired yet. The
+ * runtime and score come from the same helpers the sideways rail card uses, and
+ * the date from the TV row's own formatter, so the layouts cannot word or
+ * format the same episode differently. The name is replaced with
  * "Episode <n>" by spoiler-free mode for an unstarted episode (see
  * [SpoilerFree]), and a long press raises the episode menu.
  */
@@ -1546,6 +1602,7 @@ private fun EpisodeRow(
                 }
             }
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1570,6 +1627,21 @@ private fun EpisodeRow(
                         ?.takeIf { it > 0.0 }
                         ?.let { EpisodeRatingChip(rating = it) }
                 }
+                // The television row's date, sat at the end of the line: it is
+                // what tells a viewer whether the next episode is out yet, and
+                // the TV card's formatter keeps the two screens in step.
+                episode.airDate
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { airDate ->
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            text = formatEpisodeAirDate(airDate),
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
             }
         }
     }
@@ -1638,18 +1710,33 @@ private fun RecommendationTile(
     onLongClick: () -> Unit
 ) {
     val posterSize = rememberTouchPosterSize()
-    TouchGlobalPosterCard(
-        posterUrl = item.posterPath?.let { TmdbRepository.POSTER_BASE + it },
-        backdropUrl = item.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
-        contentDescription = item.title ?: item.name,
-        isWatched = isWatched,
-        onClick = onClick,
-        onLongClick = onLongClick,
-        artId = item.id.toString(),
-        artType = mediaType,
-        posterWidth = posterSize.width,
-        posterHeight = posterSize.height
-    )
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
+    Column(
+        modifier = Modifier.width(tileWidth),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TouchGlobalPosterCard(
+            posterUrl = item.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+            backdropUrl = item.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+            contentDescription = item.title ?: item.name,
+            isWatched = isWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            artId = item.id.toString(),
+            artType = mediaType,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height
+        )
+        // More Like This was the second rail missing the shared caption block;
+        // the title/rating/year toggles apply here exactly as they do on the
+        // browse rows (which this tile is otherwise the twin of).
+        TouchPosterCaptions(
+            title = item.title ?: item.name ?: "Untitled",
+            year = (item.releaseDate ?: item.firstAirDate)?.take(4),
+            rating = item.voteAverage,
+            modifier = Modifier.width(tileWidth)
+        )
+    }
 }
 
 /**
@@ -1913,6 +2000,53 @@ private fun MobileSectionTitle(text: String) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(horizontal = 16.dp)
     )
+}
+
+/**
+ * The title's critic/audience scores as a wrapping strip - the touch twin of
+ * the TV page's RATINGS row.
+ *
+ * The sources and their order come from the shared [mdbListRatingSources]
+ * rule, so the phone and the TV cannot disagree about which score belongs to
+ * which brand. The marks are tinted with each source's own colour and the
+ * values use the accent, as on the TV; the chips wrap so seven sources fit a
+ * 360dp screen without a horizontal scroll the thumb would have to discover.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MobileRatingsStrip(
+    sources: List<RatingChipSource>,
+    modifier: Modifier = Modifier
+) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        sources.forEach { source ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(KBShapeChip)
+                    .background(KBSurfaceRaised)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Image(
+                    painter = painterResource(id = source.icon),
+                    contentDescription = "${source.name} rating",
+                    colorFilter = ColorFilter.tint(source.tint),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = source.value,
+                    color = KBAccent,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
 }
 
 /** One season chip's long-press subject. */

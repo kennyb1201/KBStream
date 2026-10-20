@@ -73,11 +73,54 @@ class LaunchScreenGateTest {
         // identity — anything else would be a launch into a drill-down with no
         // back destination.
         listOf(false, true).forEach { profilesExist ->
-            assertTrue(
-                "unexpected launch screen for profilesExist=$profilesExist",
-                launchScreen(profilesExist) in listOf(Screen.Home, Screen.ProfilePicker())
-            )
+            listOf(false, true).forEach { showProfilePicker ->
+                assertTrue(
+                    "unexpected launch screen for profilesExist=$profilesExist " +
+                        "showProfilePicker=$showProfilePicker",
+                    launchScreen(profilesExist, showProfilePicker) in
+                        listOf(Screen.Home, Screen.ProfilePicker())
+                )
+            }
         }
+    }
+
+    // ── the device-local "Who's Watching on launch" switch ───────────
+
+    @Test
+    fun `a device with the picker switched off opens into the last used profile`() {
+        // ProfileManager.init re-establishes the last used profile before the
+        // first composition, so Home is that profile already: the picker is
+        // skipped rather than replaced with anything else.
+        assertEquals(Screen.Home, launchScreen(profilesExist = true, showProfilePicker = false))
+    }
+
+    @Test
+    fun `switching the picker off thins the saver back to the plain one`() {
+        // No gate means the ordinary restore, exactly as a profile-less install
+        // gets: a launch has nothing to restore, so the state's initial value
+        // (Home) stands.
+        assertSame(
+            ScreenSaver,
+            launchScreenSaver(profilesExist = true, coldLaunch = true, showProfilePicker = false)
+        )
+        assertEquals(
+            "and a saved screen is handed back rather than gated to the picker",
+            Screen.Home,
+            launchScreenSaver(profilesExist = true, coldLaunch = true, showProfilePicker = false)
+                .restore("{\"type\":\"home\"}")
+        )
+    }
+
+    @Test
+    fun `the switch defaults to the picker, so an untouched device is unchanged`() {
+        assertEquals(
+            Screen.ProfilePicker(),
+            launchScreen(profilesExist = true)
+        )
+        assertFalse(
+            "and its saver is still the gated one",
+            launchScreenSaver(profilesExist = true) === ScreenSaver
+        )
     }
 
     // ── the gate in the restore path ─────────────────────────────────
@@ -214,7 +257,26 @@ class LaunchScreenGateTest {
         )
         assertTrue(
             "the gate reads that flag",
-            main.contains("launchScreenSaver(profilesExist, coldLaunch)")
+            main.contains("launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)")
+        )
+    }
+
+    @Test
+    fun `the device-local switch and a PIN both reach the gate`() {
+        val main = squash(source(MAIN))
+        assertTrue(
+            "the switch is read from AppPreferences, once, before the gate is built",
+            main.contains("getShowProfilePicker(applicationContext)")
+        )
+        assertTrue(
+            "a PIN-protected profile still forces the picker: the code is " +
+                "entered there, so skipping it would silently unlock the profile",
+            main.contains("launchProfileHasPin ||")
+        )
+        assertTrue(
+            "and the saver is keyed on the answer, so the switch changes which " +
+                "gate the state starts with",
+            main.contains("remember(profilesExist, coldLaunch, showProfilePicker)")
         )
     }
 
@@ -264,7 +326,7 @@ class LaunchScreenGateTest {
         val main = squash(source(MAIN))
         assertTrue(
             "the state must start on the gate's answer",
-            main.contains("{ mutableStateOf<Screen>(launchScreen(profilesExist)) }")
+            main.contains("{ mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker)) }")
         )
         assertTrue(
             "the saver has to be the gated one",
@@ -272,7 +334,7 @@ class LaunchScreenGateTest {
         )
         assertTrue(
             "and the gate is what both halves read",
-            main.contains("launchScreenSaver(profilesExist, coldLaunch)")
+            main.contains("launchScreenSaver(profilesExist, coldLaunch, showProfilePicker)")
         )
         assertFalse(
             "seeding the state with Home is the flash this replaced",

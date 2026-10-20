@@ -339,4 +339,66 @@ class DetailScreenMobileContractTest {
                 mobile.contains("SpoilerFree.episodeLabel(")
         )
     }
+
+    @Test
+    fun `collection and More Like This posters carry the shared captions`() {
+        val mobile = mobileDetail()
+
+        val collection = mobile
+            .substringAfter("items(collectionParts")
+            .substringBefore("item(key = \"recommendations\")")
+        assertTrue(
+            "a collection part draws the caption block every other poster row has",
+            collection.contains("TouchPosterCaptions(")
+        )
+        assertTrue(
+            "with the part's own title, year and score",
+            collection.contains("title = part.title ?: part.name") &&
+                collection.contains("year = part.releaseDate?.take(4)") &&
+                collection.contains("rating = part.voteAverage")
+        )
+
+        val tile = mobile
+            .substringAfter("private fun RecommendationTile(")
+            .substringBefore("private fun ReviewTile(")
+        assertTrue(
+            "a More Like This tile draws the same caption block",
+            tile.contains("TouchPosterCaptions(")
+        )
+        assertTrue(
+            "from the recommendation's own title, year and score",
+            tile.contains("title = item.title ?: item.name") &&
+                tile.contains("year = (item.releaseDate ?: item.firstAirDate)?.take(4)") &&
+                tile.contains("rating = item.voteAverage")
+        )
+    }
+
+    @Test
+    fun `the MDBList ratings strip is drawn from the shared source rule`() {
+        val mobile = mobileDetail()
+
+        assertTrue(
+            "the page reads the same ratings flow the TV page does",
+            mobile.contains(
+                "val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()"
+            )
+        )
+        assertTrue(
+            "and builds the strip through the shared source rule",
+            mobile.contains("mdbListRatingSources(")
+        )
+        assertTrue(
+            "with TMDB's score as the fallback chip, exactly as on TV",
+            mobile.contains("tmdbFallback = tmdbDetail?.voteAverage?.takeIf { it > 0.0 }")
+        )
+        assertTrue(
+            "a title with no scores draws no empty strip",
+            mobile.contains("if (ratingSources.isNotEmpty())") &&
+                mobile.contains("MobileRatingsStrip(")
+        )
+        assertTrue(
+            "and each brand mark keeps its own colour",
+            mobile.contains("colorFilter = ColorFilter.tint(source.tint)")
+        )
+    }
 }

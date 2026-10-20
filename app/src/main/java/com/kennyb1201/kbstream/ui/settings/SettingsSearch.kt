@@ -117,6 +117,12 @@ internal object SettingsSearchIndex {
             "profile switch rename viewing who is watching account"
         ),
         SettingSearchEntry(
+            "integrations.who-is-watching",
+            SettingsPane.INTEGRATIONS,
+            "Who's Watching on Launch",
+            "profile picker startup launch last used skip who is watching"
+        ),
+        SettingSearchEntry(
             ADDONS_ENTRY_KEY,
             SettingsPane.INTEGRATIONS,
             "Add-ons",

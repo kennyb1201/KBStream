@@ -35,8 +35,9 @@ object AppPreferences {
     private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
     private const val KEY_USE_STREAM_RANKER = "use_stream_ranker"
     // Ceiling on what auto-play may start (see AutoPlayQuality):
-    // 0=auto, 1=4K, 2=1080p, 3=720p. Synced: it is a viewing preference, not a
-    // device capability, so the same ceiling follows the profile.
+    // 0=auto, 1=4K, 2=1080p, 3=720p. DEVICE-LOCAL, not synced: it is what THIS
+    // box can decode, so a stick's 1080p answer must not become the phone's
+    // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
     private const val KEY_MAX_AUTO_PLAY_QUALITY = "max_auto_play_quality"
     private const val KEY_BINGE_GROUP_PREFER = "binge_group_prefer"
     private const val KEY_BINGE_GROUP_REUSE = "binge_group_reuse"
@@ -142,6 +143,12 @@ object AppPreferences {
     // purpose: the pane someone was last reading says nothing about the
     // account, and syncing it would drag a phone's "Data & Backup" onto the TV.
     private const val KEY_LAST_SETTINGS_PANE = "last_settings_pane"
+    // Whether a LAUNCH opens on Who's Watching. Device-local on purpose: a
+    // television in a living room wants the picker every time, a phone that
+    // only ever signs in as one person does not - and that is a property of
+    // how this device is used, not of the account (see
+    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    private const val KEY_SHOW_PROFILE_PICKER = "show_profile_picker"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
@@ -415,12 +422,17 @@ object AppPreferences {
     // ── Max auto-play quality ────────────────────────────────────────
     // A ceiling on the source auto-play picks (see AutoPlayQuality). The
     // picker still lists every source; only the automatic pick is constrained.
+    //
+    // DEVICE-LOCAL on purpose: what a box can decode is a property of that
+    // box, not of the account - a 1080p ceiling chosen for a Fire TV Stick
+    // says nothing about the phone in the same profile - so this stops at the
+    // local revision like Poster Size and never rides the display-prefs blob.
     fun getMaxAutoPlayQuality(context: Context): Int =
         readIntPref(context, KEY_MAX_AUTO_PLAY_QUALITY, AutoPlayQuality.CAP_AUTO)
 
     fun setMaxAutoPlayQuality(context: Context, cap: Int) {
         prefs(context).edit().putInt(KEY_MAX_AUTO_PLAY_QUALITY, cap).apply()
-        syncDisplayPrefsBlob(context)
+        notifyDisplayPrefChanged()
     }
 
     // ── Binge group (Stremio behaviorHints.bingeGroup) ───────────────
@@ -1860,6 +1872,25 @@ object AppPreferences {
 
     fun setLastSettingsPane(context: Context, pane: String) {
         prefs(context).edit().putString(KEY_LAST_SETTINGS_PANE, pane).apply()
+    }
+
+    // ── Who's Watching on launch ──────────────────────────────────────
+    /**
+     * True (the default, and the app's behaviour before the row existed) means a
+     * cold launch opens on Who's Watching so every session starts under a
+     * chosen identity. False skips the picker and goes straight into the last
+     * used profile, which `ProfileManager.init` has already re-established.
+     *
+     * DEVICE-LOCAL: how a particular screen is shared is not an account fact.
+     * It stops at [notifyDisplayPrefChanged] and is never enqueued, exactly like
+     * Poster Size and the episode layout.
+     */
+    fun getShowProfilePicker(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SHOW_PROFILE_PICKER, true)
+
+    fun setShowProfilePicker(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SHOW_PROFILE_PICKER, enabled).apply()
+        notifyDisplayPrefChanged()
     }
 
     // ── Sports hub: which leagues the hub renders ─────────────────────
