@@ -1776,7 +1776,8 @@ object AppPreferences {
     // PrefsPayloadBuilder.SYNCED_PREF_KEYS).
     //
     // Default false - the vertical list - so an install that never touches the
-    // switch is exactly the screen it was before the switch existed.
+    // Settings → Posters & Browsing → Episode layout row is exactly the screen
+    // it was before that row existed.
     fun getDetailEpisodeRail(context: Context): Boolean =
         prefs(context).getBoolean(KEY_DETAIL_EPISODE_RAIL, false)
 

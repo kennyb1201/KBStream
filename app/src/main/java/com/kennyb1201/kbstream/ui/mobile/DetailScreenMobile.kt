@@ -80,8 +80,10 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
+import com.kennyb1201.kbstream.ui.components.touch.episodeRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -533,11 +535,12 @@ fun DetailScreenMobile(
         // ---- the episode area's layout ----
         // Device-local screen geometry (see AppPreferences.getDetailEpisodeRail):
         // this page's shape says nothing about the television's, so the choice
-        // never syncs. Held as state so the switch repaints the page at once,
-        // and written through on every press so leaving and coming back keeps
-        // it.
-        var episodeRail by remember {
-            mutableStateOf(AppPreferences.getDetailEpisodeRail(context))
+        // never syncs. The switch lives in Settings → Posters & Browsing; the
+        // revision is collected so a change there repaints this page even when
+        // it is still on the back stack.
+        val displayRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+        val episodeRail = remember(displayRevision) {
+            AppPreferences.getDetailEpisodeRail(context)
         }
 
         // One episode's state, derived once. BOTH layouts read this - the
@@ -721,21 +724,13 @@ fun DetailScreenMobile(
                     item(key = "seasons") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MobileSectionTitle(if (episodesLoading) "Episodes…" else "Episodes")
-                            // The season chips and the layout switch share one
-                            // row: the switch sits at the right end, where the
-                            // thumb is after picking a season, and the chips
-                            // scroll in the space that is left. It is here
-                            // rather than in Settings because it applies to
-                            // this page only (see AppPreferences: a
-                            // device-local, non-synced choice).
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(end = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            // The season chips own the row now. The episode
+                            // area's LIST/RAIL choice is a Settings row
+                            // (Settings → Posters & Browsing), not a control
+                            // on this page: it is a viewing preference that
+                            // applies to every season, so it belongs beside
+                            // the other display choices.
                             LazyRow(
-                                modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -757,14 +752,6 @@ fun DetailScreenMobile(
                                         }
                                     )
                                 }
-                            }
-                            EpisodeLayoutSwitch(
-                                rail = episodeRail,
-                                onChange = { next ->
-                                    episodeRail = next
-                                    AppPreferences.setDetailEpisodeRail(context, next)
-                                }
-                            )
                             }
                         }
                     }
@@ -1450,40 +1437,11 @@ private fun MobileDetailHeader(
 }
 
 /**
- * The episodes area's layout switch: LIST (the vertical rows) or RAIL (the
- * television's sideways episode cards).
- *
- * Two chips rather than one button that flips: the state is a choice between
- * two named layouts, and the app's other small controls (the season row, the
- * Media tabs) are the same pill - so the selected half is readable at a glance
- * instead of having to be inferred from which way a toggle leans.
- */
-@Composable
-private fun EpisodeLayoutSwitch(
-    rail: Boolean,
-    onChange: (Boolean) -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        TouchChoiceChip(
-            label = "LIST",
-            selected = !rail,
-            onClick = { onChange(false) }
-        )
-        TouchChoiceChip(
-            label = "RAIL",
-            selected = rail,
-            onClick = { onChange(true) }
-        )
-    }
-}
-
-/**
- * One episode row: still, number and name, overview, runtime, watched state,
- * and - when the season's dates can be trusted - an UNAVAILABLE mark on an
- * episode that has not aired yet. The name is replaced with
+ * One episode row: still, number and name, overview, runtime, the episode's
+ * IMDb score, watched state, and - when the season's dates can be trusted - an
+ * UNAVAILABLE mark on an episode that has not aired yet. The runtime and score
+ * come from the same helpers the sideways rail card uses, so the two layouts
+ * cannot word or format the same episode differently. The name is replaced with
  * "Episode <n>" by spoiler-free mode for an unstarted episode (see
  * [SpoilerFree]), and a long press raises the episode menu.
  */
@@ -1591,9 +1549,9 @@ private fun EpisodeRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                episode.runtimeMinutes?.takeIf { it > 0 }?.let { minutes ->
+                episodeRuntimeLabel(episode.runtimeMinutes, progress)?.let { label ->
                     Text(
-                        text = "$minutes min",
+                        text = "🕒 $label",
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -1605,6 +1563,12 @@ private fun EpisodeRow(
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold
                     )
+                } else {
+                    // No score on an unaired episode, exactly as the TV card:
+                    // a future episode's vote average is early-vote noise.
+                    episode.voteAverage
+                        ?.takeIf { it > 0.0 }
+                        ?.let { EpisodeRatingChip(rating = it) }
                 }
             }
         }

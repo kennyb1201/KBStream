@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,10 +13,11 @@ import org.junit.Test
  *     the character under the name; the phone's tile never read the field, so a
  *     phone showed a row of names and nothing else.
  *  2. **A season can be browsed sideways.** The page listed episodes
- *     vertically and offered no other shape; the switch on the season row now
- *     flips it to the television's episode rail, drawn by the shared touch twin
+ *     vertically and offered no other shape; a Settings row now chooses the
+ *     television's episode rail, drawn by the shared touch twin
  *     (`ui/components/touch/KBEpisodeTouch.kt`) so the phone cannot grow a
- *     second episode-card design.
+ *     second episode-card design. The choice is a display preference, so it
+ *     sits with the other display rows instead of on every season.
  *
  * What a JVM test can hold here is the wiring and the arithmetic: the state an
  * episode is drawn with is derived ONCE and read by both layouts, so a watched
@@ -93,21 +95,36 @@ class DetailEpisodeRailMobileContractTest {
     }
 
     @Test
-    fun `the episode area switches between the list and the shared rail card`() {
+    fun `the episode layout is chosen in Settings, not on the detail page`() {
         val mobile = mobileDetail()
-        assertTrue(
-            "the switch must be on the page, in the season row",
-            mobile.contains("EpisodeLayoutSwitch(") &&
-                mobile.contains("label = \"LIST\"") &&
+        val settings = source("com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt")
+
+        assertFalse(
+            "the season row must no longer carry the LIST/RAIL control",
+            mobile.contains("EpisodeLayoutSwitch(") ||
+                mobile.contains("label = \"LIST\"") ||
                 mobile.contains("label = \"RAIL\"")
         )
         assertTrue(
-            "it must open on the device-local pref, not a synced one",
+            "Detail still opens on the device-local pref, not a synced one",
             mobile.contains("AppPreferences.getDetailEpisodeRail(context)")
         )
         assertTrue(
-            "and every press must write that pref through",
-            mobile.contains("AppPreferences.setDetailEpisodeRail(context, next)")
+            "and a Settings change repaints the page even from the back stack",
+            mobile.contains("val displayRevision by PrefsPayloadApplier.revision")
+        )
+        assertTrue(
+            "Settings offers the two named layouts",
+            settings.contains("label = \"Episode layout\"") &&
+                settings.contains("options = listOf(\"List\" to 0, \"Rail\" to 1)")
+        )
+        assertTrue(
+            "and every press writes the device-local pref through",
+            settings.contains("AppPreferences.setDetailEpisodeRail(context, rail)")
+        )
+        assertFalse(
+            "the setter must not live on the page any more",
+            mobile.contains("AppPreferences.setDetailEpisodeRail")
         )
         assertTrue(
             "the rail must be the shared touch twin, not a card drawn here",
@@ -173,6 +190,62 @@ class DetailEpisodeRailMobileContractTest {
                 twin.contains("contentDescription = \"Watched\"") &&
                 twin.contains("fraction.coerceIn") &&
                 twin.contains("\"UNAVAILABLE\"")
+        )
+    }
+
+    /** The vertical row's own body, so the rail's definition cannot satisfy it. */
+    private fun mobileRow(): String = mobileDetail()
+        .substringAfter("private fun EpisodeRow(")
+        .substringBefore("private fun CastTile(")
+
+    /** The rail card's own body, so the helper definitions cannot satisfy it. */
+    private fun railCard(): String = episodeTwin()
+        .substringAfter("fun KBEpisodeRailCardTouch(")
+        .substringBefore("fun episodeRuntimeLabel(")
+
+    @Test
+    fun `both episode layouts draw the TV card's rating and runtime`() {
+        listOf("the vertical row" to mobileRow(), "the rail card" to railCard())
+            .forEach { (name, source) ->
+                assertTrue(
+                    "$name must use the TV card's runtime rule",
+                    source.contains("episodeRuntimeLabel(")
+                )
+                assertTrue(
+                    "$name must use the shared IMDb chip",
+                    source.contains("EpisodeRatingChip(")
+                )
+                assertTrue(
+                    "$name must show the runtime as the TV card does",
+                    source.contains("🕒")
+                )
+            }
+        assertFalse(
+            "the vertical row must not fall back to the old bare-minutes label",
+            mobileRow().contains("\"\$minutes min\"")
+        )
+    }
+
+    @Test
+    fun `the rail card keeps the TV card's overlay caption`() {
+        val card = railCard()
+        assertTrue(
+            "the TV card's gradient is what keeps the words legible",
+            card.contains("Brush.verticalGradient(")
+        )
+        assertTrue(
+            "the caption is over the still, as on the television",
+            card.contains("verticalArrangement = Arrangement.SpaceBetween") &&
+                card.contains(".padding(10.dp)")
+        )
+        assertTrue(
+            "and the frame is the TV card's 260x170",
+            episodeTwin().contains("EpisodeCardWidth = 260.dp") &&
+                episodeTwin().contains("EpisodeCardHeight = 170.dp")
+        )
+        assertTrue(
+            "a future episode's early score is not shown",
+            card.contains("takeIf { !unavailable }")
         )
     }
 }

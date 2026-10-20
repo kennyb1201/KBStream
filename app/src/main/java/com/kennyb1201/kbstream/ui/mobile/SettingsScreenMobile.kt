@@ -1721,6 +1721,9 @@ private fun InterfacePaneMobile() {
     var spoilerFree by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSpoilerFree(context))
     }
+    var episodeRail by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getDetailEpisodeRail(context))
+    }
     var posterSize by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPosterSize(context).toInt())
     }
@@ -1908,6 +1911,21 @@ private fun InterfacePaneMobile() {
                 spoilerFree = it
                 AppPreferences.setSpoilerFree(context, it)
             }
+        )
+        // The Detail page's episode area: vertical rows or the TV-style
+        // sideways rail. Device-local (see AppPreferences.getDetailEpisodeRail),
+        // but a viewing preference, so it sits with the display rows instead of
+        // as a control on every season the viewer opens.
+        SettingsChoiceMobile(
+            label = "Episode layout",
+            options = listOf("List" to 0, "Rail" to 1),
+            selected = if (episodeRail) 1 else 0,
+            onSelect = { value ->
+                val rail = value == 1
+                episodeRail = rail
+                AppPreferences.setDetailEpisodeRail(context, rail)
+            },
+            description = "Detail page: vertical episode rows, or the television's sideways rail."
         )
         SettingsChoiceMobile(
             label = "Poster size",

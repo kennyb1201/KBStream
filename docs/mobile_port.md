@@ -464,19 +464,26 @@ character under the actor's name, in the TV card's own slot and type
 `member.name` alone, so a phone showed a row of names and nothing about who
 they played.
 
-A season can also be browsed sideways. The right end of the season row carries
-a **LIST | RAIL** switch (list is the default), and RAIL draws the television's
+A season can also be browsed sideways. **Settings → Posters & Browsing →
+Episode layout** offers **List** (the default, vertical rows) and **Rail**; the
+choice is no longer a control on the Detail page. RAIL draws the television's
 episode cards through the shared touch twin `ui/components/touch/
-KBEpisodeTouch.kt` (`KBEpisodeRailTouch` / `KBEpisodeRailCardTouch`): episode
-badge, watched tick, resume bar, UNAVAILABLE mark and the spoiler-free mask,
-with the caption beneath the still rather than over it. Both layouts read ONE
-`episodeVisual` derivation (watched, progress, unaired, hidden title), so the
-two shapes cannot disagree about an episode, and both call the same
-`openEpisode` and raise the same `EpisodeMenuTarget`. The choice is the
-`detail_episode_rail` pref: device-local screen geometry like Poster Size - no
-Settings row, nothing published to the sync blob, and the TV page does not read
-it (`DeviceLocalDisplayPrefsTest`, `SyncScopeTest`,
-`DetailEpisodeRailMobileContractTest`).
+KBEpisodeTouch.kt` (`KBEpisodeRailTouch` / `KBEpisodeRailCardTouch`): the TV
+card's 260x170 frame and gradient, the caption over the still, the episode
+badge, watched tick, resume bar, UNAVAILABLE mark, spoiler-free mask, and the
+the TV card's bottom line - runtime (`42m`, or `12m left` while part-watched)
+and the yellow IMDb chip with the episode's score. The vertical row draws the
+same runtime rule and the same `EpisodeRatingChip`, and suppresses the score on
+an unaired episode for the TV card's reason (early votes read as a real score).
+Both layouts read ONE `episodeVisual` derivation (watched, progress, unaired,
+hidden title), so the two shapes cannot disagree about an episode, and both
+call the same `openEpisode` and raise the same `EpisodeMenuTarget`. The choice
+is the `detail_episode_rail` pref: device-local screen geometry like Poster
+Size - nothing published to the sync blob, and the TV page does not read it
+(`DeviceLocalDisplayPrefsTest`, `SyncScopeTest`,
+`DetailEpisodeRailMobileContractTest`). The Detail page collects
+`PrefsPayloadApplier.revision`, so a Settings change repaints it even when it
+is still on the back stack.
 
 Parity notes (not bugs to fix):
 - The season mark/unmark arithmetic lives in `ui/mobile/MobileDetailRules.kt`
