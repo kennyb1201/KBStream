@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
+import android.util.Log
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -23,6 +25,30 @@ data class TraktPollResult(
     val token: TraktToken? = null,
     val retryAfterSeconds: Long? = null
 )
+
+/**
+ * The connect screen's two tiles: how many movies and shows this account has
+ * watched. Display-only - Home and the badges read the watched snapshot.
+ */
+data class TraktWatchedCounts(
+    val movies: Int,
+    val shows: Int
+)
+
+/**
+ * Counts from the two watched reads, or null when either answer is unusable.
+ *
+ * A half-answered pair is not reported: showing one tile and hiding the other
+ * would read as "0 shows watched" over an account that has hundreds. Pure so
+ * the failure rule is tested without a network or a token.
+ */
+internal fun traktWatchedCounts(
+    movies: List<TraktWatchedMovie>?,
+    shows: List<TraktWatchedShow>?
+): TraktWatchedCounts? {
+    if (movies == null || shows == null) return null
+    return TraktWatchedCounts(movies = movies.size, shows = shows.size)
+}
 
 /**
  * One paused Trakt session, flattened for the Continue Watching merge.
@@ -195,6 +221,16 @@ class TraktRepository private constructor(private val context: Context?) {
             expiresInSeconds = expiresInSeconds,
             error = oauthError
         )
+        // Debug builds only: one failed connect has to say whether Trakt
+        // answered 404/409/410 or the local math is wrong. Never the device
+        // code, the user code or a token - those are live credentials.
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                "TraktPoll",
+                "status=${response.code()} elapsed=${elapsedSeconds}s " +
+                    "expiresIn=${expiresInSeconds}s state=$state"
+            )
+        }
         if (state != TraktDeviceFlowRules.Poll.APPROVED) {
             return TraktPollResult(state, retryAfterSeconds = retryAfter)
         }
@@ -646,6 +682,26 @@ class TraktRepository private constructor(private val context: Context?) {
      */
     internal fun onSyncedSessionChanged() {
         invalidateWatchedSnapshot()
+    }
+
+    /**
+     * The account's watched movie/show totals for the connect screen.
+     *
+     * Two reads under one budget slot (see [TraktRateGuard]); any failure - a
+     * non-2xx, a transport error, no token, an exhausted budget - answers null,
+     * and the screen hides the row rather than blocking the connected state.
+     */
+    suspend fun watchedCounts(): TraktWatchedCounts? {
+        if (!TraktConfig.isConfigured) return null
+        val token = validAccessToken() ?: return null
+        if (!guard.tryAcquire()) return null
+        val authorization = "Bearer $token"
+        val movies = runCatchingCancellable { api.watchedMovies(authorization) }.getOrNull()
+        val shows = runCatchingCancellable { api.watchedShows(authorization) }.getOrNull()
+        return traktWatchedCounts(
+            movies = movies?.body().takeIf { movies?.isSuccessful == true },
+            shows = shows?.body().takeIf { shows?.isSuccessful == true }
+        )
     }
 
     /**

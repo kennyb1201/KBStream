@@ -207,6 +207,26 @@ is for MDBList's sessions. The choice is a synced display pref, so every device
 in the account agrees; every linked tracker still scrobbles and receives watched
 marks regardless.
 
+## Connect screen — WATCHED tiles and QR (2026-10-19)
+
+The connect page now shows the same two tiles Simkl's does, labelled
+"MOVIES WATCHED" / "SHOWS WATCHED" (Trakt's own noun, not Simkl's "series").
+They are the list sizes of `GET /sync/watched/movies` and
+`GET /sync/watched/shows`, read once per entry into the connected state under a
+single `TraktRateGuard` slot. Any failure - a non-2xx, a transport error, no
+token, an exhausted budget, or only one of the two answering - stores null and
+hides the row; "Connected to Trakt." is unaffected. This is display-only: Home
+and the badges still read the watched snapshot (`watchedSnapshot`), not these
+counts.
+
+While linking, both connect screens draw a QR of the verification address with
+`qrcodeBitmap()` (the add-on pairing helper, ZXing - no new dependency), at
+220dp on a white field so it scans from couch distance, under the label "SCAN
+TO OPEN" with the URL printed below. The user code stays large and separate:
+neither Trakt's nor Simkl's activation page pre-fills the code from a query
+parameter, so the QR only replaces typing the URL. The QR is drawn only in the
+linking state (`verificationUrl != null`); a connected account shows no code.
+
 ## Not done (deliberately)
 
 - **D2/E2 — posting comments.** There is no submission UI for any provider; the
@@ -226,10 +246,20 @@ D3 (token sync across devices) is done - see the section above.
 The Trakt tests cover the pure rules (`TraktDeviceFlowRulesTest`,
 `TraktRateGuardTest`, `TraktWatchStateTest`), the wire field names
 (`TraktWireFormatTest`), the phase wiring (`TraktIntegrationContractTest`) and
-the phase-A invariants (`TraktWiringContractTest`).
+the phase-A invariants (`TraktWiringContractTest`), and the poll's monotonic
+clock plus its debug diagnostic (`TraktPollClockContractTest`), the WATCHED tile
+rule (`TraktWatchedCountsTest`), and the QR/counts placement on both connect
+layouts (`TraktConnectSurfacesContractTest`). `QrCodeEncodingTest` encodes both
+activation URLs through the shared helper under Robolectric.
 
-On a device: Settings -> Trakt -> GENERATE CODE, open the verification address,
-type the code, and the page should flip to "Signed in as <slug>". Playing a
+If a connect fails on a debug build, logcat tag `TraktPoll` records the HTTP
+status Trakt answered, the elapsed/expires seconds the app computed, and the
+resulting poll state. It never logs the device code, the user code or a token.
+
+On a device: Settings -> Trakt -> GENERATE CODE, scan the QR (or open the
+address it prints), type the code, and the page should flip to "Signed in as
+<slug>" with the MOVIES/SHOWS WATCHED tiles below it. The same QR appears on
+Simkl's connect page while its PIN is pending. Playing a
 title should produce scrobble events on the Trakt dashboard, a finished episode
 should get a play, and a title watched on Trakt should show its badge here after
 the snapshot refresh. Killing the app and returning should show the same account

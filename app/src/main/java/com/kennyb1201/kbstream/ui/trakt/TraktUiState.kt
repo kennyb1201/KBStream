@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.trakt
 
+import com.kennyb1201.kbstream.data.trakt.TraktWatchedCounts
+
 /**
  * Everything the Trakt connect screen draws.
  *
@@ -15,6 +17,11 @@ data class TraktUiState(
     val isConnected: Boolean = false,
     /** The account's Trakt slug, when one has been read. */
     val accountSlug: String? = null,
+    /**
+     * WATCHED tiles for the connected state. Null hides the row - a failed or
+     * budget-blocked read must not stop the screen saying "Connected to Trakt."
+     */
+    val watchedCounts: TraktWatchedCounts? = null,
     val isLoading: Boolean = false,
     /** True while the poll loop is waiting for approval. */
     val isPolling: Boolean = false,

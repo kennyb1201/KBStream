@@ -28,6 +28,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
@@ -186,8 +187,9 @@ fun SimklConnectScreenMobile(
                                 "URL on your phone or computer and enter the code."
                         )
 
+                        // Linking only: no QR on the connected branch above.
                         uiState.verificationUrl?.let { url ->
-                            SimklInfoBlock(label = "VERIFY AT", value = url)
+                            KBQrCode(url = url)
                         }
 
                         uiState.userCode?.let { code ->
@@ -305,29 +307,6 @@ private fun SimklStatusPanel(title: String, message: String) {
             text = message,
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
-@Composable
-private fun SimklInfoBlock(label: String, value: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(KBSurfaceRaised, KBShapeCard)
-            .padding(16.dp)
-    ) {
-        Text(
-            text = label,
-            color = KBAccent,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = value,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(top = 6.dp)
         )
     }

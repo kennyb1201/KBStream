@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.trakt
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -56,6 +57,9 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
 
     private var pollJob: Job? = null
 
+    /** The counts read for the connected state; replaced, never stacked. */
+    private var countsJob: Job? = null
+
     init {
         if (repository.hasToken()) refreshAccount()
         observeProfileSwitches()
@@ -71,6 +75,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                     return@collect
                 }
                 stopPolling()
+                countsJob?.cancel()
                 val connected = repository.hasToken()
                 _uiState.value = TraktUiState(
                     isConfigured = repository.isConfigured(),
@@ -78,8 +83,34 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                     accountSlug = repository.accountSlug(),
                     statusMessage = if (connected) "Connected to Trakt." else null
                 )
-                if (connected) refreshAccount()
+                if (connected) {
+                    refreshAccount()
+                    // The screen's entry effect will not fire again while it is
+                    // already open on a true isConnected, so the new account's
+                    // tiles are asked for here.
+                    refreshWatchedCounts()
+                }
             }
+        }
+    }
+
+    /**
+     * Reads the two WATCHED totals once for the screen entry that asks for
+     * them. Deliberately not called from composition: the screen runs this in a
+     * `LaunchedEffect`, so a recomposition cannot spend another pair of reads.
+     *
+     * Any failure - no token, a non-2xx, a spent [TraktRateGuard] budget - lands
+     * as null, which hides the row and leaves the connected state alone.
+     */
+    fun refreshWatchedCounts() {
+        countsJob?.cancel()
+        if (!repository.hasToken()) {
+            _uiState.value = _uiState.value.copy(watchedCounts = null)
+            return
+        }
+        countsJob = viewModelScope.launch {
+            val counts = runCatchingCancellable { repository.watchedCounts() }.getOrNull()
+            _uiState.value = _uiState.value.copy(watchedCounts = counts)
         }
     }
 
@@ -156,7 +187,13 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 return@launch
             }
-            val issuedAtMs = System.currentTimeMillis()
+            // Monotonic, never the wall clock: NTP sync or a viewer changing
+            // the time can jump `currentTimeMillis` by minutes inside this
+            // 1.5-second flow, and `elapsed` would then read as 600s+ on the
+            // FIRST poll - "That code expired" while Trakt has just accepted
+            // the approval. elapsedRealtime measures real elapsed time, which
+            // is the only thing the poll's expiry math actually needs.
+            val issuedAtMs = SystemClock.elapsedRealtime()
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
                 isPolling = true,
@@ -185,7 +222,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
             var consecutiveFailures = 0
             while (isActive) {
                 delay(TraktDeviceFlowRules.intervalMillis(interval))
-                val elapsed = (System.currentTimeMillis() - issuedAtMs) / 1_000L
+                val elapsed = (SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L
                 val result = runCatchingCancellable {
                     repository.pollOnce(
                         deviceCode = deviceCode,
@@ -214,6 +251,8 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                             statusMessage = "Connected to Trakt.",
                             errorMessage = null
                         )
+                        // No counts call here: the screen's entry effect sees
+                        // isConnected flip and fetches the pair exactly once.
                         return@launch
                     }
 
@@ -283,6 +322,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun disconnect() {
         stopPolling()
+        countsJob?.cancel()
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             runCatchingCancellable { repository.revokeAndClear() }

@@ -36,6 +36,7 @@ import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.mobile.SimklConnectScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -185,11 +186,10 @@ fun SimklConnectScreen(
                         message = "Generate a code, then open the verification URL on your phone or computer and enter the code."
                     )
 
+                    // Only while linking: the connected branch above has no
+                    // address left to open, so it never draws a QR.
                     uiState.verificationUrl?.let { url ->
-                        SimklInfoBlock(
-                            label = "VERIFY AT",
-                            value = url
-                        )
+                        KBQrCode(url = url)
                     }
 
                     uiState.userCode?.let { code ->
@@ -362,32 +362,6 @@ private fun SimklStatusPanel(
             text = message,
             color = KBTextLo,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
-@Composable
-private fun SimklInfoBlock(
-    label: String,
-    value: String
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(KBSurfaceRaised, KBShapeCard)
-            .padding(16.dp)
-    ) {
-        Text(
-            text = label,
-            color = KBAccent,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = value,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.padding(top = 6.dp)
         )
     }

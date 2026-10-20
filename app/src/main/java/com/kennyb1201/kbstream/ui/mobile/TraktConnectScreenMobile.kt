@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +27,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.data.trakt.TraktWatchedCounts
+import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
@@ -61,6 +64,11 @@ fun TraktConnectScreenMobile(
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    // Once per entry into the connected state, never per recomposition.
+    LaunchedEffect(uiState.isConnected) {
+        if (uiState.isConnected) vm.refreshWatchedCounts()
+    }
 
     MobileTheme {
         Box(
@@ -118,6 +126,10 @@ fun TraktConnectScreenMobile(
                                 message = uiState.accountSlug?.let { "Signed in as $it." }
                                     ?: "Your Trakt account is connected and ready."
                             )
+                            uiState.watchedCounts?.let { counts ->
+                                TraktWatchedCountsRow(counts = counts)
+                            }
+
                             uiState.statusMessage?.let { TraktLine(it) }
                             uiState.errorMessage?.let { TraktErrorLine(it) }
 
@@ -147,8 +159,9 @@ fun TraktConnectScreenMobile(
                                     "address on your phone or computer, and enter the code."
                             )
 
+                            // Linking only: the connected branch has no URL.
                             uiState.verificationUrl?.let { url ->
-                                TraktInfoBlock(label = "VERIFY AT", value = url)
+                                KBQrCode(url = url)
                             }
 
                             uiState.userCode?.let { code ->
@@ -303,28 +316,52 @@ private fun TraktStatusPanel(
     }
 }
 
+/** Simkl's two tiles in the same shape; Trakt's own noun is SHOWS. */
 @Composable
-private fun TraktInfoBlock(
+private fun TraktWatchedCountsRow(counts: TraktWatchedCounts) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        TraktWatchedCountTile(
+            label = "MOVIES WATCHED",
+            value = counts.movies,
+            modifier = Modifier.weight(1f)
+        )
+        TraktWatchedCountTile(
+            label = "SHOWS WATCHED",
+            value = counts.shows,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun TraktWatchedCountTile(
     label: String,
-    value: String
+    value: Int,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
             .background(KBSurfaceRaised, KBShapeCard)
-            .padding(16.dp)
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
         Text(
-            text = label,
+            text = value.toString(),
             color = KBAccent,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
         )
         Text(
-            text = value,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 6.dp)
+            text = label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
         )
     }
 }

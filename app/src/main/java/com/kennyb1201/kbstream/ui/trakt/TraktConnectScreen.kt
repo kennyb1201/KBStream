@@ -33,10 +33,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.trakt.TraktWatchedCounts
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.mobile.TraktConnectScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -76,6 +78,13 @@ fun TraktConnectScreen(
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    // Once per entry into the connected state - a recomposition must not spend
+    // another pair of watched reads, and a screen opened already connected still
+    // asks for its tiles. Failure just leaves watchedCounts null (row hidden).
+    LaunchedEffect(uiState.isConnected) {
+        if (uiState.isConnected) vm.refreshWatchedCounts()
+    }
 
     Box(
         modifier = modifier
@@ -133,6 +142,10 @@ fun TraktConnectScreen(
                         message = uiState.accountSlug?.let { "Signed in as $it." }
                             ?: "Your Trakt account is connected and ready."
                     )
+                    uiState.watchedCounts?.let { counts ->
+                        TraktWatchedCountsRow(counts = counts)
+                    }
+
                     uiState.statusMessage?.let { TraktStatusLine(it) }
                     uiState.errorMessage?.let { TraktErrorLine(it) }
 
@@ -151,8 +164,10 @@ fun TraktConnectScreen(
                             "phone or computer, and enter the code."
                     )
 
+                    // Only while linking: the connected state above never draws
+                    // a code for an address there is nothing left to enter on.
                     uiState.verificationUrl?.let { url ->
-                        TraktInfoBlock(label = "VERIFY AT", value = url)
+                        KBQrCode(url = url)
                     }
 
                     uiState.userCode?.let { code ->
@@ -316,28 +331,57 @@ private fun TraktStatusPanel(
     }
 }
 
+/**
+ * The two tiles Simkl's screen already had, in the same shape.
+ *
+ * Trakt calls them SHOWS, not SERIES, because that is the noun its own API and
+ * site use. Display-only: Home and the badges read the watched snapshot.
+ */
 @Composable
-private fun TraktInfoBlock(
+private fun TraktWatchedCountsRow(counts: TraktWatchedCounts) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        TraktWatchedCountTile(
+            label = "MOVIES WATCHED",
+            value = counts.movies,
+            modifier = Modifier.weight(1f)
+        )
+        TraktWatchedCountTile(
+            label = "SHOWS WATCHED",
+            value = counts.shows,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun TraktWatchedCountTile(
     label: String,
-    value: String
+    value: Int,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
             .background(KBSurfaceRaised, KBShapeCard)
-            .padding(16.dp)
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
         Text(
-            text = label,
+            text = value.toString(),
             color = KBAccent,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
         )
         Text(
-            text = value,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(top = 6.dp)
+            text = label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
         )
     }
 }
