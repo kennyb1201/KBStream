@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -93,6 +94,9 @@ import com.kennyb1201.kbstream.ui.components.LocalKBHeroTransition
 import com.kennyb1201.kbstream.ui.components.LocalKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedbackState
 import com.kennyb1201.kbstream.ui.components.KBCard
+// The touch twin, for the one dialog a phone draws with buttons: the TV card's
+// clicks are focus/D-pad driven, so a finger cannot press it at all.
+import com.kennyb1201.kbstream.ui.components.touch.KBCard as TouchKBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.LAUNCH_SPLASH_TIMEOUT_MS
 import com.kennyb1201.kbstream.ui.LaunchSplashTarget
@@ -3667,10 +3671,57 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
         else -> null
     } ?: return
 
-    Dialog(onDismissRequest = { }) {
+    // A phone draws this dialog with a finger, a television with a D-pad. The
+    // report this branch answers: INSTALL/LATER could not be TAPPED (they were
+    // built from the TV card, whose clicks are focus-driven) and Back did
+    // nothing (`onDismissRequest = { }` swallowed it), so the popup was a dead
+    // end that also re-armed on the next launch. TV keeps every bit of the old
+    // behaviour, including the barrier.
+    val mobile = !FormFactor.isTv
+
+    // Back and a scrim tap mean "not now", never "abandon a download". Each
+    // phase answers with the button it already has, so a dismissal can never
+    // do something the UI does not offer:
+    //  - Offer: exactly LATER, i.e. a per-version dismissal that survives a
+    //    relaunch (the reason force-stopping did not help before was that the
+    //    offer was never dismissed, only escaped from).
+    //  - Installed / Failed: acknowledge(), the DONE and CLOSE actions.
+    //  - Downloading / Installing: a no-op - the download must not be
+    //    orphaned, and Installing still has its HIDE button.
+    // On TV the dialog stays a barrier: its buttons work and Back does nothing.
+    val onDismiss: () -> Unit = if (mobile) {
+        {
+            when (phase) {
+                UpdatePhase.Offer -> available?.let { offer ->
+                    hidden = true
+                    AppUpdater.dismissPopup(context, offer)
+                }
+                UpdatePhase.Installed, UpdatePhase.Failed -> AppUpdater.acknowledge()
+                UpdatePhase.Downloading, UpdatePhase.Installing -> Unit
+            }
+        }
+    } else {
+        {}
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(560.dp)
+                // A portrait phone is narrower than the television panel, so the
+                // 560dp is a CAP here rather than a width. `widthIn` comes first
+                // on purpose: `fillMaxWidth` would otherwise claim the screen's
+                // full width and the cap could never bite. The 16dp is the outer
+                // gutter, so it sits before the background.
+                .then(
+                    if (mobile) {
+                        Modifier
+                            .widthIn(max = 560.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    } else {
+                        Modifier.width(560.dp)
+                    }
+                )
                 .background(KBSurface, KBShapePanel)
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
@@ -3686,7 +3737,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)
                     ) {
-                        KBCard(onClick = {
+                        DialogPlate(mobile = mobile, onClick = {
                             // No dismissPopup here: if the download/install
                             // fails the popup must re-offer this version on
                             // the next launch.
@@ -3695,7 +3746,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         }) {
                             UpdateDialogButton("INSTALL NOW", KBAccent, bold = true)
                         }
-                        KBCard(onClick = {
+                        DialogPlate(mobile = mobile, onClick = {
                             hidden = true
                             AppUpdater.dismissPopup(context, offer)
                         }) {
@@ -3741,7 +3792,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)
                     ) {
-                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                        DialogPlate(mobile = mobile, onClick = { AppUpdater.acknowledge() }) {
                             UpdateDialogButton("HIDE", KBTextHi)
                         }
                     }
@@ -3757,7 +3808,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)
                     ) {
-                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                        DialogPlate(mobile = mobile, onClick = { AppUpdater.acknowledge() }) {
                             UpdateDialogButton("DONE", KBAccent, bold = true)
                         }
                     }
@@ -3770,7 +3821,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)
                     ) {
-                        KBCard(onClick = {
+                        DialogPlate(mobile = mobile, onClick = {
                             // Un-hide first: the dismissed flag is keyed to a
                             // versionCode that has not changed, so the retry's
                             // fresh offer would otherwise stay hidden.
@@ -3780,7 +3831,7 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         }) {
                             UpdateDialogButton("TRY AGAIN", KBAccent, bold = true)
                         }
-                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                        DialogPlate(mobile = mobile, onClick = { AppUpdater.acknowledge() }) {
                             UpdateDialogButton("CLOSE", KBTextHi)
                         }
                     }
@@ -3869,6 +3920,29 @@ private fun UpdateDialogFootnote(text: String) {
     )
 }
 
+/**
+ * One button plate in the app's two shared dialogs (the update prompt and the
+ * exit prompt).
+ *
+ * Both dialogs are shared code, so their buttons used to be the TV [KBCard] on
+ * every device: a focus surface that takes Select/Enter from a remote and
+ * nothing at all from a finger, which is why INSTALL, LATER, STAY and EXIT could
+ * not be tapped on a phone. Mobile gets [TouchKBCard] - same plate, same labels,
+ * same clicks - and a television keeps exactly what it had.
+ */
+@Composable
+private fun DialogPlate(
+    mobile: Boolean,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    if (mobile) {
+        TouchKBCard(onClick = onClick) { content() }
+    } else {
+        KBCard(onClick = onClick) { content() }
+    }
+}
+
 @Composable
 private fun UpdateDialogButton(text: String, color: Color, bold: Boolean = false) {
     Text(
@@ -3925,10 +3999,27 @@ private fun ExitConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    // The second shared dialog with the same problem the update prompt had: a
+    // TV card is a focus surface, so STAY and EXIT could not be TAPPED on a
+    // phone. Back already works here (onDismissRequest is wired), which is why
+    // this one was annoying rather than a trap - the fix still belongs with the
+    // other one. The panel width gets the same phone treatment: 620dp is a cap
+    // on a phone and a fixed width on a television.
+    val mobile = !FormFactor.isTv
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(620.dp)
+                .then(
+                    if (mobile) {
+                        Modifier
+                            .widthIn(max = 620.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    } else {
+                        Modifier.width(620.dp)
+                    }
+                )
                 .background(KBSurface, KBShapePanel)
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
@@ -3949,8 +4040,8 @@ private fun ExitConfirmDialog(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(top = 18.dp)
             ) {
-                ExitDialogButton(label = "STAY", onClick = onDismiss)
-                ExitDialogButton(label = "EXIT", onClick = onConfirm)
+                ExitDialogButton(label = "STAY", mobile = mobile, onClick = onDismiss)
+                ExitDialogButton(label = "EXIT", mobile = mobile, onClick = onConfirm)
             }
         }
     }
@@ -3959,9 +4050,10 @@ private fun ExitConfirmDialog(
 @Composable
 private fun ExitDialogButton(
     label: String,
+    mobile: Boolean,
     onClick: () -> Unit
 ) {
-    KBCard(onClick = onClick) {
+    DialogPlate(mobile = mobile, onClick = onClick) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
