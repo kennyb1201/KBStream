@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -115,7 +116,9 @@ fun ActorScreenMobile(
     val hiddenTitleKeys = rememberHiddenTitleKeys()
 
     val screenKey = remember(actorId) { actorBrowseScreenKey(actorId) }
-    val gridState = remember(actorId) { LazyGridState() }
+    // A saveable scroll record, scoped to this actor: rotation keeps the place,
+    // a different actor opens at the top.
+    val gridState = key(actorId) { rememberLazyGridState() }
     var returnTarget by remember(actorId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
@@ -219,13 +222,18 @@ fun ActorScreenMobile(
         val posterSize = rememberTouchPosterSize()
         val tileWidth =
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        // Three poster columns in portrait, more when the phone is turned.
+        val columns = rememberMobileGridColumns(
+            preferredTileWidth = tileWidth,
+            landscape = landscape
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = tileWidth),
+                columns = GridCells.Fixed(columns),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,

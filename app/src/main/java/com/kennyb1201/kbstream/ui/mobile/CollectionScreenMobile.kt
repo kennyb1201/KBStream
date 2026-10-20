@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.MaterialTheme
@@ -124,7 +124,9 @@ fun CollectionScreenMobile(
     }
 
     val screenKey = remember(collectionId) { collectionBrowseScreenKey(collectionId) }
-    val gridState = remember { LazyGridState() }
+    // Saveable, so turning the phone keeps the viewer's place in the
+    // collection instead of throwing the grid back to the first film.
+    val gridState = rememberLazyGridState()
     var returnTarget by remember(collectionId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
@@ -167,13 +169,18 @@ fun CollectionScreenMobile(
         val posterSize = rememberTouchPosterSize()
         val tileWidth =
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        // Three poster columns in portrait, more when the phone is turned.
+        val columns = rememberMobileGridColumns(
+            preferredTileWidth = tileWidth,
+            landscape = landscape
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = tileWidth),
+                columns = GridCells.Fixed(columns),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,

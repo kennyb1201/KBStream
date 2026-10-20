@@ -4,22 +4,27 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
 /**
  * The touch twin of `ui/components/KBDialogPanel.kt`: the app's one dialog
@@ -87,6 +92,70 @@ fun KBSheetContent(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         content()
+    }
+}
+
+/**
+ * One row of the shared "Add to list…" picker, for a finger.
+ *
+ * The picker itself is one dialog with one data path (the local lists, the
+ * MDBList watchlist and lists, the Trakt shelves, and the create row). Only its
+ * rows change hands: the TV row is a focus surface that takes Select from a
+ * remote and nothing at all from a thumb, which made "Add to list…" a dead end
+ * on a phone even though the menu that opens it is a sheet. This is the touch
+ * twin - same label, sublabel and trailing verdict, as a tappable plate.
+ */
+@Composable
+fun TouchPickerRow(
+    label: String,
+    sublabel: String,
+    trailing: String?,
+    trailingAccent: Boolean,
+    trailingError: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBTextHi,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = sublabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            trailing?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        trailingError -> KBDanger
+                        trailingAccent -> KBAccent
+                        else -> KBTextLo
+                    },
+                    modifier = Modifier.padding(start = 10.dp)
+                )
+            }
+        }
     }
 }
 

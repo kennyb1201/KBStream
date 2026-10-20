@@ -27,6 +27,9 @@ survives beyond a chat session — nothing here happens on its own.
    the dispatch, the touch widget layer, the ViewModel reads, and whatever
    play/navigation path the screen owns. Pure helpers are tested by behaviour.
 
+Portrait is the phone's first shape: see `docs/mobile_portrait.md` for the
+orientation policy, the width-derived grid rule and the overlay width cap.
+
 ## Shell: the phone safe area
 
 The window is edge-to-edge (`setDecorFitsSystemWindows(window, false)`) because
@@ -36,6 +39,53 @@ reserves `systemBars ∪ displayCutout` **on the phone only** - one place instea
 of twenty screen files, gated on `FormFactor.isTv` so the TV layout is unchanged.
 `imePadding()` still follows it, measured against the space the bars left.
 `MobileSafeAreaContractTest` pins the gate, the inset pair and that ordering.
+
+## Shell: the phone's bottom navigation
+
+Home used to reach its other screens through four header icons. They were the
+wrong shape for a hand: they scrolled away with Home's content and they vanished
+the moment you used one, because they belonged to Home rather than to the app.
+The phone now has one persistent bottom bar, owned by the shell:
+
+| Item | Destination |
+|---|---|
+| Home | `Screen.Home`; re-tapping it while on Home scrolls Home back to the top |
+| Search | `Screen.Search` |
+| Live TV | `Screen.Guide` |
+| Library | `Screen.Library` |
+| Settings | `Screen.Settings` |
+
+- **One owner.** `MobileBottomNav` is drawn by `MainActivity` next to the screen
+  switch, not by any screen, so switching to Search does not take the way back
+  to Home with it. The four actions are the same lambdas Home's header icons
+  called (`navToSearch`/`navToGuide`/`navToLibrary`/`navToSettings`), handed to
+  both the bar and `HomeScreen`, so the TV and the phone cannot land somewhere
+  different for the same destination.
+- **One rule.** `mobileNavSelection(screen)` answers for the five top-level
+  destinations and returns null for everything else - Detail, browse
+  drill-downs, the poster grids, the streams picker, the player, the connect
+  pages, the profile picker/editor, Stats, Sports. Null is the bar's absence, so
+  a pushed screen can never wear it. The answer is *derived from the screen
+  being drawn* rather than stored, which is what keeps the right item lit after
+  Back.
+- **Layout, not padding.** The bar is a sibling below the screen switch's Box
+  (a `Column`), so the switch is measured with the space that is left and no
+  top-level screen's last rail can sit under the bar. That is the same rule the
+  spec states as "pad every screen", implemented once instead of five times -
+  and it cannot drift when a sixth top-level screen is added. On a television
+  the bar is null and the column holds the single child it always had.
+- **Styling.** The brand plate (`KBSurface`) under a hairline, `MaterialTheme`
+  (the phone theme), labels under the icons, the selected item's icon, label and
+  indicator in `KBAccent`, the rest in `KBTextLo`. The bottom system inset is
+  already reserved by the shell's safe area; `navigationBarsPadding()` on the
+  bar is a guard for the day it is composed anywhere else.
+- **Home's header** is branding and profile identity only now - the wordmark
+  (weighted, ellipsised) and the profile chip that opens the profile picker.
+  `HomeScreenMobile` no longer takes the four destination callbacks at all, so a
+  header icon cannot come back by accident.
+
+`MobileBottomNavContractTest` pins the host, the visibility rule, the shared
+wiring, the re-tap-to-top path, the header change and the bar's styling.
 
 ## Player touch UX (Phase 3)
 

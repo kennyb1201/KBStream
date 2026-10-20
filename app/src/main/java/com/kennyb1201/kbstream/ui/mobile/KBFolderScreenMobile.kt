@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -144,7 +145,9 @@ fun KBFolderScreenMobile(
     var menuTarget by remember { mutableStateOf<KBContentItem?>(null) }
     var titleLogoFailed by remember { mutableStateOf(false) }
 
-    val gridState = remember(folderId) { LazyGridState() }
+    // `key` scopes the saveable scroll record to this folder: a rotation keeps
+    // the viewer's place, a different folder opens at the top.
+    val gridState = key(folderId) { rememberLazyGridState() }
     val returnKey = remember(folderId) { kbFolderBrowseScreenKey(folderId) }
     var returnTarget by remember(folderId) {
         mutableStateOf<BrowseReturnTarget?>(null)
@@ -190,6 +193,11 @@ fun KBFolderScreenMobile(
         val posterSize = rememberTouchPosterSize()
         val tileWidth =
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        // Three poster columns in portrait, more when the phone is turned.
+        val columns = rememberMobileGridColumns(
+            preferredTileWidth = tileWidth,
+            landscape = landscape
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -273,7 +281,7 @@ fun KBFolderScreenMobile(
                     }
 
                     else -> LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = tileWidth),
+                        columns = GridCells.Fixed(columns),
                         state = gridState,
                         contentPadding = PaddingValues(
                             start = 16.dp,

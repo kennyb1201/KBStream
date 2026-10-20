@@ -286,9 +286,11 @@ class ExternalPlayerActivity : ComponentActivity() {
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // A phone clears the manifest's landscape lock before the window exists;
-        // on TV this returns without touching the activity (see FormFactor).
-        com.kennyb1201.kbstream.FormFactor.applyOrientation(this)
+        // A phone asks for landscape before the window exists - a title plays
+        // sideways even though browsing follows the device; on TV this returns
+        // without touching the activity (see FormFactor). The request is
+        // released in onDestroy, so Home comes back in the viewer's hand.
+        com.kennyb1201.kbstream.FormFactor.applyPlaybackOrientation(this)
         super.onCreate(savedInstanceState)
 
         // The window behind this hand-off card: the theme's static
@@ -426,6 +428,10 @@ class ExternalPlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // Back to browsing, in whatever orientation the phone is now held.
+        // Released before the superclass tears the window down, while the
+        // activity can still take the request.
+        com.kennyb1201.kbstream.FormFactor.releasePlaybackOrientation(this)
         super.onDestroy()
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         if (!concluded && !isLiveChannel && positionMs > 0L) {

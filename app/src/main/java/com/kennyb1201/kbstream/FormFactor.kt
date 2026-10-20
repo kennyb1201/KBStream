@@ -102,4 +102,39 @@ object FormFactor {
         if (isTv) return
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
+
+    /**
+     * Enters playback on a phone by asking for landscape, and does nothing at
+     * all on a television.
+     *
+     * This is the other half of [applyOrientation]: browsing follows the device
+     * (a phone lives in portrait), while a title plays sideways. The request is
+     * `SENSOR_LANDSCAPE` rather than a hard landscape lock so the player's own
+     * hold-to-rotate gesture still reaches portrait - a phone propped up or held
+     * upright can be turned back, and the portrait stage in the player is still
+     * reachable.
+     *
+     * Must be called BEFORE `super.onCreate`, like [applyOrientation], so the
+     * window is created in the orientation the viewer will watch in instead of
+     * rotating a frame in. On TV this returns before touching the activity: the
+     * manifest's landscape lock is the only orientation policy a television
+     * has.
+     */
+    fun applyPlaybackOrientation(activity: Activity) {
+        if (isTv) return
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    /**
+     * Releases the playback request on the way out of a player, so the browsing
+     * activity behind it is free to follow the device again.
+     *
+     * A phone returning from a film to a portrait-held Home must not inherit the
+     * player's landscape request. On TV this is a no-op for the same reason as
+     * every other method here: the manifest owns that lock.
+     */
+    fun releasePlaybackOrientation(activity: Activity) {
+        if (isTv) return
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
 }

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,14 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LiveTv
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -165,10 +158,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 fun HomeScreenMobile(
     onItemClick: (MetaPreview) -> Unit,
     onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
-    onSearch: () -> Unit,
-    onOpenGuide: () -> Unit,
-    onOpenLibrary: () -> Unit,
-    onOpenSettings: () -> Unit,
     onSwitchProfile: () -> Unit,
     onOpenCatalogGrid: (Rail) -> Unit,
     onOpenKBFolder: (String) -> Unit = {},
@@ -182,6 +171,20 @@ fun HomeScreenMobile(
     MobileTheme {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
+
+        // The screen's one vertical scroll, hoisted only so the bottom bar's
+        // Home item can send it back to the top on a re-tap (see
+        // [MobileHomeTopRequest]). Deliberately remembered here rather than at
+        // the shell: Home still opens at the top after a trip to Search, which
+        // is what this screen did before the bar existed.
+        val listState = rememberLazyListState()
+        val homeTopRequested by MobileHomeTopRequest.requests
+            .collectAsStateWithLifecycle()
+        LaunchedEffect(homeTopRequested) {
+            // Consumed, so the request that a re-tap raises scrolls this screen
+            // once and cannot follow the viewer into a later visit.
+            if (MobileHomeTopRequest.consume()) listState.animateScrollToItem(0)
+        }
 
         // The artwork the viewer chose for a title, resolved once for the whole
         // screen and applied per card - the same call the TV rail makes.
@@ -321,17 +324,12 @@ fun HomeScreenMobile(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
                 item(key = "topBar") {
-                    MobileTopBar(
-                        onSearch = onSearch,
-                        onOpenGuide = onOpenGuide,
-                        onOpenLibrary = onOpenLibrary,
-                        onOpenSettings = onOpenSettings,
-                        onSwitchProfile = onSwitchProfile
-                    )
+                    MobileTopBar(onSwitchProfile = onSwitchProfile)
                 }
 
                 heroMeta?.let { hero ->
@@ -1003,29 +1001,29 @@ private data class RailMenuTarget(
 )
 
 /**
- * The phone top bar: the wordmark and the four places the TV's hidden top bar
- * leads to.
+ * The phone top bar: the wordmark and the profile it is browsing as.
  *
- * The TV raises that bar with Up from the first rail because its screen is one
- * focus column; a phone has no such gesture, so the bar is simply always there.
- * The actions are the same four (search, guide, library, settings) plus the
- * profile switch, which the TV puts in the same row.
+ * It carries branding and identity only. The four places it used to lead to
+ * (search, live TV, library, settings) are the bottom bar's items now, hosted
+ * by the shell so they are one tap away from every top-level screen instead of
+ * only from the top of this one - see [MobileBottomNav]. The profile chip stays
+ * here because switching identity is not one of the bar's five destinations.
  */
 @Composable
 private fun MobileTopBar(
-    onSearch: () -> Unit,
-    onOpenGuide: () -> Unit,
-    onOpenLibrary: () -> Unit,
-    onOpenSettings: () -> Unit,
     onSwitchProfile: () -> Unit
 ) {
     val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
     val profileName = activeProfile?.name?.takeIf { it.isNotBlank() } ?: "PROFILES"
 
+    // The wordmark and the profile chip are all that is left, so the bar no
+    // longer has to shrink itself to fit four icon buttons at 360dp - but the
+    // chip still caps its width, or a long profile name would push the wordmark
+    // out of view.
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 4.dp, top = 10.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1033,9 +1031,11 @@ private fun MobileTopBar(
             color = KBTextHi,
             fontFamily = OswaldFamily,
             fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.titleLarge
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
-        Spacer(modifier = Modifier.weight(1f))
         Text(
             text = profileName,
             color = KBAccent,
@@ -1043,22 +1043,11 @@ private fun MobileTopBar(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
+                .widthIn(max = 140.dp)
                 .clip(KBShapeCard)
                 .clickable(onClick = onSwitchProfile)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         )
-        IconButton(onClick = onSearch) {
-            Icon(Icons.Filled.Search, contentDescription = "Search", tint = KBTextHi)
-        }
-        IconButton(onClick = onOpenGuide) {
-            Icon(Icons.Filled.LiveTv, contentDescription = "TV guide", tint = KBTextHi)
-        }
-        IconButton(onClick = onOpenLibrary) {
-            Icon(Icons.Filled.VideoLibrary, contentDescription = "Library", tint = KBTextHi)
-        }
-        IconButton(onClick = onOpenSettings) {
-            Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = KBTextHi)
-        }
     }
 }
 

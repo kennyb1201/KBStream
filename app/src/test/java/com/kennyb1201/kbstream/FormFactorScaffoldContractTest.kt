@@ -72,19 +72,26 @@ class FormFactorScaffoldContractTest {
     }
 
     @Test
-    fun `every window-owning activity clears the lock before the window exists`() {
+    fun `every window sets its orientation before the window exists`() {
+        // Browsing follows the device; playback asks for landscape. Both are
+        // phone-only and both must land BEFORE super.onCreate, or the window is
+        // created in the old orientation and rotates a frame in.
         listOf(
-            "com/kennyb1201/kbstream/MainActivity.kt",
-            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
-            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
-            "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
-        ).forEach { path ->
+            "com/kennyb1201/kbstream/MainActivity.kt" to
+                "FormFactor.applyOrientation(this)",
+            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt" to
+                "FormFactor.applyPlaybackOrientation(this)",
+            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt" to
+                "FormFactor.applyPlaybackOrientation(this)",
+            "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt" to
+                "FormFactor.applyPlaybackOrientation(this)"
+        ).forEach { (path, callText) ->
             val activity = source(path)
-            val call = activity.indexOf("FormFactor.applyOrientation(this)")
+            val call = activity.indexOf(callText)
             val superCall = activity.indexOf("super.onCreate(savedInstanceState)")
             assertTrue(
-                "$path must call FormFactor.applyOrientation(this), or a phone " +
-                    "has no way past the manifest's landscape lock",
+                "$path must call $callText, or a phone has no orientation " +
+                    "policy of its own",
                 call >= 0
             )
             assertTrue(
@@ -96,25 +103,65 @@ class FormFactorScaffoldContractTest {
     }
 
     @Test
-    fun `the helper never touches a tv window`() {
+    fun `the players release the landscape request on the way out`() {
+        listOf(
+            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
+        ).forEach { path ->
+            val activity = source(path)
+            val destroy = activity.indexOf("override fun onDestroy()")
+            val release = activity.indexOf("FormFactor.releasePlaybackOrientation(this)")
+            assertTrue("$path must have an onDestroy", destroy >= 0)
+            assertTrue(
+                "$path must release the playback orientation on exit, or Home " +
+                    "stays landscape after the film",
+                release > destroy
+            )
+        }
+    }
+
+    @Test
+    fun `the helpers never touch a tv window`() {
         val formFactor = source("com/kennyb1201/kbstream/FormFactor.kt")
-        val tvGuard = formFactor.indexOf("if (isTv) return")
-        val platformWrite = formFactor.indexOf("activity.requestedOrientation")
-        assertTrue(
-            "applyOrientation must return before touching the activity on TV",
-            tvGuard >= 0
-        )
-        assertTrue(
-            "the TV return must come before the platform write",
-            platformWrite > tvGuard
-        )
+
+        fun body(name: String): String {
+            val start = formFactor.indexOf("fun $name(activity: Activity)")
+            assertTrue("FormFactor must declare $name", start >= 0)
+            return formFactor.substring(start).substringBefore("\n    }")
+        }
+
+        listOf(
+            "applyOrientation",
+            "applyPlaybackOrientation",
+            "releasePlaybackOrientation"
+        ).forEach { name ->
+            val function = body(name)
+            val tvGuard = function.indexOf("if (isTv) return")
+            val platformWrite = function.indexOf("activity.requestedOrientation")
+            assertTrue("$name must return before touching the activity on TV", tvGuard >= 0)
+            assertTrue(
+                "$name's TV return must come before the platform write",
+                platformWrite > tvGuard
+            )
+        }
+
         assertFalse(
-            "TV no longer requests landscape in code - the manifest owns that lock",
-            formFactor.contains("SCREEN_ORIENTATION_LANDSCAPE")
+            "browsing must not request landscape - that is the player's job, and " +
+                "the TV manifest owns the television's lock",
+            body("applyOrientation").contains("SCREEN_ORIENTATION_LANDSCAPE")
         )
         assertTrue(
-            "the phone override is what clears the lock",
-            formFactor.contains("SCREEN_ORIENTATION_UNSPECIFIED")
+            "the browse override is what clears the manifest lock",
+            body("applyOrientation").contains("SCREEN_ORIENTATION_UNSPECIFIED")
+        )
+        assertTrue(
+            "playback asks for sensor landscape, so hold-to-rotate still reaches portrait",
+            body("applyPlaybackOrientation").contains("SCREEN_ORIENTATION_SENSOR_LANDSCAPE")
+        )
+        assertTrue(
+            "and exiting hands the window back to the device's own sensor",
+            body("releasePlaybackOrientation").contains("SCREEN_ORIENTATION_UNSPECIFIED")
         )
     }
 

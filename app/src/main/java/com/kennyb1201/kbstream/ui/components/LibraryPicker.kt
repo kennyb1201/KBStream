@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,6 +50,9 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.trakt.TraktListEntry
 import com.kennyb1201.kbstream.data.trakt.TraktListRef
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.FormFactor
+import com.kennyb1201.kbstream.ui.components.touch.KBButton as TouchKBButton
+import com.kennyb1201.kbstream.ui.components.touch.TouchPickerRow
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -451,13 +456,27 @@ fun LibraryAddToListDialog(
         }
     }
 
+    // A phone comes here from the touch context sheet, so this panel must fit a
+    // hand: the 560dp becomes a cap with a 16dp gutter instead of a fixed width
+    // (see docs/mobile_portrait.md). The television keeps its exact panel.
+    val mobile = !FormFactor.isTv
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Column(
             modifier = Modifier
-                .width(560.dp)
+                .then(
+                    if (mobile) {
+                        Modifier
+                            .widthIn(max = 560.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    } else {
+                        Modifier.width(560.dp)
+                    }
+                )
                 .background(KBSurface, KBShapePanel)
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
@@ -482,7 +501,16 @@ fun LibraryAddToListDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(320.dp)
+                    // The television panel is a fixed 320dp; a portrait phone
+                    // only has that much to give when the create-list keyboard
+                    // is down, so the list is capped rather than fixed.
+                    .then(
+                        if (mobile) {
+                            Modifier.heightIn(max = 320.dp)
+                        } else {
+                            Modifier.height(320.dp)
+                        }
+                    )
             ) {
                 if (loadingLists && rows.isEmpty()) {
                     item {
@@ -500,24 +528,38 @@ fun LibraryAddToListDialog(
                     val member = key in memberships
                     val justDone = key in doneLabels
                     val failed = key in failedLabels
-                    PickerRow(
-                        label = row.label,
-                        sublabel = row.sublabel,
-                        trailing = when {
-                            failed -> "COULDN'T ADD"
-                            justDone -> "ADDED ✓"
-                            member -> "✓"
-                            else -> null
-                        },
-                        trailingAccent = justDone,
-                        trailingError = failed,
-                        onClick = { addRow(row) },
-                        modifier = if (rows.indexOf(row) == 0) {
-                            Modifier.focusRequester(focusRequester)
-                        } else {
-                            Modifier
-                        }
-                    )
+                    val trailing = when {
+                        failed -> "COULDN'T ADD"
+                        justDone -> "ADDED ✓"
+                        member -> "✓"
+                        else -> null
+                    }
+                    if (mobile) {
+                        // Same row content, as a tappable plate. The TV row is a
+                        // focus surface: a thumb could not pick a list with it.
+                        TouchPickerRow(
+                            label = row.label,
+                            sublabel = row.sublabel,
+                            trailing = trailing,
+                            trailingAccent = justDone,
+                            trailingError = failed,
+                            onClick = { addRow(row) }
+                        )
+                    } else {
+                        PickerRow(
+                            label = row.label,
+                            sublabel = row.sublabel,
+                            trailing = trailing,
+                            trailingAccent = justDone,
+                            trailingError = failed,
+                            onClick = { addRow(row) },
+                            modifier = if (rows.indexOf(row) == 0) {
+                                Modifier.focusRequester(focusRequester)
+                            } else {
+                                Modifier
+                            }
+                        )
+                    }
                 }
             }
 
@@ -657,6 +699,11 @@ private fun PickerAction(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    if (!FormFactor.isTv) {
+        // The same two buttons, as real Material buttons so a tap lands.
+        TouchKBButton(label = label, enabled = enabled, onClick = onClick)
+        return
+    }
     if (enabled) {
         KBCard(onClick = onClick) {
             Box(

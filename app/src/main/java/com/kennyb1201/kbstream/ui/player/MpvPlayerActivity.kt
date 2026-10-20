@@ -866,9 +866,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var durationMs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // A phone clears the manifest's landscape lock before the window exists;
-        // on TV this returns without touching the activity (see FormFactor).
-        com.kennyb1201.kbstream.FormFactor.applyOrientation(this)
+        // A phone asks for landscape before the window exists - a title plays
+        // sideways even though browsing follows the device; on TV this returns
+        // without touching the activity (see FormFactor). The request is
+        // released in onDestroy, so Home comes back in the viewer's hand.
+        com.kennyb1201.kbstream.FormFactor.applyPlaybackOrientation(this)
         super.onCreate(savedInstanceState)
 
         // The window behind and around the picture. The theme's static
@@ -5827,6 +5829,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     override fun onDestroy() {
+        // Back to browsing, in whatever orientation the phone is now held.
+        // Released before the superclass tears the window down, while the
+        // activity can still take the request.
+        com.kennyb1201.kbstream.FormFactor.releasePlaybackOrientation(this)
         super.onDestroy()
         // Safety net for a player that never reached onStop: leaving this
         // set would hold guide writes back for the life of the process.

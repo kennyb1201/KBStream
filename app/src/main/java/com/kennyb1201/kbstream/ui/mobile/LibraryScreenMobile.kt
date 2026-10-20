@@ -11,22 +11,22 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -140,8 +141,11 @@ fun LibraryScreenMobile(
         }
 
         // One grid per filter, exactly as on TV: switching filters is a new
-        // list, and the old scroll offset means nothing in it.
-        val gridState = remember(state.filter) { LazyGridState() }
+        // list, and the old scroll offset means nothing in it. `key` gives each
+        // filter its own slot in the saveable registry, so a ROTATION keeps the
+        // position inside the filter on screen while a filter switch still
+        // starts at the top.
+        val gridState = key(state.filter) { rememberLazyGridState() }
         var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
 
         var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
@@ -252,13 +256,18 @@ fun LibraryScreenMobile(
         val posterSize = rememberTouchPosterSize()
         val tileWidth =
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        // Three poster columns in portrait, more when the phone is turned.
+        val columns = rememberMobileGridColumns(
+            preferredTileWidth = tileWidth,
+            landscape = landscape
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = tileWidth),
+                columns = GridCells.Fixed(columns),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -282,7 +291,12 @@ fun LibraryScreenMobile(
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
-                            Spacer(modifier = Modifier.weight(1f))
+                            // The source line is the widest thing in this
+                            // header (four connected services is a long
+                            // string). It takes the leftover space and ends
+                            // there, instead of being measured at its full
+                            // intrinsic width and pushing the LIBRARY title
+                            // off the left edge of a 360dp portrait screen.
                             Text(
                                 text = buildList {
                                     if (state.simklConnected) add("SIMKL")
@@ -293,7 +307,9 @@ fun LibraryScreenMobile(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = KBTextLo,
                                 maxLines = 1,
-                                softWrap = false
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                         notice?.let { text ->

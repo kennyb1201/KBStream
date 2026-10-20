@@ -125,6 +125,13 @@ fun CatalogGridScreenMobile(
         val posterSize = rememberTouchPosterSize()
         val tileWidth =
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        // Three poster columns in portrait, and the width buys more columns when
+        // the phone is turned - see [rememberMobileGridColumns]. The tile keeps
+        // its shape; only the cell is narrower.
+        val columns = rememberMobileGridColumns(
+            preferredTileWidth = tileWidth,
+            landscape = landscape
+        )
 
         var menuTarget by remember { mutableStateOf<MetaPreview?>(null) }
 
@@ -161,7 +168,7 @@ fun CatalogGridScreenMobile(
             // skeleton rows are the cards' own footprint, so the page does not
             // jump when the posters land.
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = tileWidth),
+                columns = GridCells.Fixed(columns),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -170,7 +177,7 @@ fun CatalogGridScreenMobile(
                     .fillMaxSize()
                     .background(KBVoid)
             ) {
-                items(if (landscape) 4 else 6) {
+                items(columns * if (landscape) 3 else 2) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -191,7 +198,7 @@ fun CatalogGridScreenMobile(
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = tileWidth),
+                columns = GridCells.Fixed(columns),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,

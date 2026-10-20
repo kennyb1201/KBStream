@@ -24,6 +24,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.mapSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -202,7 +204,30 @@ internal fun SectionsBrowseMobile(
     // what lets the return hand-back address a row that has not composed yet).
     val listState = rememberLazyListState()
     val railTitles = remember(sections) { sections.map { it.title } }
-    val rowStates = remember(railTitles) {
+    // Each rail's sideways offset is saved as (index, offset) and rebuilt into
+    // the same LazyListState, so turning the phone keeps every band where the
+    // viewer left it. The map itself still has to live here: a band that scrolls
+    // out of view is disposed with its own state, and the return hand-back
+    // addresses rows that have not composed yet.
+    val rowStates = rememberSaveable(
+        railTitles,
+        saver = mapSaver(
+            save = { states ->
+                states.mapValues { (_, state) ->
+                    listOf(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset)
+                }
+            },
+            restore = { saved ->
+                saved.mapValues { (_, value) ->
+                    val position = value as? List<*>
+                    LazyListState(
+                        firstVisibleItemIndex = (position?.getOrNull(0) as? Int) ?: 0,
+                        firstVisibleItemScrollOffset = (position?.getOrNull(1) as? Int) ?: 0
+                    )
+                }
+            }
+        )
+    ) {
         railTitles.associateWith { LazyListState() }
     }
     var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }

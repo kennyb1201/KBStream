@@ -3326,10 +3326,10 @@ fun HomeScreen(
         HomeScreenMobile(
             onItemClick = onItemClick,
             onOpenDetailTarget = onOpenDetailTarget,
-            onSearch = onSearch,
-            onOpenGuide = onOpenGuide,
-            onOpenLibrary = onOpenLibrary,
-            onOpenSettings = onOpenSettings,
+            // Search / Live TV / Library / Settings are NOT handed to the
+            // phone screen any more: they are the shell's bottom bar items, and
+            // the shell calls the very same callbacks this screen holds. TV
+            // still uses all four below, which is why they stay parameters.
             onSwitchProfile = onSwitchProfile,
             onOpenCatalogGrid = onOpenCatalogGrid,
             onOpenKBFolder = onOpenKBFolder,

@@ -106,6 +106,10 @@ import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.mobile.CatalogGridScreenMobile
+import com.kennyb1201.kbstream.ui.mobile.MobileBottomNav
+import com.kennyb1201.kbstream.ui.mobile.MobileHomeTopRequest
+import com.kennyb1201.kbstream.ui.mobile.MobileNavDestination
+import com.kennyb1201.kbstream.ui.mobile.mobileNavSelection
 import com.kennyb1201.kbstream.ui.mobile.OnboardingScreenMobile
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
@@ -1822,6 +1826,41 @@ fun AppRoot(
         return
     }
 
+    // ------------------------------------------------------------------ phone nav
+    //
+    // The phone's five top-level destinations live in ONE persistent bottom bar,
+    // hosted here rather than by any single screen. That is the whole point: a
+    // bar owned by Home disappears the moment it is used, which is what the four
+    // header icons did before it. The actions are the same callbacks those icons
+    // called - the destinations themselves are untouched, only the way in moved.
+    val navToSearch: () -> Unit = { screen = Screen.Search }
+    val navToGuide: () -> Unit = { screen = Screen.Guide }
+    val navToLibrary: () -> Unit = { screen = Screen.Library }
+    val navToSettings: () -> Unit = { screen = Screen.Settings }
+    val onMobileNavSelect: (MobileNavDestination) -> Unit = { destination ->
+        when (destination) {
+            // Re-tapping the destination you are already on is the standard
+            // "take me back to the top", not a no-op navigation.
+            MobileNavDestination.Home ->
+                if (screen is Screen.Home) {
+                    MobileHomeTopRequest.request()
+                } else {
+                    screen = Screen.Home
+                }
+
+            MobileNavDestination.Search -> navToSearch()
+            MobileNavDestination.LiveTv -> navToGuide()
+            MobileNavDestination.Library -> navToLibrary()
+            MobileNavDestination.Settings -> navToSettings()
+        }
+    }
+    // Which item is lit - and whether the bar exists at all. Derived from the
+    // screen being drawn, so it cannot disagree with what is on screen (Back
+    // from Search lands on Home with Home lit), and it is null on a television
+    // and on every pushed screen, which is how the bar stays out of Detail, the
+    // browse drill-downs, the player and the connect pages.
+    val mobileNavDestination = if (FormFactor.isTv) null else mobileNavSelection(screen)
+
     // Screen transitions. Every navigation used to be an instant cut, which is
     // the one thing that most reliably reads as "not a finished app" on a TV —
     // the user triggers it constantly.
@@ -1838,6 +1877,14 @@ fun AppRoot(
     HeroTransitionHost(
         enabled = transitionMs != 0
     ) { heroScope ->
+    // The phone's screens sit ABOVE the bottom bar rather than behind it: the bar
+    // measures itself and the screen switch is handed the space that is left, so
+    // the last rail of every top-level screen ends where the bar begins and no
+    // screen needed a bottom inset of its own. (A bar drawn as an overlay is the
+    // arrangement that would have needed every screen edited.) On a television
+    // the bar is null and this column holds the one child it always had.
+    Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },
@@ -2001,21 +2048,16 @@ fun AppRoot(
                     )
                 },
 
-                onSearch = {
-                    screen = Screen.Search
-                },
+                // The same four actions the bottom bar's items call: a TV still
+                // reaches them through its top bar, and the phone through the
+                // bar, but there is one definition of where each one lands.
+                onSearch = navToSearch,
 
-                onOpenGuide = {
-                    screen = Screen.Guide
-                },
+                onOpenGuide = navToGuide,
 
-                onOpenLibrary = {
-                    screen = Screen.Library
-                },
+                onOpenLibrary = navToLibrary,
 
-                onOpenSettings = {
-                    screen = Screen.Settings
-                },
+                onOpenSettings = navToSettings,
                 onSwitchProfile = {
                     // Quick switch: top-bar profile button -> picker, then
                     // back to Home with the new profile's rails loaded.
@@ -3378,6 +3420,18 @@ fun AppRoot(
     if (splashVisible) {
         LaunchSplash()
     }
+    } // closes the screen Box above the bottom bar
+
+    // The bar, on the phone's five top-level destinations and nowhere else.
+    // Drawn after the screen (and after the launch splash), so it is the last
+    // thing in the column and nothing can compose over it.
+    mobileNavDestination?.let { destination ->
+        MobileBottomNav(
+            selected = destination,
+            onSelect = onMobileNavSelect
+        )
+    }
+    } // closes the shell Column
     } // closes HeroTransitionHost
 }
 

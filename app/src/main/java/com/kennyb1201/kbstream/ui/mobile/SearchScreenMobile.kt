@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -251,7 +252,14 @@ fun SearchScreenMobile(
         val visibleEntries = remember(activeCategory?.entries, browseFilter) {
             filterBrowseEntries(activeCategory?.entries.orEmpty(), browseFilter)
         }
-        val chipRows = remember(visibleEntries) { visibleEntries.chunked(3) }
+        // Browse is a grid of chips, not a row: three across a portrait phone,
+        // more once the phone is turned and the width is there for them. The
+        // number follows the window (see [mobileGridColumns]' reasoning), and
+        // the chips keep their own size rather than stretching.
+        val browseChipColumns = if (LocalConfiguration.current.screenWidthDp >= 600) 5 else 3
+        val chipRows = remember(visibleEntries, browseChipColumns) {
+            visibleEntries.chunked(browseChipColumns)
+        }
         val showBrowser = query.isBlank() || (!isLoading && totalCount == 0)
 
         Box(

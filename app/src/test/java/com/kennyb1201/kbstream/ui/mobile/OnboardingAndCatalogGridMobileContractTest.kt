@@ -251,9 +251,17 @@ class OnboardingAndCatalogGridMobileContractTest {
         val text = catalogGridMobile()
         assertTouchScreen(text, "CatalogGridScreenMobile")
 
+        // Portrait is the phone's first shape (docs/mobile_portrait.md): the
+        // column count is derived from the width the grid has, so a 360dp phone
+        // draws three posters and a turned phone draws more. The old Adaptive
+        // rule measured the viewer's poster width and produced two oversized
+        // columns in portrait (PortraitBrowseContractTest pins the arithmetic).
         assertTrue(
-            "the grid must be a finger-scrolled lazy grid",
-            text.contains("LazyVerticalGrid(") && text.contains("GridCells.Adaptive(")
+            "the grid must be a finger-scrolled lazy grid whose columns come " +
+                "from the available width",
+            text.contains("LazyVerticalGrid(") &&
+                text.contains("rememberMobileGridColumns(") &&
+                text.contains("GridCells.Fixed(columns)")
         )
         assertTrue(
             "the grid must draw the touch tile that follows the landscape switch " +
