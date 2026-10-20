@@ -34,9 +34,11 @@ enum class PosterSize(val width: Dp, val height: Dp) {
 /**
  * Current poster size from prefs, remembered for the composition.
  *
- * Keyed on the sync revision: "Poster Size" is a SYNCED pref, so the size the
- * viewer picked on the other TV has to reshape these tiles when the blob lands.
- * A bare `remember` kept whatever was read at first composition (see
+ * Keyed on the pref revision: "Poster Size" is screen geometry, so it stays on
+ * this device (see [AppPreferences.setPosterSize]) — but Settings is one screen
+ * away from the grid it changes, so the row has to reshape these tiles on the
+ * way back. The setter ticks the same counter a pulled blob ticks. A bare
+ * `remember` kept whatever was read at first composition (see
  * [PrefsPayloadApplier.revision]).
  */
 @Composable
@@ -103,8 +105,8 @@ fun rememberPosterTileWidth(posterWidth: Dp): Dp =
 fun rememberHomeLandscape(): Boolean {
     val context = LocalContext.current
     // Reactive for the same reason as [rememberGlobalLandscape]: the Home-rails
-    // switch is a synced pref, and a change of it from the account must reshape
-    // Home's rails live instead of after the next screen build.
+    // switch is device-local, but flipping it in Settings must reshape Home's
+    // rails live instead of after the next screen build.
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
     return remember(syncedRevision) { AppPreferences.homeLandscapeActive(context) }
 }

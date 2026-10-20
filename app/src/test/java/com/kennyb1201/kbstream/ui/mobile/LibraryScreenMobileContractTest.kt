@@ -78,8 +78,8 @@ class LibraryScreenMobileContractTest {
             mobile.contains("MobileTheme {")
         )
         assertTrue(
-            "posters are touch tiles",
-            mobile.contains("ui.components.touch.PosterCard")
+            "posters are touch tiles that follow the global landscape switch",
+            mobile.contains("ui.components.touch.TouchGlobalPosterTile")
         )
         assertTrue(
             "the row menu is the touch sheet",

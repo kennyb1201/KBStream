@@ -819,6 +819,12 @@ private suspend fun recoveredEpisodeAlreadyWatched(
             false
         )
 
+        // Launch, or rebuild? Read before anything composes, because the app
+        // shell's saveable state has to know which one it is restoring into
+        // (see AppRoot's `coldLaunch`).
+        val coldLaunch = !shellStarted
+        shellStarted = true
+
         // Establish the active profile BEFORE the first composition. The
         // theme seed inside setContent reads PROFILE-SCOPED prefs (AMOLED /
         // pure-black live under "<profileId>.kbstream_player_prefs"); with
@@ -923,7 +929,8 @@ private suspend fun recoveredEpisodeAlreadyWatched(
                         CompositionLocalProvider(LocalKBFeedback provides kbFeedback) {
                             AppRoot(
                                 incomingIntent = incomingIntent,
-                                onIncomingIntentConsumed = { consumeIncomingIntent() }
+                                onIncomingIntentConsumed = { consumeIncomingIntent() },
+                                coldLaunch = coldLaunch
                             )
                         }
                         KBFeedbackHost(state = kbFeedback)
@@ -1033,6 +1040,23 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     /** Startup phase lines, deliberately separate from the screen tags. */
     private companion object {
         const val TAG_STARTUP = "STARTUP"
+
+        /**
+         * Whether an activity in THIS process has already built the app shell.
+         *
+         * The launch gate opens on Who's Watching whenever the device holds
+         * profiles, and it does that from the screen state's own restore path —
+         * which cannot tell a launch from a rebuild. A configuration change
+         * (a phone rotating, a TV switching display mode, the theme/profile
+         * `recreate()`) re-creates this activity in the same process and
+         * restores that state, so every rotation reopened the picker over
+         * whatever the viewer was doing. The first create of the process is the
+         * launch; later ones keep the screen they saved. Process death clears
+         * this with the rest of the process, so a restored app still starts
+         * under a chosen identity.
+         */
+        @Volatile
+        private var shellStarted = false
     }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -1075,7 +1099,15 @@ fun AppRoot(
      */
     incomingIntent: Intent?,
     /** Called once [incomingIntent] has been routed, so it cannot re-fire. */
-    onIncomingIntentConsumed: () -> Unit
+    onIncomingIntentConsumed: () -> Unit,
+    /**
+     * True only for the first activity create in this process (see
+     * `MainActivity.shellStarted`). A configuration change re-creates the
+     * activity and restores the shell's screen, and that restore is not a
+     * launch: gating it back to Who's Watching is what made a phone rotation
+     * leave the screen the viewer was on.
+     */
+    coldLaunch: Boolean = true
 ) {
 
     // Persisted across process death: Android can kill a backgrounded TV app,
@@ -1086,7 +1118,9 @@ fun AppRoot(
     // Profile gating rides in that same saver, so the entry screen is decided
     // BEFORE anything composes: with profiles on the device the launch opens on
     // Who's Watching (each session starts under a chosen identity), and only a
-    // profile-less install opens on Home. init() already ran in onCreate; this
+    // profile-less install opens on Home. A rebuild inside the same process (a
+    // phone rotating, a theme/profile recreate) restores the saved screen
+    // instead - see `coldLaunch`. init() already ran in onCreate; this
     // is just the "which screen do we open on" read. It used to be a
     // LaunchedEffect beside this state, which runs a frame AFTER the first
     // composition — so Home composed, its rail loaders started, and its empty
@@ -1094,7 +1128,9 @@ fun AppRoot(
     val profilesExist = remember {
         com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)
     }
-    val entrySaver = remember(profilesExist) { launchScreenSaver(profilesExist) }
+    val entrySaver = remember(profilesExist, coldLaunch) {
+        launchScreenSaver(profilesExist, coldLaunch)
+    }
     var screen by rememberSaveable(stateSaver = entrySaver) {
         mutableStateOf<Screen>(launchScreen(profilesExist))
     }
@@ -1149,9 +1185,9 @@ fun AppRoot(
     // Deliberately NOT saveable: `splashArmed` is the latch, and it is restored
     // across a re-create, so a restored target could never show anything. It is
     // re-derived from the launch gate below and set outright by a profile pick.
-    var splashTarget by remember {
+    var splashTarget by remember(coldLaunch) {
         mutableStateOf(
-            if (profilesExist) {
+            if (profilesExist && coldLaunch) {
                 LaunchSplashTarget.PROFILE_PICKER
             } else {
                 LaunchSplashTarget.HOME

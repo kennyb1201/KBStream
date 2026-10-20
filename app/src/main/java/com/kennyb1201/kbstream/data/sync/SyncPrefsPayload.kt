@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktTokenStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -218,14 +219,20 @@ object PrefsPayloadBuilder {
         "home_rail_show_addon_name",
         "search_rail_show_catalog_type",
         "search_rail_show_addon_name",
-        "poster_size",                       // Small/Medium/Large poster tiles
+        // `poster_size`, `home_landscape_cards` and `landscape_posters` are
+        // deliberately NOT here (decision, 2026-10-20): the useful tile size
+        // and card shape depend on the screen — a 65" TV and a 6.7" phone want
+        // different answers — so they are screen geometry, not identity. Each
+        // device keeps the value it already has stored locally, and changing
+        // one only affects that device. This set gates BOTH directions (the
+        // builder only publishes listed keys, [applyDisplayPrefs] skips any
+        // key not in it), so a blob from an older build that still carries
+        // them applies nothing for them — no migration needed.
         "poster_caption_title",
         "poster_caption_year",
         "poster_caption_rating",
         "home_rail_hide_upcoming",
         "browse_english_only",               // catalog language filter, not device-specific
-        "home_landscape_cards",
-        "landscape_posters",
         "poster_partial_watch_badge",
         "poster_border_strength",           // poster edge strength: same look on every device
         "poster_edge",                       // poster corner shape: same look on every device
@@ -1002,6 +1009,27 @@ object PrefsPayloadApplier {
      * anything useful with "which blob", only with "something landed".
      */
     val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    /**
+     * Ticks the revision for a LOCAL edit of a synced pref.
+     *
+     * The revision used to move only when a pulled blob differed from the last
+     * one applied, which made every `remember(syncedRevision) { read the pref }`
+     * read a value only a sibling device could change. A viewer flipping a
+     * switch in Settings got nothing: the switch itself moved (it is local
+     * state), but every tile drawn from that pref kept the value it read at
+     * first composition - the "changing it does nothing" report on the phone's
+     * poster size and poster-title/year/rating toggles, where Settings sits one
+     * screen away from the grid it changes.
+     *
+     * A local write is the same "something landed" the remote path reports, so
+     * it lands on the same counter (see [AppPreferences.syncDisplayPrefsBlob],
+     * which every display-pref setter calls). Readers cannot tell the two
+     * apart, and do not need to.
+     */
+    fun notifyLocalPrefChange() {
+        _revision.update { it + 1 }
+    }
 
     // Suspend: the addon applier serializes through AddonManager's apply
     // mutex (shared with auto-update), which can suspend. Every caller is

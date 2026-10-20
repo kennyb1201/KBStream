@@ -174,6 +174,58 @@ class HomeScreenMobileContractTest {
     }
 
     @Test
+    fun `the Upcoming rail obeys the hide-upcoming pref`() {
+        val mobile = mobileHome()
+        assertTrue(
+            "the phone's own toggle label is 'Hide the Upcoming rail'",
+            mobile.contains("AppPreferences.getHomeRailHideUpcoming(")
+        )
+        assertTrue(
+            "the row's visibility must be the pref AND the schedule",
+            mobile.contains("val upcomingVisible = upcoming.isNotEmpty() && !hideUpcomingRail")
+        )
+        assertTrue(
+            "the row must disappear from the built-ins the order builder sees",
+            mobile.contains("if (upcomingVisible) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)")
+        )
+        assertTrue(
+            "and the screen must not draw the item it just dropped",
+            mobile.contains("if (upcomingVisible) { item(key = \"upcoming\")")
+        )
+    }
+
+    @Test
+    fun `Continue Watching and Upcoming cards carry the tv treatment`() {
+        val mobile = mobileHome()
+        // The state chip, the time-left chip and the shared resume bar: the
+        // three things the phone card used to leave UNDER the artwork.
+        listOf(
+            "displayBadge",
+            "\"SERIES FINALE\"",
+            "ep. left",
+            "formatTimeLeft(",
+            "KBProgressBar("
+        ).forEach { marker ->
+            assertTrue("the Continue Watching card must draw $marker", mobile.contains(marker))
+        }
+        assertTrue(
+            "the state chip is spelled the way the TV rail spells it",
+            mobile.contains("\"NEXT UP\"") && mobile.contains("UpNextBadge.NEW_SEASON")
+        )
+        assertTrue(
+            "and filled with the TV rail's per-state colour, not one accent for all",
+            mobile.contains("val badgeColor = when {") &&
+                mobile.contains("item.isSeriesFinale -> KBDanger") &&
+                mobile.contains("UpNextBadge.NEXT_UP -> KBSteel")
+        )
+        // Upcoming: the air-date chip on top, the calendar date leading the
+        // bottom block, the S/E line the TV card prints.
+        listOf("\"NEW SEASON\"", "episode.airDateFull", "S%02d · E%02d").forEach { marker ->
+            assertTrue("the Upcoming card must draw $marker", mobile.contains(marker))
+        }
+    }
+
+    @Test
     fun `the mobile home renders the arranged entries the tv builder produces`() {
         val mobile = mobileHome()
         assertTrue(
@@ -198,8 +250,15 @@ class HomeScreenMobileContractTest {
                 mobile.contains("removeBrowseShortcut")
         )
         assertTrue(
-            "landscape cards must follow the synced pref",
-            mobile.contains("getHomeLandscapeCards") && mobile.contains("rail.landscapeArt")
+            "landscape cards must follow the Home-or-global synced pref, or the " +
+                "phone stayed portrait with 'Landscape Posters Everywhere' on",
+            mobile.contains("AppPreferences.homeLandscapeActive(") &&
+                mobile.contains("rail.landscapeArt")
+        )
+        assertTrue(
+            "and index that map by its real 'type:id' key - a raw id lookup found " +
+                "nothing, which is why the phone drew no clearlogo",
+            mobile.contains("rail.landscapeArt[ meta.landscapeArtKey() ]")
         )
         assertTrue(
             "spoiler-free mode must hide episode identities on the phone",

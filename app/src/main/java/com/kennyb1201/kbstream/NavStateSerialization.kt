@@ -73,13 +73,25 @@ internal fun launchScreen(profilesExist: Boolean): Screen =
  * frame before the picker replaced it. Deciding it here removes that frame, so
  * the first composition already IS the picker and Home never composes at all.
  *
- * With profiles on the device no restored screen is honoured, not even the
- * Detail/Streams screen [ScreenSaver] exists to keep, because the effect this
- * replaces overrode every one of them the same way. Without profiles this is
- * [ScreenSaver] itself, so the restore behaves exactly as it always did.
+ * On a COLD launch with profiles on the device no restored screen is honoured,
+ * not even the Detail/Streams screen [ScreenSaver] exists to keep, because the
+ * effect this replaces overrode every one of them the same way. Without profiles
+ * this is [ScreenSaver] itself, so the restore behaves exactly as it always
+ * did.
+ *
+ * [coldLaunch] is the half that keeps a phone rotation out of the picker. A
+ * configuration change re-creates MainActivity in the SAME process, and the
+ * rebuilt instance restores this state — but that restore is not a launch, so
+ * handing back Who's Watching threw the viewer out of whatever they were doing
+ * every time the device turned. Only the process's first activity create is
+ * gated; a rebuild keeps the screen it saved. Process death still starts a new
+ * process, so a restored app still opens on the picker.
  */
-internal fun launchScreenSaver(profilesExist: Boolean): Saver<Screen, String> =
-    if (!profilesExist) {
+internal fun launchScreenSaver(
+    profilesExist: Boolean,
+    coldLaunch: Boolean = true
+): Saver<Screen, String> =
+    if (!profilesExist || !coldLaunch) {
         ScreenSaver
     } else {
         Saver(

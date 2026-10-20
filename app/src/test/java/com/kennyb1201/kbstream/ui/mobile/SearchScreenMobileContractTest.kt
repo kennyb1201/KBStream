@@ -96,8 +96,8 @@ class SearchScreenMobileContractTest {
             mobile.contains("ui.components.touch.KBTextField")
         )
         assertTrue(
-            "results are touch poster tiles",
-            mobile.contains("ui.components.touch.PosterCard")
+            "results are touch tiles that follow the global landscape switch",
+            mobile.contains("ui.components.touch.TouchGlobalPosterCard")
         )
         assertTrue(
             "the menus are the touch sheet",

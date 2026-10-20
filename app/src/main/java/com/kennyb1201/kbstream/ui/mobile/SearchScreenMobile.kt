@@ -62,9 +62,13 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
@@ -960,40 +964,39 @@ private fun SearchTile(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    // The column tracks the card's own width: a landscape tile is wider than
+    // the poster it replaces, and a column pinned to the poster width would clip
+    // it and its caption. Both come from the viewer's Poster Size - this tile
+    // used to pin 112dp, which is why the size switch did nothing here.
+    val landscape = rememberGlobalLandscape()
+    val posterSize = rememberTouchPosterSize()
     Column(
-        modifier = Modifier.width(112.dp),
+        modifier = Modifier.width(
+            if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+        ),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        PosterCard(
+        // Shape follows Settings' global landscape switch, like every other
+        // catalog surface.
+        TouchGlobalPosterCard(
             posterUrl = result.poster,
             contentDescription = result.name,
             isWatched = watched,
             isPartiallyWatched = partiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
-            modifier = Modifier
-                .width(112.dp)
-                .height(168.dp)
+            artId = result.id,
+            artType = result.type,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height
         )
-        Text(
-            text = result.name,
-            color = KBTextHi,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        // Shared caption block: the Settings toggles for title / year / rating
+        // apply here exactly as they do on a rail.
+        TouchPosterCaptions(
+            title = result.name,
+            year = result.year?.toString(),
+            rating = result.rating
         )
-        listOfNotNull(
-            result.year?.toString(),
-            result.rating?.takeIf { it > 0.0 }?.let { "★ %.1f".format(it) }
-        ).takeIf { it.isNotEmpty() }?.let { line ->
-            Text(
-                text = line.joinToString(" · "),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 
@@ -1109,15 +1112,19 @@ private fun CollectionTile(
     collection: TmdbSearchCollectionResult,
     onClick: () -> Unit
 ) {
-    PosterCard(
+    val posterSize = rememberTouchPosterSize()
+    TouchGlobalPosterCard(
         posterUrl = collection.posterPath
             ?.let { TmdbRepository.POSTER_BASE + it },
         contentDescription = collection.name,
         isWatched = false,
         onClick = onClick,
-        modifier = Modifier
-            .width(112.dp)
-            .height(168.dp)
+        artId = collection.id.toString(),
+        // A collection is its own id space: the card must not read a title's
+        // overrides for it, and resolves the collection's own art.
+        artType = "collection",
+        posterWidth = posterSize.width,
+        posterHeight = posterSize.height
     )
 }
 

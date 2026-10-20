@@ -63,6 +63,27 @@ class SyncScopeTest {
     }
 
     @Test
+    fun `screen-geometry prefs stay on the device`() {
+        // Decision (2026-10-20): the right tile size and card shape depend on
+        // the screen - a 65" TV and a 6.7" phone want different answers - so
+        // these three are screen geometry, not identity. Asserted as ABSENCE
+        // because the failure mode of re-adding one is silent: it would look
+        // wired up and quietly start reshaping the other device. Poster Size
+        // and the two landscape switches still work; they are just local.
+        val synced = PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        listOf(
+            "poster_size",
+            "home_landscape_cards",
+            "landscape_posters"
+        ).forEach { key ->
+            assertFalse(
+                "$key is per-device screen geometry and must not sync",
+                key in synced
+            )
+        }
+    }
+
+    @Test
     fun `decoder and playback prefs stay per-device`() {
         // A Fire TV Stick and a projector need different decoders: not one of
         // these may ride the sync payload. The list lives beside the allow-list

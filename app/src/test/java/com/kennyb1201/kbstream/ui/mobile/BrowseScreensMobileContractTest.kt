@@ -114,9 +114,11 @@ class BrowseScreensMobileContractTest {
         ).forEach { (name, mobile) ->
             assertTrue("$name must apply MobileTheme", mobile.contains("MobileTheme {"))
             assertTrue(
-                "$name must draw posters with the touch card - directly, or " +
-                    "through the shared sections page",
+                "$name must draw posters with the touch card that follows the " +
+                    "global landscape switch - directly, or through the shared " +
+                    "sections page",
                 mobile.contains("ui.components.touch.PosterCard") ||
+                    mobile.contains("ui.components.touch.TouchGlobalPosterTile") ||
                     mobile.contains("SectionsBrowseMobile(")
             )
             assertFalse(
@@ -125,8 +127,14 @@ class BrowseScreensMobileContractTest {
             )
         }
         assertTrue(
-            "the shared page draws its posters with the touch card",
-            sharedPage().contains("ui.components.touch.PosterCard")
+            "the shared page draws its posters with the touch card that follows " +
+                "the global landscape switch",
+            sharedPage().contains("ui.components.touch.TouchGlobalPosterCard")
+        )
+        assertTrue(
+            "and captions through the shared block, so the poster-title toggles " +
+                "reach it",
+            sharedPage().contains("TouchPosterCaptions(")
         )
         assertTrue(
             "the row menu is the touch sheet",
@@ -145,7 +153,7 @@ class BrowseScreensMobileContractTest {
         )
         assertTrue(
             "watched state is resolved through the IMDB key with the TMDB fallback",
-            shared.contains("val tmdbKeyId = \"tmdb:\${item.item.id}\"") &&
+            shared.contains("val tmdbKeyId = \"tmdb:\${railItem.item.id}\"") &&
                 shared.contains("watchedKey(tmdbKeyId, mediaType) in watchedKeys")
         )
         assertTrue(
@@ -154,10 +162,11 @@ class BrowseScreensMobileContractTest {
                 shared.contains("!watched && (")
         )
         assertTrue(
-            "a rail with another page offers LOAD MORE, and shows its in-flight state",
+            "a rail with another page offers LOAD MORE at the end of its own row, " +
+                "and shows its in-flight state",
             shared.contains("\"LOAD MORE\"") &&
                 shared.contains("\"LOADING…\"") &&
-                shared.contains("onLoadMore(entry.railKey)")
+                shared.contains("onLoadMore(section.title)")
         )
         assertTrue(
             "the menu carries the shared library, hide and watched rows",
@@ -170,12 +179,46 @@ class BrowseScreensMobileContractTest {
             "a tap records the card the Detail page returns to",
             shared.contains("BrowseReturnFocus.record(") &&
                 shared.contains("BrowseReturnTarget(") &&
-                shared.contains("BrowseReturnFocus.consume(screenKey)") &&
-                shared.contains("gridState.scrollToItem(index)")
+                shared.contains("BrowseReturnFocus.consume(screenKey)")
+        )
+        // Back from Detail reopens the page on the card that was pressed, in
+        // the two steps the rail shape needs: the outer list onto the rail,
+        // then that rail onto the card.
+        assertTrue(
+            "the return puts the outer list back on the recorded rail",
+            shared.contains("revealBrowseReturnRail(railKey, target.railIndex)") &&
+                shared.contains("rowStates[railKey]?.scrollToItem(target.position)")
         )
         assertTrue(
             "a failed load says so instead of reading as an empty page",
             shared.contains("\"Error: \$error\"") && shared.contains("\"TRY AGAIN\"")
+        )
+    }
+
+    @Test
+    fun `each rail is a horizontal band, so the next rail is one swipe away`() {
+        val shared = sharedPage()
+        assertTrue(
+            "the page must scroll vertically, one rail at a time",
+            shared.contains("LazyColumn(") && shared.contains("rememberLazyListState()")
+        )
+        assertTrue(
+            "and each rail must be its own horizontal row",
+            shared.contains("LazyRow(") && shared.contains("itemsIndexed(")
+        )
+        assertTrue(
+            "each rail's row must be keyed by the rail title, the key the return " +
+                "record carries",
+            shared.contains("key = { _, section -> section.title }")
+        )
+        assertTrue(
+            "the rail's heading must name it above the row",
+            shared.contains("BrowseRailTitle(")
+        )
+        assertFalse(
+            "a grid laid ONE rail's posters out as rows, which buried every rail " +
+                "under it - the 'scroll forever to reach the next row' report",
+            shared.contains("LazyVerticalGrid")
         )
     }
 

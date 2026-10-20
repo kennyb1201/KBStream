@@ -159,6 +159,66 @@ Unported screens still compile and render on a phone, but they are D-pad
 Compose (`androidx.tv.material3`) — reachable by tap, awkward to use, and they
 are what the remaining work covers.
 
+**Every poster surface follows the landscape switch.** The phone pages were
+built on `components.touch.PosterCard` before the app-wide "Landscape posters"
+toggle existed, and each kept calling it directly — so turning that toggle on
+reshaped Home's rails and nothing else on a phone. They now draw
+`components.touch.TouchGlobalPosterCard` (for a row of fixed-width tiles) or
+`TouchGlobalPosterTile` (for a cell whose width the layout owns), the touch
+twins of `GlobalPosterCard`: one answer to the switch, and the same backdrop +
+clearlogo resolution the rails use (`ui/components/GlobalLandscapeArt.kt`).
+Library, Search, the browse sections, actor credits, collection parts and its
+header poster, KB folders, Detail's rails and the catalog grid all went through
+that swap. A Home surface keeps its own two-switch rule
+(`AppPreferences.homeLandscapeActive`), so the Home-rails switch still stops at
+Home.
+
+**Captions go through one block too.** Each phone tile used to draw its own
+title and `year · ★rating` lines, so the Settings switches for poster titles,
+years and star ratings stopped at the television: the TV showed bare posters and
+the phone kept its captions. Those tiles now draw
+`components.touch.TouchPosterCaptions`, the touch twin of `PosterCaptions` -
+the same three synced prefs, the same "emit nothing when every enabled part is
+blank" rule - in the browse sections, the catalog grid, Library, Search, actor
+credits and collection parts. Lines that are not the caption (Library's source
+label) are not gated by it.
+
+**A Settings change now reaches the screen it changes.** The synced-pref
+revision (`PrefsPayloadApplier.revision`) used to tick only when a PULLED blob
+differed, so a local edit moved the switch in Settings and nothing else: every
+`remember(syncedRevision) { read the pref }` kept the value it read at first
+composition. That is what "changing it does nothing" was for poster size and
+the three poster-caption switches. Every display-pref setter funnels through
+`AppPreferences.syncDisplayPrefsBlob`, which ticks the same counter
+(`notifyLocalPrefChange`), so a local edit and a sibling device's edit arrive by
+one path. (Poster Size's setter now ticks it directly - see the device-local
+note below - but the counter and the readers are unchanged.)
+
+**Poster Size has a phone scale.** `ui/components/touch/TouchPosterSize.kt`
+reads the same pref the TV's `PosterSize` does and maps it to a thumb-sized tile
+(96 / 112 / 128dp wide, medium being what the phone pages already used), plus
+`rememberTouchTileWidth` for the landscape width. Every phone poster surface
+sizes its cell, its card and its caption from that one answer - the rails, the
+browse sections, Library, Search, actor credits, collection parts, the KB
+folder, the catalog grid, Detail's rails and Home's own rows. Before it, each
+file pinned its own literal (112dp, 104dp, 120dp), which is why the switch
+changed nothing on a phone.
+
+**Poster Size and the two landscape switches are device-local (2026-10-20).**
+`poster_size`, `home_landscape_cards` and `landscape_posters` are screen
+geometry, not identity: the right tile size and card shape depend on the screen,
+so a 65" TV and a 6.7" phone no longer overwrite each other. They are out of
+`PrefsPayloadBuilder.SYNCED_PREF_KEYS`, which gates both directions - the
+builder publishes only listed keys and `applyDisplayPrefs` skips any key not in
+it - so a blob from a build that still carries them is ignored on receipt and
+there is no migration code. Each device keeps the value already stored, and
+changing one affects only that device. The setters still write the same keys
+with the same defaults and still tick the local revision, so a Settings change
+reshapes the tiles on that device exactly as before; what they no longer do is
+enqueue a display blob. The rest of the display blob keeps syncing. Pinned by
+`data/sync/DeviceLocalDisplayPrefsTest` and the absence assertion in
+`SyncScopeTest`.
+
 ## The last two gaps: onboarding and the catalog grid
 
 Both were found by audit after Phase 2 was called done, and both are ports like
@@ -202,6 +262,47 @@ landscape pref draws backdrop+clearlogo cards with their rank; spoiler-free mode
 hides episode identities; a Continue Watching tap re-verifies the stored resume
 root against TMDB before opening, and a long press raises the TV card's menu
 (details, watched/unwatched, remove from the row, hide).
+
+**The Browse chips are cards, not pills.** The row of search/browse shortcuts
+used to be a `LazyRow` of text pills - the category's name on an accent wash -
+which said what the door was and nothing about what was behind it, on a screen
+where every other row is artwork. Each chip is now the touch twin of the TV's
+`BrowseShortcutTile`: the resolved backdrop (`KBHomeViewModel.browseShortcutArt`,
+keyed by `BrowseHomeShortcut.chipKey()`) as a dimmed base, the legibility scrim
+over it, and the brand's clearlogo walked across its candidate list - with the
+chip's own name uppercased and centred when the category owns no mark (a genre,
+a tag, a decade) or every candidate turned out undrawable.
+
+**The ranked "Top ... Today" row keeps the TV's landscape treatment.** Two
+pieces of it were missing on the phone: the numeral now comes from the shared
+`landscapeRank(rail.ranked, index)` rule (so the two screens cannot disagree
+about which rows are rankings), and a landscape card's artwork honours the
+viewer's chosen still through `imageOverrideCardBackdropUrl` - including over a
+pinned row's blank art marker, which is the one case that marker exists for.
+The tile's size follows Poster Size like every other phone row.
+
+The Continue Watching and Upcoming rows are drawn in the television's own
+design, because the phone had a different one: the cards used to be a bare
+backdrop with the show, episode and air date captioned UNDER the artwork, which
+read as a different row from the one on the TV beside it. They now carry what
+`CompactUpNextCard` and `UpcomingEpisodeCard` carry — the scrim, the state chip
+(RESUME / NEXT UP / NEW EPISODE / NEW SEASON, or a finale flag) or the air-date
+chip, the show and episode lines inside the bottom corner, the "N ep. left" and
+time-left chips, and the shared resume bar along the bottom edge.
+
+Two Home bugs of the same shape were fixed with it, and both were a pref that
+no phone surface ever read:
+
+- **The landscape rails had no clearlogo.** The rows looked the rail art up by
+  the item's raw id, but that map is filed under `landscapeArtKey()` —
+  `"type:id"` — so every lookup missed and the card fell back to a plain
+  backdrop. The key is the same one `HomeScreen` uses.
+- **"Hide the Upcoming rail" did nothing.** The switch was a Settings toggle and
+  a synced pref with no reader on this screen: the row was built from the
+  schedule alone. The phone now asks `getHomeRailHideUpcoming` and gates the
+  row's presence in the order builder with it (`upcomingVisible`), so a hidden
+  row is not drawn, is not counted as content, and does not make the
+  all-hidden card lie.
 
 When every rail is hidden the phone draws the same "All rails are hidden" card
 as TV, with MANAGE RAILS opening the rail manager through the one-shot request
@@ -329,19 +430,28 @@ every rail (and a rail that empties drops out), watched/partial badges resolve
 through the IMDb key with the TMDB `tmdb:<id>` fallback and the checkmark wins
 over the eye, and the long-press sheet offers the shared library add, hide,
 Go to Details and watched toggle. A card tap records the same
-`BrowseReturnTarget` the TV rail records, and a return scrolls the grid to that
-card.
+`BrowseReturnTarget` the TV rail records, and a return puts the page back on
+that card in the two steps the shape needs: the outer list onto the recorded
+rail (`revealBrowseReturnRail`, the shared TV walk), then that rail's own row
+onto the card.
+
+**The shape is the TV's: a vertical list of horizontal rails.** It was one
+vertical grid, and that was the wrong shape for a page of rails - a grid lays a
+rail's cards out as ROWS, so the next rail (the next genre, the next studio) sat
+below a screenful of the current one's posters, and reading on meant scrolling
+past cards already seen. Each rail is now its own `LazyRow` under its own
+title, so the next rail is one swipe away. A rail's items land at a fixed tile
+width (`landscapeTileWidth` when the global landscape switch is on), and the
+caption under a tile follows that width.
 
 Parity notes (not bugs to fix):
-- Each TV rail becomes a titled band inside one vertical grid. A phone has no
-  room for a horizontal rail per section plus its own vertical list, and the
-  grid puts the whole catalogue behind one thumb scroll.
-- Paging is explicit: a rail with another page ends its band with LOAD MORE
-  (LOADING… while the page is in flight). The TV page triggers the next page
-  from a scroll delta on the rail's own `LazyRow`, which a grid band has nowhere
-  to read.
-- The TV focus restore (rail scrolled, focus put back on the card) becomes a
-  scroll to the card: a phone has no focus ring to land on the poster.
+- Paging is explicit: a rail with another page ends its band with a LOAD MORE
+tile, at the end of the row (LOADING… while the page is in flight, and the
+rail's heading says so too). The TV page triggers the next page from a scroll
+delta on the rail's own row.
+- The TV focus restore (rail scrolled, focus put back on the card) becomes two
+  scrolls - outer list, then row: a phone has no focus ring to land on the
+  poster.
 - The studio header reuses the TV `BrandLogo`, so the brand-mark treatment
   (whiten / as-is / unusable, with its candidate walk) is not duplicated.
 

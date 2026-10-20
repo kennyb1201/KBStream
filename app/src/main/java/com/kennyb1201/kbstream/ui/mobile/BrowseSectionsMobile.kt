@@ -6,18 +6,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,6 +32,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -42,15 +42,21 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterSize
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -75,20 +81,27 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * page of the family and is ported next to this file, because it is one rail
  * with a fixed header rather than a page of rails).
  *
- * The TV shape is a pin rail above a vertical list of horizontal rails. That is
- * the wrong shape for a thumb - it puts most of the catalogue behind a sideways
- * swipe per rail - so each rail becomes a titled band in ONE vertical grid. The
- * poster tile, the watched/partial badges, the caption block, the hidden-title
- * filter, the context sheet and the return record are all the shared ones.
+ * The shape is the TV's: a header, then one titled band per rail, and the band
+ * itself scrolls sideways. It was a single vertical grid first, and that is the
+ * shape this file had to leave: a grid lays a rail's cards out as ROWS, so the
+ * next rail - and the next genre, the next studio - sat below a screenful of
+ * this one's posters, and reaching it meant scrolling past cards already read.
+ * A band is one thumb-swipe away from the rail under it, which is how the
+ * television page reads.
+ *
+ * The poster tile, the watched/partial badges, the caption block, the
+ * hidden-title filter, the context sheet and the return record are all the
+ * shared ones.
  *
  * Paging is explicit on touch: a rail that has another page ends its band with a
- * LOAD MORE button. The TV triggers the next page from a scroll delta on the
- * rail's own row, which a phone grid has nowhere to read.
+ * LOAD MORE tile, so the way to the next page is where the rail itself ends.
+ * The TV triggers it from a scroll delta on the rail's own row.
  *
  * There is deliberately no focus plumbing: the TV's return record carried a
  * rail key and a card key so a D-pad could be put back on the exact poster. On
- * touch the same record is used to scroll the grid to that card - the phone
- * equivalent of putting it back under the viewer.
+ * touch the same record puts the page back the way the viewer left it - the
+ * outer list on the rail, then that rail on the card (see the LaunchedEffect
+ * below), which is the phone equivalent of putting it back under the thumb.
  */
 
 /** One rail's paging state, as the shared page needs it. */
@@ -115,27 +128,6 @@ internal fun sectionsMediaType(mediaType: String?): String =
         "tv", "series" -> "series"
         else -> "movie"
     }
-
-private sealed interface BrowseEntry {
-    val key: String
-
-    data class SectionTitle(val railIndex: Int, val title: String) : BrowseEntry {
-        override val key: String get() = "rail:$railIndex:$title"
-    }
-
-    data class Card(
-        val railIndex: Int,
-        val railKey: String,
-        val position: Int,
-        val item: StudioItem
-    ) : BrowseEntry {
-        override val key: String get() = "card:$railIndex:$position:${cardKey(item)}"
-    }
-
-    data class More(val railKey: String) : BrowseEntry {
-        override val key: String get() = "more:$railKey"
-    }
-}
 
 /** The key a rail card is identified by, the same one the TV rails use. */
 internal fun cardKey(item: StudioItem): String = "${item.mediaType}:${item.item.id}"
@@ -183,35 +175,6 @@ internal fun SectionsBrowseMobile(
         }
     }
 
-    // The paging states are part of the entry list: a rail that gains
-    // another page must gain its LOAD MORE row, and one that is loading must
-    // start saying so. The signature is what makes that visible to `remember`
-    // without re-building the whole list on every recomposition.
-    val pagingSignature = sections.joinToString("|") { section ->
-        val state = paging(section.title)
-        "${section.title}:${state.hasMore}:${state.isLoadingMore}"
-    }
-    val entries = remember(sections, pagingSignature) {
-        buildList {
-            sections.forEachIndexed { railIndex, section ->
-                add(BrowseEntry.SectionTitle(railIndex, section.title))
-                section.items.forEachIndexed { position, item ->
-                    add(
-                        BrowseEntry.Card(
-                            railIndex = railIndex,
-                            railKey = section.title,
-                            position = position,
-                            item = item
-                        )
-                    )
-                }
-                if (paging(section.title).tailVisible) {
-                    add(BrowseEntry.More(section.title))
-                }
-            }
-        }
-    }
-
     val overridePaths = rememberImageOverridePaths()
     val fanUrls = remember(sections, overridePaths) {
         sections.asSequence()
@@ -229,7 +192,19 @@ internal fun SectionsBrowseMobile(
             .toList()
     }
 
-    val gridState = remember { LazyGridState() }
+    // The page is a vertical list of rails, so it owns two levels of scroll
+    // state: the outer one that brings a RAIL back on screen, and one per rail
+    // for the card inside it.
+    //
+    // The per-rail states live HERE, keyed by the rail title, rather than in
+    // each rail's own `remember`: a band that scrolls out of view is disposed
+    // with its state, so the map is what keeps a rail's sideways offset (and
+    // what lets the return hand-back address a row that has not composed yet).
+    val listState = rememberLazyListState()
+    val railTitles = remember(sections) { sections.map { it.title } }
+    val rowStates = remember(railTitles) {
+        railTitles.associateWith { LazyListState() }
+    }
     var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
     var menu by remember { mutableStateOf<Pair<StudioItem, BrowseReturnTarget>?>(null) }
 
@@ -237,19 +212,24 @@ internal fun SectionsBrowseMobile(
         returnTarget = BrowseReturnFocus.consume(screenKey)
     }
 
-    // Puts the grid back on the card the Detail page was opened from. The rails
-    // land after the grid composes, so the record is held until the card is
-    // actually in the list.
-    LaunchedEffect(returnTarget, entries) {
+    // Puts the page back where the Detail page was opened from, in the two steps
+    // the shape needs: the outer list onto the rail the card sits in, then that
+    // rail onto the card. `revealBrowseReturnRail` is the shared TV walk (hint,
+    // then a step each way, because hidden titles and a paging load move rails
+    // while the viewer is away).
+    //
+    // The rails land after the page composes, so the record is held until the
+    // rail exists. Revealing it puts the band on screen (and composes it); the
+    // row then scrolls to the card whether or not it has composed yet, because
+    // a [LazyListState] takes an offset before its list exists.
+    LaunchedEffect(returnTarget, sections) {
         val target = returnTarget ?: return@LaunchedEffect
-        val index = entries.indexOfFirst { entry ->
-            entry is BrowseEntry.Card &&
-                entry.railKey == target.railKey &&
-                cardKey(entry.item) == target.itemId
-        }.takeIf { it >= 0 }
-            ?: entries.indexOfFirst { it is BrowseEntry.Card }.takeIf { it >= 0 }
-            ?: return@LaunchedEffect
-        runCatching { gridState.scrollToItem(index) }
+        val railKey = target.railKey
+        if (railKey == null) {
+            runCatching { listState.scrollToItem(target.railIndex.coerceAtLeast(0)) }
+        } else if (listState.revealBrowseReturnRail(railKey, target.railIndex)) {
+            runCatching { rowStates[railKey]?.scrollToItem(target.position) }
+        }
         returnTarget = null
     }
 
@@ -262,130 +242,176 @@ internal fun SectionsBrowseMobile(
             railIndex = railIndex
         )
 
+    // Landscape cards are wider than posters, so a rail's tile - and the caption
+    // under it - widen with the card. Both come from the viewer's Poster Size:
+    // the phone used to pin 112dp here, so Settings' size switch reached the
+    // television and nothing else.
+    val landscape = rememberGlobalLandscape()
+    val posterSize = rememberTouchPosterSize()
+    val tileWidth = if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 104.dp),
-            state = gridState,
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
-                top = 16.dp,
-                bottom = 28.dp
-            ),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                BrowseHeaderPanel(header = header, fanUrls = fanUrls)
+            item(key = "header", contentType = "header") {
+                Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    BrowseHeaderPanel(header = header, fanUrls = fanUrls)
+                }
             }
 
             if (genres.isNotEmpty()) {
-                item(key = "genres", span = { GridItemSpan(maxLineSpan) }) {
+                item(key = "genres", contentType = "genres") {
                     GenreChipRow(
                         genres = genres,
                         selectedGenreId = selectedGenreId,
                         onSelect = onSelectGenre,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
                     )
                 }
             }
 
             when {
                 isLoading && sections.isEmpty() -> {
-                    item(key = "loading", span = { GridItemSpan(maxLineSpan) }) {
-                        BrowseStatus(message = "Loading…")
+                    item(key = "loading", contentType = "status") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            BrowseStatus(message = "Loading…")
+                        }
                     }
                 }
 
                 // A failed load says so instead of reading as an empty page -
                 // the TV pages fixed this and the phone must not regress it.
                 error != null && sections.isEmpty() -> {
-                    item(key = "error", span = { GridItemSpan(maxLineSpan) }) {
-                        BrowseStatus(
-                            message = "Error: $error",
-                            action = "TRY AGAIN",
-                            onAction = onRetry
-                        )
+                    item(key = "error", contentType = "status") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            BrowseStatus(
+                                message = "Error: $error",
+                                action = "TRY AGAIN",
+                                onAction = onRetry
+                            )
+                        }
                     }
                 }
 
                 sections.isEmpty() -> {
-                    item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
-                        BrowseStatus(message = emptyText)
+                    item(key = "empty", contentType = "status") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            BrowseStatus(message = emptyText)
+                        }
                     }
                 }
 
-                else -> items(
-                    items = entries,
-                    key = { it.key },
-                    span = { entry ->
-                        if (entry is BrowseEntry.Card) GridItemSpan(1)
-                        else GridItemSpan(maxLineSpan)
-                    }
-                ) { entry ->
-                    when (entry) {
-                        is BrowseEntry.SectionTitle -> Text(
-                            text = entry.title.uppercase(),
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 6.dp)
+                // One band per rail, the rail's own title above it, and the
+                // band scrolls sideways. The item KEY is the rail's title,
+                // because that is what the return record carries
+                // (`BrowseReturnTarget.railKey`) and what
+                // [revealBrowseReturnRail] looks for.
+                else -> itemsIndexed(
+                    items = sections,
+                    key = { _, section -> section.title },
+                    contentType = { _, _ -> "rail" }
+                ) { railIndex, section ->
+                    // Every rail in `sections` has a state; the fallback is only
+                    // so a band cannot crash on the frame its title arrives.
+                    val rowState = rowStates[section.title] ?: LazyListState()
+                    val pagingState = paging(section.title)
+
+                    Column {
+                        BrowseRailTitle(
+                            title = section.title,
+                            loadingMore = pagingState.isLoadingMore
                         )
 
-                        is BrowseEntry.Card -> {
-                            val item = entry.item
-                            val mediaType = sectionsMediaType(item.mediaType)
-                            val imdbId = resolvedIds[lookupKey(item.item.id, mediaType)]
-                            val tmdbKeyId = "tmdb:${item.item.id}"
-                            val watched =
-                                imdbId?.let { watchedKey(it, mediaType) in watchedKeys } == true ||
-                                    watchedKey(tmdbKeyId, mediaType) in watchedKeys
-                            // The checkmark wins over the eye, tested here rather
-                            // than trusted from the view model's subtraction.
-                            val partial =
-                                !watched && (
+                        LazyRow(
+                            state = rowState,
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            itemsIndexed(
+                                items = section.items,
+                                key = { _, railItem -> cardKey(railItem) }
+                            ) { position, railItem ->
+                                val mediaType = sectionsMediaType(railItem.mediaType)
+                                val imdbId =
+                                    resolvedIds[lookupKey(railItem.item.id, mediaType)]
+                                val tmdbKeyId = "tmdb:${railItem.item.id}"
+                                val watched =
                                     imdbId?.let {
-                                        watchedKey(it, mediaType) in partialWatchedKeys
+                                        watchedKey(it, mediaType) in watchedKeys
                                     } == true ||
-                                        watchedKey(tmdbKeyId, mediaType) in partialWatchedKeys
-                                    )
+                                        watchedKey(tmdbKeyId, mediaType) in watchedKeys
+                                // The checkmark wins over the eye, tested here
+                                // rather than trusted from the view model's
+                                // subtraction.
+                                val partial =
+                                    !watched && (
+                                        imdbId?.let {
+                                            watchedKey(it, mediaType) in partialWatchedKeys
+                                        } == true ||
+                                            watchedKey(tmdbKeyId, mediaType) in
+                                            partialWatchedKeys
+                                        )
 
-                            BrowseTile(
-                                item = item,
-                                isWatched = watched,
-                                isPartiallyWatched = partial,
-                                onClick = {
-                                    BrowseReturnFocus.record(
-                                        record(entry.railKey, entry.railIndex, entry.position, item)
-                                    )
-                                    onOpenItem(item)
-                                },
-                                onLongClick = {
-                                    menu = item to record(
-                                        entry.railKey,
-                                        entry.railIndex,
-                                        entry.position,
-                                        item
-                                    )
+                                BrowseTile(
+                                    item = railItem,
+                                    width = tileWidth,
+                                    posterSize = posterSize,
+                                    isWatched = watched,
+                                    isPartiallyWatched = partial,
+                                    onClick = {
+                                        BrowseReturnFocus.record(
+                                            record(
+                                                section.title,
+                                                railIndex,
+                                                position,
+                                                railItem
+                                            )
+                                        )
+                                        onOpenItem(railItem)
+                                    },
+                                    onLongClick = {
+                                        menu = railItem to record(
+                                            section.title,
+                                            railIndex,
+                                            position,
+                                            railItem
+                                        )
+                                    }
+                                )
+                            }
+
+                            // The next page lives where the rail ends, so it is
+                            // one swipe further, not below the band.
+                            if (pagingState.tailVisible) {
+                                item(key = "more:${section.title}") {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(tileWidth)
+                                            .height(if (landscape) 96.dp else 120.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        KBButton(
+                                            label = if (pagingState.isLoadingMore) {
+                                                "LOADING…"
+                                            } else {
+                                                "LOAD MORE"
+                                            },
+                                            enabled = !pagingState.isLoadingMore,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            onLoadMore(section.title)
+                                        }
+                                    }
                                 }
-                            )
-                        }
-
-                        is BrowseEntry.More -> {
-                            val state = paging(entry.railKey)
-                            KBButton(
-                                label = if (state.isLoadingMore) "LOADING…" else "LOAD MORE",
-                                enabled = !state.isLoadingMore,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                onLoadMore(entry.railKey)
                             }
                         }
                     }
@@ -558,50 +584,79 @@ private fun BrowseHeaderPanel(
     }
 }
 
-/** One poster, with the shared caption block's title/year/rating lines. */
+/**
+ * One rail's heading: its title, and the append state while a page is in
+ * flight - the phone's stand-in for the TV pendant that hangs off the rail.
+ */
+@Composable
+private fun BrowseRailTitle(title: String, loadingMore: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title.uppercase(),
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (loadingMore) {
+            Text(
+                text = "LOADING…",
+                color = KBAccent,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * One poster in a rail: the shared touch card at [width], with the shared
+ * caption block under it (title/year/rating, each gated by its Settings toggle).
+ */
 @Composable
 private fun BrowseTile(
     item: StudioItem,
+    width: Dp,
+    posterSize: TouchPosterSize,
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.width(width),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        PosterCard(
+        TouchGlobalPosterCard(
             posterUrl = item.item.posterPath
                 ?.let { "${TmdbRepository.POSTER_BASE}$it" },
+            backdropUrl = item.item.backdropPath
+                ?.let { "${TmdbRepository.BACKDROP_BASE}$it" },
             contentDescription = item.item.title ?: item.item.name,
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+            artId = item.item.id.toString(),
+            artType = item.mediaType,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height
         )
-        Text(
-            text = item.item.title ?: item.item.name ?: "Untitled",
-            color = KBTextHi,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        TouchPosterCaptions(
+            title = item.item.title ?: item.item.name ?: "Untitled",
+            year = (item.item.releaseDate ?: item.item.firstAirDate)?.take(4),
+            rating = item.item.voteAverage,
+            modifier = Modifier.width(width)
         )
-        listOfNotNull(
-            (item.item.releaseDate ?: item.item.firstAirDate)?.take(4),
-            item.item.voteAverage?.takeIf { it > 0.0 }?.let { "★ %.1f".format(it) }
-        ).takeIf { it.isNotEmpty() }?.let { line ->
-            Text(
-                text = line.joinToString(" · "),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 

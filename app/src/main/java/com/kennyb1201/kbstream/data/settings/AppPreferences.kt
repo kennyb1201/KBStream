@@ -1411,7 +1411,7 @@ object AppPreferences {
 
     fun setPosterSize(context: Context, size: Long) {
         prefs(context).edit().putLong(KEY_POSTER_SIZE, size).apply()
-        syncDisplayPrefsBlob(context)
+        notifyDisplayPrefChanged()
     }
 
     // ── Poster captions (all screens except Home rails) ───────────────
@@ -1727,7 +1727,7 @@ object AppPreferences {
 
     fun setHomeLandscapeCards(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
-        syncDisplayPrefsBlob(context)
+        notifyDisplayPrefChanged()
     }
 
     // ── Global landscape posters (every poster surface, not just Home) ─
@@ -1741,7 +1741,7 @@ object AppPreferences {
 
     fun setLandscapePosters(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_POSTERS, enabled).apply()
-        syncDisplayPrefsBlob(context)
+        notifyDisplayPrefChanged()
     }
 
     /**
@@ -2003,10 +2003,28 @@ object AppPreferences {
         }
 
     /**
+     * A display pref changed on THIS device: tick the same counter a pulled
+     * blob ticks, so a screen already composed re-reads it (see
+     * [com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.notifyLocalPrefChange]).
+     *
+     * Local only by design: it is what the DEVICE-LOCAL display prefs reach
+     * their readers through. `poster_size`, `home_landscape_cards` and
+     * `landscape_posters` are screen geometry, so their setters stop here -
+     * publishing them would put one screen's answer on another (see
+     * [com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.SYNCED_PREF_KEYS]).
+     */
+    private fun notifyDisplayPrefChanged() {
+        com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.notifyLocalPrefChange()
+    }
+
+    /**
      * Cross-device sync: called by every setter of a SYNCED pref. Debounced
      * inside SupabaseSync (outbox coalescing), so spamming toggles is cheap.
      */
     internal fun syncDisplayPrefsBlob(context: Context) {
+        // A local edit is a change every tile reading this pref has to see, not
+        // only the switch that wrote it.
+        notifyDisplayPrefChanged()
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,

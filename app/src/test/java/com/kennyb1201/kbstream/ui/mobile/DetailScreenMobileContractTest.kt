@@ -127,8 +127,9 @@ class DetailScreenMobileContractTest {
             mobile.contains("ui.components.touch.KBButton")
         )
         assertTrue(
-            "More Like This must use the touch poster tile",
-            mobile.contains("ui.components.touch.PosterCard")
+            "More Like This must use the touch tile that follows the global " +
+                "landscape switch",
+            mobile.contains("ui.components.touch.TouchGlobalPosterCard")
         )
         assertTrue(
             "every long-press menu must be the touch sheet",

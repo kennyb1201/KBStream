@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,11 +47,16 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -157,13 +161,19 @@ fun CollectionScreenMobile(
     }
 
     MobileTheme {
+        // Landscape cards are wider than posters, so the columns widen with
+        // them - the same 168dp the catalog grid uses.
+        val landscape = rememberGlobalLandscape()
+        val posterSize = rememberTouchPosterSize()
+        val tileWidth =
+            if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 104.dp),
+                columns = GridCells.Adaptive(minSize = tileWidth),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -417,36 +427,26 @@ private fun CollectionPartTile(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        PosterCard(
+        // A collection PART is a real title (always a movie), so it follows the
+        // global landscape switch like every other title tile.
+        TouchGlobalPosterTile(
             posterUrl = part.posterPath?.let { "${TmdbRepository.POSTER_BASE}$it" },
             contentDescription = part.title ?: part.name ?: "Collection movie",
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+            artId = part.id.toString(),
+            artType = "movie",
+            modifier = Modifier.fillMaxWidth()
         )
-        Text(
-            text = part.title ?: part.name ?: "Untitled",
-            color = KBTextHi,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        // Shared caption block: a collection's parts are titles, so the
+        // poster-caption toggles apply to them like to any other tile.
+        TouchPosterCaptions(
+            title = part.title ?: part.name ?: "Untitled",
+            year = part.releaseDate?.take(4),
+            rating = part.voteAverage
         )
-        listOfNotNull(
-            part.releaseDate?.take(4),
-            part.voteAverage?.takeIf { it > 0.0 }?.let { "★ %.1f".format(it) }
-        ).takeIf { it.isNotEmpty() }?.let { line ->
-            Text(
-                text = line.joinToString(" · "),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 

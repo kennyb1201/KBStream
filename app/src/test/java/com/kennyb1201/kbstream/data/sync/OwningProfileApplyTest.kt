@@ -19,8 +19,9 @@ import org.robolectric.annotation.Config
 /**
  * Where a realtime prefs row lands.
  *
- * Field report (2026-10-15, two TVs): `landscape_posters` turned on under TV#1's
- * guest profile never reached TV#2's guest profile until the app was restarted.
+ * Field report (2026-10-15, two TVs): a display pref turned on under TV#1's
+ * guest profile (`landscape_posters`, still a synced key at the time) never
+ * reached TV#2's guest profile until the app was restarted.
  * The realtime row HAD arrived — the restart's cold-start pull is what applied
  * it — because `onRemoteChange` dropped every prefs row whose profile was not the
  * active one. The fix applies the row to the profile its OWN key names, so this
@@ -69,10 +70,17 @@ class OwningProfileApplyTest {
     /** The profile's own display-prefs file, as the applier writes it. */
     private fun displayPrefs(profileId: String) = scoped(profileId)
 
-    private fun displayBlob(updatedAt: Long, landscape: Boolean): JsonObject =
+    /**
+     * A display blob carrying one boolean. The vehicle is `amoled_black`: the
+     * original field report used `landscape_posters`, which is now
+     * device-local screen geometry and would be filtered out by the applier's
+     * allowlist (see [DeviceLocalDisplayPrefsTest]) — this test is about WHERE
+     * a row lands, so it needs a key that still syncs.
+     */
+    private fun displayBlob(updatedAt: Long, amoled: Boolean): JsonObject =
         buildJsonObject {
             put("updatedAt", updatedAt)
-            put("landscape_posters", landscape)
+            put("amoled_black", amoled)
         }
 
     @Test
@@ -90,17 +98,17 @@ class OwningProfileApplyTest {
             context,
             PROFILE_THREE,
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS,
-            displayBlob(updatedAt = 1_000L, landscape = true)
+            displayBlob(updatedAt = 1_000L, amoled = true)
         )
 
         assertTrue(
             "the guest profile's own store must already hold the change - this " +
                 "is what used to only appear after a restart",
-            displayPrefs(PROFILE_THREE).getBoolean("landscape_posters", false)
+            displayPrefs(PROFILE_THREE).getBoolean("amoled_black", false)
         )
         assertFalse(
             "the row must never reach the active profile's store",
-            displayPrefs(PROFILE_ONE).contains("landscape_posters")
+            displayPrefs(PROFILE_ONE).contains("amoled_black")
         )
     }
 
@@ -113,7 +121,7 @@ class OwningProfileApplyTest {
             context,
             PROFILE_THREE,
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS,
-            displayBlob(updatedAt = 2_000L, landscape = true)
+            displayBlob(updatedAt = 2_000L, amoled = true)
         )
         assertEquals(
             "a sibling profile's change cannot repaint a screen showing this one",
@@ -124,7 +132,7 @@ class OwningProfileApplyTest {
         PrefsPayloadApplier.apply(
             context,
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS,
-            displayBlob(updatedAt = 3_000L, landscape = false)
+            displayBlob(updatedAt = 3_000L, amoled = false)
         )
         assertEquals(
             "a change to the active profile's store is what the UI must repaint on",
@@ -133,7 +141,7 @@ class OwningProfileApplyTest {
         )
         assertTrue(
             "and it is the active profile's own store that was written",
-            displayPrefs(PROFILE_ONE).contains("landscape_posters")
+            displayPrefs(PROFILE_ONE).contains("amoled_black")
         )
     }
 
@@ -149,12 +157,12 @@ class OwningProfileApplyTest {
                 context,
                 profileId,
                 PrefsPayloadBuilder.KEY_DISPLAY_PREFS,
-                displayBlob(updatedAt = 4_000L, landscape = true)
+                displayBlob(updatedAt = 4_000L, amoled = true)
             )
         }
 
-        assertTrue(displayPrefs(PROFILE_ONE).getBoolean("landscape_posters", false))
-        assertTrue(displayPrefs(PROFILE_THREE).getBoolean("landscape_posters", false))
+        assertTrue(displayPrefs(PROFILE_ONE).getBoolean("amoled_black", false))
+        assertTrue(displayPrefs(PROFILE_THREE).getBoolean("amoled_black", false))
     }
 
     private companion object {

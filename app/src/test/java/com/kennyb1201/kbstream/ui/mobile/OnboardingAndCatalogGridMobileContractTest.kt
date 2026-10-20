@@ -256,9 +256,11 @@ class OnboardingAndCatalogGridMobileContractTest {
             text.contains("LazyVerticalGrid(") && text.contains("GridCells.Adaptive(")
         )
         assertTrue(
-            "the grid must draw the touch cards",
-            text.contains("import com.kennyb1201.kbstream.ui.components.touch.PosterCard") &&
-                text.contains("import com.kennyb1201.kbstream.ui.components.touch.LandscapeCard")
+            "the grid must draw the touch tile that follows the landscape switch " +
+                "and resolves the same backdrop + clearlogo the rails do",
+            text.contains(
+                "import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile"
+            )
         )
         assertTrue(
             "the grid must keep the rail's landscape shape",

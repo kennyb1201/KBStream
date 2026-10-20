@@ -2,7 +2,6 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,7 +19,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
@@ -43,13 +40,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,6 +61,8 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.chipKey
+import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBFolder
@@ -72,23 +74,35 @@ import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.posterBorderModifier
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.landscapeRank
+import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
+import com.kennyb1201.kbstream.ui.home.formatTimeLeft
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
 import com.kennyb1201.kbstream.ui.kb.HomeEntry
 import com.kennyb1201.kbstream.ui.kb.KBHomeSlots
@@ -96,10 +110,14 @@ import com.kennyb1201.kbstream.ui.kb.KBHomeViewModel
 import com.kennyb1201.kbstream.ui.kb.collectionRailKey
 import com.kennyb1201.kbstream.ui.kb.collectionRailTiles
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBPlum
+import com.kennyb1201.kbstream.ui.theme.KBRust
+import com.kennyb1201.kbstream.ui.theme.KBSteel
+import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
-import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
-import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -129,9 +147,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * collections, the Browse-chip rows and the catalog rails appear in the order
  * the home manager stores (and a hidden or unpinned row behaves the same on
  * both screens). Collections render as folder tiles sized by each folder's own
- * `tileShape`; Browse rows render as chips and can be removed with a long
+ * `tileShape`; Browse rows render as artwork cards (the category's backdrop and
+ * clearlogo, as the TV row draws them) and a chip can be removed with a long
  * press; landscape mode (the synced pref) draws backdrop+clearlogo cards with
- * their rank.
+ * their rank. Every rail's tile follows Settings' Poster Size.
  *
  * A Continue Watching long press raises the TV card's menu (details, watched,
  * remove from the row, hide) and a tap re-verifies the stored resume root before
@@ -181,11 +200,25 @@ fun HomeScreenMobile(
         val showRailAddon = remember(activeProfileId?.id, syncRevision) {
             AppPreferences.getHomeRailShowAddonName(context)
         }
-        // The rail card shape is one synced preference for the whole screen,
-        // exactly as on TV.
+        // The rail card shape: the Home-rails switch OR the global "Landscape
+        // Posters Everywhere" one, which is what [homeLandscapeActive] means.
+        // Reading only the Home switch here is why turning the global setting
+        // on reshaped the TV's Home and left the phone's on posters - the
+        // ViewModel had already resolved every rail's backdrop + clearlogo, and
+        // the cards ignored them.
         val landscapeCards = remember(activeProfileId?.id, syncRevision) {
-            AppPreferences.getHomeLandscapeCards(context)
+            AppPreferences.homeLandscapeActive(context)
         }
+        // The viewer's Poster Size, which the phone's own rails pinned (120dp
+        // portrait, 224dp landscape) until now - so the Settings switch moved
+        // the television's tiles and left every phone row alone.
+        val railPosterSize = rememberTouchPosterSize()
+        val railLandscapeWidth = landscapeTileWidth(railPosterSize.width)
+        val railLandscapeHeight = landscapeTileHeight(railPosterSize.width)
+        // Settings' "Hide the Upcoming rail": the Upcoming schedule row is off
+        // Home. The same synced pref filters unreleased titles out of the
+        // catalog rails inside HomeViewModel; this is the row itself, which is
+        // what the phone's own label promises.
 
         val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
         val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
@@ -240,10 +273,17 @@ fun HomeScreenMobile(
         // where the home manager says on both screens.
         val kbViewModel: KBHomeViewModel = viewModel()
         val kbState by kbViewModel.state.collectAsStateWithLifecycle()
-        val builtinWithContent = remember(upNext.isNotEmpty(), upcoming.isNotEmpty()) {
+        val hideUpcomingRail = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeRailHideUpcoming(context)
+        }
+        // The row the screen actually draws - everything below asks this, not
+        // the raw schedule, or "All rails are hidden" would claim the viewer
+        // hid rails when the only thing they hid was Upcoming.
+        val upcomingVisible = upcoming.isNotEmpty() && !hideUpcomingRail
+        val builtinWithContent = remember(upNext.isNotEmpty(), upcomingVisible) {
             buildSet {
                 if (upNext.isNotEmpty()) add(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING)
-                if (upcoming.isNotEmpty()) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)
+                if (upcomingVisible) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)
             }
         }
         val homeEntries = remember(rails, kbState, builtinWithContent) {
@@ -344,7 +384,7 @@ fun HomeScreenMobile(
                             }
 
                             KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE -> {
-                                if (upcoming.isNotEmpty()) {
+                                if (upcomingVisible) {
                                     item(key = "upcoming") {
                                         MobileSection(title = "Upcoming") {
                                             LazyRow(
@@ -387,6 +427,10 @@ fun HomeScreenMobile(
                         is HomeEntry.BrowseRail -> item(key = "browse:" + entry.key) {
                             MobileBrowseShortcutSection(
                                 rail = entry.rail,
+                                // The same resolved art the TV row draws: a
+                                // backdrop spotlight still plus the brand's
+                                // clearlogo, per chip key.
+                                artByKey = kbState.browseShortcutArt,
                                 onOpen = onOpenBrowseShortcut,
                                 onLongPress = kbViewModel::removeBrowseShortcut
                             )
@@ -429,27 +473,54 @@ fun HomeScreenMobile(
                                             if (landscapeCards) {
                                                 // Landscape rows carry their own
                                                 // resolved backdrop + clearlogo
-                                                // (see Rail.landscapeArt).
-                                                val art = rail.landscapeArt[meta.id]
+                                                // (see Rail.landscapeArt), keyed
+                                                // by `landscapeArtKey()` - the
+                                                // map is "type:id", so a raw id
+                                                // lookup found nothing and every
+                                                // phone card drew without its
+                                                // clearlogo.
+                                                val art = rail.landscapeArt[
+                                                    meta.landscapeArtKey()
+                                                ]
                                                 LandscapeCard(
-                                                    backdropUrl = art?.first
-                                                        ?: meta.background
-                                                        ?: meta.poster,
+                                                    // The viewer's chosen still wins
+                                                    // over the rail's own art - the
+                                                    // same chain the TV rail uses,
+                                                    // including over a pinned
+                                                    // "Top ... Today" row's blank
+                                                    // marker (see LandscapeArt).
+                                                    // Without it, "Set as landscape
+                                                    // card" did nothing on a phone.
+                                                    backdropUrl = imageOverrideCardBackdropUrl(
+                                                        paths = overridePaths,
+                                                        rawId = meta.id,
+                                                        fallbackUrl = art?.first
+                                                            ?: meta.background
+                                                            ?: meta.poster
+                                                    ),
                                                     logoUrl = art?.second,
                                                     fallbackTitle = meta.name,
                                                     contentDescription = meta.name,
                                                     isWatched = watched,
                                                     isPartiallyWatched =
                                                         partiallyWatched,
-                                                    rank = if (rail.ranked) index + 1 else null,
+                                                    // A pinned "Top ... Today" row
+                                                    // numbers its cards; no other
+                                                    // rail has a standing to show.
+                                                    // The same rule the TV rail
+                                                    // reads (see landscapeRank).
+                                                    rank = landscapeRank(
+                                                        rail.ranked,
+                                                        index
+                                                    ),
                                                     onClick = { onItemClick(meta) },
                                                     onLongClick = {
                                                         menuTarget =
                                                             RailMenuTarget(meta, rail)
                                                     },
                                                     modifier = Modifier
-                                                        .width(224.dp)
-                                                        .height(126.dp)
+                                                        .width(railLandscapeWidth)
+                                                        .height(railLandscapeHeight)
                                                 )
                                             } else {
                                                 PosterCard(
@@ -468,8 +539,8 @@ fun HomeScreenMobile(
                                                             RailMenuTarget(meta, rail)
                                                     },
                                                     modifier = Modifier
-                                                        .width(120.dp)
-                                                        .height(180.dp)
+                                                        .width(railPosterSize.width)
+                                                        .height(railPosterSize.height)
                                                 )
                                             }
                                         }
@@ -486,7 +557,7 @@ fun HomeScreenMobile(
                 // with no catalogs at all - there, there is nothing to manage
                 // yet. Without this card Home was the hero and nothing else.
                 val allRailsHidden = !isLoading && homeEntries.isEmpty() &&
-                    (rails.isNotEmpty() || upNext.isNotEmpty() || upcoming.isNotEmpty())
+                    (rails.isNotEmpty() || upNext.isNotEmpty() || upcomingVisible)
                 if (allRailsHidden) {
                     item(key = "all-hidden") {
                         Column(
@@ -514,7 +585,7 @@ fun HomeScreenMobile(
                     }
                 }
 
-                if (isLoading && rails.isEmpty() && upNext.isEmpty() && upcoming.isEmpty()) {
+                if (isLoading && rails.isEmpty() && upNext.isEmpty() && !upcomingVisible) {
                     item(key = "loading") {
                         Box(
                             modifier = Modifier
@@ -774,19 +845,26 @@ private fun CollectionFolderCard(folder: KBFolder, onClick: () -> Unit) {
 }
 
 /**
- * The Browse chips the viewer mirrored to Home, as one chip row per kind.
+ * The Browse chips the viewer mirrored to Home, as one card row per kind.
  *
- * TV draws these as tiles; a phone gets chips, which is what the Search screen's
- * browse strip already uses. A long press removes the chip from Home - the TV's
- * tile menu action, and the same pref blob either way.
+ * A phone used to get text pills here while the television drew artwork tiles,
+ * which read as a different feature: the pill named the door, the TV card showed
+ * what was behind it. These are now cards (see [BrowseShortcutCard]) fed by the
+ * same resolved art the TV row reads. A long press removes the chip from Home -
+ * the TV's tile menu action, and the same pref blob either way.
  */
 @Composable
 private fun MobileBrowseShortcutSection(
     rail: BrowseHomeRail,
+    artByKey: Map<String, BrowseShortcutArt>,
     onOpen: (BrowseHomeShortcut) -> Unit,
     onLongPress: (BrowseHomeShortcut) -> Unit
 ) {
     if (rail.shortcuts.isEmpty()) return
+
+    val posterSize = rememberTouchPosterSize()
+    val cardWidth = landscapeTileWidth(posterSize.width)
+    val cardHeight = landscapeTileHeight(posterSize.width)
 
     MobileSection(title = rail.title.ifBlank { "Browse" }) {
         LazyRow(
@@ -794,20 +872,124 @@ private fun MobileBrowseShortcutSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(rail.shortcuts, key = { it.categoryKey + ":" + it.id }) { shortcut ->
-                Text(
-                    text = shortcut.name,
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(KBShapePanel)
-                        .background(KBAccent.copy(alpha = 0.18f))
-                        .combinedClickable(
-                            onClick = { onOpen(shortcut) },
-                            onLongClick = { onLongPress(shortcut) }
+                BrowseShortcutCard(
+                    shortcut = shortcut,
+                    art = artByKey[shortcut.chipKey()],
+                    width = cardWidth,
+                    height = cardHeight,
+                    onClick = { onOpen(shortcut) },
+                    onLongClick = { onLongPress(shortcut) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One Browse chip, as the television draws it: a landscape card wearing the
+ * category's own artwork rather than a text pill.
+ *
+ * The phone had a pill here - the chip's name on an accent wash - which said
+ * what the door was but nothing about what was behind it, on a screen where
+ * every other row is artwork. This is the touch twin of the TV's
+ * `BrowseShortcutTile`: the same resolved backdrop as a dimmed base (a spotlight
+ * still for a genre/decade/studio, a collection's own art), the same legibility
+ * scrim, and then the brand's clearlogo - walked across its candidate list so a
+ * mark that cannot be drawn falls through to the next, exactly as the TV tile
+ * does - with the chip's own name standing in when the category owns no mark
+ * (a genre, a tag, a decade) or every candidate turned out unusable.
+ */
+@Composable
+private fun BrowseShortcutCard(
+    shortcut: BrowseHomeShortcut,
+    art: BrowseShortcutArt?,
+    width: Dp,
+    height: Dp,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val logoUrls = art?.clearlogoUrls.orEmpty()
+        .ifEmpty { listOfNotNull(art?.clearlogoUrl?.takeIf { it.isNotBlank() }) }
+    // The index walks the candidates: a blank plate or artwork that never
+    // arrives advances it, so a brand whose top mark is undrawable still shows
+    // one of its own instead of an empty card.
+    var logoIndex by remember(logoUrls) { mutableStateOf(0) }
+    val logo = logoUrls.getOrNull(logoIndex)
+    val backgroundUrl = art?.backdropUrl?.takeIf { it.isNotBlank() }
+
+    KBCard(
+        onClick = onClick,
+        onLongClick = onLongClick,
+        shape = posterEdgeShape()
+    ) {
+        Box(
+            modifier = Modifier
+                .width(width)
+                .height(height)
+                .background(KBSurface)
+                // A soft accent wash under everything, so a chip with no
+                // resolved artwork is still a warm card rather than a flat
+                // grey rectangle (the TV tile's own base).
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            KBAccent.copy(alpha = 0.12f),
+                            Color.Transparent
                         )
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                )
+                .then(posterBorderModifier()),
+            contentAlignment = Alignment.Center
+        ) {
+            if (backgroundUrl != null) {
+                AsyncImage(
+                    model = backgroundUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .matchParentSize()
+                        // Texture, not a thumbnail: a full-strength still under a
+                        // wordmark reads as a mismatched poster.
+                        .graphicsLayer { alpha = 0.42f }
+                )
+            }
+
+            // Legibility scrim: the mark or the name sits on it, so a bright
+            // backdrop cannot swallow either.
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                KBVoid.copy(alpha = 0.30f),
+                                KBVoid.copy(alpha = 0.90f)
+                            )
+                        )
+                    )
+            )
+
+            if (logo == null) {
+                Text(
+                    text = shortcut.name.uppercase(),
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                )
+            } else {
+                BrandMarkImage(
+                    url = logo,
+                    contentDescription = shortcut.name,
+                    onUnusable = { logoIndex += 1 },
+                    modifier = Modifier
+                        .fillMaxWidth(0.72f)
+                        .height(height * 0.42f)
                 )
             }
         }
@@ -993,8 +1175,19 @@ private fun MobileSection(
 }
 
 /**
- * A Continue Watching card: the episode still with its clearlogo, the show and
- * episode under it, and the resume progress as a thin bar.
+ * A Continue Watching card, in the television rail's own design.
+ *
+ * The card WAS a bare backdrop with the show and episode captioned UNDER it,
+ * which read as a different row from the one on the TV: everything here is now
+ * on the artwork the way `CompactUpNextCard` draws it - the scrim, the state
+ * chip in the top-left (RESUME / NEXT UP / NEW EPISODE / NEW SEASON, or a
+ * finale flag), the show title and episode line in the bottom-left corner,
+ * the "N ep. left" and time-left chips in the corners, and the resume bar
+ * along the bottom edge.
+ *
+ * Spoiler-free keeps the TV rule too: an episode the viewer has not started
+ * shows the SHOW's art instead of a still from that episode, and its episode
+ * title is not drawn.
  */
 @Composable
 private fun ContinueWatchingCard(
@@ -1005,109 +1198,282 @@ private fun ContinueWatchingCard(
     val title = item.showTitle ?: item.title
     // Spoiler-free: the card is offering an unwatched episode, so the guard is
     // entirely the resume position - the same rule the TV card applies.
-    val hidesEpisodeTitle = rememberHidesEpisodeTitle(inProgress = item.startPositionMs > 0)
-    Column(
-        modifier = Modifier.width(250.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        LandscapeCard(
-            backdropUrl = item.episodeThumbnail ?: item.backdrop ?: item.poster,
-            logoUrl = item.clearLogo,
-            fallbackTitle = title,
-            contentDescription = title,
-            isWatched = false,
-            onClick = onClick,
-            onLongClick = onLongClick,
-            isPartiallyWatched = false,
-            modifier = Modifier
-                .width(250.dp)
-                .height(141.dp)
-        )
-        item.progressPercent?.takeIf { it > 0f }?.let { progress ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .clip(CircleShape)
-                    .background(KBSurfaceRaised)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress.coerceIn(0f, 1f))
-                        .fillMaxHeight()
-                        .background(KBAccent)
-                )
-            }
+    val hidesEpisodeIdentity = rememberHidesEpisodeTitle(inProgress = item.startPositionMs > 0)
+    val episodeLabel = upNextEpisodeLabel(item)
+    val progress = item.progressPercent?.coerceIn(0f, 1f)
+    // Resume cards keep their progress bar and time-left. A finale being
+    // resumed still has a saved position, so it behaves like a resume card.
+    val isResumeCard = item.badge == UpNextBadge.CONTINUE_WATCHING ||
+        (item.startPositionMs > 0L && (item.isSeasonFinale || item.isSeriesFinale))
+    val timeLeft = if (isResumeCard) formatTimeLeft(item.remainingMinutes) else null
+    val displayBadge = when {
+        item.isSeriesFinale -> "SERIES FINALE"
+        item.isSeasonFinale -> "SEASON FINALE"
+        else -> when (item.badge) {
+            UpNextBadge.CONTINUE_WATCHING -> "RESUME"
+            UpNextBadge.NEXT_UP -> "NEXT UP"
+            UpNextBadge.NEW_EPISODE -> "NEW EPISODE"
+            UpNextBadge.NEW_SEASON -> "NEW SEASON"
         }
-        Text(
-            text = title,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+    }
+    // The same chip colours the television gives the same states (see
+    // `CompactUpNextCard`'s `badgeColor` argument): the chip is a state, and a
+    // single accent for all four made a finale and a resume look alike.
+    val badgeColor = when {
+        item.isSeriesFinale -> KBDanger
+        item.isSeasonFinale -> KBRust
+        else -> when (item.badge) {
+            UpNextBadge.CONTINUE_WATCHING -> KBAccent
+            UpNextBadge.NEXT_UP -> KBSteel
+            UpNextBadge.NEW_EPISODE -> KBSuccess
+            UpNextBadge.NEW_SEASON -> KBPlum
+        }
+    }
+    val bottomInset = if (isResumeCard && progress != null && progress > 0f) 15.dp else 9.dp
+
+    PosterCard(
+        posterUrl = if (hidesEpisodeIdentity) {
+            item.backdrop ?: item.poster ?: ""
+        } else {
+            item.episodeThumbnail ?: item.backdrop ?: item.poster ?: ""
+        },
+        contentDescription = title,
+        isWatched = false,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        modifier = Modifier
+            .width(250.dp)
+            .height(141.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            KBVoid.copy(alpha = 0.08f),
+                            KBVoid.copy(alpha = 0.34f),
+                            KBVoid.copy(alpha = 0.80f),
+                            KBVoid.copy(alpha = 0.97f)
+                        )
+                    )
+                )
         )
-        if (!hidesEpisodeTitle) {
-            upNextEpisodeLabel(item)?.let { label ->
+
+        Text(
+            text = displayBadge,
+            color = KBTextHi,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(6.dp)
+                .background(color = badgeColor, shape = KBShapeChip)
+                .padding(horizontal = 6.dp, vertical = 3.dp)
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomStart)
+                .padding(start = 10.dp, end = 10.dp, bottom = bottomInset)
+        ) {
+            Text(
+                text = title,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            episodeLabel?.let { label ->
                 Text(
                     text = label,
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi.copy(alpha = 0.78f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
+            if (!hidesEpisodeIdentity) {
+                item.episodeTitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = KBTextHi.copy(alpha = 0.88f),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+            }
+        }
+
+        item.episodesRemaining?.takeIf { it > 0 }?.let { remaining ->
+            Text(
+                text = if (remaining == 1) "1 ep. left" else "$remaining ep. left",
+                color = KBTextHi,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 10.dp, bottom = bottomInset)
+                    .background(color = KBVoid.copy(alpha = 0.65f), shape = KBShapeChip)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            )
+        }
+
+        timeLeft?.let { label ->
+            Text(
+                text = label,
+                color = KBTextHi.copy(alpha = 0.90f),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .background(color = KBVoid.copy(alpha = 0.65f), shape = KBShapeChip)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            )
+        }
+
+        if (isResumeCard && progress != null && progress > 0f) {
+            KBProgressBar(
+                progress = progress,
+                modifier = Modifier.align(Alignment.BottomStart)
+            )
         }
     }
 }
 
-/** An Upcoming card: the show's backdrop, its air-date line, then the episode. */
+/**
+ * An Upcoming card, in the television rail's own design.
+ *
+ * The air date is the scan hook, so it gets the top-left chip ("NEW SEASON" on
+ * a season premiere that is not airing today; "TODAY" still wins on the day it
+ * matters), and the bottom block leads with the full calendar date before the
+ * show title, the S/E line and the episode name - exactly the order
+ * `UpcomingEpisodeCard` uses.
+ */
 @Composable
 private fun UpcomingCard(
     episode: UpcomingEpisode,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier.width(250.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+    val hidesEpisodeTitle = rememberHidesEpisodeTitle(inProgress = false)
+    PosterCard(
+        posterUrl = episode.backdrop ?: episode.poster,
+        contentDescription = episode.title,
+        isWatched = false,
+        onClick = onClick,
+        modifier = Modifier
+            .width(250.dp)
+            .height(141.dp)
     ) {
-        LandscapeCard(
-            backdropUrl = episode.backdrop ?: episode.poster,
-            logoUrl = null,
-            fallbackTitle = episode.title,
-            contentDescription = episode.title,
-            isWatched = false,
-            onClick = onClick,
-            isPartiallyWatched = false,
+        Box(
             modifier = Modifier
-                .width(250.dp)
-                .height(141.dp)
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            KBVoid.copy(alpha = 0.08f),
+                            KBVoid.copy(alpha = 0.34f),
+                            KBVoid.copy(alpha = 0.80f),
+                            KBVoid.copy(alpha = 0.97f)
+                        )
+                    )
+                )
         )
-        Text(
-            text = episode.airDateLabel,
-            color = KBAccent,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1
-        )
-        Text(
-            text = episode.title,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = buildString {
-                append("S").append(episode.season)
-                append(" E").append(episode.episode)
-                episode.episodeTitle?.takeIf { it.isNotBlank() }?.let {
-                    append(" · ").append(it)
+
+        if (episode.isSeasonPremiere && episode.airDateLabel != "Today") {
+            Text(
+                text = "NEW SEASON",
+                color = KBTextHi,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(color = KBPlum, shape = KBShapeChip)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            )
+        } else {
+            Text(
+                text = episode.airDateLabel.uppercase(),
+                color = Color.Black,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(color = KBAccent, shape = KBShapeChip)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
+            episode.airDateFull
+                .takeIf { it.isNotBlank() }
+                ?.let { fullDate ->
+                    Text(
+                        text = fullDate,
+                        color = KBTextHi.copy(alpha = 0.80f),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
                 }
-            },
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+            Text(
+                text = episode.title,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 1.dp)
+            )
+            Text(
+                text = "S%02d · E%02d".format(episode.season, episode.episode),
+                color = KBTextHi.copy(alpha = 0.78f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            if (!hidesEpisodeTitle) {
+                episode.episodeTitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = KBTextHi.copy(alpha = 0.88f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
+            }
+        }
     }
 }
 

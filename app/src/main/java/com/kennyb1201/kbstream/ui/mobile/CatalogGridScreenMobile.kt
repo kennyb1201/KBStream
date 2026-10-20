@@ -44,11 +44,13 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberHomeLandscape
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
-import com.kennyb1201.kbstream.ui.components.touch.LandscapeCard
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
@@ -118,6 +120,11 @@ fun CatalogGridScreenMobile(
         // The shape the rail itself was drawn in, so "Open in Grid" does not
         // hand a landscape viewer a wall of posters.
         val landscape = rememberHomeLandscape()
+        // The viewer's Poster Size, in this grid's own cell: 104dp used to be
+        // pinned here, so Settings' size switch never reached the grid.
+        val posterSize = rememberTouchPosterSize()
+        val tileWidth =
+            if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
 
         var menuTarget by remember { mutableStateOf<MetaPreview?>(null) }
 
@@ -154,7 +161,7 @@ fun CatalogGridScreenMobile(
             // skeleton rows are the cards' own footprint, so the page does not
             // jump when the posters land.
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = if (landscape) 168.dp else 104.dp),
+                columns = GridCells.Adaptive(minSize = tileWidth),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -184,7 +191,7 @@ fun CatalogGridScreenMobile(
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = if (landscape) 168.dp else 104.dp),
+                columns = GridCells.Adaptive(minSize = tileWidth),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -387,58 +394,36 @@ private fun CatalogTile(
     onLongClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (landscape) {
-            LandscapeCard(
-                backdropUrl = meta.background,
-                logoUrl = meta.logo,
-                fallbackTitle = meta.name,
-                contentDescription = meta.name,
-                isWatched = isWatched,
-                isPartiallyWatched = isPartiallyWatched,
-                onClick = onClick,
-                onLongClick = onLongClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-            )
-        } else {
-            PosterCard(
-                posterUrl = meta.poster,
-                contentDescription = meta.name,
-                isWatched = isWatched,
-                isPartiallyWatched = isPartiallyWatched,
-                onClick = onClick,
-                onLongClick = onLongClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(2f / 3f)
-            )
-        }
+        // The shared touch tile: it takes the grid cell's width and sets the
+        // height, so a landscape cell is a real 16:9 card rather than a poster
+        // box with a backdrop cropped into it - and it resolves the same
+        // backdrop + clearlogo the rails do, which is why the corner mark is
+        // there at all. [landscape] comes from the shape the rail was drawn in,
+        // so the grid cannot disagree with the row it was opened from.
+        TouchGlobalPosterTile(
+            posterUrl = meta.poster,
+            contentDescription = meta.name,
+            isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            backdropUrl = meta.background,
+            artId = meta.id,
+            artType = meta.type,
+            landscape = landscape,
+            modifier = Modifier.fillMaxWidth()
+        )
 
-        Text(
-            text = meta.name,
-            color = KBTextHi,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+        // The shared caption block, so Settings' title/year/rating toggles
+        // reach this grid like every other poster surface. The score is the
+        // add-on's IMDb one where there is one, else the TMDB score the app's
+        // own rails carry.
+        TouchPosterCaptions(
+            title = meta.name,
+            year = meta.yearOrNull?.toString(),
+            rating = meta.imdbRating?.toDoubleOrNull() ?: meta.tmdbRating,
             modifier = Modifier.padding(top = 4.dp)
         )
-        listOfNotNull(
-            meta.yearOrNull?.toString(),
-            // The add-on's IMDb score where there is one, else the TMDB score
-            // the app's own rails carry.
-            (meta.imdbRating?.toDoubleOrNull() ?: meta.tmdbRating)
-                ?.takeIf { it > 0.0 }
-                ?.let { "★ %.1f".format(it) }
-        ).takeIf { it.isNotEmpty() }?.let { line ->
-            Text(
-                text = line.joinToString(" · "),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 

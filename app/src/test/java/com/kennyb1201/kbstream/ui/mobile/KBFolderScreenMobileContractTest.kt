@@ -94,8 +94,10 @@ class KBFolderScreenMobileContractTest {
         val mobile = mobileFolder()
         assertTrue("the page must apply MobileTheme", mobile.contains("MobileTheme {"))
         assertTrue(
-            "the cards are touch poster tiles",
-            mobile.contains("com.kennyb1201.kbstream.ui.components.touch.PosterCard")
+            "the cards are touch tiles that follow the global landscape switch",
+            mobile.contains(
+                "com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile"
+            )
         )
         assertTrue(
             "the long-press menu is the touch sheet",

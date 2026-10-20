@@ -80,7 +80,8 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
@@ -785,7 +786,11 @@ fun DetailScreenMobile(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 items(collectionParts, key = { "part:" + it.id }) { part ->
-                                    PosterCard(
+                                    // Shape follows Settings' global landscape
+                                    // switch, as it does on every catalog row -
+                                    // and its size follows Settings' Poster Size.
+                                    val partSize = rememberTouchPosterSize()
+                                    TouchGlobalPosterCard(
                                         posterUrl = part.posterPath
                                             ?.let { TmdbRepository.POSTER_BASE + it },
                                         contentDescription = part.title,
@@ -800,9 +805,10 @@ fun DetailScreenMobile(
                                                 name = part.title.orEmpty()
                                             )
                                         },
-                                        modifier = Modifier
-                                            .width(112.dp)
-                                            .height(168.dp)
+                                        artId = part.id.toString(),
+                                        artType = "movie",
+                                        posterWidth = partSize.width,
+                                        posterHeight = partSize.height
                                     )
                                 }
                             }
@@ -825,6 +831,7 @@ fun DetailScreenMobile(
                                 ) { item ->
                                     RecommendationTile(
                                         item = item,
+                                        mediaType = type,
                                         isWatched = isPosterWatched(item.id, type),
                                         onClick = { openRecommendation(item) },
                                         onLongClick = {
@@ -1541,19 +1548,24 @@ private fun CastTile(
 @Composable
 private fun RecommendationTile(
     item: TmdbRecommendationItem,
+    /** The page's own type: recommendations carry no media type of their own. */
+    mediaType: String,
     isWatched: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    PosterCard(
+    val posterSize = rememberTouchPosterSize()
+    TouchGlobalPosterCard(
         posterUrl = item.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+        backdropUrl = item.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
         contentDescription = item.title ?: item.name,
         isWatched = isWatched,
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = Modifier
-            .width(112.dp)
-            .height(168.dp)
+        artId = item.id.toString(),
+        artType = mediaType,
+        posterWidth = posterSize.width,
+        posterHeight = posterSize.height
     )
 }
 

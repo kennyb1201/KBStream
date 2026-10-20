@@ -271,8 +271,11 @@ private val TvSafeAreaVertical = 0.dp
 
 /**
  * Formats UpNextItem.remainingMinutes as "1h 12m left" / "42m left".
+ *
+ * Internal rather than private because the touch Home draws the same Continue
+ * Watching card, and the two must not spell the same fact two ways.
  */
-private fun formatTimeLeft(remainingMinutes: Int?): String? {
+internal fun formatTimeLeft(remainingMinutes: Int?): String? {
     if (remainingMinutes == null || remainingMinutes <= 0) return null
 
     val hours = remainingMinutes / 60

@@ -75,8 +75,8 @@ class ActorScreenMobileContractTest {
         val mobile = mobileActor()
         assertTrue("the screen must apply MobileTheme", mobile.contains("MobileTheme {"))
         assertTrue(
-            "credits are touch poster tiles",
-            mobile.contains("ui.components.touch.PosterCard")
+            "credits are touch tiles that follow the global landscape switch",
+            mobile.contains("ui.components.touch.TouchGlobalPosterTile")
         )
         assertTrue(
             "the credit menu is the touch sheet",

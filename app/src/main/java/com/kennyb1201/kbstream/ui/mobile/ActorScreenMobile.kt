@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -53,10 +52,14 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -210,13 +213,19 @@ fun ActorScreenMobile(
     }
 
     MobileTheme {
+        // Landscape cards are wider than posters, so the columns widen with
+        // them - the same 168dp the catalog grid uses.
+        val landscape = rememberGlobalLandscape()
+        val posterSize = rememberTouchPosterSize()
+        val tileWidth =
+            if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 104.dp),
+                columns = GridCells.Adaptive(minSize = tileWidth),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -617,36 +626,27 @@ private fun CreditTile(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        PosterCard(
+        // Shape follows Settings' global landscape switch ("Landscape Posters
+        // Everywhere"), like every other catalog surface on the phone.
+        TouchGlobalPosterTile(
             posterUrl = credit.posterPath?.let { TmdbRepository.POSTER_BASE + it },
             contentDescription = credit.title ?: credit.name ?: "",
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+            artId = credit.id.toString(),
+            artType = credit.mediaType
+                ?: if (credit.firstAirDate != null) "tv" else "movie",
+            modifier = Modifier.fillMaxWidth()
         )
-        Text(
-            text = credit.title ?: credit.name ?: "Untitled",
-            color = KBTextHi,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        // Shared caption block, so the poster-caption toggles reach a
+        // filmography like they reach every other rail.
+        TouchPosterCaptions(
+            title = credit.title ?: credit.name ?: "Untitled",
+            year = (credit.releaseDate ?: credit.firstAirDate)?.take(4),
+            rating = credit.voteAverage
         )
-        listOfNotNull(
-            (credit.releaseDate ?: credit.firstAirDate)?.take(4),
-            credit.voteAverage?.takeIf { it > 0.0 }?.let { "★ %.1f".format(it) }
-        ).takeIf { it.isNotEmpty() }?.let { line ->
-            Text(
-                text = line.joinToString(" · "),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }
 

@@ -158,11 +158,10 @@ fun GlobalPosterCard(
 @Composable
 fun rememberGlobalLandscape(): Boolean {
     val context = LocalContext.current
-    // Reactive like the card itself: this reads the same synced pref, and a
-    // wrapper that sized itself from a stale answer would clip the landscape
-    // tile the card is drawing. The rule for every Compose read of a
-    // SYNCED_PREF_KEYS-backed pref: collect PrefsPayloadApplier.revision, never
-    // a bare remember.
+    // Reactive like the card itself: this reads the same device-local display
+    // pref, and a wrapper that sized itself from a stale answer would clip the
+    // landscape tile the card is drawing. A Settings edit one screen away ticks
+    // PrefsPayloadApplier.revision, so collect it — never a bare remember.
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
     return remember(syncedRevision) { AppPreferences.landscapePostersActive(context) }
 }

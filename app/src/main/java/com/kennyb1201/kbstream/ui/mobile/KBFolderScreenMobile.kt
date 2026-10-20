@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -46,9 +45,13 @@ import com.kennyb1201.kbstream.ui.browse.kbFolderBrowseScreenKey
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
-import com.kennyb1201.kbstream.ui.components.touch.PosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -181,6 +184,12 @@ fun KBFolderScreenMobile(
     }
 
     MobileTheme {
+        // Landscape cards are wider than posters, so the columns widen with
+        // them - the same 168dp the catalog grid uses.
+        val landscape = rememberGlobalLandscape()
+        val posterSize = rememberTouchPosterSize()
+        val tileWidth =
+            if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -264,7 +273,7 @@ fun KBFolderScreenMobile(
                     }
 
                     else -> LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 104.dp),
+                        columns = GridCells.Adaptive(minSize = tileWidth),
                         state = gridState,
                         contentPadding = PaddingValues(
                             start = 16.dp,
@@ -282,38 +291,56 @@ fun KBFolderScreenMobile(
                             items = items,
                             key = { _, item -> kbFolderCardKey(item) }
                         ) { index, item ->
-                            PosterCard(
-                                posterUrl = item.posterUrl,
-                                contentDescription = item.title,
-                                isWatched = mobileKbWatchedKeys(item, resolvedIds)
-                                    .any { it in watchedKeys },
-                                isPartiallyWatched = mobileKbWatchedKeys(item, resolvedIds)
-                                    .any { it in partialWatchedKeys },
-                                onClick = {
-                                    // Remember this card, so backing out of its
-                                    // Detail page reopens the folder ON it.
-                                    BrowseReturnFocus.record(
-                                        BrowseReturnTarget(
-                                            screenKey = returnKey,
-                                            itemId = kbFolderCardKey(item),
-                                            position = index
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                // The card shape follows Settings' global
+                                // landscape switch, as it does for every other
+                                // KB surface.
+                                TouchGlobalPosterTile(
+                                    posterUrl = item.posterUrl,
+                                    backdropUrl = item.backdropUrl,
+                                    artId = item.tmdbId?.toString() ?: item.id,
+                                    artType = item.type,
+                                    contentDescription = item.title,
+                                    isWatched = mobileKbWatchedKeys(item, resolvedIds)
+                                        .any { it in watchedKeys },
+                                    isPartiallyWatched =
+                                        mobileKbWatchedKeys(item, resolvedIds)
+                                            .any { it in partialWatchedKeys },
+                                    onClick = {
+                                        // Remember this card, so backing out of
+                                        // its Detail page reopens the folder ON
+                                        // it.
+                                        BrowseReturnFocus.record(
+                                            BrowseReturnTarget(
+                                                screenKey = returnKey,
+                                                itemId = kbFolderCardKey(item),
+                                                position = index
+                                            )
                                         )
-                                    )
-                                    viewModel.resolveAndNavigate(item) { type, imdbId ->
-                                        onItemClick(
-                                            type,
-                                            imdbId,
-                                            item.posterUrl,
-                                            item.backdropUrl,
-                                            item.title
-                                        )
-                                    }
-                                },
-                                onLongClick = { menuTarget = item },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(2f / 3f)
-                            )
+                                        viewModel.resolveAndNavigate(item) { type, imdbId ->
+                                            onItemClick(
+                                                type,
+                                                imdbId,
+                                                item.posterUrl,
+                                                item.backdropUrl,
+                                                item.title
+                                            )
+                                        }
+                                    },
+                                    onLongClick = { menuTarget = item },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                // The grid's captions honour the same three
+                                // Settings switches the TV grid's do - this
+                                // folder used to draw no caption at all, so
+                                // "Poster titles" had nothing to show here.
+                                TouchPosterCaptions(
+                                    title = item.title,
+                                    year = item.year,
+                                    rating = item.rating,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                         }
                     }
                 }

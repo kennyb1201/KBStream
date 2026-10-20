@@ -123,6 +123,50 @@ class LaunchScreenGateTest {
         assertFalse(launchScreenSaver(profilesExist = true) === ScreenSaver)
     }
 
+    // ── the gate must not fire on a rebuild ──────────────────────────
+
+    @Test
+    fun `a configuration change restores the screen the viewer was on`() {
+        // A phone rotation re-creates MainActivity in the same process. That
+        // restore used to be gated exactly like a launch, so turning the device
+        // reopened Who's Watching over whatever was on screen.
+        val rebuild = launchScreenSaver(profilesExist = true, coldLaunch = false)
+
+        assertSame("a rebuild keeps the ordinary saver", ScreenSaver, rebuild)
+        assertEquals(
+            "and hands back the saved screen",
+            Screen.Home,
+            rebuild.restore("{\"type\":\"home\"}")
+        )
+    }
+
+    @Test
+    fun `a cold launch with profiles still opens on who's watching`() {
+        assertEquals(
+            Screen.ProfilePicker(),
+            launchScreenSaver(profilesExist = true, coldLaunch = true)
+                .restore("{\"type\":\"home\"}")
+        )
+    }
+
+    @Test
+    fun `the cold-launch flag is claimed once per process and reaches the gate`() {
+        val main = source(MAIN)
+
+        assertTrue(
+            "the first create of the process claims the launch; later ones are rebuilds",
+            main.contains("val coldLaunch = !shellStarted")
+        )
+        assertTrue(
+            "and the shell is told which one it is",
+            main.contains("coldLaunch = coldLaunch")
+        )
+        assertTrue(
+            "the gate reads that flag",
+            main.contains("launchScreenSaver(profilesExist, coldLaunch)")
+        )
+    }
+
     // ── the wiring MainActivity has to keep ──────────────────────────
 
     @Test
@@ -138,7 +182,7 @@ class LaunchScreenGateTest {
         )
         assertTrue(
             "and the gate is what both halves read",
-            main.contains("launchScreenSaver(profilesExist)")
+            main.contains("launchScreenSaver(profilesExist, coldLaunch)")
         )
         assertFalse(
             "seeding the state with Home is the flash this replaced",
