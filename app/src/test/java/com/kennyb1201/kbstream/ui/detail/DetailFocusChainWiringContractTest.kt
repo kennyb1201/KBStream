@@ -47,9 +47,20 @@ class DetailFocusChainWiringContractTest {
     @Test
     fun `each rail names itself and keeps its column`() {
         assertTrue(
+            "the tag rail hands over the COLUMN of the chip that was pressed. It " +
+                "passed a literal 0 from the row, so UP out of the fifth tag landed " +
+                "on the first genre and DOWN came back to the first tag - and a rail " +
+                "left scrolled to the fifth chip then had its first chip disposed, " +
+                "which is the field report of DOWN skipping the row for the " +
+                "episode card",
             detail.contains(
-                "detailRowVerticalFocus( DetailRow.KEYWORDS, 0, detailRowPresence )"
+                "detailRowVerticalFocus( DetailRow.KEYWORDS, keywordIndex, " +
+                    "detailRowPresence )"
             )
+        )
+        assertFalse(
+            "and no tag press still names a hardcoded first column",
+            detail.contains("DetailRow.KEYWORDS, 0,")
         )
         assertTrue(
             "the genre chips keep their column, which is what a press out of the " +
@@ -468,6 +479,37 @@ class DetailFocusChainWiringContractTest {
             "a failed ask on a row that was there is logged as a retry, so the " +
                 "field log says which cause it was",
             detail.contains("focusRow(KEYWORDS) failed") && detail.contains("on retry")
+        )
+    }
+
+    @Test
+    fun `a chip rail is scrolled to the pressed column before the focus is asked`() {
+        // The rail is lazy twice. Revealing the ROW against the vertical list
+        // does not compose a chip the rail itself has scrolled past, and a
+        // disposed chip's requester answers false forever - so the ask failed
+        // every frame and the chain walked on to the next row. The rail is
+        // scrolled to the press's column (clamped by its own item count) first.
+        val reveal = detail.substringAfter("suspend fun revealAndFocusChipColumn(")
+            .substringBefore("// The card a drill-down off this page was opened from")
+        assertTrue(
+            "the rail's own scroll state is what gets moved",
+            reveal.contains("val rail = railStateFor(rowKey)")
+        )
+        assertTrue(
+            "to the column the press arrived with, clamped to the chips the rail " +
+                "actually has",
+            reveal.contains("DetailChipColumns.columnFor(fromColumn, columns)")
+        )
+        val scroll = reveal.indexOf("rail.scrollToItem(column)")
+        val ask = reveal.indexOf("if (focusChipColumn(rowKey, fromColumn)) return true")
+        assertTrue("the rail must actually be scrolled", scroll >= 0)
+        assertTrue("and only then asked for the focus", ask > scroll)
+
+        assertTrue(
+            "every chip rail the chain can move into has a state to scroll",
+            detail.contains("fun railStateFor(rowKey: String): LazyListState? = when (rowKey)") &&
+                detail.contains("KEYWORDS_ROW_KEY -> keywordsRowState") &&
+                detail.contains("MEDIA_ROW_KEY -> mediaRowState")
         )
     }
 

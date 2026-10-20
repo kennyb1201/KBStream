@@ -837,6 +837,33 @@ fun DetailScreen(
     }
 
     /**
+     * The horizontal scroll state of the rail named [rowKey], when the row is a
+     * single LazyRow of chips or cards.
+     *
+     * A chip rail is lazy in BOTH directions: the vertical reveal puts the rail
+     * item on screen, but the chip the press asks for can still be disposed
+     * inside it - the rail left at the far end by a RIGHT press, or by a
+     * drill-down return, whose `scrollToItem(itemIndex)` puts the returned chip
+     * at the rail's LEFT edge and disposes every chip before it. A disposed
+     * chip's requester answers false forever, so the column has to be scrolled
+     * into composition before the ask (see [revealAndFocusChipColumn]).
+     *
+     * The same mapping the drill-down return uses for its own rail; kept here so
+     * a rail added to one is visible to the other.
+     */
+    fun railStateFor(rowKey: String): LazyListState? = when (rowKey) {
+        GENRE_ROW_KEY -> genreRowState
+        KEYWORDS_ROW_KEY -> keywordsRowState
+        PEOPLE_ROW_KEY -> peopleRowState
+        NETWORK_ROW_KEY -> networkRowState
+        PRODUCTION_ROW_KEY -> productionRowState
+        COLLECTION_ROW_KEY -> collectionRowState
+        RECS_ROW_KEY -> recsRowState
+        MEDIA_ROW_KEY -> mediaRowState
+        else -> null
+    }
+
+    /**
      * [focusChipColumn], asked once more a frame later.
      *
      * The 2026-10-14 field race: a rail this page HAS can be composed on screen
@@ -882,6 +909,7 @@ fun DetailScreen(
             .firstOrNull { it.key == fromRowKey }?.index ?: 0
         detailListState.revealRail(rowKey, hint)
         var attempts = 0
+        var railScrolled = false
         while (attempts < RETURN_FOCUS_STEPS) {
             // The rail has to be back in composition before its card can take
             // the focus, and a lazy list composes it a frame or more after the
@@ -890,7 +918,34 @@ fun DetailScreen(
             // that is not composed yet fails silently, which is the stranding.
             val composed =
                 detailListState.layoutInfo.visibleItemsInfo.any { it.key == rowKey }
-            if (composed && focusChipColumn(rowKey, fromColumn)) return true
+            if (composed) {
+                // The chip rail is lazy a second time: the chip in the press's
+                // COLUMN can be disposed inside a rail that is on screen (see
+                // [railStateFor]), and then no number of vertical reveals will
+                // make it answer. Scroll the rail to that column once - its own
+                // item count is the clamp, so a shorter rail lands on its last
+                // chip exactly as [DetailChipColumns] says it should - and only
+                // then ask. This is the GENRE -> KEYWORDS skip: after a keyword
+                // drill-down the rail sits at the returned chip's index, the
+                // column the press asks for is off the left edge, and the press
+                // fell through to the episode card below.
+                if (!railScrolled) {
+                    val rail = railStateFor(rowKey)
+                    val columns = rail?.layoutInfo?.totalItemsCount ?: 0
+                    val column =
+                        if (columns > 0) {
+                            DetailChipColumns.columnFor(fromColumn, columns)
+                        } else {
+                            null
+                        }
+                    if (rail != null && column != null) {
+                        runCatching { rail.scrollToItem(column) }
+                        delay(RETURN_FOCUS_DELAY_MS)
+                        railScrolled = true
+                    }
+                }
+                if (focusChipColumn(rowKey, fromColumn)) return true
+            }
             delay(RETURN_FOCUS_DELAY_MS)
             attempts++
         }
@@ -3824,21 +3879,6 @@ fun DetailScreen(
                                         .padding(bottom = 10.dp)
                                         .focusGroup()
                                         .focusRestorer()
-                                        // The page's one vertical handoff: DOWN
-                                        // leaves the tag rail for the nearest
-                                        // row this page has below it - the
-                                        // episode section on a series, the
-                                        // people cards (or a chip rail) on a
-                                        // movie (see DetailFocusChain). The old
-                                        // movie/series branches are what the
-                                        // chain replaces.
-                                        .onPreviewKeyEvent(
-                                            detailRowVerticalFocus(
-                                                DetailRow.KEYWORDS,
-                                                0,
-                                                detailRowPresence
-                                            )
-                                        )
                                 ) {
                                     itemsIndexed(
                                         keywords,
@@ -3879,6 +3919,25 @@ fun DetailScreen(
                                             modifier = Modifier
                                                 .focusRequester(
                                                     chipFocusRequester
+                                                )
+                                                // The page's one vertical handoff,
+                                                // answered by the CHIP so the
+                                                // press keeps its COLUMN: the
+                                                // row-level handler passed 0,
+                                                // so UP out of the fifth tag
+                                                // landed on the first genre and
+                                                // DOWN came back to the first
+                                                // tag - a rail left scrolled to
+                                                // the fifth chip then had its
+                                                // first chip disposed, and the
+                                                // next DOWN skipped the row
+                                                // entirely (see focusRow).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.KEYWORDS,
+                                                        keywordIndex,
+                                                        detailRowPresence
+                                                    )
                                                 )
                                                 .padding(
                                                     end = 6.dp
