@@ -2,12 +2,14 @@ package com.kennyb1201.kbstream.ui.components
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.library.LibraryMirror
+import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -61,12 +63,22 @@ internal object LibraryAdds {
         )
 
     /**
-     * The ", Simkl and MDBList" tail of the add row's description, from what is
-     * actually connected — so the row promises exactly the mirrors it has.
+     * The ", Simkl, MDBList and Trakt" tail of the add row's description, from
+     * what is actually connected — so the row promises exactly the mirrors it
+     * has.
      */
-    fun mirrorSuffix(context: Context): String = buildString {
-        if (LibraryMirror.simklConnected(context)) append(", Simkl")
-        if (LibraryMirror.mdbListConnected(context)) append(" and MDBList")
+    fun mirrorSuffix(context: Context): String {
+        val connected = buildList {
+            if (LibraryMirror.simklConnected(context)) add("Simkl")
+            if (LibraryMirror.mdbListConnected(context)) add("MDBList")
+            if (LibraryMirror.traktConnected(context)) add("Trakt")
+        }
+        return when (connected.size) {
+            0 -> ""
+            1 -> ", ${connected.first()}"
+            else -> ", " + connected.dropLast(1).joinToString(", ") +
+                " and " + connected.last()
+        }
     }
 
     /**
@@ -134,6 +146,10 @@ internal object LibraryAdds {
 
         LibraryAddRoute.MdbListWatchlist -> addToMdbListWatchlist(context, target)
 
+        LibraryAddRoute.TraktWatchlist -> addToTraktWatchlist(context, target)
+
+        is LibraryAddRoute.TraktList -> addToTraktList(context, route.remoteId, target)
+
         is LibraryAddRoute.MdbListList -> LibraryMirror.addToList(
             context = context,
             listId = route.id,
@@ -178,6 +194,46 @@ internal object LibraryAdds {
                         tmdbId = target.tmdbId
                     )
                 )
+            )
+        }.getOrDefault(false)
+    }
+
+    /** The Trakt watchlist row: remote-only, and reports the real POST. */
+    private suspend fun addToTraktWatchlist(
+        context: Context,
+        target: LibraryAddTarget
+    ): Boolean {
+        if (!LibraryMirror.traktConnected(context)) return false
+        return runCatchingCancellable {
+            TraktRepository.getInstance(context).addToWatchlist(
+                isMovie = LocalLibraryStore.normalizedType(target.mediaType) == "movie",
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year
+            )
+        }.getOrDefault(false)
+    }
+
+    /**
+     * One Trakt personal list: remote-only. The list is addressed by its
+     * slug/id, which the picker row carries from the list read, so this is the
+     * same real-outcome path as the MDBList personal-list row.
+     */
+    private suspend fun addToTraktList(
+        context: Context,
+        remoteId: String,
+        target: LibraryAddTarget
+    ): Boolean {
+        if (!LibraryMirror.traktConnected(context)) return false
+        return runCatchingCancellable {
+            TraktRepository.getInstance(context).addToList(
+                listId = remoteId,
+                isMovie = LocalLibraryStore.normalizedType(target.mediaType) == "movie",
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year
             )
         }.getOrDefault(false)
     }
@@ -247,8 +303,14 @@ internal sealed interface LibraryAddRoute {
     /** The account's MDBList watchlist (remote only). */
     data object MdbListWatchlist : LibraryAddRoute
 
+    /** The account's Trakt watchlist (remote only). */
+    data object TraktWatchlist : LibraryAddRoute
+
     /** One MDBList personal list. */
     data class MdbListList(val id: Int) : LibraryAddRoute
+
+    /** One Trakt personal list, addressed by its slug/id. */
+    data class TraktList(val remoteId: String) : LibraryAddRoute
 
     /** One local personal list. */
     data class LocalList(val id: Int) : LibraryAddRoute
@@ -258,18 +320,29 @@ internal sealed interface LibraryAddRoute {
 }
 
 /**
- * The destination [row] names. Local list ids are negative and MDBList ids
- * positive (local ids are derived from their creation time and negated), so
- * the sign is the whole test — and an id of zero is neither, which is
- * [LibraryAddRoute.Unroutable] rather than a list that cannot exist.
+ * The destination [row] names.
+ *
+ * A list's SOURCE is the test, not its shelf id's sign: local ids are negative,
+ * MDBList ids positive, and Trakt's reserved shelf ids are negative too. An id
+ * that does not exist (zero) is [LibraryAddRoute.Unroutable] rather than a list
+ * that cannot be addressed.
  */
 internal fun libraryAddRoute(row: LibraryPickerRow): LibraryAddRoute {
     val list = row.list
     return when {
         row.isMyList -> LibraryAddRoute.MyList
         row.isMdbListWatchlist -> LibraryAddRoute.MdbListWatchlist
+        row.isTraktWatchlist -> LibraryAddRoute.TraktWatchlist
         list == null || list.id == 0 -> LibraryAddRoute.Unroutable
+        // A list's SOURCE decides where it lives, not its shelf id's sign:
+        // Trakt's shelf ids are negative like a local list's, and MDBList's
+        // are positive. The id only has to exist.
+        list.source == LibrarySource.TRAKT_LIST -> list.remoteId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { LibraryAddRoute.TraktList(it) }
+            ?: LibraryAddRoute.Unroutable
+        list.source == LibrarySource.LOCAL_LIST -> LibraryAddRoute.LocalList(list.id)
         list.id > 0 -> LibraryAddRoute.MdbListList(list.id)
-        else -> LibraryAddRoute.LocalList(list.id)
+        else -> LibraryAddRoute.Unroutable
     }
 }

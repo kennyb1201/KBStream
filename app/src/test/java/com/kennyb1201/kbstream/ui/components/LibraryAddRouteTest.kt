@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.components
 
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.traktListShelfId
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -24,18 +25,33 @@ class LibraryAddRouteTest {
     private fun row(
         isMyList: Boolean = false,
         isMdbListWatchlist: Boolean = false,
+        isTraktWatchlist: Boolean = false,
         list: LibraryList? = null
     ) = LibraryPickerRow(
         isMyList = isMyList,
         isMdbListWatchlist = isMdbListWatchlist,
+        isTraktWatchlist = isTraktWatchlist,
         list = list
     )
 
-    private fun list(id: Int, name: String = "L") = LibraryList(
+    private fun list(
+        id: Int,
+        name: String = "L",
+        source: LibrarySource =
+            if (id > 0) LibrarySource.MDBLIST_LIST else LibrarySource.LOCAL_LIST
+    ) = LibraryList(
         id = id,
         name = name,
         itemCount = 0,
-        source = if (id > 0) LibrarySource.MDBLIST_LIST else LibrarySource.LOCAL_LIST
+        source = source
+    )
+
+    private fun traktList(remoteId: String = "my-list") = LibraryList(
+        id = traktListShelfId(77),
+        name = "Trakt list",
+        itemCount = 0,
+        source = LibrarySource.TRAKT_LIST,
+        remoteId = remoteId
     )
 
     @Test
@@ -78,6 +94,30 @@ class LibraryAddRouteTest {
         assertEquals(
             LibraryAddRoute.LocalList(-987654321),
             libraryAddRoute(row(list = list(-987654321)))
+        )
+    }
+
+    @Test
+    fun `the Trakt watchlist row goes to the Trakt watchlist`() {
+        assertEquals(
+            LibraryAddRoute.TraktWatchlist,
+            libraryAddRoute(row(isTraktWatchlist = true, list = list(-2)))
+        )
+    }
+
+    @Test
+    fun `a Trakt list routes by its own remote id, not its negative shelf id`() {
+        assertEquals(
+            LibraryAddRoute.TraktList("my-list"),
+            libraryAddRoute(row(list = traktList()))
+        )
+    }
+
+    @Test
+    fun `a Trakt list with no remote id is unroutable`() {
+        assertEquals(
+            LibraryAddRoute.Unroutable,
+            libraryAddRoute(row(list = traktList(remoteId = "")))
         )
     }
 

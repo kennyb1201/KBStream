@@ -109,6 +109,31 @@ class DeviceFirstFfmpegAudioWiringContractTest {
     }
 
     @Test
+    fun `the bundle codecs are never declined on the capabilities path`() {
+        val rules = source(RULES)
+        assertTrue(
+            "DTS is in the never-decline set",
+            rules.contains("MimeTypes.AUDIO_DTS,")
+        )
+        assertTrue(
+            "DTS-HD is in the never-decline set",
+            rules.contains("MimeTypes.AUDIO_DTS_HD,")
+        )
+        assertTrue(
+            "TrueHD is in the never-decline set",
+            rules.contains("MimeTypes.AUDIO_TRUEHD")
+        )
+        assertTrue(
+            "the rule tests the set before it trusts the platform answer",
+            rules.contains("if (sampleMimeType in NEVER_DECLINE_MIMES) return false")
+        )
+        assertTrue(
+            "and the capabilities path passes the real mime to it",
+            renderer.contains("sampleMimeType = format.sampleMimeType")
+        )
+    }
+
+    @Test
     fun `the platform-decoder probe asks what MediaCodec asks`() {
         val src = renderer
         assertTrue(
@@ -133,6 +158,7 @@ class DeviceFirstFfmpegAudioWiringContractTest {
         const val PACKAGE = "com/kennyb1201/kbstream/ui/player/"
         const val FACTORY = PACKAGE + "SplitModeRenderersFactory.kt"
         const val RENDERER = PACKAGE + "DeviceFirstFfmpegAudioRenderer.kt"
+        const val RULES = PACKAGE + "SoftwareAudioRules.kt"
 
         /**
          * The class the factory looks for in the renderer list. Spelled out here

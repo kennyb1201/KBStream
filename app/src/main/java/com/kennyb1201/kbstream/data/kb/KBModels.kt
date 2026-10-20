@@ -75,9 +75,8 @@ data class KBCatalogSource(
  *  - tmdb: discover filters, a TMDB list, a TMDB collection, a company or a
  *    network (disambiguated by [tmdbSourceType], and by [tmdbId] being set)
  *  - addon: an installed Stremio addon's catalog ([addonId] + [catalogId])
- *
- * KB exports also carry "trakt" list sources; the app no longer reads them
- * (they need a paid Trakt API app), so such a source loads as an empty rail.
+ *  - trakt: a Trakt user list, addressed by a URL/path/id in [catalogId] or
+ *    [id] (see TraktListRefParser) and read with the connected account
  */
 @JsonClass(generateAdapter = true)
 data class KBSource(

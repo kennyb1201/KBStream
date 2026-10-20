@@ -102,6 +102,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
@@ -12269,6 +12270,60 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
     }
 
+    /**
+     * Mirror the current scrobble action to Trakt.
+     *
+     * The third fire-and-forget beside Simkl and MDBList: same session events,
+     * its own token, and every failure is silent. A tracker that is not
+     * connected (or a build without a client id) is a no-op, not an error.
+     */
+    private suspend fun scrobbleTrakt(action: String, progress: Double) {
+        // Same TOCTOU re-check as the other two trackers: the token is the
+        // ACTIVE profile's, resolved at fire time, so a session that outlived a
+        // profile switch must not scrobble the departing episode to the
+        // profile the viewer moved TO.
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val trakt = TraktRepository.getInstance(this)
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        trakt.scrobble(
+            action = action,
+            parentId = parentId,
+            parentType = parentType,
+            season = season,
+            episode = episode,
+            progress = progress,
+            tmdbId = resolveParentTmdbId()
+        )
+    }
+
+    /** Records a finished title on Trakt, once per session. */
+    private suspend fun syncCompletionToTrakt() {
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val trakt = TraktRepository.getInstance(this)
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        val tmdb = resolveParentTmdbId()
+        when (parentType.lowercase()) {
+            "movie" -> trakt.pushWatchedMovie(parentId = parentId, tmdbId = tmdb)
+            "series", "show", "tv" -> {
+                val s = season
+                val e = episode
+                if (s != null && e != null) {
+                    // Same covered-episode fan-out as Simkl and MDBList: a file
+                    // covering two TMDB episodes marks both, or the second
+                    // segment stays unwatched on the tracker.
+                    coveredTmdbEpisodes(e).forEach { coveredEpisode ->
+                        trakt.pushWatchedEpisode(
+                            showId = parentId,
+                            season = s,
+                            episode = coveredEpisode,
+                            tmdbId = tmdb
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private fun scrobbleSimkl(action: String, progressOverride: Double? = null) {
         if (isLiveChannel || parentId.isBlank()) return
         if (action == "start" && simklScrobbleActive && !simklScrobblePaused) return
@@ -12341,6 +12396,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // tracker. Mirrors Simkl only when a key is set.
             runCatchingCancellable { scrobbleMdbList(action, progress) }
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action error: ${it.message}") }
+            runCatchingCancellable { scrobbleTrakt(action, progress) }
+                .onFailure { Log.w(TAG, "Trakt scrobble/$action error: ${it.message}") }
             if (!ok && action == "start") {
                 simklScrobbleActive = false
                 Log.e(TAG, "Simkl scrobble start failed; will retry on next play")
@@ -12421,6 +12478,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     )
                 }
             }.onFailure { Log.w(TAG, "MDBList completion sync error: ${it.message}") }
+            runCatchingCancellable { syncCompletionToTrakt() }
+                .onFailure { Log.w(TAG, "Trakt completion sync error: ${it.message}") }
             if (!ok) {
                 simklScrobbleSent = false
                 Log.e(TAG, "Simkl completion sync failed; will retry")

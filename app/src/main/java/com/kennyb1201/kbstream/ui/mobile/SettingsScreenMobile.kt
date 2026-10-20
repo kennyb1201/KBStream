@@ -572,7 +572,7 @@ private fun IntegrationsPaneMobile(
         )
         SettingsNavRowMobile(
             label = "Trakt",
-            description = "Connect your Trakt account for scrobbling",
+            description = "Connect your Trakt account to scrobble playback and sync watched state",
             onClick = onOpenTrakt
         )
         SettingsNavRowMobile(

@@ -54,6 +54,7 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
@@ -5067,6 +5068,51 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             }.onFailure { Log.w(TAG, "Simkl scrobble/$action failed", it) }
             runCatchingCancellable { scrobbleMdbList(action, progress) }
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action failed", it) }
+            runCatchingCancellable { scrobbleTrakt(action, progress) }
+                .onFailure { Log.w(TAG, "Trakt scrobble/$action failed", it) }
+        }
+    }
+
+    /** The third tracker, silent on every failure (see Simkl/MDBList above). */
+    private suspend fun scrobbleTrakt(action: String, progress: Double) {
+        // The token is the ACTIVE profile's, resolved at fire time (see the
+        // Simkl path's guard above).
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val trakt = TraktRepository.getInstance(this)
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        trakt.scrobble(
+            action = action,
+            parentId = parentId,
+            parentType = parentType,
+            season = season,
+            episode = episode,
+            progress = progress,
+            tmdbId = tmdbId()
+        )
+    }
+
+    /** Records a finished title on Trakt, once per session. */
+    private suspend fun syncCompletionToTrakt() {
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+        val trakt = TraktRepository.getInstance(this)
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        val tmdb = tmdbId()
+        when (parentType.lowercase()) {
+            "movie" -> trakt.pushWatchedMovie(parentId = parentId, tmdbId = tmdb)
+            "series", "show", "tv" -> {
+                val s = season
+                val e = episode
+                if (s != null && e != null) {
+                    coveredTmdbEpisodes(e).forEach { coveredEpisode ->
+                        trakt.pushWatchedEpisode(
+                            showId = parentId,
+                            season = s,
+                            episode = coveredEpisode,
+                            tmdbId = tmdb
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -5144,6 +5190,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     )
                 }
             }.onFailure { Log.w(TAG, "MDBList completion sync failed", it) }
+            runCatchingCancellable { syncCompletionToTrakt() }
+                .onFailure { Log.w(TAG, "Trakt completion sync failed", it) }
             // The completion is on the tracker now, so the Continue Watching
             // feeds are stale. Home's ON_RESUME refresh races this write and
             // can read the pre-completion feed; ask for one more merge so a

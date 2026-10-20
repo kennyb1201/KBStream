@@ -122,9 +122,25 @@ class SoftwareAudioRulesTest {
     }
 
     @Test
+    fun `the bundle codecs keep FFmpeg even when the device lists a decoder`() {
+        // Field log (Onn 4K Plus, 2026-10-19): the firmware lists
+        // c2.amlogic.audio.decoder.dtshd for audio/vnd.dts, so the old rule
+        // declined and the platform decoder took the DTS track — then starved
+        // AudioTrack into silence. These three are the codecs the FFmpeg
+        // bundle exists for; a listed decoder must not take them away.
+        listOf(MimeTypes.AUDIO_DTS, MimeTypes.AUDIO_DTS_HD, MimeTypes.AUDIO_TRUEHD)
+            .forEach { mime ->
+                assertFalse(
+                    "$mime must never decline, even with a listed platform decoder",
+                    SoftwareAudioRules.ffmpegDeclinesForDeviceDecoder(mime, true)
+                )
+            }
+    }
+
+    @Test
     fun `a codec the device cannot decode is still FFmpeg's`() {
-        // DTS / DTS-HD / TrueHD: no platform decoder found, so the preference
-        // the setting exists for still applies and the track keeps its sound.
+        // No platform decoder at all: the ordinary path, unchanged by the
+        // never-decline set.
         listOf(MimeTypes.AUDIO_DTS, MimeTypes.AUDIO_DTS_HD, MimeTypes.AUDIO_TRUEHD)
             .forEach { mime ->
                 assertFalse(

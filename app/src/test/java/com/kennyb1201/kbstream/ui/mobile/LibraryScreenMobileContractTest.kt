@@ -207,12 +207,12 @@ class LibraryScreenMobileContractTest {
         assertTrue(
             "rows show their count and source",
             mobile.contains("titles · ") &&
-                mobile.contains("val sourceLabel = if (list.id < 0) " +
-                    "\"This device\" else \"MDBList\"")
+                mobile.contains("val sourceLabel = list.locationLabel")
         )
         assertTrue(
             "only a list this device owns can be deleted",
-            mobile.contains("if (list.id < 0) listPendingDelete = list")
+            mobile.contains("if (list.source.isLocalList) {") &&
+                mobile.contains("listPendingDelete = list")
         )
         assertTrue(
             "the press opens a confirmation, never the delete itself",
@@ -235,6 +235,8 @@ class LibraryScreenMobileContractTest {
             "LibrarySource.MDBLIST_WATCHLIST",
             "LibrarySource.LOCAL_LIST",
             "LibrarySource.MDBLIST_LIST",
+            "LibrarySource.TRAKT_WATCHLIST",
+            "LibrarySource.TRAKT_LIST",
             "LibrarySource.SIMKL_WATCHLIST",
             "LibrarySource.SIMKL_LIST"
         ).forEach { source ->

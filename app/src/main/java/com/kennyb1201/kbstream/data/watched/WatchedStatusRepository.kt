@@ -8,6 +8,8 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
@@ -179,6 +181,24 @@ class WatchedStatusRepository(
     private var mdbListFetchedAt = 0L
 
     /*
+     * Trakt's watched snapshot (GET /sync/watched), read alongside the other
+     * two so a title watched through Trakt shows the same badge here. Movies
+     * are completed; Trakt's show rows list watched episodes but carry no
+     * "every episode watched" flag, so a show lands in the started set exactly
+     * as MDBList's does - the completed checkmark comes from the episode data
+     * the union feeds, not from a show-level guess.
+     */
+    private var traktMovieKeys:
+        Set<String> =
+        emptySet()
+
+    private var traktStartedShowKeys:
+        Set<String> =
+        emptySet()
+
+    private var traktFetchedAt = 0L
+
+    /*
      * Backup restore replaces the Room watched tables while repository
      * instances may still hold in-memory snapshots. This tracks the global
      * invalidation epoch so stale memory state is dropped on the next
@@ -335,6 +355,15 @@ class WatchedStatusRepository(
                     emptySet()
 
                 mdbListFetchedAt =
+                    0L
+
+                traktMovieKeys =
+                    emptySet()
+
+                traktStartedShowKeys =
+                    emptySet()
+
+                traktFetchedAt =
                     0L
             }
 
@@ -505,6 +534,15 @@ class WatchedStatusRepository(
         // Simkl early-return below — a user with only an MDBList key set
         // (no Simkl auth) must still get MDBList-backed badges.
         refreshMdbListSetsIfNeeded(
+            appContext = appContext,
+            now = now,
+            force = forceRemoteRefresh,
+            profileAtStart = profileAtStart
+        )
+
+        // And Trakt's, on the same terms: before the Simkl early return, so a
+        // profile that connected only Trakt still gets its badges.
+        refreshTraktSetsIfNeeded(
             appContext = appContext,
             now = now,
             force = forceRemoteRefresh,
@@ -1076,6 +1114,15 @@ class WatchedStatusRepository(
                     emptySet()
 
                 mdbListFetchedAt =
+                    0L
+
+                traktMovieKeys =
+                    emptySet()
+
+                traktStartedShowKeys =
+                    emptySet()
+
+                traktFetchedAt =
                     0L
             }
 
@@ -1851,6 +1898,35 @@ class WatchedStatusRepository(
                 }
             }
 
+        // Trakt, the third tracker: the same mark, its own token. A whole-show
+        // mark maps to an ids-only show entry, which Trakt expands to every
+        // episode it knows. Silent: a tracker failure must never undo a local
+        // mark.
+        if (traktMarkRepository().isConfigured() && traktMarkRepository().hasToken()) {
+            val traktImdbId = normalizedId.takeIf { it.startsWith("tt") }
+            val traktTmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                ?.takeIf { normalizedId.startsWith("tmdb:") }
+            try {
+                when (normalizedType) {
+                    "movie" -> traktMarkRepository().pushWatchedMovie(
+                        parentId = traktImdbId ?: normalizedId,
+                        tmdbId = traktTmdbId
+                    )
+
+                    "series" -> traktMarkRepository().pushWatchedShow(
+                        showId = traktImdbId ?: normalizedId,
+                        tmdbId = traktTmdbId
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(
+                    "WATCHED_REPO",
+                    "Trakt mark-watched push failed for $key",
+                    e
+                )
+            }
+        }
+
         // The cached Simkl marker sets still describe the state BEFORE this
         // mark. Without dropping them a preload in the next 15 minutes keeps
         // resolving the title from that snapshot, and the tracker push above
@@ -1881,6 +1957,10 @@ class WatchedStatusRepository(
      * launcher card until the next playback save. Best-effort: a failed sync
      * must not fail the mark.
      */
+    /** The Trakt repository for this repository's context, resolved per use. */
+    private fun traktMarkRepository(): TraktRepository =
+        TraktRepository.getInstance(context)
+
     private suspend fun publishLauncherWatchNext() {
         runCatchingCancellable {
             WatchHistoryDatabase.withScopedDao(context) { dao ->
@@ -2089,6 +2169,23 @@ class WatchedStatusRepository(
                 Log.e(
                     "WATCHED_REPO",
                     "mark episode watched mdblist push failed s=$season e=$episode",
+                    e
+                )
+            }
+        }
+
+        if (traktMarkRepository().isConfigured() && traktMarkRepository().hasToken()) {
+            runCatchingCancellable {
+                traktMarkRepository().pushWatchedEpisode(
+                    showId = imdbForm ?: normalizedId,
+                    season = season,
+                    episode = episode,
+                    tmdbId = resolvedTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "WATCHED_REPO",
+                    "mark episode watched trakt push failed s=$season e=$episode",
                     e
                 )
             }
@@ -2564,6 +2661,34 @@ class WatchedStatusRepository(
                 }
             }
 
+        // Trakt removal, symmetric with the mark above. Without it the tracker
+        // would keep the title watched and the next snapshot refresh would put
+        // the badge straight back.
+        if (traktMarkRepository().isConfigured() && traktMarkRepository().hasToken()) {
+            val traktImdbId = normalizedId.takeIf { it.startsWith("tt") }
+            val traktTmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                ?.takeIf { normalizedId.startsWith("tmdb:") }
+            try {
+                when (normalizedType) {
+                    "movie" -> traktMarkRepository().removeWatchedMovie(
+                        parentId = traktImdbId ?: normalizedId,
+                        tmdbId = traktTmdbId
+                    )
+
+                    "series" -> traktMarkRepository().removeWatchedShow(
+                        showId = traktImdbId ?: normalizedId,
+                        tmdbId = traktTmdbId
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(
+                    "WATCHED_REPO",
+                    "Trakt remove-watched push failed for $key",
+                    e
+                )
+            }
+        }
+
         // Drop the cached Simkl marker sets so the next preload re-reads them
         // instead of resurrecting this title from the pre-unmark snapshot
         // (which is how an unmarked show kept its completed checkmark).
@@ -2786,11 +2911,70 @@ class WatchedStatusRepository(
     }
 
     /**
+     * Fetches (or reuses) Trakt's watched snapshot on the same TTL cadence and
+     * with the same profile-switch guard as the other two remote sets. Any
+     * failure keeps the previous snapshot; the union simply keeps answering
+     * from what it already had.
+     */
+    private suspend fun refreshTraktSetsIfNeeded(
+        appContext: Context?,
+        now: Long,
+        force: Boolean,
+        profileAtStart: String?
+    ) {
+        val context = appContext ?: return
+        val traktRepository = TraktRepository.getInstance(context)
+        if (!traktRepository.isConfigured() || !traktRepository.hasToken()) return
+
+        val stale = now - traktFetchedAt >= REMOTE_SET_TTL_MS
+        if (!force && !stale) return
+
+        val snapshot = try {
+            traktRepository.watchedSnapshot(forceRefresh = force)
+        } catch (e: Exception) {
+            Log.e(
+                "WATCHED_REPO",
+                "Trakt watched snapshot fetch failed: ${e.message}",
+                e
+            )
+            null
+        }
+
+        if (snapshot == null || snapshot.isEmpty) return
+
+        // Same mid-fetch profile rule as the other two: the snapshot was read
+        // with the OLD profile's token, and adopting it would badge the new
+        // profile's titles for the whole set TTL.
+        if (com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id !=
+            profileAtStart
+        ) {
+            Log.i(
+                "WATCHED_REPO",
+                "Trakt snapshot dropped: profile switched mid-fetch"
+            )
+            return
+        }
+
+        cacheMutex.withLock {
+            traktMovieKeys = snapshot.movieKeys
+            traktStartedShowKeys = snapshot.startedShowKeys
+            traktFetchedAt = now
+        }
+
+        Log.i(
+            "WATCHED_REPO",
+            "Trakt marker sets refreshed: " +
+                "movies=${snapshot.movieKeys.size}, " +
+                "shows=${snapshot.startedShowKeys.size}"
+        )
+    }
+
+    /**
      * Shared resolver for the watched badges: local state first (manual
-     * overrides, Room history), then the Simkl sets, then the MDBList
-     * snapshot. Runs on every [preload] path — including the
-     * Simkl-not-authenticated early return, where MDBList is the only
-     * remote source.
+     * overrides, Room history), then the Simkl sets, then the MDBList and
+     * Trakt snapshots. Runs on every [preload] path — including the
+     * Simkl-not-authenticated early return, where those two are the only
+     * remote sources.
      */
     private suspend fun resolveWithMergedRemoteSets(
         items: List<Pair<String, String>>,
@@ -2807,7 +2991,9 @@ class WatchedStatusRepository(
                     partialShowTmdbKeys,
                     mdbListMovieKeys,
                     mdbListEpisodeKeys,
-                    mdbListStartedShowKeys
+                    mdbListStartedShowKeys,
+                    traktMovieKeys,
+                    traktStartedShowKeys
                 )
             }
 
@@ -2844,10 +3030,19 @@ class WatchedStatusRepository(
                         val mdbListWatched =
                             id in remoteSnapshot.mdbListMovieKeys
 
+                        // Trakt keys are canonicalised on both sides: the
+                        // snapshot carries every id form a title answers to,
+                        // and a rail id may be a bare TMDB number.
+                        val traktWatched =
+                            id in remoteSnapshot.traktMovieKeys ||
+                                TraktIdKeys.canonical(id)
+                                    ?.let { key -> key in remoteSnapshot.traktMovieKeys } == true
+
                         manuallyWatched ||
                             localWatched ||
                             simklWatched ||
-                            mdbListWatched
+                            mdbListWatched ||
+                            traktWatched
                     }
 
                     "series" -> {
@@ -2893,6 +3088,11 @@ class WatchedStatusRepository(
                         id in remoteSnapshot.simklPartialShowKeys ||
                             id in remoteSnapshot.simklPartialShowTmdbKeys ||
                             id in remoteSnapshot.mdbListStartedShowKeys ||
+                            id in remoteSnapshot.traktStartedShowKeys ||
+                            (
+                                TraktIdKeys.canonical(id)
+                                    ?.let { key -> key in remoteSnapshot.traktStartedShowKeys } == true
+                                ) ||
                             hasLocalSeriesActivity(id)
                         )
 
@@ -2981,7 +3181,9 @@ class WatchedStatusRepository(
         val simklPartialShowTmdbKeys: Set<String>,
         val mdbListMovieKeys: Set<String>,
         val mdbListEpisodeKeys: Set<String>,
-        val mdbListStartedShowKeys: Set<String>
+        val mdbListStartedShowKeys: Set<String>,
+        val traktMovieKeys: Set<String>,
+        val traktStartedShowKeys: Set<String>
     )
 
     companion object {

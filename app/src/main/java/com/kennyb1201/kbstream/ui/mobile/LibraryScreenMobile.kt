@@ -226,6 +226,7 @@ fun LibraryScreenMobile(
                 val sources = buildList {
                     if (!state.simklConnected) add("Simkl not connected")
                     if (!state.mdbListConfigured) add("MDBList key not set")
+                    if (!state.traktConnected) add("Trakt not connected")
                 }
                 if (sources.isEmpty()) {
                     "Watchlist is empty."
@@ -278,6 +279,7 @@ fun LibraryScreenMobile(
                                     if (state.simklConnected) add("SIMKL")
                                     if (state.mdbListConfigured) add("MDBLIST")
                                     add("LOCAL")
+                                    if (state.traktConnected) add("TRAKT")
                                 }.joinToString(" + "),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = KBTextLo,
@@ -354,9 +356,11 @@ fun LibraryScreenMobile(
                                     onClick = { viewModel.selectList(list) },
                                     onLongClick = {
                                         // Only a list this device owns can be
-                                        // deleted; an MDBList list is managed
-                                        // on MDBList.
-                                        if (list.id < 0) listPendingDelete = list
+                                        // deleted; an MDBList or Trakt list is
+                                        // managed on its service.
+                                        if (list.source.isLocalList) {
+                                            listPendingDelete = list
+                                        }
                                     }
                                 )
                             }
@@ -475,7 +479,8 @@ fun LibraryScreenMobile(
 
                         when (item.source) {
                             LibrarySource.LOCAL,
-                            LibrarySource.MDBLIST_WATCHLIST -> add(
+                            LibrarySource.MDBLIST_WATCHLIST,
+                            LibrarySource.TRAKT_WATCHLIST -> add(
                                 PosterContextAction(
                                     label = "Remove from Library",
                                     description =
@@ -489,7 +494,8 @@ fun LibraryScreenMobile(
                             )
 
                             LibrarySource.LOCAL_LIST,
-                            LibrarySource.MDBLIST_LIST -> add(
+                            LibrarySource.MDBLIST_LIST,
+                            LibrarySource.TRAKT_LIST -> add(
                                 PosterContextAction(
                                     label = "Remove from this list",
                                     description = item.listName?.let {
@@ -598,7 +604,7 @@ private fun ListRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?
 ) {
-    val sourceLabel = if (list.id < 0) "This device" else "MDBList"
+    val sourceLabel = list.locationLabel
     Column(
         modifier = Modifier
             .fillMaxWidth()

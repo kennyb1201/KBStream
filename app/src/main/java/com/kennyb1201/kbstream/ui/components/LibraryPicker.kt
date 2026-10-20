@@ -39,10 +39,15 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
+import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.trakt.TraktListEntry
+import com.kennyb1201.kbstream.data.trakt.TraktListRef
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -82,13 +87,16 @@ data class LibraryPickerRow(
     val isMyList: Boolean = false,
     /** MDBList watchlist row (remote-only). */
     val isMdbListWatchlist: Boolean = false,
-    /** Any other list: local (negative id) or MDBList (positive id). */
+    /** Trakt watchlist row (remote-only). */
+    val isTraktWatchlist: Boolean = false,
+    /** Any other list: local, MDBList or Trakt. */
     val list: LibraryList? = null
 ) {
     val label: String
         get() = when {
             isMyList -> "MY LIST"
             isMdbListWatchlist -> "Watchlist · MDBList"
+            isTraktWatchlist -> "Watchlist · Trakt"
             else -> list?.name ?: ""
         }
 
@@ -96,13 +104,8 @@ data class LibraryPickerRow(
         get() = when {
             isMyList -> "This profile · mirrors to connected trackers"
             isMdbListWatchlist -> "${list?.itemCount ?: 0} titles · remote"
-            else -> {
-                val source = when {
-                    list?.source?.name?.startsWith("LOCAL") == true -> "This device"
-                    else -> "MDBList"
-                }
-                "${list?.itemCount ?: 0} titles · $source"
-            }
+            isTraktWatchlist -> "${list?.itemCount ?: 0} titles · remote"
+            else -> "${list?.itemCount ?: 0} titles · ${list?.locationLabel ?: "MDBList"}"
         }
 }
 
@@ -204,17 +207,19 @@ fun LibraryAddToListDialog(
                     MdbListClient.getUserLists(context)
                 }.getOrDefault(emptyList())
                 val rowsOut = mutableListOf<LibraryPickerRow>()
-                if (watchlistCount > 0 || lists.isNotEmpty()) {
-                    rowsOut += LibraryPickerRow(
-                        isMdbListWatchlist = true,
-                        list = LibraryList(
-                            id = -1,
-                            name = "Watchlist",
-                            itemCount = watchlistCount,
-                            source = com.kennyb1201.kbstream.data.library.LibrarySource.MDBLIST_WATCHLIST
-                        )
+                // Always offered while connected: the row is a destination, not
+                // a directory. An EMPTY watchlist is exactly the state where a
+                // viewer needs the row - hiding it made an empty watchlist look
+                // like an unconnected account.
+                rowsOut += LibraryPickerRow(
+                    isMdbListWatchlist = true,
+                    list = LibraryList(
+                        id = -1,
+                        name = "Watchlist",
+                        itemCount = watchlistCount,
+                        source = LibrarySource.MDBLIST_WATCHLIST
                     )
-                }
+                )
                 rowsOut += lists.map { user ->
                     LibraryPickerRow(
                         list = LibraryList(
@@ -227,6 +232,52 @@ fun LibraryAddToListDialog(
                 }
                 rowsOut
             }
+        }
+
+        // Trakt, beside MDBList: its watchlist and personal lists are the same
+        // kind of remote destination, and the rows carry the same real ids so
+        // a press reports the far end's answer rather than a local guess.
+        if (LibraryMirror.traktConnected(context)) {
+            val trakt = TraktRepository.getInstance(context)
+            val traktRows = withContext(Dispatchers.IO) {
+                val watchlistCount = runCatchingCancellable {
+                    trakt.watchlist().size
+                }.getOrDefault(0)
+                val lists = runCatchingCancellable {
+                    trakt.userLists()
+                }.getOrDefault(emptyList())
+                val rowsOut = mutableListOf<LibraryPickerRow>()
+                // Same rule as MDBList's row: offered while connected even at
+                // zero titles, because that is the watchlist someone is trying
+                // to put their first title on.
+                rowsOut += LibraryPickerRow(
+                    isTraktWatchlist = true,
+                    list = LibraryList(
+                        id = -2,
+                        name = "Watchlist",
+                        itemCount = watchlistCount,
+                        source = LibrarySource.TRAKT_WATCHLIST
+                    )
+                )
+                rowsOut += lists.mapNotNull { user ->
+                    val traktId = user.ids?.trakt ?: 0
+                    val remoteId = user.ids?.slug
+                        ?: traktId.takeIf { it > 0 }?.toString()
+                    val name = user.name?.takeIf { it.isNotBlank() }
+                    if (remoteId.isNullOrBlank() || name == null) return@mapNotNull null
+                    LibraryPickerRow(
+                        list = LibraryList(
+                            id = traktListShelfId(traktId),
+                            name = name,
+                            itemCount = user.itemCount ?: 0,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = remoteId
+                        )
+                    )
+                }
+                rowsOut
+            }
+            remoteRows = remoteRows + traktRows
         }
 
         rows = initial + remoteRows
@@ -263,6 +314,32 @@ fun LibraryAddToListDialog(
                     }
             }
         }
+        if (LibraryMirror.traktConnected(context)) {
+            val trakt = TraktRepository.getInstance(context)
+            withContext(Dispatchers.IO) {
+                runCatchingCancellable {
+                    trakt.watchlist().any { entry ->
+                        matchesTraktEntry(entry, normalizedType, imdb, tmdb)
+                    }
+                }.getOrDefault(false).let { if (it) member += "TRAKT_WATCHLIST" }
+
+                runCatchingCancellable { trakt.userLists() }
+                    .getOrDefault(emptyList())
+                    .forEach { user ->
+                        val remoteId = user.ids?.slug
+                            ?: user.ids?.trakt?.takeIf { it > 0 }?.toString()
+                            ?: return@forEach
+                        val has = runCatchingCancellable {
+                            trakt.listItems(
+                                TraktListRef(user = "me", listId = remoteId)
+                            ).any { entry ->
+                                matchesTraktEntry(entry, normalizedType, imdb, tmdb)
+                            }
+                        }.getOrDefault(false)
+                        if (has) member += "trakt:$remoteId"
+                    }
+            }
+        }
         memberships = member
     }
 
@@ -292,7 +369,9 @@ fun LibraryAddToListDialog(
     fun rowKey(row: LibraryPickerRow): String = when {
         row.isMyList -> "MY_LIST"
         row.isMdbListWatchlist -> "MDB_WATCHLIST"
-        row.list != null && row.list.id < 0 -> "local:${row.list.id}"
+        row.isTraktWatchlist -> "TRAKT_WATCHLIST"
+        row.list?.source == LibrarySource.LOCAL_LIST -> "local:${row.list.id}"
+        row.list?.source == LibrarySource.TRAKT_LIST -> "trakt:${row.list.remoteId}"
         row.list != null -> "mdb:${row.list.id}"
         else -> ""
     }
@@ -620,6 +699,22 @@ private fun PickerAction(
             }
         }
     }
+}
+
+/** Trakt membership test: same id/type pair, from a list or watchlist row. */
+private fun matchesTraktEntry(
+    entry: TraktListEntry,
+    mediaType: String,
+    imdbId: String?,
+    tmdbId: Int?
+): Boolean {
+    val entryType = LocalLibraryStore.normalizedType(
+        if (entry.isMovie) "movie" else "series"
+    )
+    if (entryType != mediaType) return false
+    val ids = entry.media.ids
+    return (imdbId != null && ids?.imdb == imdbId) ||
+        (tmdbId != null && ids?.tmdb == tmdbId)
 }
 
 /** MDBList membership test shared by the dialog's row badges. */

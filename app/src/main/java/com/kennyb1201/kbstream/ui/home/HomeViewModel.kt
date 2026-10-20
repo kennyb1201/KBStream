@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -120,6 +121,11 @@ class HomeViewModel(
 
     private val simklRepository =
         SimklRepository.getInstance(application)
+
+    // The third tracker's watched history. Reads are unioned with Simkl's and
+    // MDBList's below; nothing here writes to it.
+    private val traktRepository =
+        TraktRepository.getInstance(application)
 
     private val tmdbRepository =
         TmdbRepository.getInstance(application)
@@ -5716,11 +5722,41 @@ episodesTotal =
                     emptySet()
                 }
 
-            // The union of both trackers. Everything downstream - the episode
-            // counts, the next-episode resolution and the caught-up rules -
-            // reads this one set, which is the whole point of tracker parity.
+            /*
+             * Trakt's watched episodes for this show. Guarded on its own
+             * client id and token, and read from its cached /sync/watched
+             * snapshot, so it normally costs a lookup. A failed read is
+             * "no evidence" - the same trackerReadFailed distinction Simkl and
+             * MDBList already make - rather than "nothing watched".
+             */
+            val traktCompletedEpisodes =
+                if (
+                    traktRepository.isConfigured() &&
+                    traktRepository.hasToken()
+                ) {
+
+                    try {
+
+                        traktRepository
+                            .watchedEpisodesForShow(
+                                showKeys = showParentIds
+                            )
+
+                    } catch (_: Exception) {
+                        trackerReadFailed = true
+                        emptySet()
+                    }
+
+                } else {
+                    emptySet()
+                }
+
+            // The union of all three trackers. Everything downstream - the
+            // episode counts, the next-episode resolution and the caught-up
+            // rules - reads this one set, which is the whole point of tracker
+            // parity.
             val trackerCompletedEpisodes =
-                simklCompletedEpisodes + mdbListCompletedEpisodes
+                simklCompletedEpisodes + mdbListCompletedEpisodes + traktCompletedEpisodes
 
             val mergedWatchedKeys =
                 WatchedEpisodeState

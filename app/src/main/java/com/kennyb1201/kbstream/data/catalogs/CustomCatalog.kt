@@ -25,7 +25,7 @@ const val CATALOG_MEDIA_TV = "tv"
 const val CUSTOM_CATALOG_ADDON_NAME = "My Catalogs"
 
 /** How many built catalogs one profile may keep. */
-const val MAX_CUSTOM_CATALOGS = 40
+const val MAX_CUSTOM_CATALOGS = 100
 
 /**
  * The watch region a new catalog starts on.

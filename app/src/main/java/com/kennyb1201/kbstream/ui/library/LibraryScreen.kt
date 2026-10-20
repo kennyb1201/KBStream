@@ -260,6 +260,7 @@ fun LibraryScreen(
                     if (state.simklConnected) add("SIMKL")
                     if (state.mdbListConfigured) add("MDBLIST")
                     add("LOCAL")
+                    if (state.traktConnected) add("TRAKT")
                 }.joinToString(" + "),
                 style = MaterialTheme.typography.labelMedium,
                 color = KBTextLo,
@@ -406,6 +407,7 @@ fun LibraryScreen(
                         val sources = mutableListOf<String>()
                         if (!state.simklConnected) sources.add("Simkl not connected")
                         if (!state.mdbListConfigured) sources.add("MDBList key not set")
+                        if (!state.traktConnected) sources.add("Trakt not connected")
                         if (sources.isEmpty()) {
                             "Watchlist is empty."
                         } else {
@@ -450,7 +452,7 @@ fun LibraryScreen(
                         // opens a menu everywhere else in the app, and a whole
                         // list leaving on one is not a choice a stray press
                         // should be able to make.
-                        if (list.id < 0) {
+                        if (list.source.isLocalList) {
                             listPendingDelete = list
                         }
                     },
@@ -570,7 +572,8 @@ private fun LibraryItemMenu(
 
             when (item.source) {
                 LibrarySource.LOCAL,
-                LibrarySource.MDBLIST_WATCHLIST -> add(
+                LibrarySource.MDBLIST_WATCHLIST,
+                LibrarySource.TRAKT_WATCHLIST -> add(
                     PosterContextAction(
                         label = "Remove from Library",
                         description = "Remove it here and on every connected tracker",
@@ -581,7 +584,8 @@ private fun LibraryItemMenu(
                 )
 
                 LibrarySource.LOCAL_LIST,
-                LibrarySource.MDBLIST_LIST -> add(
+                LibrarySource.MDBLIST_LIST,
+                LibrarySource.TRAKT_LIST -> add(
                     PosterContextAction(
                         label = "Remove from this list",
                         description = item.listName?.let { "Take it out of \"$it\"" },
@@ -1026,14 +1030,14 @@ private fun ListsPane(
             items(lists, key = { list -> list.id }) { list ->
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
-                val sourceLabel = if (list.id < 0) "This device" else "MDBList"
+                val sourceLabel = list.locationLabel
                 // The delete gesture the local lists never had: the parameter
                 // and the ViewModel call existed, nothing ever invoked them.
-                // Only for a list this device owns - an MDBList list is
-                // managed on MDBList, and the screen's callback refuses one
-                // anyway; not offering the press is what says so.
+                // Only for a list this device owns - MDBList and Trakt lists
+                // are managed on their service, and the screen's callback
+                // refuses one anyway; not offering the press is what says so.
                 val onRowLongPress: (() -> Unit)? =
-                    if (list.id < 0) {
+                    if (list.source.isLocalList) {
                         { onListLongPress(list) }
                     } else {
                         null

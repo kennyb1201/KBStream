@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.trakt.TraktComment
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -122,6 +123,56 @@ internal object DetailRatingEnrichment {
             vm.setAwards(awards)
         }
     }
+
+    /**
+     * Trakt comments, appended to the same review rail as TMDB's.
+     *
+     * Read-only (posting is a separate decision), sorted by likes, and silent
+     * on every failure: a tracker outage must not cost the page its reviews.
+     * The IMDb id is preferred because Trakt's comments path accepts it
+     * directly; a TMDB-only title is resolved by the repository.
+     */
+    fun traktComments(vm: DetailViewModel, normalizedType: String) {
+        val rawId = vm.meta.value?.id ?: vm.imdbId
+        val tmdbId = vm.tmdbDetail.value?.id?.takeIf { it > 0 }
+        // Captured before the launch: a later load for a different title
+        // retargets vm.imdbId, and this answer must not land under it.
+        val requestParentId = vm.imdbId
+        val isMovie = normalizedType.lowercase() == "movie"
+
+        vm.viewModelScope.launch {
+            if (!vm.traktRepository.isConfigured() || !vm.traktRepository.hasToken()) {
+                return@launch
+            }
+            val imdbId = rawId.takeIf { it.startsWith("tt") }
+                ?: tmdbId?.let { id ->
+                    runCatchingCancellable {
+                        vm.tmdbRepository.resolveImdbId(id, normalizedType)
+                    }.getOrNull()
+                }
+            val comments = runCatchingCancellable {
+                vm.traktRepository.commentsFor(
+                    tmdbId = tmdbId,
+                    imdbId = imdbId,
+                    isMovie = isMovie
+                )
+            }.getOrNull().orEmpty()
+
+            if (comments.isEmpty()) return@launch
+            if (vm.imdbId != requestParentId) return@launch
+            vm.addAllReviews(comments.map { comment -> comment.toTmdbReview() })
+        }
+    }
+
+    private fun TraktComment.toTmdbReview(): TmdbReview = TmdbReview(
+        id = "trakt:$id",
+        author = user?.name?.takeIf { it.isNotBlank() }
+            ?: user?.username?.takeIf { it.isNotBlank() }
+            ?: "Trakt user",
+        content = comment.orEmpty(),
+        createdAt = createdAt,
+        spoiler = spoiler
+    )
 
     /**
      * Reviews beyond the first page. TMDB's detail payload bundles only page

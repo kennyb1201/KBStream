@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,12 @@ object LibraryMirror {
     /** MDBList API key is set, so adds will mirror to its watchlist too. */
     fun mdbListConnected(context: Context): Boolean =
         MdbListClient.isConfigured(context)
+
+    /** Trakt is connected, so adds will mirror to its watchlist too. */
+    fun traktConnected(context: Context): Boolean {
+        val trakt = TraktRepository.getInstance(context)
+        return trakt.isConfigured() && trakt.hasToken()
+    }
 
     /** The id triple shared by every entry point. */
     data class TitleRef(
@@ -228,6 +235,23 @@ object LibraryMirror {
             }
         }
 
+        if (traktConnected(context)) {
+            val isMovie = type == "movie"
+            if (imdbId != null || tmdbId != null) {
+                mirrorScope.launch {
+                    runCatchingCancellable {
+                        TraktRepository.getInstance(context).removeFromWatchlist(
+                            isMovie = isMovie,
+                            imdbId = imdbId,
+                            tmdbId = tmdbId
+                        )
+                    }.onFailure { e ->
+                        Log.e(TAG, "trakt removeFromWatchlist failed: ${e.message}", e)
+                    }
+                }
+            }
+        }
+
         // Simkl has no remove-from-watchlist endpoint (only add-to-list
         // moves between statuses), so Simkl rows are add-only.
     }
@@ -309,6 +333,20 @@ object LibraryMirror {
                     )
                 }.onFailure { e ->
                     Log.e(TAG, "mdblist mirror failed: ${e.message}", e)
+                }
+            }
+
+            if (traktConnected(context)) {
+                runCatchingCancellable {
+                    TraktRepository.getInstance(context).addToWatchlist(
+                        isMovie = r.normalizedType == "movie",
+                        imdbId = r.imdbId,
+                        tmdbId = r.tmdbId,
+                        title = r.title,
+                        year = r.year
+                    )
+                }.onFailure { e ->
+                    Log.e(TAG, "trakt mirror failed: ${e.message}", e)
                 }
             }
         }

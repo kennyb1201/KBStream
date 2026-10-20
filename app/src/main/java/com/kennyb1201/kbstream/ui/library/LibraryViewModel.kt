@@ -9,10 +9,14 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.trakt.TraktListEntry
+import com.kennyb1201.kbstream.data.trakt.TraktListRef
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -114,7 +118,8 @@ data class LibraryUiState(
     val partiallyWatchedKeys: Set<String> = emptyList<String>().toSet(),
 
     val simklConnected: Boolean = false,
-    val mdbListConfigured: Boolean = false
+    val mdbListConfigured: Boolean = false,
+    val traktConnected: Boolean = false
 )
 
 /**
@@ -135,6 +140,8 @@ class LibraryViewModel(
         WatchedStatusRepository(application)
     private val tmdbRepository =
         TmdbRepository.getInstance(application)
+    private val traktRepository =
+        TraktRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()
@@ -356,6 +363,42 @@ class LibraryViewModel(
                     pushDisplay()
                 }
 
+                LibrarySource.TRAKT_WATCHLIST -> {
+                    runCatchingCancellable {
+                        traktRepository.removeFromWatchlist(
+                            isMovie = LocalLibraryStore.normalizedType(item.mediaType) == "movie",
+                            imdbId = item.imdbId,
+                            tmdbId = item.tmdbId
+                        )
+                    }.onFailure {
+                        Log.w(TAG, "Trakt watchlist removal failed: ${it.message}")
+                    }
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalWatchlist = canonicalWatchlist.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    recomputeAll()
+                }
+
+                LibrarySource.TRAKT_LIST -> {
+                    val listKey = item.listRemoteId ?: return@launch
+                    runCatchingCancellable {
+                        traktRepository.removeFromList(
+                            listId = listKey,
+                            isMovie = LocalLibraryStore.normalizedType(item.mediaType) == "movie",
+                            imdbId = item.imdbId,
+                            tmdbId = item.tmdbId
+                        )
+                    }.onFailure {
+                        Log.w(TAG, "Trakt list removal failed: ${it.message}")
+                    }
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalListItems = canonicalListItems.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    pushDisplay()
+                }
+
                 // Simkl: add-only; no remove path exists on the API.
                 LibrarySource.SIMKL_WATCHLIST, LibrarySource.SIMKL_LIST -> Unit
             }
@@ -378,7 +421,7 @@ class LibraryViewModel(
             val localItems = LocalLibraryStore.myList(appContext)
             val localLists = LocalLibraryStore.userLists(appContext)
             val localListItems = localLists
-                .filter { it.id < 0 }
+                .filter { it.source.isLocalList }
                 .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
             localListFlatCache = localListItems
             canonicalLocal = localItems
@@ -387,15 +430,18 @@ class LibraryViewModel(
             )
             _uiState.value = _uiState.value.copy(
                 loading = false,
-                lists = localLists + _uiState.value.lists.filter { it.id > 0 }
+                lists = localLists + _uiState.value.lists.filter { !it.source.isLocalList }
             )
             pushDisplay()
 
             val simklConnected =
                 simklRepository.isConfigured() && simklRepository.hasToken()
             val mdbListConfigured = MdbListClient.isConfigured(appContext)
+            val traktConnected =
+                traktRepository.isConfigured() && traktRepository.hasToken()
 
-            // WATCHLIST merge: Simkl plan-to-watch + MDBList watchlist.
+            // WATCHLIST merge: Simkl plan-to-watch + MDBList watchlist + Trakt
+            // watchlist.
             val simklItems = if (simklConnected) {
                 runCatchingCancellable { simklRepository.getWatchlistItems() }
                     .onFailure {
@@ -429,7 +475,20 @@ class LibraryViewModel(
                 emptyList()
             }
 
-            val lists = localLists + if (mdbListConfigured) {
+            val traktWatchlist = if (traktConnected) {
+                runCatchingCancellable { traktRepository.watchlist() }
+                    .onFailure {
+                        Log.w(TAG, "Trakt watchlist fetch failed: ${it.message}")
+                    }
+                    .getOrDefault(emptyList())
+                    .mapNotNull { entry ->
+                        traktLibraryItem(entry, LibrarySource.TRAKT_WATCHLIST)
+                    }
+            } else {
+                emptyList()
+            }
+
+            val mdbLists = if (mdbListConfigured) {
                 runCatchingCancellable {
                     MdbListClient.getUserLists(appContext).map { list ->
                         LibraryList(
@@ -446,10 +505,34 @@ class LibraryViewModel(
                 emptyList()
             }
 
+            val traktLists = if (traktConnected) {
+                runCatchingCancellable {
+                    traktRepository.userLists().mapNotNull { list ->
+                        val traktId = list.ids?.trakt ?: 0
+                        val remoteId = list.ids?.slug ?: traktId.takeIf { it > 0 }?.toString()
+                        val name = list.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        if (remoteId.isNullOrBlank()) return@mapNotNull null
+                        LibraryList(
+                            id = traktListShelfId(traktId),
+                            name = name,
+                            itemCount = list.itemCount ?: 0,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = remoteId
+                        )
+                    }
+                }.onFailure {
+                    Log.w(TAG, "Trakt lists fetch failed: ${it.message}")
+                }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+
+            val lists = localLists + mdbLists + traktLists
+
             if (version != requestVersion) return@launch
 
             val watchlistMerged = kidsFiltered(
-                mergeById(simklItems + mdbListWatchlist)
+                mergeById(simklItems + mdbListWatchlist + traktWatchlist)
             )
 
             // Canonical rows: ALL merges My List + watchlists + every local
@@ -472,7 +555,8 @@ class LibraryViewModel(
                 loading = false,
                 lists = lists,
                 simklConnected = simklConnected,
-                mdbListConfigured = mdbListConfigured
+                mdbListConfigured = mdbListConfigured,
+                traktConnected = traktConnected
             )
             pushDisplay()
 
@@ -502,7 +586,28 @@ class LibraryViewModel(
             } else {
                 emptyList()
             }
-            _uiState.value = _uiState.value.copy(lists = localLists + mdbLists)
+            val traktLists = if (
+                traktRepository.isConfigured() && traktRepository.hasToken()
+            ) {
+                runCatchingCancellable {
+                    traktRepository.userLists().mapNotNull { list ->
+                        val traktId = list.ids?.trakt ?: 0
+                        val remoteId = list.ids?.slug ?: traktId.takeIf { it > 0 }?.toString()
+                        val name = list.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        if (remoteId.isNullOrBlank()) return@mapNotNull null
+                        LibraryList(
+                            id = traktListShelfId(traktId),
+                            name = name,
+                            itemCount = list.itemCount ?: 0,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = remoteId
+                        )
+                    }
+                }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+            _uiState.value = _uiState.value.copy(lists = localLists + mdbLists + traktLists)
         }
     }
 
@@ -527,7 +632,26 @@ class LibraryViewModel(
      */
     private suspend fun fetchListItems(list: LibraryList): List<LibraryItem> {
         val appContext = getApplication<Application>()
-        if (list.id < 0) return LocalLibraryStore.listItems(appContext, list.id)
+        if (list.source.isLocalList) return LocalLibraryStore.listItems(appContext, list.id)
+
+        if (list.source == LibrarySource.TRAKT_LIST) {
+            val remoteId = list.remoteId ?: return emptyList()
+            val entries = runCatchingCancellable {
+                traktRepository.listItems(TraktListRef(user = "me", listId = remoteId))
+            }.onFailure {
+                Log.w(TAG, "Trakt list items fetch failed: ${it.message}")
+            }.getOrDefault(emptyList())
+            return entries.mapNotNull { entry ->
+                traktLibraryItem(
+                    entry = entry,
+                    source = LibrarySource.TRAKT_LIST,
+                    listId = list.id,
+                    listName = list.name,
+                    listRemoteId = remoteId
+                )
+            }
+        }
+
         val entries = runCatchingCancellable {
             MdbListClient.getListItems(appContext, list.id)
         }.onFailure {
@@ -546,6 +670,46 @@ class LibraryViewModel(
                 listName = list.name
             )
         }
+    }
+
+    /**
+     * One Trakt read row as a Library row.
+     *
+     * Both Trakt sources come through here so the watchlist and a personal
+     * list cannot drift: same title fallback, same artwork pick (`images` is
+     * only present because the read asks for `extended=full,images`), and the
+     * list context is stamped on when the row came from a list.
+     *
+     * A row with no title or no id Trakt can address is dropped: it could not
+     * be opened, badged, or removed, so drawing it would only look broken.
+     */
+    private fun traktLibraryItem(
+        entry: TraktListEntry,
+        source: LibrarySource,
+        listId: Int? = null,
+        listName: String? = null,
+        listRemoteId: String? = null
+    ): LibraryItem? {
+        val media = entry.media
+        val title = media.title?.takeIf { it.isNotBlank() } ?: return null
+        val ids = media.ids
+        val imdbId = ids?.imdb?.takeIf { it.isNotBlank() }
+        val tmdbId = ids?.tmdb?.takeIf { it > 0 }
+        if (imdbId == null && tmdbId == null) return null
+        return LibraryItem(
+            source = source,
+            mediaType = if (entry.isMovie) "movie" else "series",
+            title = title,
+            year = media.year?.takeIf { it > 0 },
+            posterUrl = media.images?.poster
+                ?.firstOrNull()
+                ?.takeIf { it.isNotBlank() },
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            listId = listId,
+            listName = listName,
+            listRemoteId = listRemoteId
+        )
     }
 
     /**
@@ -838,7 +1002,7 @@ class LibraryViewModel(
     private fun recomputeAll() {
         val appContext = getApplication<Application>()
         localListFlatCache = _uiState.value.lists
-            .filter { it.id < 0 }
+            .filter { it.source.isLocalList }
             .flatMap { LocalLibraryStore.listItems(appContext, it.id) }
         canonicalAll = mergeAllSources(
             listOf(canonicalLocal, canonicalWatchlist, localListFlatCache)

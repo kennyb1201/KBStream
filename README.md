@@ -370,8 +370,8 @@ Re-run it when startup changes, or when a screen on the startup path does.
 
 ```
 app/src/main/java/com/kennyb1201/kbstream/
-  data/            # TMDB, addons, Simkl, IPTV, Supabase sync,
-                   # profile management, watch history (Room)
+  data/            # TMDB, addons, Simkl, MDBList, Trakt, IPTV, Supabase
+                   # sync, profile management, watch history (Room)
   domain/          # stream engine (ranking, auto-select)
   ui/              # Compose for Android TV screens (home, detail, player,
                    # search, profiles, settings, addons, IPTV, streams)
@@ -429,6 +429,8 @@ docs/              # Supabase RLS + Realtime SQL reference
                    #   supabase_realtime.sql -- enable live sync (publication)
                    # mobile_port.md -- the phone port's status, and every item
                    #   deliberately deferred inside a ported screen
+                   # trakt_integration.md -- Trakt phases A-E1, its Library-tab
+                   #   sources, their rules and the three deliberate deferrals
 ```
 
 ## Notes

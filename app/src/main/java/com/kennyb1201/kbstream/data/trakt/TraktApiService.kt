@@ -7,9 +7,12 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
- * Trakt's OAuth surface, and only that - Phase A is authentication.
+ * Trakt's OAuth surface plus the reads and writes the integration uses
+ * (scrobble, watch history, watched snapshot, user lists, comments).
  *
  * Every answer that can legitimately be an error is returned as a
  * [Response] rather than as a parsed body, because Trakt's device flow
@@ -45,6 +48,154 @@ interface TraktApiService {
     suspend fun userSettings(
         @Header("Authorization") authorization: String
     ): TraktUserSettings
+
+    // -------------------------------------------------------------------
+    // Playback and watch state
+    // -------------------------------------------------------------------
+
+    /**
+     * `POST /scrobble/{start,pause,stop}`.
+     *
+     * 201 carries the recorded action; 409 means Trakt ignored it (the viewer
+     * had already watched the item, or the session was too short). Both are
+     * answers, not failures, so the body stays unparsed when it is not 2xx.
+     */
+    @POST("scrobble/{action}")
+    suspend fun scrobble(
+        @Path("action") action: String,
+        @Header("Authorization") authorization: String,
+        @Body body: TraktScrobbleRequest
+    ): Response<TraktScrobbleResponse>
+
+    /** `POST /sync/history` - mark a movie or episode watched. */
+    @POST("sync/history")
+    suspend fun addToHistory(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** `POST /sync/history/remove` - the exact inverse of the above. */
+    @POST("sync/history/remove")
+    suspend fun removeFromHistory(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** The account's watched shows, with their watched episodes nested. */
+    @GET("sync/watched/shows")
+    suspend fun watchedShows(
+        @Header("Authorization") authorization: String
+    ): Response<List<TraktWatchedShow>>
+
+    /** The account's watched movies. */
+    @GET("sync/watched/movies")
+    suspend fun watchedMovies(
+        @Header("Authorization") authorization: String
+    ): Response<List<TraktWatchedMovie>>
+
+    /**
+     * The account's watchlist, newest first.
+     *
+     * Trakt returns one row per title with a `movie` or `show` object; the
+     * `extended=full,images` read is what carries title/year and artwork, so
+     * the Library tab does not need a TMDB lookup per row just to draw it.
+     */
+    @GET("sync/watchlist")
+    suspend fun watchlist(
+        @Header("Authorization") authorization: String,
+        @Query("extended") extended: String = "full,images",
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListItem>>
+
+    /** `POST /sync/watchlist` - the Library's add mirror. */
+    @POST("sync/watchlist")
+    suspend fun addToWatchlist(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** `POST /sync/watchlist/remove` - the watchlist's removal write. */
+    @POST("sync/watchlist/remove")
+    suspend fun removeFromWatchlist(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** The authenticated account's personal lists. */
+    @GET("users/me/lists")
+    suspend fun userLists(
+        @Header("Authorization") authorization: String,
+        @Query("extended") extended: String = "full"
+    ): Response<List<TraktUserList>>
+
+    /**
+     * A user list's items, one media type at a time.
+     *
+     * Trakt has no all-types GET here: `/items/{type}` is the documented read,
+     * so the repository asks for movies and shows and merges them.
+     * `extended=full,images` is what carries the title/year and the artwork.
+     */
+    @GET("users/{user}/lists/{listId}/items/{type}")
+    suspend fun listItems(
+        @Path("user") user: String,
+        @Path("listId") listId: String,
+        @Path("type") type: String,
+        @Query("extended") extended: String = "full,images",
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListItem>>
+
+    /** `POST /users/me/lists/{listId}/items` - an item add. */
+    @POST("users/me/lists/{listId}/items")
+    suspend fun addToList(
+        @Header("Authorization") authorization: String,
+        @Path("listId") listId: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** `POST /users/me/lists/{listId}/items/remove`. */
+    @POST("users/me/lists/{listId}/items/remove")
+    suspend fun removeFromList(
+        @Header("Authorization") authorization: String,
+        @Path("listId") listId: String,
+        @Body body: TraktSyncHistoryRequest
+    ): Response<Unit>
+
+    /** The same read for an export that named only the list id. */
+    @GET("lists/{listId}/items/{type}")
+    suspend fun listItemsById(
+        @Path("listId") listId: String,
+        @Path("type") type: String,
+        @Query("extended") extended: String = "full,images",
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListItem>>
+
+    /** Resolves a TMDB id to the Trakt entry (used by the comments read). */
+    @GET("search/{idType}/{id}")
+    suspend fun searchById(
+        @Path("idType") idType: String,
+        @Path("id") id: String,
+        @Query("type") type: String
+    ): Response<List<TraktSearchResult>>
+
+    /**
+     * `GET /{type}/{id}/comments/{sort}`.
+     *
+     * `{id}` accepts a Trakt id, Trakt slug or IMDb id - never a TMDB id, which
+     * is why [searchById] exists. `{type}` is the plural path segment
+     * ("movies" / "shows").
+     */
+    @GET("{type}/{id}/comments/{sort}")
+    suspend fun comments(
+        @Path("type") type: String,
+        @Path("id") id: String,
+        @Path("sort") sort: String = "likes",
+        @Query("extended") extended: String = "full",
+        @Query("limit") limit: Int = 20,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktComment>>
 }
 
 /**

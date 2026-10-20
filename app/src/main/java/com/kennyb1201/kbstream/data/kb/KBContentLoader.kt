@@ -7,6 +7,9 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.trakt.TraktListEntry
+import com.kennyb1201.kbstream.data.trakt.TraktListRefParser
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -22,9 +25,12 @@ import kotlinx.coroutines.withContext
  *    /list/{id}), COLLECTION (tmdbId -> /collection/{id} parts), COMPANY and
  *    NETWORK (tmdbId -> with_companies / with_networks discover).
  *  - "addon": an installed Stremio addon catalog (addonId + catalogId + type).
+ *  - "trakt": a Trakt user list, read through the account connected in
+ *    Settings. The source names the list as a URL, a path, or a bare id (see
+ *    [TraktListRefParser]); without a connected account it degrades to an
+ *    empty rail like any other source that cannot answer.
  *
- * Any other provider (KB exports also carry "trakt" list sources, which need a
- * paid Trakt API app) degrades to an empty rail.
+ * Any other provider degrades to an empty rail.
  *
  * All source kinds for a folder load in parallel; a failing source degrades
  * to an empty rail instead of failing the folder. Each rail is handed to the
@@ -36,11 +42,11 @@ class KBContentLoader(context: android.content.Context) {
     private val appContext = context.applicationContext
     private val tmdbRepository = TmdbRepository.getInstance(appContext)
     private val addonRepository = AddonRepository.getInstance()
+    private val traktRepository = TraktRepository.getInstance(appContext)
 
     companion object {
         private const val TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w500"
         private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
-        private const val MAX_ITEMS_PER_SOURCE = 40
     }
 
     /**
@@ -193,6 +199,7 @@ class KBContentLoader(context: android.content.Context) {
             when (source.provider?.lowercase()) {
                 "tmdb" -> loadTmdbSource(source)
                 "addon" -> loadAddonSource(source)
+                "trakt" -> loadTraktSource(source)
                 else -> emptyList()
             }
         }.getOrDefault(emptyList())
@@ -335,6 +342,81 @@ class KBContentLoader(context: android.content.Context) {
         )
 
     // ------------------------------------------------------------------
+    // Trakt list sources
+    // ------------------------------------------------------------------
+
+    /**
+     * A Trakt list, addressed by whatever the KB export put in the source.
+     *
+     * A list item carries its Trakt, TMDB and IMDb ids together, so the rail's
+     * rows are keyed like every other rail here (TMDB id first). Artwork comes
+     * from Trakt's own images because a list read has no TMDB poster path; it
+     * is the only field this mapping cannot derive from the ids.
+     */
+    private suspend fun loadTraktSource(source: KBSource): List<KBContentItem> {
+        val ref = TraktListRefParser.fromSource(
+            listOf(
+                source.catalogId,
+                source.id,
+                source.addonId
+            )
+        ) ?: return emptyList()
+
+        if (!traktRepository.isConfigured() || !traktRepository.hasToken()) return emptyList()
+
+        // No item cap: the repository pages the whole list (and spends its
+        // rate budget one page at a time), so a 500-title list is 500 rows.
+        val items = traktRepository.listItems(ref)
+            .mapNotNull { entry -> entry.toContentItem() }
+
+        return applyKidsCeiling(items)
+    }
+
+    /**
+     * The kids ceiling, on the one provider branch that has no repository call
+     * to filter it. Uses the shared meta filter rather than a second rule, so a
+     * Trakt row is hidden under exactly the ceiling that hides the same title
+     * on a Home or Search rail.
+     */
+    private suspend fun applyKidsCeiling(items: List<KBContentItem>): List<KBContentItem> {
+        if (items.isEmpty()) return items
+        val metas = items.map { item ->
+            MetaPreview(
+                id = item.id,
+                type = item.type,
+                name = item.title.orEmpty(),
+                poster = item.posterUrl,
+                background = item.backdropUrl,
+                description = item.overview,
+                releaseInfo = item.year
+            )
+        }
+        val allowed = tmdbRepository.kidsFilterMetas(metas)
+            .mapTo(HashSet()) { meta -> meta.id }
+        return items.filter { item -> item.id in allowed }
+    }
+
+    private fun TraktListEntry.toContentItem(): KBContentItem? {
+        val ids = media.ids
+        val tmdbId = ids?.tmdb
+        val imdbId = ids?.imdb?.takeIf { it.startsWith("tt") }
+        // TMDB id first: the detail route resolves a numeric id directly, and
+        // it is the form every other rail on this screen carries.
+        val id = tmdbId?.toString() ?: imdbId ?: ids?.slug ?: return null
+        return KBContentItem(
+            id = id,
+            type = if (isMovie) "movie" else "series",
+            title = media.title,
+            posterUrl = media.images?.poster?.firstOrNull(),
+            backdropUrl = media.images?.fanart?.firstOrNull(),
+            year = media.year?.toString(),
+            rating = null,
+            tmdbId = tmdbId,
+            overview = null
+        )
+    }
+
+    // ------------------------------------------------------------------
     // Stremio addon catalog sources
     // ------------------------------------------------------------------
 
@@ -352,7 +434,7 @@ class KBContentLoader(context: android.content.Context) {
             .firstOrNull { it.id == addonId && it.enabled }
             ?: return emptyList()
 
-        val catalog: List<MetaPreview> = addonRepository.getCatalog(
+        val catalog: List<MetaPreview> = loadAllAddonPages(
             baseUrl = addon.manifestUrl,
             type = type,
             catalogId = catalogId
@@ -375,7 +457,55 @@ class KBContentLoader(context: android.content.Context) {
 
         return metas.map { meta ->
             meta.toContentItem()
-        }.take(MAX_ITEMS_PER_SOURCE)
+        }
+    }
+
+    /**
+     * Every page of an add-on catalog, with no item cap.
+     *
+     * Stremio catalogs page by `skip`; the loader used to read page 1 only and
+     * then throw away everything past row 40, so a "/collection" rail built
+     * from an add-on silently showed a fraction of the catalog. This walks the
+     * pages until the add-on returns nothing new.
+     *
+     * Two things keep that from becoming a load problem:
+     *
+     *  - **One page at a time.** Pages are requested sequentially and the
+     *    repository's catalog cache is reused for repeats, so opening the same
+     *    folder twice costs no extra requests and no burst is ever fired at one
+     *    add-on.
+     *  - **Duplicate detection is the terminator.** An add-on that ignores
+     *    `skip` (or a cache that returns the same page) stops the walk on its
+     *    first repeated page instead of looping. An empty page is the normal
+     *    end.
+     */
+    private suspend fun loadAllAddonPages(
+        baseUrl: String,
+        type: String,
+        catalogId: String
+    ): List<MetaPreview> {
+        val rows = mutableListOf<MetaPreview>()
+        val seen = HashSet<String>()
+        var skip = 0
+        while (true) {
+            val page = addonRepository.getCatalog(
+                baseUrl = baseUrl,
+                type = type,
+                catalogId = catalogId,
+                skip = skip
+            )
+            if (page.isEmpty()) break
+            var added = 0
+            page.forEach { meta ->
+                if (seen.add(meta.id)) {
+                    rows += meta
+                    added += 1
+                }
+            }
+            if (added == 0) break
+            skip += page.size
+        }
+        return rows
     }
 
     private fun MetaPreview.toContentItem(): KBContentItem =

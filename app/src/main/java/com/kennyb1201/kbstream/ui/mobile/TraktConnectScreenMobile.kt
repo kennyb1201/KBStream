@@ -90,8 +90,9 @@ fun TraktConnectScreenMobile(
                     )
 
                     Text(
-                        text = "Connect your Trakt account to scrobble playback. Your " +
-                            "watch history stays on this device if you disconnect.",
+                        text = "Connect your Trakt account to scrobble playback and " +
+                            "keep watched state in sync. Your watch history stays on " +
+                            "this device if you disconnect.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodyMedium
                     )

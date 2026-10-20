@@ -118,6 +118,20 @@ jobs:
             echo "VERSION_NAME=0.0.0-dev" >> "$GITHUB_ENV"
           fi
 
+      # Whether this run can connect Trakt. TRAKT_CLIENT_ID is a REPOSITORY
+      # secret: this job declares no `environment:`, so a secret scoped to a
+      # GitHub environment would not be visible to it. An empty value is not
+      # fatal (the app builds and the Trakt row says it is not configured),
+      # but the warning keeps that silent degradation out of a release log.
+      - name: Check Trakt client id
+        run: |
+          set -euo pipefail
+          if [[ -n "${TRAKT_CLIENT_ID:-}" ]]; then
+            echo "TRAKT_CLIENT_ID is present; Trakt connect, scrobble and history are enabled."
+          else
+            echo "::warning title=Trakt disabled::TRAKT_CLIENT_ID is empty; this build's Trakt row will say it is not configured."
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:

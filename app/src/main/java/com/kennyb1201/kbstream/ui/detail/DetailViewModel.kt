@@ -31,6 +31,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.omdb.OmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
@@ -209,6 +210,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val addonManager = AddonManager.getInstance(app)
     internal val tmdbRepository = TmdbRepository.getInstance(app)
     internal val simklRepository = SimklRepository.getInstance(app)
+    // Trakt is read-only on this screen (comments and the watched union); the
+    // "not connected" case is a no-op, never an error.
+    internal val traktRepository = TraktRepository.getInstance(app)
     // Resolved per access: the scoped DB instance is bound to the ACTIVE
     // profile. Capturing the DAO once meant a Detail page opened before a
     // profile switch kept writing resume/watch progress into the previous
@@ -402,6 +406,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
      * episode keys without paying for the cloud snapshot again.
      */
     private var mdbListWatchedEpisodes: Set<Pair<Int, Int>> = emptySet()
+
+    /**
+     * Trakt's watched-episode set for the loaded title, on the same terms as
+     * [mdbListWatchedEpisodes]: read once in [load], kept so a local-only
+     * refresh can rebuild the merged episode keys without another network
+     * read. Trakt watched state is part of the union on this screen too, not
+     * only on Home - otherwise an episode watched on Trakt would show its
+     * tick on a poster but not in the season list.
+     */
+    private var traktWatchedEpisodes: Set<Pair<Int, Int>> = emptySet()
 
     /**
      * Collects this title's in-progress rows so the RESUME bar and the episode
@@ -694,7 +708,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         }.getOrDefault(emptyList())
 
         // First frame of the checkmarks; the collector started at the end of
-        // this function keeps them following the table from here on.
+        // this    function keeps them following the table from here on.
         publishLocalWatchedMarkers(parentId, localCompletedEntries)
 
         /*
@@ -824,9 +838,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The merged watched-episode key set (local history + Simkl + MDBList) for
-     * [parentId]. Shared by the full load and the freshness gate's fast path
-     * so both publish the same keys from the same inputs.
+     * The merged watched-episode key set (local history + Simkl + MDBList +
+     * Trakt) for [parentId]. Shared by the full load and the freshness gate's
+     * fast path so both publish the same keys from the same inputs.
      */
     private fun publishWatchedEpisodeKeys(
         parentId: String,
@@ -838,6 +852,8 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 localCompletedEntries = localCompletedEntries,
                 simklCompletedEpisodes = _simklWatchedEpisodes.value
             ) + mdbListWatchedEpisodes.map { (season, episode) ->
+                "$parentId:$season:$episode"
+            } + traktWatchedEpisodes.map { (season, episode) ->
                 "$parentId:$season:$episode"
             }
     }
@@ -1254,6 +1270,25 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // the merged keys without re-reading the cloud snapshot.
                 mdbListWatchedEpisodes = mdbListCompleted
 
+                // Trakt's watched episodes, unioned into the same keys. Guarded
+                // on its own client id and token; a failed read leaves the
+                // previous set rather than clearing ticks that were already
+                // right (same posture as MDBList above).
+                val traktCompleted = if (
+                    normalizedType == "series" &&
+                    traktRepository.isConfigured() &&
+                    traktRepository.hasToken()
+                ) {
+                    runCatchingCancellable {
+                        traktRepository.watchedEpisodesForShow(
+                            showKeys = localHistoryParentIds(id)
+                        )
+                    }.getOrElse { traktWatchedEpisodes }
+                } else {
+                    emptySet()
+                }
+                traktWatchedEpisodes = traktCompleted
+
                 // 3. Build merged keys *before* evaluating target episodes or seasons
                 publishWatchedEpisodeKeys(id, localCompletedEntries)
 
@@ -1482,6 +1517,7 @@ for ((metaAddon, response, error) in probeResults) {
                         refreshPosterWatchedStatus(normalizedType)
                     }
                     fetchExtraReviews(normalizedType)
+                    fetchTraktComments(normalizedType)
                 }
 
                 // 5. Trigger season selection strictly after history states are fully loaded
@@ -1537,6 +1573,10 @@ for ((metaAddon, response, error) in probeResults) {
     private fun fetchExtraReviews(normalizedType: String) =
         DetailRatingEnrichment.extraReviews(this, normalizedType)
 
+    /** Trakt comments, merged into the same review rail as TMDB's. */
+    private fun fetchTraktComments(normalizedType: String) =
+        DetailRatingEnrichment.traktComments(this, normalizedType)
+
     internal fun setMdbListRatings(value: MdbListRatings?) {
         _mdbListRatings.value = value
     }
@@ -1547,6 +1587,19 @@ for ((metaAddon, response, error) in probeResults) {
 
     internal fun setAllReviews(value: List<TmdbReview>) {
         _allReviews.value = value
+    }
+
+    /**
+     * Appends a second source's reviews (Trakt) to the rail without dropping
+     * the TMDB pages that arrived first. The bundled payload is the fallback
+     * base when the paginated TMDB read has not published yet; de-duping by id
+     * keeps a retry of the same load from doubling the row.
+     */
+    internal fun addAllReviews(extra: List<TmdbReview>) {
+        if (extra.isEmpty()) return
+        val base = _allReviews.value
+            .ifEmpty { _tmdbDetail.value?.reviews?.results.orEmpty() }
+        _allReviews.value = (base + extra).distinctBy { review -> review.id }
     }
 
     private fun autoLoadRelevantSeason(
@@ -2271,6 +2324,29 @@ for ((metaAddon, response, error) in probeResults) {
                 }
             }
 
+            // 5. Trakt, the third tracker. One write per episode (Trakt's
+            // history endpoint takes a whole season, but this app already
+            // addresses episodes individually everywhere else).
+            val trakt = TraktRepository.getInstance(getApplication())
+            if (trakt.isConfigured() && trakt.hasToken()) {
+                runCatchingCancellable {
+                    validEpisodes.forEach { episode ->
+                        trakt.pushWatchedEpisode(
+                            showId = parentId,
+                            season = season,
+                            episode = episode,
+                            tmdbId = showTmdbId
+                        )
+                    }
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonWatched trakt failed s=$season",
+                        e
+                    )
+                }
+            }
+
             refreshPostersAfterWatchedChange()
 
             // This path writes its own DB rows and pushes its own tracker
@@ -2447,6 +2523,27 @@ for ((metaAddon, response, error) in probeResults) {
                     )
                 }
             }
+
+            // 6. And the same removal on Trakt.
+            val trakt = TraktRepository.getInstance(getApplication())
+            if (trakt.isConfigured() && trakt.hasToken()) {
+                runCatchingCancellable {
+                    validEpisodes.forEach { episode ->
+                        trakt.removeWatchedEpisode(
+                            showId = parentId,
+                            season = season,
+                            episode = episode,
+                            tmdbId = showTmdbId
+                        )
+                    }
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSeasonUnwatched trakt failed s=$season",
+                        e
+                    )
+                }
+            }
         }
     }
 
@@ -2585,6 +2682,40 @@ for ((metaAddon, response, error) in probeResults) {
                     Log.e(
                         "KBStream",
                         "rewriteTrackers re-mark mdblist failed s=$season",
+                        e
+                    )
+                }
+            }
+        }
+
+        // Trakt: drop the whole-show record, then re-mark only what is still
+        // watched - the same two-step rewrite as the other trackers.
+        val trakt = TraktRepository.getInstance(appContext)
+        if (trakt.isConfigured() && trakt.hasToken()) {
+            runCatchingCancellable {
+                trakt.removeWatchedShow(showId = parentId, tmdbId = showTmdbId)
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "rewriteTrackers unmark trakt failed",
+                    e
+                )
+            }
+
+            remainingBySeason.forEach { (season, episodes) ->
+                runCatchingCancellable {
+                    episodes.forEach { episode ->
+                        trakt.pushWatchedEpisode(
+                            showId = parentId,
+                            season = season,
+                            episode = episode,
+                            tmdbId = showTmdbId
+                        )
+                    }
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "rewriteTrackers re-mark trakt failed s=$season",
                         e
                     )
                 }
@@ -2828,7 +2959,7 @@ for ((metaAddon, response, error) in probeResults) {
             // from two tables, and for a series the card normally comes from
             // the "watching" library (getContinueWatching's
             // source = "watching", carrying a next-episode pointer) rather
-            // than from the playback table this function used to be the only
+            // than from the playback table this    function used to be the only
             // one to touch. So a fully-marked show stayed in "watching" and
             // came straight back on the next rail refresh. The whole-show
             // write moves it to Simkl's completed list, and its impl closes
@@ -3184,6 +3315,27 @@ for ((metaAddon, response, error) in probeResults) {
                     Log.e(
                         "KBStream",
                         "markSpecificEpisodesUnwatched mdblist failed s=$season",
+                        e
+                    )
+                }
+            }
+
+            // 6. Trakt, the third tracker.
+            val trakt = TraktRepository.getInstance(getApplication())
+            if (trakt.isConfigured() && trakt.hasToken()) {
+                runCatchingCancellable {
+                    validEpisodes.forEach { episode ->
+                        trakt.removeWatchedEpisode(
+                            showId = parentId,
+                            season = season,
+                            episode = episode,
+                            tmdbId = showTmdbId
+                        )
+                    }
+                }.onFailure { e ->
+                    Log.e(
+                        "KBStream",
+                        "markSpecificEpisodesUnwatched trakt failed s=$season",
                         e
                     )
                 }

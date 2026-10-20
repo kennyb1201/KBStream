@@ -13,8 +13,24 @@ enum class LibrarySource(val label: String) {
     SIMKL_LIST("Simkl list"),
     MDBLIST_WATCHLIST("MDBList"),
     MDBLIST_LIST("MDBList list"),
-    LOCAL_LIST("This device · list")
+    TRAKT_WATCHLIST("Trakt"),
+    TRAKT_LIST("Trakt list"),
+    LOCAL_LIST("This device · list");
+
+    /** True for a list this device owns and can rename/delete. */
+    val isLocalList: Boolean get() = this == LOCAL_LIST
 }
+
+/**
+ * The rail id for a Trakt personal list.
+ *
+ * [LibraryList.id] is an Int (MDBList ids are positive, local ids negative
+ * from their creation time), and Trakt's own id is an Int too — but a Trakt id
+ * and an MDBList id can be the same number. Trakt rows therefore live in the
+ * one range no local id can reach (`Int.MIN_VALUE` … `Int.MIN_VALUE + n`), and
+ * callers test [LibraryList.remoteId] / the source rather than the sign.
+ */
+fun traktListShelfId(traktId: Int): Int = Int.MIN_VALUE + traktId.coerceAtLeast(1)
 
 /**
  * One row in the Library tab. A row is either a whole title (movie or
@@ -36,7 +52,12 @@ data class LibraryItem(
      */
     val simklSlug: String? = null,
     val listId: Int? = null,
-    val listName: String? = null
+    val listName: String? = null,
+    /**
+     * The remote list's own id, for the lists that are not addressed by
+     * [listId] (Trakt's slugs/ids are strings). Null on every other row.
+     */
+    val listRemoteId: String? = null
 ) {
     val navigationId: String?
         get() = imdbId ?: tmdbId?.let { "tmdb:$it" }
@@ -89,8 +110,19 @@ data class LibraryList(
     val id: Int,
     val name: String,
     val itemCount: Int,
-    val source: LibrarySource
-)
+    val source: LibrarySource,
+    /** Trakt's own list id/slug; null for local and MDBList lists. */
+    val remoteId: String? = null
+) {
+    /** Where the list lives, for the rail's source line. */
+    val locationLabel: String
+        get() = when (source) {
+            LibrarySource.LOCAL_LIST -> "This device"
+            LibrarySource.MDBLIST_LIST -> "MDBList"
+            LibrarySource.TRAKT_LIST -> "Trakt"
+            else -> source.label
+        }
+}
 
 /**
  * Profile-scoped local library: the on-device "My List" (works with no

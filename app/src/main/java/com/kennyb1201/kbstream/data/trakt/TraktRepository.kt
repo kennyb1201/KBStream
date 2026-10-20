@@ -6,6 +6,9 @@ import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
@@ -24,10 +27,11 @@ data class TraktPollResult(
 /**
  * Trakt, as this app speaks to it.
  *
- * Phase A on purpose: the device-code grant, the proactive refresh, and the
- * disconnect. Scrobbling, the watched union and lists are separate phases and
- * land at their own call sites - this class holds no player or history code, so
- * nothing here can block playback.
+ * The device-code grant, the proactive refresh and the disconnect; the
+ * scrobble history writes; the watched snapshot that Home and the badges read;
+ * user-list reads for KB folders; and comment reads for Detail. Nothing here
+ * touches a player or the local history database: the players call in
+ * fire-and-forget, so no Trakt failure can block playback.
  *
  * Two rules are structural rather than documented:
  *
@@ -44,6 +48,18 @@ class TraktRepository private constructor(private val context: Context?) {
     companion object {
         private const val PREFS_TAG = "TraktRepository"
 
+        // The watched snapshot is account-wide and read by badges and Continue
+        // Watching alike; 15 minutes is the same cadence the watched
+        // repository already uses for the other trackers' sets, so the three
+        // do not make the screen wait on three different refresh schedules.
+        private const val SNAPSHOT_TTL_MS = 15L * 60L * 1_000L
+
+        /** The review rail is a handful of the best comments, not a feed. */
+        private const val MAX_COMMENTS = 20
+
+        /** One Trakt read page (Trakt's own maximum page size). */
+        private const val TRAKT_PAGE_SIZE = 100
+
         @Volatile
         private var instance: TraktRepository? = null
 
@@ -57,6 +73,17 @@ class TraktRepository private constructor(private val context: Context?) {
     internal val store = TraktTokenStore(context)
 
     internal val guard = TraktRateGuard()
+
+    private val snapshotMutex = Mutex()
+
+    @Volatile
+    private var cachedSnapshot: TraktWatchedSnapshot? = null
+
+    @Volatile
+    private var cachedSnapshotAt: Long = 0L
+
+    @Volatile
+    private var cachedSnapshotKey: String? = null
 
     private val moshi by lazy {
         Moshi.Builder()
@@ -247,5 +274,693 @@ class TraktRepository private constructor(private val context: Context?) {
             }
         }
         store.clear()
+        invalidateWatchedSnapshot()
     }
+
+    // ------------------------------------------------------------------
+    // Phase B: scrobbling
+    // ------------------------------------------------------------------
+
+    /**
+     * Mirrors one player event to Trakt's `/scrobble/{start,pause,stop}`.
+     *
+     * Fire-and-forget by construction: every reason not to send (no client id,
+     * no token, a spent budget, an id Trakt cannot resolve) answers `false`
+     * instead of throwing, so a tracker outage can never reach playback. The
+     * progress is a whole percent, per [TraktScrobbleRules.progressPercent].
+     */
+    suspend fun scrobble(
+        action: String,
+        parentId: String,
+        parentType: String,
+        season: Int? = null,
+        episode: Int? = null,
+        progress: Double,
+        tmdbId: Int? = null
+    ): Boolean {
+        if (!TraktConfig.isConfigured || parentId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+
+        val ids = idsFor(parentId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val percent = TraktScrobbleRules.progressPercent(progress)
+        val body = if (TraktScrobbleRules.isMovie(parentType)) {
+            TraktScrobbleRequest(
+                movie = TraktMediaEntry(ids = ids),
+                progress = percent
+            )
+        } else {
+            val showSeason = season ?: return false
+            val showEpisode = episode ?: return false
+            TraktScrobbleRequest(
+                show = TraktMediaEntry(ids = ids),
+                episode = TraktEpisodeNumber(showSeason, showEpisode),
+                progress = percent
+            )
+        }
+
+        val response = runCatchingCancellable {
+            api.scrobble(action = action, authorization = "Bearer $token", body = body)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        // A stop at Trakt's own threshold records the title as watched, so the
+        // snapshot the badges read is now stale. A start/pause changes nothing
+        // in the watched history and is not worth a refetch.
+        if (action == "stop") invalidateWatchedSnapshot()
+        return true
+    }
+
+    /**
+     * Marks a movie watched through `/sync/history`.
+     *
+     * Used by the players' completion path (and by the local mark-watched
+     * paths) where the intent is explicit rather than inferred from a stop
+     * percentage.
+     */
+    suspend fun pushWatchedMovie(
+        parentId: String,
+        tmdbId: Int? = null
+    ): Boolean {
+        if (parentId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val ids = idsFor(parentId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val response = runCatchingCancellable {
+            api.addToHistory(
+                authorization = "Bearer $token",
+                body = TraktSyncHistoryRequest(
+                    movies = listOf(TraktMediaEntry(ids = ids))
+                )
+            )
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        invalidateWatchedSnapshot()
+        return true
+    }
+
+    /**
+     * Marks a whole show watched.
+     *
+     * Trakt expands an ids-only show entry to every episode it knows, which is
+     * the documented meaning of the request (see `/sync/history`): the app's
+     * own "mark series watched" is the same whole-show intent.
+     */
+    suspend fun pushWatchedShow(
+        showId: String,
+        tmdbId: Int? = null
+    ): Boolean = postShowHistory(showId, tmdbId, add = true)
+
+    /** Removes a movie from the account's watched history. */
+    suspend fun removeWatchedMovie(
+        parentId: String,
+        tmdbId: Int? = null
+    ): Boolean {
+        if (parentId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val ids = idsFor(parentId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val response = runCatchingCancellable {
+            api.removeFromHistory(
+                authorization = "Bearer $token",
+                body = TraktSyncHistoryRequest(
+                    movies = listOf(TraktMediaEntry(ids = ids))
+                )
+            )
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        invalidateWatchedSnapshot()
+        return true
+    }
+
+    /** Removes a whole show from the account's watched history. */
+    suspend fun removeWatchedShow(
+        showId: String,
+        tmdbId: Int? = null
+    ): Boolean = postShowHistory(showId, tmdbId, add = false)
+
+    private suspend fun postShowHistory(
+        showId: String,
+        tmdbId: Int?,
+        add: Boolean
+    ): Boolean {
+        if (showId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val ids = idsFor(showId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val body = TraktSyncHistoryRequest(
+            shows = listOf(TraktShowHistoryEntry(ids = ids))
+        )
+        val response = runCatchingCancellable {
+            if (add) {
+                api.addToHistory("Bearer $token", body)
+            } else {
+                api.removeFromHistory("Bearer $token", body)
+            }
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        invalidateWatchedSnapshot()
+        return true
+    }
+
+    /** Removes one episode from the account's watched history. */
+    suspend fun removeWatchedEpisode(
+        showId: String,
+        season: Int,
+        episode: Int,
+        tmdbId: Int? = null
+    ): Boolean {
+        if (showId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val ids = idsFor(showId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val response = runCatchingCancellable {
+            api.removeFromHistory(
+                authorization = "Bearer $token",
+                body = TraktSyncHistoryRequest(
+                    shows = listOf(
+                        TraktShowHistoryEntry(
+                            ids = ids,
+                            seasons = listOf(
+                                TraktSeasonHistoryEntry(
+                                    number = season,
+                                    episodes = listOf(TraktEpisodeNumber(season, episode))
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        invalidateWatchedSnapshot()
+        return true
+    }
+
+    /** Marks one episode of a show watched through `/sync/history`. */
+    suspend fun pushWatchedEpisode(
+        showId: String,
+        season: Int,
+        episode: Int,
+        tmdbId: Int? = null
+    ): Boolean {
+        if (showId.isBlank()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val ids = idsFor(showId, tmdbId)
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val response = runCatchingCancellable {
+            api.addToHistory(
+                authorization = "Bearer $token",
+                body = TraktSyncHistoryRequest(
+                    shows = listOf(
+                        TraktShowHistoryEntry(
+                            ids = ids,
+                            seasons = listOf(
+                                TraktSeasonHistoryEntry(
+                                    number = season,
+                                    episodes = listOf(TraktEpisodeNumber(season, episode))
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        invalidateWatchedSnapshot()
+        return true
+    }
+
+    // ------------------------------------------------------------------
+    // Phase C: watched state
+    // ------------------------------------------------------------------
+
+    /**
+     * The account's watched history, cached for [SNAPSHOT_TTL_MS].
+     *
+     * Two reads (`/sync/watched/shows` and `/sync/watched/movies`) answer one
+     * snapshot. Anything that goes wrong returns the snapshot already in hand -
+     * never an empty one, which downstream would read as "nothing watched" -
+     * and a spent budget returns the cache without touching the network, the
+     * same rule [TraktRateGuard] states. The cache is keyed by the access token
+     * so a profile switch (a different profile's token) can never be served the
+     * previous profile's history.
+     */
+    suspend fun watchedSnapshot(forceRefresh: Boolean = false): TraktWatchedSnapshot {
+        if (!TraktConfig.isConfigured) return TraktWatchedSnapshot()
+        val token = validAccessToken() ?: return TraktWatchedSnapshot()
+
+        cachedSnapshot?.let { cached ->
+            if (!forceRefresh &&
+                cachedSnapshotKey == token &&
+                System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
+            ) {
+                return cached
+            }
+        }
+
+        return snapshotMutex.withLock {
+            val previous = cachedSnapshot?.takeIf { cachedSnapshotKey == token }
+            if (!forceRefresh &&
+                previous != null &&
+                System.currentTimeMillis() - cachedSnapshotAt < SNAPSHOT_TTL_MS
+            ) {
+                return@withLock previous
+            }
+            if (!guard.tryAcquire()) return@withLock previous ?: TraktWatchedSnapshot()
+
+            val showsResponse = runCatchingCancellable {
+                api.watchedShows("Bearer $token")
+            }.getOrNull()
+            noteRetryAfter(showsResponse)
+            val moviesResponse = if (showsResponse != null && showsResponse.isSuccessful) {
+                runCatchingCancellable {
+                    api.watchedMovies("Bearer $token")
+                }.getOrNull()
+            } else {
+                null
+            }
+            moviesResponse?.let(::noteRetryAfter)
+
+            val showsOk = showsResponse?.isSuccessful == true
+            val moviesOk = moviesResponse?.isSuccessful == true
+            if (!showsOk && !moviesOk) return@withLock previous ?: TraktWatchedSnapshot()
+
+            val built = TraktWatchRules.snapshot(
+                shows = showsResponse?.body().takeIf { showsOk },
+                movies = moviesResponse?.body().takeIf { moviesOk }
+            )
+            // A half-answered refresh keeps the half it did not hear about,
+            // rather than clearing that half's badges until the next TTL.
+            val merged = when {
+                !showsOk && previous != null -> built.copy(shows = previous.shows)
+                !moviesOk && previous != null -> built.copy(movieKeys = previous.movieKeys)
+                else -> built
+            }
+            cachedSnapshot = merged
+            cachedSnapshotAt = System.currentTimeMillis()
+            cachedSnapshotKey = token
+            merged
+        }
+    }
+
+    /**
+     * The account's watched episodes for one show, by any of [showKeys].
+     *
+     * Empty when the tracker has nothing on record; the caller distinguishes
+     * "no answer" by catching the call, exactly as the Simkl/MDBList union
+     * already does.
+     */
+    suspend fun watchedEpisodesForShow(showKeys: List<String>): Set<Pair<Int, Int>> =
+        watchedSnapshot().watchedEpisodesFor(showKeys)
+
+    /** Drops the cached snapshot so the next read re-downloads it. */
+    private fun invalidateWatchedSnapshot() {
+        cachedSnapshot = null
+        cachedSnapshotAt = 0L
+        cachedSnapshotKey = null
+    }
+
+    // ------------------------------------------------------------------
+    // Phase D: external lists
+    // ------------------------------------------------------------------
+
+    /**
+     * A Trakt user list's movies and shows, in list order.
+     *
+     * The API addresses one media type at a time, so both reads happen here
+     * and the two halves are merged. A failed half contributes nothing (the
+     * folder's rail then shows what did arrive); a failure of both is an empty
+     * list, which the KB loader already renders as "this rail has nothing"
+     * rather than failing the folder.
+     */
+    suspend fun listItems(ref: TraktListRef): List<TraktListEntry> {
+        if (!TraktConfig.isConfigured) return emptyList()
+        val token = validAccessToken() ?: return emptyList()
+        val movies = readListHalf(ref, "movies")
+        val shows = readListHalf(ref, "shows")
+        return movies + shows
+    }
+
+    private suspend fun readListHalf(
+        ref: TraktListRef,
+        type: String
+    ): List<TraktListEntry> = readAllPages { page ->
+        val user = ref.user
+        if (user == null) {
+            api.listItemsById(listId = ref.listId, type = type, page = page)
+        } else {
+            api.listItems(
+                user = user,
+                listId = ref.listId,
+                type = type,
+                page = page
+            )
+        }
+    }
+
+    /**
+     * Every page of one Trakt list read — no title cap.
+     *
+     * Trakt pages at 100 and reports how many pages there are in
+     * `X-Pagination-Page-Count`. That header is the terminator: fetch page 1,
+     * then every page it names. When a proxy or a stubbed response omits the
+     * header, a FULL page means "probably more", so the next one is fetched;
+     * a short page ends the read.
+     *
+     * Two guards keep an uncapped read from becoming an unbounded one:
+     *
+     *  - **[TraktRateGuard]** is spent one page at a time, exactly like every
+     *    other call. Exhaustion stops the read with the pages already in hand
+     *    rather than blanking the rail (the "exhaustion is not empty" rule).
+     *  - **A page that adds no new row ends the read.** An add-on-style server
+     *    that ignores `page` and repeats page 1 forever would otherwise loop;
+     *    duplicate detection is the real safety net, not a page number cap.
+     *
+     * Rows are de-duplicated by Trakt id (then IMDb/TMDB/slug), so a repeated
+     * page can never double a rail.
+     */
+    private suspend fun readAllPages(
+        call: suspend (page: Int) -> Response<List<TraktListItem>>
+    ): List<TraktListEntry> {
+        val entries = mutableListOf<TraktListEntry>()
+        val seen = HashSet<String>()
+        var page = 1
+        var pageCount = 1
+        while (page <= pageCount) {
+            if (!guard.tryAcquire()) break
+            val response = runCatchingCancellable { call(page) }.getOrNull() ?: break
+            noteRetryAfter(response)
+            if (!response.isSuccessful) break
+
+            val rows = response.body().orEmpty()
+            var added = 0
+            rows.forEach { row ->
+                val media = row.movie ?: row.show ?: return@forEach
+                val isMovie = row.movie != null || row.type == "movie"
+                if (!seen.add(mediaKey(isMovie, media))) return@forEach
+                entries += TraktListEntry(media = media, isMovie = isMovie)
+                added += 1
+            }
+
+            val headerPages = response.headers()["X-Pagination-Page-Count"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+            pageCount = headerPages
+                ?: if (rows.size >= TRAKT_PAGE_SIZE) page + 1 else page
+
+            if (rows.isEmpty()) break
+            if (added == 0) break
+            page += 1
+        }
+        return entries
+    }
+
+    /** Stable identity for one list/watched row across pages. */
+    private fun mediaKey(isMovie: Boolean, media: TraktMediaEntry): String {
+        val ids = media.ids
+        val id = ids?.trakt?.toString()
+            ?: ids?.imdb
+            ?: ids?.tmdb?.toString()
+            ?: ids?.slug
+            ?: "${media.title}:${media.year}"
+        return "${if (isMovie) "movie" else "show"}:$id"
+    }
+
+    /**
+     * The account's watchlist, as the Library tab reads it.
+     *
+     * The Library's other watchlist sources (Simkl's plan-to-watch, MDBList's
+     * watchlist) are one read each; this keeps that shape. Every failure is an
+     * empty list, so an outage leaves the tab's other sources intact rather
+     * than half-drawn.
+     */
+    suspend fun watchlist(): List<TraktListEntry> {
+        if (!TraktConfig.isConfigured) return emptyList()
+        val token = validAccessToken() ?: return emptyList()
+        return readAllPages { page ->
+            api.watchlist("Bearer $token", page = page)
+        }
+    }
+
+    /**
+     * The connected account's personal lists, for the Library's list rail.
+     *
+     * A list without any id is skipped: the rail and the item read are both
+     * addressed by a Trakt id or slug, and a row that can never be opened is
+     * worse than no row.
+     */
+    suspend fun userLists(): List<TraktUserList> {
+        if (!TraktConfig.isConfigured) return emptyList()
+        val token = validAccessToken() ?: return emptyList()
+        if (!guard.tryAcquire()) return emptyList()
+        val response = runCatchingCancellable {
+            api.userLists("Bearer $token")
+        }.getOrNull() ?: return emptyList()
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return emptyList()
+        return response.body().orEmpty()
+            .filter { it.name?.isNotBlank() == true }
+            .filter { it.ids?.trakt != null || it.ids?.slug != null }
+    }
+
+    /**
+     * Adds one title to the account's watchlist — the mirror behind the
+     * Library's "Add to Library".
+     *
+     * Ids only where Trakt accepts them (a show entry is addressed by ids), and
+     * title/year on the movie entry so the watchlist row reads correctly even
+     * before the app's next TMDB enrichment. A title with no id Trakt can
+     * resolve is refused before a request is made.
+     */
+    suspend fun addToWatchlist(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String,
+        year: Int?
+    ): Boolean {
+        val ids = TraktIds(
+            imdb = imdbId?.trim()?.takeIf { it.startsWith("tt") },
+            tmdb = tmdbId?.takeIf { it > 0 }
+        )
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val body = TraktSyncHistoryRequest(
+            movies = if (isMovie) {
+                listOf(TraktMediaEntry(title = title, year = year, ids = ids))
+            } else {
+                null
+            },
+            shows = if (isMovie) null else listOf(TraktShowHistoryEntry(ids = ids))
+        )
+        val response = runCatchingCancellable {
+            api.addToWatchlist("Bearer $token", body)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /** Removes one title from the account's watchlist. */
+    suspend fun removeFromWatchlist(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?
+    ): Boolean {
+        val body = removalBody(isMovie, imdbId, tmdbId) ?: return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.removeFromWatchlist("Bearer $token", body)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /**
+     * Adds one title to a personal list the account owns — the picker's
+     * "Add to list…" destination for a Trakt list.
+     *
+     * Addressed by the list's slug or id (both come back on the list read), and
+     * the title by whichever ids the app holds. A list id and a title id are
+     * each required; neither request shape has a meaningful empty form.
+     */
+    suspend fun addToList(
+        listId: String,
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String,
+        year: Int?
+    ): Boolean {
+        if (listId.isBlank()) return false
+        val ids = TraktIds(
+            imdb = imdbId?.trim()?.takeIf { it.startsWith("tt") },
+            tmdb = tmdbId?.takeIf { it > 0 }
+        )
+        if (ids.imdb == null && ids.tmdb == null) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val body = TraktSyncHistoryRequest(
+            movies = if (isMovie) {
+                listOf(TraktMediaEntry(title = title, year = year, ids = ids))
+            } else {
+                null
+            },
+            shows = if (isMovie) null else listOf(TraktShowHistoryEntry(ids = ids))
+        )
+        val response = runCatchingCancellable {
+            api.addToList("Bearer $token", listId, body)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /** Removes one title from a personal list the account owns. */
+    suspend fun removeFromList(
+        listId: String,
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?
+    ): Boolean {
+        if (listId.isBlank()) return false
+        val body = removalBody(isMovie, imdbId, tmdbId) ?: return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.removeFromList("Bearer $token", listId, body)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /**
+     * The removal body both watchlist/list writes share.
+     *
+     * Null when neither id can address the title: an empty ids object is a
+     * request Trakt answers with an error, and this app never sends one.
+     */
+    private fun removalBody(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?
+    ): TraktSyncHistoryRequest? {
+        val ids = TraktIds(
+            imdb = imdbId?.trim()?.takeIf { it.startsWith("tt") },
+            tmdb = tmdbId?.takeIf { it > 0 }
+        )
+        if (ids.imdb == null && ids.tmdb == null) return null
+        return TraktSyncHistoryRequest(
+            movies = if (isMovie) listOf(TraktMediaEntry(ids = ids)) else null,
+            shows = if (isMovie) null else listOf(TraktShowHistoryEntry(ids = ids))
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Phase E1: reviews
+    // ------------------------------------------------------------------
+
+    /**
+     * Trakt comments (reviews and shouts) for a title.
+     *
+     * Trakt does not accept a TMDB id in the comments path, so a TMDB-only
+     * title is resolved through `/search/tmdb/{id}` first; an IMDb id needs no
+     * resolution. Sorted by likes, because the row is a review rail rather than
+     * a chronological feed. Empty on any failure - reviews must never block a
+     * detail page.
+     */
+    suspend fun commentsFor(
+        tmdbId: Int?,
+        imdbId: String?,
+        isMovie: Boolean
+    ): List<TraktComment> {
+        if (!TraktConfig.isConfigured) return emptyList()
+        val token = validAccessToken() ?: return emptyList()
+        val subject = imdbId
+            ?.trim()
+            ?.takeIf { it.startsWith("tt") }
+            ?: tmdbId?.let { resolveCommentSubject("Bearer $token", it, isMovie) }
+            ?: return emptyList()
+        if (!guard.tryAcquire()) return emptyList()
+        val response = runCatchingCancellable {
+            api.comments(
+                type = if (isMovie) "movies" else "shows",
+                id = subject
+            )
+        }.getOrNull() ?: return emptyList()
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return emptyList()
+        return response.body().orEmpty()
+            .filter { !it.comment.isNullOrBlank() }
+            .take(MAX_COMMENTS)
+    }
+
+    private suspend fun resolveCommentSubject(
+        authorization: String,
+        tmdbId: Int,
+        isMovie: Boolean
+    ): String? {
+        if (!guard.tryAcquire()) return null
+        val response = runCatchingCancellable {
+            api.searchById(
+                idType = "tmdb",
+                id = tmdbId.toString(),
+                type = if (isMovie) "movie" else "show"
+            )
+        }.getOrNull() ?: return null
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return null
+        val entry = response.body().orEmpty()
+            .firstOrNull { if (isMovie) it.movie != null else it.show != null }
+        val ids = if (isMovie) entry?.movie?.ids else entry?.show?.ids
+        return ids?.trakt?.toString()?.takeIf { it.isNotBlank() }
+            ?: ids?.slug?.takeIf { it.isNotBlank() }
+    }
+
+    // ------------------------------------------------------------------
+    // Shared helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * The id object every Trakt write travels with.
+     *
+     * `parentId` is the app's own id (an IMDb id or the numeric TMDB id), and
+     * [tmdbId] is the resolved twin when the app only knew an IMDb/other id. A
+     * title with neither id cannot be addressed by Trakt and is refused by the
+     * caller before a request is made (the id object would be empty).
+     */
+    private fun idsFor(parentId: String, tmdbId: Int?): TraktIds {
+        val trimmed = parentId.trim()
+        val imdb = when {
+            trimmed.startsWith("imdb:") -> trimmed.substringAfter(':')
+            trimmed.startsWith("tt") -> trimmed.substringBefore(':')
+            else -> null
+        }?.trim()?.takeIf { it.isNotBlank() }
+        val tmdb = when {
+            trimmed.startsWith("tmdb:") -> trimmed.substringAfter(':').toIntOrNull()
+            trimmed.all(Char::isDigit) -> trimmed.toIntOrNull()
+            else -> null
+        } ?: tmdbId?.takeIf { it > 0 }
+        return TraktIds(imdb = imdb, tmdb = tmdb)
+    }
+
+    /** A 429 parks the next call for its `Retry-After`, or a minute by default. */
+    private fun noteRetryAfter(response: Response<*>?) {
+        if (response?.code() != 429) return
+        val seconds = response.headers()["Retry-After"]?.toLongOrNull() ?: 60L
+        guard.noteRetryAfter(seconds)
+    }
+
 }

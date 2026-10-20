@@ -130,11 +130,39 @@ internal object SoftwareAudioRules {
      * A blank or null mime is never a decline: with no type stated there is
      * nothing for a platform decoder to match, and answering "decline" would
      * take the track away from FFmpeg with nothing to hand it to.
+     *
+     * **The bundle codecs are never declined, decoder listed or not.** Field
+     * log (Onn 4K Plus, 2026-10-19 18:05 EDT): the firmware lists
+     * `c2.amlogic.audio.decoder.dtshd` for `audio/vnd.dts`, so this rule
+     * declined and the platform decoder took a DTS 5.1 track — then flipped it
+     * to stereo and starved AudioTrack into silence. A listed decoder is not a
+     * working decoder, and these three are exactly what the FFmpeg bundle is
+     * shipped for (see `SplitModeRenderersFactory`). Declining them breaks the
+     * setting's whole reason to exist, so they keep FFmpeg in every mode.
+     *
+     * AAC and every other mime still decline when the device lists a decoder:
+     * the 2026-10-18 robotic-noise fix depends on that, and these codecs are
+     * deliberately absent from [NEVER_DECLINE_MIMES].
      */
     fun ffmpegDeclinesForDeviceDecoder(
         sampleMimeType: String?,
         deviceDecoderPresent: Boolean
-    ): Boolean = !sampleMimeType.isNullOrBlank() && deviceDecoderPresent
+    ): Boolean {
+        if (sampleMimeType.isNullOrBlank()) return false
+        if (sampleMimeType in NEVER_DECLINE_MIMES) return false
+        return deviceDecoderPresent
+    }
+
+    /**
+     * The compressed codecs the FFmpeg bundle always keeps, whatever the
+     * platform decoder list claims. See [ffmpegDeclinesForDeviceDecoder] for
+     * the field failure this set exists to prevent.
+     */
+    private val NEVER_DECLINE_MIMES = setOf(
+        MimeTypes.AUDIO_DTS,
+        MimeTypes.AUDIO_DTS_HD,
+        MimeTypes.AUDIO_TRUEHD
+    )
 
     /**
      * The reason this session belongs to the backup engine, or null when the

@@ -795,7 +795,7 @@ fun SettingsScreen(
                     // own page and its own token store (see TraktConnectScreen).
                     NavigationRow(
                         label = "Trakt",
-                        description = "Connect your Trakt account for scrobbling",
+                        description = "Connect your Trakt account to scrobble playback and sync watched state",
                         onClick = onOpenTrakt
                     )
                 SettingsSectionHeader("API Keys")
