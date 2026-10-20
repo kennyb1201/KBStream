@@ -393,10 +393,20 @@ fun ActorScreen(
             LaunchedEffect(movies, tvShows, isLoading) {
                 if (isLoading) {
                     focusPlaced = false
-                    // A new load is a new list: a position in the old one means nothing.
-                    returnTarget = null
+                    // HOLD the record across the reload. These ViewModels are
+                    // activity-scoped, so returning from Detail briefly
+                    // composes the OLD sections (isLoading still false), this
+                    // effect consumes the record, and only then does load()
+                    // clear the rows and flip isLoading. Nulling it here
+                    // discarded the card the viewer pressed. A genuinely
+                    // different actor gets fresh state from the
+                    // remember(actorId) keys, so a held record cannot leak.
+                    //
+                    // returnWaitStartMs is NOT reset either: the ten-second
+                    // wait for the recorded rail keeps running from when the
+                    // record was read. Zeroing it without a re-consume would
+                    // leave the timeout unable to fire.
                     returnAttempts = 0
-                    returnWaitStartMs = 0L
                 } else if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty())) {
                     // The wait starts when the record is read, not when a rail
                     // arrives: it is what bounds holding the record at all.

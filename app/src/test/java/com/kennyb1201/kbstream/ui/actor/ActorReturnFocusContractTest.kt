@@ -194,14 +194,23 @@ class ActorReturnFocusContractTest {
                 "what ran this page's budget out on the rail that built first",
             hold in 0 until landing && spent > landing
         )
+        // The reload that follows a Back composes the OLD rows first, so this
+        // effect consumes the record, and only then does load() flip isLoading.
+        // The branch must therefore HOLD what it already read - nulling it here
+        // is what reopened every Back at the first card.
+        val loading = source
+            .substringAfter("if (isLoading) {")
+            .substringBefore("} else if")
         assertTrue(
-            "and a new load drops a record left by the list before it: a " +
-                "position in the old list means nothing in the new one",
+            "a reload of the SAME actor keeps its record and its wait budget: " +
+                "a genuinely different actor gets fresh state from the " +
+                "remember(actorId) keys, not from this branch",
             source.contains("var returnWaitStartMs by remember(actorId) { mutableStateOf(0L) }") &&
-                source.contains("if (isLoading) {") &&
-                source.contains("returnTarget = null") &&
-                source.contains("returnAttempts = 0") &&
-                source.contains("returnWaitStartMs = 0L")
+                loading != source &&
+                loading.contains("focusPlaced = false") &&
+                loading.contains("returnAttempts = 0") &&
+                !loading.contains("returnTarget = null") &&
+                !loading.contains("returnWaitStartMs = 0L")
         )
     }
 

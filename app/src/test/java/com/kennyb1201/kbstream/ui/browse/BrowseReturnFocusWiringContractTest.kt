@@ -157,9 +157,18 @@ class BrowseReturnFocusWiringContractTest {
                         effect.contains("waitStartMs = returnWaitStartMs")
                 )
                 assertTrue(
-                    "a new load drops a record left by the list before it - a " +
-                        "position in the old list means nothing in the new one",
-                    effect.contains("returnTarget = null") &&
+                    "a reload of the SAME page keeps its record and its wait budget: " +
+                        "the async clear can land AFTER this effect consumed the record, " +
+                        "and discarding it there is what reopened every Back at the first " +
+                        "card. A genuinely different page gets fresh state from the " +
+                        "remember(id, ...) keys, not from this branch",
+                    !effect.contains("returnTarget = null") &&
+                        !effect.contains("returnWaitStartMs = 0L")
+                )
+                assertTrue(
+                    "the landing is still retried on the fresh list, with a fresh " +
+                        "attempt budget",
+                    effect.contains("focusPlaced = false") &&
                         effect.contains("returnAttempts = 0")
                 )
             }
@@ -184,6 +193,56 @@ class BrowseReturnFocusWiringContractTest {
             source.indexOf("if (returnTarget == null) returnTarget = recorded") in
                 0 until source.indexOf("if (parts.isEmpty()) return@LaunchedEffect")
         )
+    }
+
+    /**
+     * The record is not dropped by the reload that follows a Back. These
+     * ViewModels are activity-scoped: on return the page composes its OLD
+     * sections first, the focus effect consumes the record, and only then does
+     * load() clear the list and flip isLoading - so the isLoading branch used
+     * to throw away the place it had just read, and every Back reopened at the
+     * first card.
+     */
+    @Test
+    fun `the isLoading branch holds the record across the return reload`() {
+        listOf(
+            "tag" to "TagScreen.kt",
+            "studio" to "StudioScreen.kt",
+            "decade" to "DecadeScreen.kt",
+            "actor" to "ActorScreen.kt"
+        ).forEach { (dir, file) ->
+            val source = normalized(stripComments(read(dir, file)))
+            val loading = source
+                .substringAfter("isLoading) {")
+                .substringBefore("} else if")
+            assertTrue(
+                "$file must have an isLoading branch in its focus effect",
+                loading != source && loading.contains("focusPlaced = false")
+            )
+            assertFalse(
+                "$file must HOLD returnTarget across the reload - nulling it here " +
+                    "discards the card the viewer pressed, because the reload's " +
+                    "isLoading always lands after the effect consumed the record",
+                loading.contains("returnTarget = null")
+            )
+            assertFalse(
+                "$file must NOT zero returnWaitStartMs here: the ten-second rail " +
+                    "wait keeps running from when the record was read, and a zeroed " +
+                    "start would never reach its timeout",
+                loading.contains("returnWaitStartMs = 0L")
+            )
+            assertTrue(
+                "$file still retries the landing on the fresh list, with a fresh " +
+                    "attempt budget",
+                loading.contains("returnAttempts = 0")
+            )
+            assertTrue(
+                "$file still consumes its own record and consumes it only once: " +
+                    "the held value is what the landing reads after the reload",
+                source.contains("BrowseReturnFocus.consume(browseReturnKey)") &&
+                    source.contains("returnTarget = recorded")
+            )
+        }
     }
 
     @Test
