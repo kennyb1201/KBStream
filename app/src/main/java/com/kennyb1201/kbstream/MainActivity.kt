@@ -130,6 +130,7 @@ import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.ui.player.ActorHandoff
 import com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity
 import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
@@ -150,6 +151,7 @@ import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 import com.kennyb1201.kbstream.ui.player.addonsFor
 import com.kennyb1201.kbstream.ui.player.sourceAddonsJson
+import com.kennyb1201.kbstream.ui.player.toPlayer
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.decade.DecadeScreen
@@ -1631,6 +1633,30 @@ fun AppRoot(
         // through the same one-shot Continue Watching autoplay path. Skipped
         // when a launcher deep link is present - that launch intent wins.
         if (!handledByExtras) {
+            // The actor ticket's own safety net, beside the next-episode one
+            // below. A cast tap finishes the player with a result whose
+            // callback lives in the composition that is being torn down with
+            // this activity: a shell recreated while playback was up never runs
+            // it, and the ticket would sit unread while the viewer landed on
+            // the restored screen mid-film. Resurfacing it here puts them on
+            // the person page they tapped, with the paused playback behind it -
+            // the same destination the callback builds from the same ticket.
+            if (profilesExist && coldLaunch && showProfilePicker) {
+                // ...but NOT past Who's Watching. This launch opens on the
+                // identity picker, so the playback the ticket names belonged to
+                // the profile that was active when the player was up - and the
+                // viewer is about to choose one. Retire it instead of opening
+                // another profile's session.
+                ActorHandoff.clear(context)
+            } else {
+                ActorHandoff.restoreIfDropped(context)?.let { pending ->
+                    screen = Screen.Actor(
+                        personId = pending.personId,
+                        returnTo = pending.toPlayer(returnTo = stableBackDestination(screen))
+                    )
+                    return@LaunchedEffect
+                }
+            }
             NextEpisodeResult.restoreIfDropped(context)?.let { pending ->
                 // PendingNext carries the Stremio stream id ("tt123:S:E"), so
                 // the show id is its double-colon prefix; next episodes only
@@ -2943,8 +2969,34 @@ fun AppRoot(
                 // user was dumped on the restored screen - which felt like
                 // "Next Episode sends me Home". The stale Screen.Player in `screen`
                 // here is scratch data the new navigation overwrites wholesale.
+                //
+                // The actor ticket is read first for the same reason, and its
+                // own store is cleared on any other result: a cast tap is the
+                // one player result whose destination the shell may not still
+                // hold, and a ticket that outlived its exit must never be
+                // replayed by a later one. See ActorHandoff.
+                val actorTap = result.data
+                    ?.getStringExtra("player_result_action") == "navigate_actor"
+                val actorReturn = if (actorTap) {
+                    ActorHandoff.consumePersisted(context)
+                } else {
+                    ActorHandoff.clear(context)
+                    null
+                }
                 val next = NextEpisodeResult.consumePersisted(context)
-                if (next != null) {
+                if (actorReturn != null) {
+                    // Rebuilt from the ticket rather than `current.copy`, so
+                    // the return does not depend on this shell still holding
+                    // the session. Its own returnTo is the screen that launched
+                    // playback, so a second Back lands exactly where the first
+                    // one would have.
+                    screen = Screen.Actor(
+                        personId = actorReturn.personId,
+                        returnTo = actorReturn.toPlayer(
+                            returnTo = stableBackDestination(current.returnTo)
+                        )
+                    )
+                } else if (next != null) {
                             val nextTarget = StreamsTarget(
                         contentType = current.parentType,
                         streamId = next.streamId,

@@ -2062,6 +2062,37 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val resumeAt = positionMs.coerceAtLeast(0L)
         surface?.setPaused(true)
         saveProgress(reason = "actor")
+        // The actor ticket, on disk before this activity finishes - the same
+        // handoff the main player writes on its cast tap, and persisted first
+        // for the same reason (see ActorHandoff and NextEpisodeResult).
+        ActorHandoff.persist(
+            this,
+            ActorHandoff.PendingActor(
+                personId = member.id,
+                resumePositionMs = resumeAt,
+                url = currentUrl,
+                audioUrl = currentAudioUrl,
+                parentId = parentId,
+                parentType = parentType,
+                season = season,
+                episode = episode,
+                episodeStreamId = episodeStreamId,
+                episodeTitle = episodeTitle,
+                itemName = itemName,
+                itemPoster = itemPoster,
+                clearLogoUrl = clearLogoUrl,
+                backdropUrl = backdropUrl,
+                overview = overview,
+                totalEpisodesInSeason = totalEpisodesInSeason,
+                runtimeMinutes = launchRuntimeMinutes,
+                randomEpisodes = randomEpisodes,
+                streamHeaders = streamHeaders,
+                // No DRM fields: this engine is never the one a protected
+                // stream is handed to (the license is the app's to request),
+                // so it holds none to carry.
+                cast = castMembers
+            )
+        )
         setResult(
             RESULT_OK,
             Intent().apply {

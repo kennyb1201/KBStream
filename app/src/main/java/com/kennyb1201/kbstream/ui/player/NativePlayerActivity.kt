@@ -3679,6 +3679,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 itemView.setOnClickListener {
                     // Save current position before navigating away
                     val currentPosition = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+                    // The actor ticket, on disk before this activity finishes.
+                    // A phone routinely recreates MainActivity while playback
+                    // is up, and its in-memory Screen.Player is not what comes
+                    // back - so the person page's return has to be rebuilt
+                    // from what the player itself knows about this session
+                    // (see ActorHandoff). Persist FIRST, exactly like
+                    // NextEpisodeResult above: the result callback may run on
+                    // a shell that never received these extras.
+                    ActorHandoff.persist(
+                        this,
+                        ActorHandoff.PendingActor(
+                            personId = member.id,
+                            resumePositionMs = currentPosition,
+                            url = currentUrl,
+                            audioUrl = currentAudioUrl,
+                            parentId = parentId,
+                            parentType = parentType,
+                            season = season,
+                            episode = episode,
+                            episodeStreamId = episodeStreamId,
+                            episodeTitle = episodeTitle,
+                            itemName = itemName,
+                            itemPoster = itemPoster,
+                            clearLogoUrl = clearLogoUrl,
+                            backdropUrl = backdropUrl,
+                            overview = overview,
+                            totalEpisodesInSeason = totalEpisodesInSeason,
+                            runtimeMinutes = launchRuntimeMinutes,
+                            randomEpisodes = randomEpisodes,
+                            streamHeaders = streamHeaders,
+                            drmLicenseUrl = drmLicenseUrl,
+                            drmHeaders = drmHeaders,
+                            cast = castMembers
+                        )
+                    )
                     setResult(RESULT_OK, Intent().apply {
                         putExtra("player_result_action", "navigate_actor")
                         putExtra("actor_person_id", member.id)
