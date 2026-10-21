@@ -273,9 +273,10 @@ jobs:
       - name: Build FFmpeg video extension (optional)
         continue-on-error: true
         run: |
-          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          # Retries a truncated NDK/CMake download and verifies the installed
+          # directory: v0.9.19 died here on "Error reading Zip content from a
+          # SeekableByteChannel", which no amount of rebuilding would fix.
+          bash scripts/install_android_sdk.sh "ndk;${NDK_VERSION}" "cmake;3.22.1"
           # The runner image exports ANDROID_NDK pointing at a preinstalled NDK,
           # and the build script prefers it over NDK_VERSION. So this step
           # installed ${NDK_VERSION} and then compiled FFmpeg with the image's
@@ -397,9 +398,7 @@ jobs:
           sudo apt-get install -y -qq \
             autoconf automake libtool pkg-config gettext meson ninja-build \
             gperf autopoint
-          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          bash scripts/install_android_sdk.sh "ndk;${NDK_VERSION}" "cmake;3.22.1"
           # Same trap as the FFmpeg block: the runner exports ANDROID_NDK
           # pointing at a preinstalled NDK, and the script prefers it over
           # NDK_VERSION. Pin the whole build to the version installed here so
@@ -524,9 +523,7 @@ jobs:
       - name: Build libdovi JNI libraries
         run: |
           set -euo pipefail
-          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "ndk;${NDK_VERSION}"
+          bash scripts/install_android_sdk.sh "ndk;${NDK_VERSION}"
           # Same trap as the FFmpeg and libass blocks: the runner exports
           # ANDROID_NDK pointing at a preinstalled NDK, and the script prefers
           # it over NDK_VERSION. Pin the whole build to the version installed
