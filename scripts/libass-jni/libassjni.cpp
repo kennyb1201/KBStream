@@ -290,9 +290,17 @@ Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeLoadTrack(
  * Renders one frame into [bitmap], which the caller must have allocated as a
  * mutable ARGB_8888 bitmap matching the viewport.
  *
- * Returns whether anything was drawn. The bitmap is cleared first on every
- * call: libass only returns the images that exist at [timeMs], so a frame
- * with no subtitle must actively erase the previous one.
+ * Returns libass's `detect_change` for this tick: false means the picture is
+ * identical to the previous frame (a held, non-animated line), which is what
+ * lets the overlay skip a full-frame repaint. It used to return "something was
+ * drawn", which is true for every tick while any line is on screen, so the
+ * Kotlin side could not tell a static cue from an animated one and repainted
+ * at the tick rate for the whole session (audit P5).
+ *
+ * The bitmap is cleared first on every call: libass only returns the images
+ * that exist at [timeMs], so a frame with no subtitle must actively erase the
+ * previous one. A cleared buffer IS a change, so "nothing drawn" answers true
+ * - the previous line has to leave the screen.
  */
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeRenderFrame(
@@ -358,7 +366,10 @@ Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeRenderFrame(
     }
 
     AndroidBitmap_unlockPixels(env, bitmap);
-    return drawn > 0 ? JNI_TRUE : JNI_FALSE;
+    // A blank frame is a visible change whenever the previous one had pixels,
+    // and the caller cannot know which it was - so it always says changed.
+    if (drawn == 0) return JNI_TRUE;
+    return detectChange != 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 /**

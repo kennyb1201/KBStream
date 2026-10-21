@@ -35,7 +35,7 @@ object ProfileManager {
         val avatarIndex: Int = 0,      // 0..7 generic avatar
         val customAvatarUrl: String? = null, // remote https URL (if ever used)
         val avatarData: String? = null,      // uploaded avatar as data:image/jpeg;base64 — syncs with the blob
-        val pinHash: String? = null,         // SHA-256 of the 4-digit PIN; null = no lock
+        val pinHash: String? = null,         // salted PBKDF2 of the 4-digit PIN (see PinHash); null = no lock
         // Kids Mode ceiling: null = off. Non-null means the profile is a
         // kids profile — discover/search/browse surfaces are kid-filtered.
         // Set through [setKidsMaxAge] so the legal value set is enforced.
@@ -291,17 +291,15 @@ object ProfileManager {
     }
 
     // ── Profile PIN (Who's Watching lock) ────────────────────────────
-    // Only the SHA-256 hash is stored/synced — the plain PIN never persists.
+    // Only the hash is stored/synced — the plain PIN never persists. The format
+    // is salted PBKDF2 (see [PinHash]); it used to be bare SHA-256, which made
+    // the synced profiles blob a plaintext-equivalent copy of every PIN.
     //
     // `internal` rather than private: the app-level PARENT PIN (see
     // [KidsTimeGuard.hasParentPin]) is a second credential of the same kind, and
     // it has to hash and verify with exactly this function - a second algorithm,
     // or the same one written twice, is how two stored hashes drift apart.
-    internal fun hashPin(pin: String): String {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(pin.toByteArray(Charsets.UTF_8))
-        return digest.joinToString("") { "%02x".format(it) }
-    }
+    internal fun hashPin(pin: String): String = PinHash.create(pin)
 
     /** The one rule for what a PIN may be: exactly four digits. */
     internal fun isValidPin(pin: String): Boolean =
@@ -312,7 +310,10 @@ object ProfileManager {
      * honest answer [verifyPin] gives for a profile with no PIN.
      */
     internal fun verifyHash(hash: String?, pin: String): Boolean =
-        hash?.takeIf { it.isNotBlank() }?.let { hashPin(pin) == it } ?: false
+        PinHash.matches(hash, pin)
+
+    /** Whether a stored hash predates the salted format (see [PinHash]). */
+    internal fun pinHashNeedsUpgrade(hash: String?): Boolean = PinHash.needsUpgrade(hash)
 
     /** Sets (4 digits) or clears (null/blank) a profile's PIN. Returns false on malformed input. */
     fun setPin(context: Context, profileId: String, pin: String?): Boolean {
@@ -419,8 +420,37 @@ object ProfileManager {
      * current caller guards with [hasPin] first, so nothing changes today, but
      * the next call site that forgets the guard would have been an open door.
      */
-    fun verifyPin(profile: Profile, pin: String): Boolean =
-        verifyHash(profile.pinHash, pin)
+    fun verifyPin(profile: Profile, pin: String): Boolean {
+        if (!verifyHash(profile.pinHash, pin)) return false
+        // A successful verify is the only moment the plain PIN is available, so
+        // it is where a legacy unsalted hash gets rewritten. Failure to upgrade
+        // is not a failure to verify: the viewer is already through the gate.
+        if (pinHashNeedsUpgrade(profile.pinHash)) upgradeLegacyPin(profile.id, pin)
+        return true
+    }
+
+    /**
+     * Rewrites [profileId]'s legacy PIN hash as salted, and republishes the
+     * blob. Silent on a missing app context: verification outside the app
+     * process (tests, or a call before MainActivity's hand-off) simply leaves
+     * the old hash in place, which still verifies.
+     */
+    private fun upgradeLegacyPin(profileId: String, pin: String) {
+        val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return
+        val updated = runCatching { loadProfiles(context) }.getOrNull()?.map { p ->
+            when {
+                p.id != profileId -> p
+                pinHashNeedsUpgrade(p.pinHash) -> p.copy(pinHash = hashPin(pin))
+                else -> p
+            }
+        } ?: return
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+    }
 
     /** Explicitly sets (or clears) a profile's custom avatar URL. Clearing also drops uploaded data. */
     fun setCustomAvatar(context: Context, profileId: String, url: String?) {

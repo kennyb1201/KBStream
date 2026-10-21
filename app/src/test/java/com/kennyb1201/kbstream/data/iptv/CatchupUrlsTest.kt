@@ -133,6 +133,19 @@ class CatchupUrlsTest {
     }
 
     @Test
+    fun `an unreadable or overflowing offset declines instead of throwing`() {
+        // Audit B4: these tokens come from a provider-supplied template, and
+        // `toLong()` on a 20+-digit ticket number used to throw out of build().
+        // The repository's mapNotNull turned that into "no catch-up at all" for
+        // the channel - every program in the section vanished.
+        assertNull(build("http://host/dvr/\${offset:99999999999999999999}.ts"))
+        assertNull(build("http://host/dvr/(b)99999999999999999999.ts"))
+        // A parseable number that overflows the epoch is declined too: wrapping
+        // around would build a plausible URL for the wrong broadcast.
+        assertNull(build("http://host/dvr/\${offset:9223372036854775807}.ts"))
+    }
+
+    @Test
     fun `a literal template is declined because it cannot address a broadcast`() {
         // No token at all means the provider offers the SAME url for every past
         // program — in practice the live stream. Serving that as catch-up

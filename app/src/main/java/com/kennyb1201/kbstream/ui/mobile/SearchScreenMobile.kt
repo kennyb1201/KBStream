@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -555,10 +556,17 @@ fun SearchScreenMobile(
                             }
 
                             else -> {
-                                items(
+                                // Audit B5: keyed by the row's POSITION, not by
+                                // its first chip's display name. Two browse
+                                // entries can share a name (duplicate studio or
+                                // network labels are ordinary), and a duplicate
+                                // key crashes Compose's lazy list. A chunk's
+                                // index is unique by construction and stable
+                                // for the same entry list.
+                                itemsIndexed(
                                     chipRows,
-                                    key = { row -> "chiprow:${row.first().name}" }
-                                ) { row ->
+                                    key = { index, _ -> "chiprow:$index" }
+                                ) { _, row ->
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()

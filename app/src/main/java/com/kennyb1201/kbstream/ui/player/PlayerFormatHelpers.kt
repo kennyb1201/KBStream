@@ -72,8 +72,12 @@ internal fun formatMillis(ms: Long): String {
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
-    return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes, seconds)
-    else String.format("%02d:%02d", minutes, seconds)
+    // Locale.US, not the device locale (audit B3): the default locale renders
+    // digits in its own numbering system, so an Arabic/Hindi/Persian phone drew
+    // a clock in non-ASCII numerals while the guide clock beside it stayed
+    // ASCII. Everything user-visible that formats numbers pins this.
+    return if (hours > 0) String.format(java.util.Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    else String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
 }
 
 internal fun Stream.displayLabel(): String = listOfNotNull(

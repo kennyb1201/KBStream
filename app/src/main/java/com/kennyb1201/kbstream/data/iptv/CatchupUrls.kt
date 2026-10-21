@@ -55,12 +55,36 @@ object CatchupUrls {
             .replace("$dollar{e}", endSec.toString())
 
         // Relative offsets from now, in seconds.
+        //
+        // Audit B4: the numbers in these tokens come from a PROVIDER-SUPPLIED
+        // template, and `toLong()` on a 20+-digit one threw out of build(). The
+        // repository's mapNotNull turned that into "this channel has no
+        // catch-up", so one malformed template silently emptied every program
+        // in the section; and a near-Long.MAX offset wrapped around to a
+        // garbage timestamp that produced a plausible-looking dead URL. An
+        // offset this code cannot read, or that overflows the epoch, is a
+        // template it cannot serve - decline it like any other unreadable
+        // token, which is the same answer an unknown placeholder gets below.
+        var declined = false
+
+        fun shifted(bySeconds: Long): String? =
+            try {
+                Math.addExact(nowUtcMillis / 1000L, bySeconds).toString()
+            } catch (_: ArithmeticException) {
+                null
+            }
+
         out = Regex(Regex.escape("$dollar") + "\\{offset:(-?\\d+)}").replace(out) { match ->
-            (nowUtcMillis / 1000L + match.groupValues[1].toLong()).toString()
+            val at = match.groupValues[1].toLongOrNull()?.let { shifted(it) }
+            if (at == null) declined = true
+            at ?: match.value
         }
         out = Regex("\\(b\\)(\\d+)").replace(out) { match ->
-            (nowUtcMillis / 1000L - match.groupValues[1].toLong()).toString()
+            val at = match.groupValues[1].toLongOrNull()?.let { shifted(-it) }
+            if (at == null) declined = true
+            at ?: match.value
         }
+        if (declined) return null
 
         // Formatted date pieces of the program start (UTC — providers that
         // use these tokens index their DVR by UTC broadcast time).

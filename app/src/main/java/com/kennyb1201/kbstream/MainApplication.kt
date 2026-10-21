@@ -64,6 +64,23 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             java.lang.ref.WeakReference(applicationContext)
         // Crash reporting FIRST so every step below is observable.
         runCatching { initCrashReporting() }
+        // YouTube PO-token minting for trailers, installed once with the app
+        // context. Nothing is created here: the WebView is built only when a
+        // trailer resolve asks for a token, and the youtube_po_token_enabled
+        // preference (default on) is read per call. Without this line the
+        // extractor's provider is the null one and resolves exactly as before.
+        runCatching {
+            com.kennyb1201.kbstream.data.youtube.PoTokens.install(
+                com.kennyb1201.kbstream.data.youtube.WebViewPoTokenProvider.from(
+                    applicationContext
+                )
+            )
+        }.onFailure {
+            // Warning, not debug: without an install the extractor silently
+            // resolves tokenless, which is exactly the kind of degradation a
+            // field capture has to be able to name (Fire OS hides debug logs).
+            Log.w("APP_START", "YouTube PO token provider not installed", it)
+        }
         // Startup isolation: an exception thrown from Application.onCreate
         // kills the process before any Activity exists — on a TV that is a
         // black screen for ~2s, then the launcher. Each step is independent

@@ -73,10 +73,16 @@ class ParentPinTest {
 
         val storedPin = stored("parent_pin_hash")
         assertNotNull("something is persisted", storedPin)
-        assertEquals(
-            "and it is the SAME hash a profile PIN produces, not a second algorithm",
-            ProfileManager.hashPin("2468"),
-            storedPin
+        // Salted (audit B2), so two hashes of the same PIN are deliberately
+        // different values: what has to match is the ALGORITHM, which is what
+        // "the same credential a profile PIN produces" means now.
+        assertTrue(
+            "and it is the same salted format a profile PIN produces, not a second algorithm",
+            storedPin!!.startsWith("v2$") && ProfileManager.hashPin("2468").startsWith("v2$")
+        )
+        assertTrue(
+            "verified through the profile-PIN function",
+            ProfileManager.verifyHash(storedPin, "2468")
         )
         assertFalse(
             "the plain PIN is never written: the file holds the hash only",
@@ -87,23 +93,27 @@ class ParentPinTest {
     @Test
     fun `a malformed parent PIN is refused and changes nothing`() {
         KidsTimeGuard.setParentPin("1357")
+        val before = stored("parent_pin_hash")
 
         listOf("12", "12345", "12a4", "abcd", "123 ").forEach { bad ->
             assertFalse("\"$bad\" is not a 4-digit PIN", KidsTimeGuard.setParentPin(bad))
         }
+        assertEquals(
+            "a refused input writes nothing at all",
+            before,
+            stored("parent_pin_hash")
+        )
         // Blank is the CLEAR value rather than a malformed one, exactly as it is
         // for a profile PIN (see ProfileManager.setPin) - which is why it is not
         // in the list above: it is the one "no PIN" spelling that is accepted.
         assertTrue(KidsTimeGuard.setParentPin("  "))
         assertFalse(KidsTimeGuard.hasParentPin())
-        KidsTimeGuard.setParentPin("1357")
 
-        assertEquals(
+        KidsTimeGuard.setParentPin("1357")
+        assertTrue(
             "so the PIN that WAS set is still the one that answers",
-            ProfileManager.hashPin("1357"),
-            stored("parent_pin_hash")
+            KidsTimeGuard.verifyParentPin("1357")
         )
-        assertTrue(KidsTimeGuard.verifyParentPin("1357"))
     }
 
     @Test

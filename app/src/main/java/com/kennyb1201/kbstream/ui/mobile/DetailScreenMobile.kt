@@ -2494,7 +2494,9 @@ private fun detailMetaLine(type: String, detail: TmdbDetail?): String {
     // nowhere and once as controls that open the Tag page - read as though the
     // plain one were the interactive one.
     return listOfNotNull(
-        detail.voteAverage?.takeIf { it > 0.0 }?.let { "★ " + String.format("%.1f", it) },
+        detail.voteAverage?.takeIf { it > 0.0 }
+            // Locale.US, like every other rating readout (audit B3).
+            ?.let { "★ " + String.format(java.util.Locale.US, "%.1f", it) },
         year,
         runtime
     ).joinToString("  ·  ")

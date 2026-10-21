@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
@@ -153,6 +154,7 @@ internal class PlayerTouchGestures(
                 doubleTapOwnsGesture = true
                 callbacks.stepSeek(PlayerTouchRules.doubleTapStepMs(side))
                 stepIndicator?.show(side, PlayerTouchRules.seekStepLabel(stepAccumMs))
+                tapTick()
                 return true
             }
 
@@ -160,7 +162,10 @@ internal class PlayerTouchGestures(
                 // A hold is fullscreen, but only when the finger stayed put: a
                 // drag that slows down mid-seek must not rotate the picture.
                 if (dragAxis != null) return
-                if (callbacks.gesturesAllowed()) callbacks.toggleFullscreen()
+                if (callbacks.gesturesAllowed()) {
+                    callbacks.toggleFullscreen()
+                    tapThump()
+                }
             }
         }
     )
@@ -172,7 +177,10 @@ internal class PlayerTouchGestures(
                 // One aspect step per pinch gesture rather than per frame of it.
                 if (!pinched) {
                     pinched = true
-                    if (callbacks.gesturesAllowed()) callbacks.cycleAspect()
+                    if (callbacks.gesturesAllowed()) {
+                        callbacks.cycleAspect()
+                        tapTick()
+                    }
                 }
                 return true
             }
@@ -247,6 +255,9 @@ internal class PlayerTouchGestures(
                     seeking
                 ) {
                     callbacks.commitSeek(seekToMs)
+                    // The seek has landed: the same solid thump a remote's
+                    // Select gives, so the finger knows the drag took (F2).
+                    tapThump()
                 }
                 if (dragAxis != null) callbacks.hideSeekHint()
                 resetDrag()
@@ -311,6 +322,26 @@ internal class PlayerTouchGestures(
         if (percent == hintPercent) return
         hintPercent = percent
         callbacks.showSeekHint(PlayerTouchRules.levelHint(label, level))
+    }
+
+    /**
+     * Subtle tick for a step that moved the playhead (audit F2).
+     *
+     * The app had exactly one haptic call, a long-press on a touch button; the
+     * phone player - the surface with the most gesture surface area - was
+     * silent, so a double-tap seek and a failed one felt identical. Both
+     * helpers are called from DISCRETE events only, never from the motion path.
+     *
+     * No FLAG_IGNORE_GLOBAL_SETTING: a viewer who turned touch feedback off in
+     * Android settings keeps it off.
+     */
+    private fun tapTick() {
+        target.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    /** A committed action (a seek that landed, a fullscreen switch). */
+    private fun tapThump() {
+        target.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 
     private fun resetDrag() {

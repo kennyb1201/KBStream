@@ -363,8 +363,19 @@ object KidsTimeGuard {
      * [ProfileManager.verifyPin]): false for "there is nothing to check", so it
      * can never answer yes for a device with no parent PIN.
      */
-    fun verifyParentPin(pin: String): Boolean =
-        ProfileManager.verifyHash(parentPinHash(), pin)
+    fun verifyParentPin(pin: String): Boolean {
+        val stored = parentPinHash() ?: return false
+        if (!ProfileManager.verifyHash(stored, pin)) return false
+        // Same upgrade rule a profile PIN follows: the plain PIN exists only
+        // here, so a legacy unsalted hash is rewritten on first success.
+        if (ProfileManager.pinHashNeedsUpgrade(stored)) {
+            appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                ?.edit()
+                ?.putString(KEY_PARENT_PIN_HASH, ProfileManager.hashPin(pin))
+                ?.apply()
+        }
+        return true
+    }
 
     @Volatile
     private var overriddenProfileId: String? = null

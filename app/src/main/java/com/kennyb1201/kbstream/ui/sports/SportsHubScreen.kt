@@ -1260,12 +1260,29 @@ private fun LeagueBody(
     // happened to fall, so the star was only ever at the top by luck. The pure
     // rule is stable, so favorites keep the date/feed order among themselves and
     // the rest keep it among themselves - see [SportsGameOrder].
-    val liveGames = section.games.filter { it.state == GameState.LIVE }
-    val upcomingGames = section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs }
-    val finalGames = section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs }
-    val live = SportsGameOrder.favoritesFirst(liveGames, favoriteKeys)
-    val upcoming = SportsGameOrder.favoritesFirst(upcomingGames, favoriteKeys)
-    val final = SportsGameOrder.favoritesFirst(finalGames, favoriteKeys)
+    // Remembered, not recomputed per recomposition: the hub recomposes on every
+    // live pulse and on every focus move, and three filters plus three stable
+    // sorts over a league's card list is real work for an answer that only
+    // changes when the poll or the favorites do (audit runner-up). `section` is
+    // a fresh instance each poll, so the inputs, not the instance, are the key.
+    val live = remember(section.games, favoriteKeys) {
+        SportsGameOrder.favoritesFirst(
+            section.games.filter { it.state == GameState.LIVE },
+            favoriteKeys
+        )
+    }
+    val upcoming = remember(section.games, favoriteKeys) {
+        SportsGameOrder.favoritesFirst(
+            section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs },
+            favoriteKeys
+        )
+    }
+    val final = remember(section.games, favoriteKeys) {
+        SportsGameOrder.favoritesFirst(
+            section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs },
+            favoriteKeys
+        )
+    }
 
     // The league's identity for the two scroll rules below. `section` is a new
     // instance on every 30-second poll, so it can never be a key; and both

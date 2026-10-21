@@ -53,7 +53,9 @@ fun PosterCaptions(
     val yearLine = year?.takeIf { showYear && it.isNotBlank() }
     val ratingLine = rating
         ?.takeIf { showRating && it > 0.0 }
-        ?.let { "★ " + String.format("%.1f", it) }
+        // Locale.US (audit B3): a comma-decimal locale rendered "7,5" on tiles
+        // while the detail page and TMDB's own chips showed "7.5".
+        ?.let { "★ " + String.format(java.util.Locale.US, "%.1f", it) }
 
     if (titleLine == null && yearLine == null && ratingLine == null) {
         return

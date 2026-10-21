@@ -11,7 +11,15 @@ import androidx.room.PrimaryKey
         // getCompletedForParent all filter by parentId on every Detail
         // screen load and Up Next build. Without the index SQLite scans
         // the whole table.
-        androidx.room.Index("parentId")
+        androidx.room.Index("parentId"),
+        // (audit P3) Home's Continue Watching / completed-series reads filter
+        // on isCompleted and order by updatedAt (or completedAt). The parentId
+        // index above cannot serve a table-wide "newest in-progress rows"
+        // query, so those scanned AND sorted the entire history - ~13k rows on
+        // a long-lived account - on Home's lifetime-collected Flows, which Room
+        // re-runs on every playback-progress write.
+        androidx.room.Index(value = ["isCompleted", "updatedAt"]),
+        androidx.room.Index(value = ["isCompleted", "completedAt"])
     ]
 )
 data class WatchHistoryEntity(

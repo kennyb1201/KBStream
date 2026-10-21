@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
+import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
@@ -21,14 +22,14 @@ import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * One stream add-on's own results, beside the merged list the picker ranks.
@@ -109,6 +110,22 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         /** Sources named in the diagnostics report, head of the list first. */
         const val RANK_REPORT_TOP = 3
+
+        /** One add-on's own ceiling. Unchanged; the overall wait used to be this. */
+        const val ADDON_TIMEOUT_MS = 15_000L
+
+        /**
+         * How long AUTO-PLAY keeps collecting add-ons after the first one
+         * answers (audit P1).
+         *
+         * The picker wants every add-on: its tabs are per add-on, and a source
+         * that arrives late still belongs in the list. Auto-play does not - it
+         * plays the head of the ranked list, and waiting out a hanging add-on
+         * costs the viewer the full 15 s before the first frame even though the
+         * top add-on answered in under a second. This is the extra time the
+         * head of the list gets to be improved by a second answer.
+         */
+        const val AUTOPLAY_FIRST_RESULT_GRACE_MS = 2_500L
     }
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
@@ -162,6 +179,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
     /** The in-flight [load], so a second one supersedes it instead of racing it. */
     private var loadJob: Job? = null
+
+    /**
+     * Which fetch the published state belongs to. A cosmetic pass that finishes
+     * after a new target was requested must not paint its badges onto the new
+     * list (see [requestCachedBadges]).
+     */
+    private var fetchGeneration = 0
 
     private sealed class AddonLoadResult {
         data class Success(val addonName: String, val streams: List<Stream>) : AddonLoadResult()
@@ -242,7 +266,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             contentType,
             streamId,
             debugLines,
-            runtimeMinutes = runtimeMinutes
+            runtimeMinutes = runtimeMinutes,
+            // The press-of-Play path: this resolve is on the critical path to
+            // the first frame, so it stops collecting a short grace after the
+            // first add-on answers instead of waiting out the slowest one.
+            firstResultGraceMs = AUTOPLAY_FIRST_RESULT_GRACE_MS
         )
 
         _debug.value = debugLines
@@ -253,13 +281,19 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         return resolved
     }
 
+    /**
+     * No matter how many add-ons are installed, a single add-on's own ceiling
+     * bounds the whole wait: they all start together.
+     */
     private suspend fun fetch(
         contentType: String,
         streamId: String,
         debugLines: MutableList<String>,
         onAddonResult: ((List<Stream>) -> Unit)? = null,
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        firstResultGraceMs: Long? = null
     ): ResolvedSources {
+        val generation = ++fetchGeneration
         // A new target's groups replace the last one's as soon as this fetch
         // starts, so a background resolve cannot leave stale tabs behind.
         _addonGroups.value = emptyList()
@@ -298,38 +332,46 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val results: List<AddonLoadResult> = supervisorScope {
-            streamAddons.map { addon ->
-                async {
-                    try {
-                        val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
-                        val requestMsg = "${addon.name}: requesting $contentType/$streamId"
-                        Log.e(TAG, requestMsg)
-                        debugLines.add(requestMsg)
-
-                        val result = withTimeout(15000) {
-                            repository.getStreams(baseUrl, contentType, streamId)
-                        }
-
-                        val returnedMsg = "${addon.name}: returned ${result.size} streams"
-                        Log.e(TAG, returnedMsg)
-                        debugLines.add(returnedMsg)
-
-                        // Progressive publish: hand this addon's streams to
-                        // the caller the moment they land instead of holding
-                        // the picker empty until the slowest addon answers
-                        // (15s timeout).
-                        onAddonResult?.invoke(result)
-
-                        AddonLoadResult.Success(addon.name, result)
-                    } catch (e: Exception) {
-                        val failMsg = "${addon.name}: FAILED -- ${e.message}"
-                        Log.e(TAG, failMsg, e)
-                        debugLines.add(failMsg)
-
-                        AddonLoadResult.Failure(addon.name, e.message)
-                    }
+            // A channel rather than awaitAll: the caller may be allowed to stop
+            // collecting early (auto-play), and awaitAll cannot express "these
+            // answered, those are still out". Every add-on is still STARTED
+            // together, so this is not serialising anything.
+            val outcomes = Channel<AddonLoadResult>(Channel.UNLIMITED)
+            val jobs = streamAddons.map { addon ->
+                launch {
+                    // trySend, not send: a straggler may finish in the window
+                    // between the cancel below and the channel closing, and a
+                    // late answer nobody wants must not throw out of the scope.
+                    outcomes.trySend(
+                        loadAddon(addon, contentType, streamId, debugLines, onAddonResult)
+                    )
                 }
-            }.awaitAll()
+            }
+
+            val collected = mutableListOf<AddonLoadResult>()
+            while (collected.size < streamAddons.size) {
+                // The wait-all case (the picker) keeps waiting for every
+                // add-on, each of which is already bounded by its own 15 s
+                // timeout. The auto-play case stops [firstResultGraceMs] after
+                // the FIRST answer instead of paying the slowest add-on's
+                // timeout for a list whose head will not change.
+                val next =
+                    if (firstResultGraceMs == null || collected.isEmpty()) {
+                        withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L) { outcomes.receive() }
+                    } else {
+                        withTimeoutOrNull(firstResultGraceMs) { outcomes.receive() }
+                    }
+                if (next == null) break
+                collected += next
+            }
+            if (collected.size < streamAddons.size) {
+                // Stragglers are no longer waited for, so stop their work too:
+                // a request nobody will read must not keep a network call (or
+                // this scope) alive on the path to the first frame.
+                jobs.forEach { it.cancel() }
+            }
+            outcomes.close()
+            collected
         }
 
         results.forEach { result ->
@@ -415,14 +457,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         // Which copies the viewer's own debrid account already holds (see
         // TorBoxClient): a cached hash starts instantly off the CDN, with no
-        // peers to find. One batched check for the whole list, inert without a
-        // key, and cached for an hour. Attached after the pack badges because
-        // the pack replaces a stream's badge list rather than extending it.
-        val cachedHashes = TorBoxClient.checkCached(
-            getApplication(),
-            withBadges.map { it.infoHash }
-        )
-        val markedStreams = TorBoxCachedBadges.mark(withBadges, cachedHashes)
+        // peers to find. Attached after the pack badges because the pack
+        // replaces a stream's badge list rather than extending it.
+        //
+        // Audit P8: this used to AWAIT the TorBox round-trip on the resolve
+        // path, so a keyed account paid a network call - and with a list past
+        // the 100-hash batch, several serial ones - before playback could
+        // start, for a chip in the picker. Answers the process already holds are
+        // applied now (no I/O at all); anything else is requested beside the
+        // return and folded in if it lands while this fetch is the current one.
+        val badgeHashes = withBadges.map { it.infoHash }
+        val knownCached = TorBoxClient.knownCached(badgeHashes)
+        val markedStreams = TorBoxCachedBadges.mark(withBadges, knownCached)
 
         // Per-add-on groupings for the picker's tabs: each add-on's own list,
         // prepared by the same rules as the merged one (ranked, badged) so a
@@ -448,7 +494,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     addonName = result.addonName,
                     streams = TorBoxCachedBadges.mark(
                         StreamBadgeEngine.apply(prepared, getApplication()),
-                        cachedHashes
+                        knownCached
                     )
                 )
             }
@@ -475,6 +521,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             )
         )
 
+        if (badgeHashes.any { !it.isNullOrBlank() }) {
+            requestCachedBadges(generation, badgeHashes)
+        }
+
         // The parallel add-on list for the final order: each surviving row's
         // own add-on, looked up by the stream identity the ranking map was
         // built from. Dedup keeps one representative of a repeated torrent and
@@ -483,6 +533,63 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streams = markedStreams,
             addons = markedStreams.map { addonByStream[streamKey(it)] }
         )
+    }
+
+    /**
+     * Requests the TorBox cached-hash answer without anyone waiting for it, then
+     * folds the result into the published picker state if this fetch is still
+     * the current one (audit P8).
+     *
+     * Marking is idempotent ([TorBoxCachedBadges.mark] never doubles a chip), so
+     * re-applying over a list that may have grown is safe; the generation check
+     * is what keeps a late answer for a previous title off a new target's list.
+     */
+    private fun requestCachedBadges(generation: Int, hashes: List<String?>) {
+        viewModelScope.launch {
+            val cached = TorBoxClient.checkCached(getApplication(), hashes)
+            if (cached.isEmpty() || generation != fetchGeneration) return@launch
+            _streams.value = TorBoxCachedBadges.mark(_streams.value, cached)
+            _addonGroups.value = _addonGroups.value.map { group ->
+                group.copy(streams = TorBoxCachedBadges.mark(group.streams, cached))
+            }
+        }
+    }
+
+    /** One add-on's slice of a fetch, in its own failure domain. */
+    private suspend fun loadAddon(
+        addon: InstalledAddon,
+        contentType: String,
+        streamId: String,
+        debugLines: MutableList<String>,
+        onAddonResult: ((List<Stream>) -> Unit)?
+    ): AddonLoadResult {
+        return try {
+            val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+            val requestMsg = "${addon.name}: requesting $contentType/$streamId"
+            Log.e(TAG, requestMsg)
+            debugLines.add(requestMsg)
+
+            val result = withTimeout(ADDON_TIMEOUT_MS) {
+                repository.getStreams(baseUrl, contentType, streamId)
+            }
+
+            val returnedMsg = "${addon.name}: returned ${result.size} streams"
+            Log.e(TAG, returnedMsg)
+            debugLines.add(returnedMsg)
+
+            // Progressive publish: hand this addon's streams to the caller the
+            // moment they land instead of holding the picker empty until the
+            // slowest addon answers (15s timeout).
+            onAddonResult?.invoke(result)
+
+            AddonLoadResult.Success(addon.name, result)
+        } catch (e: Exception) {
+            val failMsg = "${addon.name}: FAILED -- ${e.message}"
+            Log.e(TAG, failMsg, e)
+            debugLines.add(failMsg)
+
+            AddonLoadResult.Failure(addon.name, e.message)
+        }
     }
 
     /**

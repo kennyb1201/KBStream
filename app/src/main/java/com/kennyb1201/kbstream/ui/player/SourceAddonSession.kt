@@ -4,6 +4,9 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -136,8 +139,15 @@ internal class SourcePlaybackProbe(
      * probes fail (the probe can be wrong; the player is the real test).
      * Probe failures mark the addon dead for the session.
      *
-     * Runs on [Dispatchers.IO], sequentially - one host at a time avoids
-     * tripping rate limits, and three short GETs are fast enough.
+     * Runs on [Dispatchers.IO], all probes AT ONCE (audit P2).
+     *
+     * The probes used to run one after another, so a launch paid their sum -
+     * up to three ceilings, ~9 s, before the player was even asked to open
+     * anything. They are independent one-byte GETs against (usually) different
+     * hosts, so the whole search now costs the SLOWEST probe rather than the
+     * total. Rank order still decides the winner: the earliest index that
+     * answered is the pick, so this can never prefer a lower-ranked source over
+     * a higher-ranked one that also answered.
      */
     suspend fun pickLiveSource(
         candidates: List<Stream>,
@@ -149,28 +159,41 @@ internal class SourcePlaybackProbe(
         if (candidates.size < 2) return candidates.first()
 
         return withContext(Dispatchers.IO) {
-            var probes = 0
-            for (i in candidates.indices) {
-                if (probes >= SourceAddonSession.MAX_PROBES) break
-                val candidate = candidates[i]
-                val url = candidate.url
-                if (url.isNullOrBlank()) continue
-                probes += 1
-                // Index 0 is the source this session is about to open - the
-                // viewer's explicit choice when they made one, since
-                // [probeCandidates] pins it to the head - so it is the one
-                // candidate probed with the larger ceiling (see
-                // [probeTimeoutMsFor]). Without that, a slow-but-alive tapped
-                // source answered just past the ranked ceiling, was read as
-                // dead, and the session opened a DIFFERENT source than the one
-                // the viewer tapped: the bug the pinning was added to fix,
-                // arriving through the timeout instead of through rank order.
-                val timeoutMs = probeTimeoutMsFor(isPinned = i == 0)
-                val servable =
-                    runCatching { isServable(url, headersFor(candidate), timeoutMs) }
-                        .getOrDefault(false)
-                if (servable) return@withContext candidate
-                SourceAddonSession.markDead(dead, addons.getOrNull(i))
+            // Index 0 is the source this session is about to open - the
+            // viewer's explicit choice when they made one, since
+            // [probeCandidates] pins it to the head - so it is the one
+            // candidate probed with the larger ceiling (see
+            // [probeTimeoutMsFor]). Without that, a slow-but-alive tapped
+            // source answered just past the ranked ceiling, was read as dead,
+            // and the session opened a DIFFERENT source than the one the viewer
+            // tapped: the bug the pinning was added to fix, arriving through
+            // the timeout instead of through rank order.
+            val probed = candidates.indices
+                .filter { !candidates[it].url.isNullOrBlank() }
+                .take(SourceAddonSession.MAX_PROBES)
+
+            val outcomes = coroutineScope {
+                probed.map { index ->
+                    val candidate = candidates[index]
+                    val url = candidate.url.orEmpty()
+                    val timeoutMs = probeTimeoutMsFor(isPinned = index == 0)
+                    async {
+                        index to runCatching {
+                            isServable(url, headersFor(candidate), timeoutMs)
+                        }.getOrDefault(false)
+                    }
+                }.awaitAll()
+            }
+
+            // Every candidate that was probed and did not answer is dead for the
+            // session, exactly as the sequential walk marked each one it passed.
+            outcomes.forEach { (index, servable) ->
+                if (!servable) SourceAddonSession.markDead(dead, addons.getOrNull(index))
+            }
+            // Rank order decides the winner, not completion order: the first
+            // index that answered wins over a lower-ranked faster answer.
+            outcomes.firstOrNull { it.second }?.let { (index, _) ->
+                return@withContext candidates[index]
             }
             candidates.first()
         }

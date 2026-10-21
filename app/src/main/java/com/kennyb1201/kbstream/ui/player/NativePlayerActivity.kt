@@ -9523,12 +9523,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // The user's offset shifts ASS exactly as it shifts text cues.
         val timeMs = (player.currentPosition + subtitleOffsetMs).coerceAtLeast(0L)
         val frame = renderer.render(timeMs) ?: return
-        subtitleAssImage.setImageBitmap(frame)
-        // The frame buffer is reused across ticks, so its pixels changed while
-        // the drawable did not: without this the view has no reason to redraw.
-        subtitleAssImage.invalidate()
-        if (subtitleAssImage.visibility != View.VISIBLE) {
-            subtitleAssImage.visibility = View.VISIBLE
+        // Coming back from hidden (a fresh attach, a rebuild, a source switch)
+        // needs the draw regardless of what libass says about this tick.
+        val becomingVisible = subtitleAssImage.visibility != View.VISIBLE
+        subtitleAssImage.setImageBitmap(frame.bitmap)
+        if (becomingVisible) subtitleAssImage.visibility = View.VISIBLE
+        // Audit P5: only repaint when the picture actually changed. The buffer
+        // is reused and re-rendered every tick, so this flag is the only way a
+        // static cue avoids a full-frame GPU composite at 30 fps.
+        if (frame.changed || becomingVisible) {
+            // The frame buffer is reused across ticks, so its pixels changed
+            // while the drawable did not: without this the view has no reason
+            // to redraw.
+            subtitleAssImage.invalidate()
         }
     }
 

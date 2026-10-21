@@ -3,7 +3,12 @@ package com.kennyb1201.kbstream.data.cache
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "watched_status_cache")
+// (audit P9) One row per title ever watched-statused, and the cache prune
+// deletes by updatedAt - without an index that is a full scan of the table.
+@Entity(
+    tableName = "watched_status_cache",
+    indices = [androidx.room.Index(value = ["updatedAt"])]
+)
 data class WatchedStatusEntity(
     @PrimaryKey val key: String,
     val imdbId: String,

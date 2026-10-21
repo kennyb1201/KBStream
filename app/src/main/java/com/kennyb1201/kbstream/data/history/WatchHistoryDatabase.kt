@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.flow
  * bump arrives without the Migration that carries it — the mistake that would
  * otherwise only show up as a wipe on a user's device.
  */
-internal const val WATCH_HISTORY_DB_VERSION = 14
+internal const val WATCH_HISTORY_DB_VERSION = 15
 
 @Database(
     entities = [
@@ -82,7 +82,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             get() = listOf(
                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                MIGRATION_12_13, MIGRATION_13_14
+                MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
             )
 
         /**
@@ -491,6 +491,50 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 db.execSQL(
                     "UPDATE `watch_history` SET `markedWatched` = 1 " +
                         "WHERE `isCompleted` = 1 AND `durationMs` <= 1 AND `positionMs` = 0"
+                )
+            }
+        }
+
+        /**
+         * v15: the query indexes the audit asked for (P3 + P9).
+         *
+         * Two classes of read were scanning, and there is one migration for
+         * both because a second version bump for indexes alone would double the
+         * upgrade path on every device for no benefit:
+         *
+         *  - Home's Continue Watching / completed-series reads: they filter on
+         *    isCompleted and sort by updatedAt (CW, launcher rail) or
+         *    completedAt (the local "next up" candidates). ~13k completed rows
+         *    on a long-lived account, re-queried on every progress write.
+         *  - the cache tables: `(imdbId, mediaType)` on the detail-resolution
+         *    path and `updatedAt` for the prunes, neither of which had ANY
+         *    secondary index.
+         *
+         * Indexes only: no table is written, so this migration cannot lose a
+         * row, and it runs once per history file (the profile-scoped builder
+         * applies the same list).
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_watch_history_isCompleted_updatedAt` " +
+                        "ON `watch_history` (`isCompleted`, `updatedAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_watch_history_isCompleted_completedAt` " +
+                        "ON `watch_history` (`isCompleted`, `completedAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_imdb_resolution_cache_imdbId_mediaType` " +
+                        "ON `imdb_resolution_cache` (`imdbId`, `mediaType`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_imdb_resolution_cache_updatedAt` " +
+                        "ON `imdb_resolution_cache` (`updatedAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_watched_status_cache_updatedAt` " +
+                        "ON `watched_status_cache` (`updatedAt`)"
                 )
             }
         }

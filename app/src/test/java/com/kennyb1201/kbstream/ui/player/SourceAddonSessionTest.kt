@@ -173,10 +173,12 @@ class SourceAddonSessionTest {
         val pick = runBlocking { probe.pickLiveSource(candidates, addons) { emptyMap() } }
 
         assertEquals("the top-ranked source loads when nothing answers", "u0", pick.url)
+        // Probes run at once (audit P2), so completion order is not the rule;
+        // WHICH candidates get probed is, and it is still the first three.
         assertEquals(
             "three probes at most",
-            listOf("u0", "u1", "u2"),
-            probed
+            setOf("u0", "u1", "u2"),
+            probed.toSet()
         )
         assertEquals(setOf("addon0", "addon1", "addon2"), dead)
     }
@@ -236,7 +238,12 @@ class SourceAddonSessionTest {
             }
         }
 
-        assertEquals(listOf(mapOf("Referer" to "u0")), seen)
+        // Both candidates are probed now (concurrently), and each request must
+        // carry its OWN source's headers - never the head source's.
+        assertEquals(
+            setOf(mapOf("Referer" to "u0"), mapOf("Referer" to "u1")),
+            seen.toSet()
+        )
     }
 
     // ── pinning the explicitly chosen initial source ─────────────────
@@ -311,14 +318,16 @@ class SourceAddonSessionTest {
 
         runBlocking { probe.pickLiveSource(candidates, listOf("A", "B", "C")) { emptyMap() } }
 
+        // Probes run concurrently (audit P2), so completion order is not the
+        // rule; what each candidate is probed WITH still is.
         assertEquals(
             "the tapped source is probed with more patience than the ranked ones",
-            listOf(
+            mapOf(
                 "pinned" to SourcePlaybackProbe.PINNED_TIMEOUT_MS,
                 "ranked1" to SourcePlaybackProbe.TIMEOUT_MS,
                 "ranked2" to SourcePlaybackProbe.TIMEOUT_MS
             ),
-            seen
+            seen.toMap()
         )
     }
 

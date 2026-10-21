@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
+import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -110,6 +111,12 @@ object Diagnostics {
         // expired" report travels with what Trakt actually answered. Status
         // and state only - never the device code, the user code or a token.
         TraktPollTrace.lines().forEach { report.appendLine(it) }
+        // The trailer pipeline's PO-token layer: per context, whether the last
+        // mint produced a token, whether it came from the cache, or the class of
+        // what went wrong, plus whether the last resolve's URLs carried `pot`.
+        // This is how a BotGuard change (which breaks the layer silently by
+        // design) becomes visible in one field capture. Never the token itself.
+        PoTokenTrace.lines().forEach { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->

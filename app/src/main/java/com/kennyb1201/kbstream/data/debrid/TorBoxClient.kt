@@ -62,6 +62,10 @@ internal object TorBoxClient {
         BaseHttpClient.derived {
             connectTimeout(10, TimeUnit.SECONDS)
             readTimeout(20, TimeUnit.SECONDS)
+            // A wall-clock ceiling on the whole call (audit P2/P8 class): the
+            // cached-hash answer is a cosmetic chip, and a hung connection used
+            // to sit on the picker's path with no overall bound at all.
+            callTimeout(15, TimeUnit.SECONDS)
         }
     }
 
@@ -90,6 +94,25 @@ internal object TorBoxClient {
             .sortedBy { it.value.atMs }
             .take(cache.size - MAX_CACHE_ENTRIES)
             .forEach { cache.remove(it.key) }
+    }
+
+    /**
+     * The subset of [hashes] already known to be cached, with NO network access
+     * and no suspension - the part of [checkCached] that costs nothing.
+     *
+     * Exists so the source list can be badged instantly on a repeat visit and
+     * never wait for a debrid round-trip to reach the player (audit P8).
+     */
+    fun knownCached(hashes: Collection<String?>): Set<String> {
+        if (cache.isEmpty()) return emptySet()
+        val now = System.currentTimeMillis()
+        return hashes
+            .mapNotNull { it?.trim()?.lowercase() }
+            .filter { hash ->
+                val entry = cache[hash] ?: return@filter false
+                entry.cached && now - entry.atMs < CACHE_TTL_MS
+            }
+            .toSet()
     }
 
     /**

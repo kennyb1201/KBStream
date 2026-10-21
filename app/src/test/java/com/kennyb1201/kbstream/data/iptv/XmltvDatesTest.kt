@@ -43,10 +43,23 @@ class XmltvDatesTest {
     }
 
     @Test
-    fun `an offset with an unrecognized spelling falls back rather than guessing`() {
-        // A tz we cannot read leaves the compact form unparseable, so the ISO
-        // path gets its chance; the point is that it never silently becomes UTC.
-        assertNull(parseXmltvDateMillis("20260921120000 CET"))
+    fun `a named zone suffix is honored instead of dropping the program`() {
+        // Audit B6: `20261021120000 GMT` is a real provider spelling, and the
+        // parser used to reject it - silently dropping every program from that
+        // guide. Named zones now normalize to the offset they stand for.
+        assertEquals(noonUtc, parseXmltvDateMillis("20260921120000 GMT"))
+        assertEquals(noonUtc, parseXmltvDateMillis("20260921120000 gmt"))
+        // 14:00 in CEST (+02:00) is the same instant as 12:00 UTC.
+        assertEquals(noonUtc, parseXmltvDateMillis("20260921140000 CEST"))
+        assertEquals(noonUtc, parseXmltvDateMillis("20260921070000 EST"))
+    }
+
+    @Test
+    fun `an ambiguous or unknown zone is still declined rather than guessed`() {
+        // "IST" is India, Ireland and Israel - picking one would put a whole
+        // provider's guide hours off with nothing on screen to explain it.
+        assertNull(parseXmltvDateMillis("20260921120000 IST"))
+        assertNull(parseXmltvDateMillis("20260921120000 XYZ"))
     }
 
     @Test

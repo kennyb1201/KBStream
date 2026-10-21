@@ -330,6 +330,10 @@ object PrefsPayloadBuilder {
         // synced value would do.
         "mpv_vo",
         "match_frame_rate",                // which refresh rates this panel can do
+        // Whether the trailer pipeline can mint YouTube PO tokens at all is a
+        // property of this box (some Fire OS images ship no usable WebView), so
+        // a TV's answer must never switch the phone's minter off.
+        "youtube_po_token_enabled",
         // Whether a launch opens on Who's Watching. How a device is shared is a
         // property of that device: a living-room TV wants the picker every
         // time, a phone that only ever uses one profile does not - so picking

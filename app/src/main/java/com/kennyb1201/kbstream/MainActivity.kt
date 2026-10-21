@@ -3980,6 +3980,13 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         "KBStream ${offer.versionName} (build ${offer.versionCode}) " +
                             "is ready to install."
                     )
+                    // Audit F6: the release notes are already downloaded with
+                    // the offer and shown in Settings/About - this is the
+                    // moment the viewer decides, and it was the one place they
+                    // were missing. Three lines, the same clamp the update row
+                    // uses, so a long changelog cannot push the buttons off a
+                    // phone screen.
+                    UpdateDialogNotes(offer.notes)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)
@@ -4164,6 +4171,31 @@ private fun UpdateDialogFootnote(text: String) {
         color = KBTextLo.copy(alpha = 0.7f),
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier.padding(top = 14.dp)
+    )
+}
+
+/**
+ * The release notes, cut down to what fits above a pair of buttons (audit F6).
+ *
+ * Empty notes render nothing at all rather than an empty box: a release with
+ * no body is a normal release, and the dialog keeps its old shape for one.
+ */
+@Composable
+private fun UpdateDialogNotes(notes: String) {
+    val preview = notes.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .take(3)
+        .joinToString("\n")
+    if (preview.isBlank()) return
+    Text(
+        text = preview,
+        // Full-strength KBTextLo (6.1:1) rather than an alpha-dimmed one: these
+        // are actual sentences to read on a 10-foot screen, not a fill or a
+        // border (audit F9).
+        color = KBTextLo,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(top = 12.dp)
     )
 }
 

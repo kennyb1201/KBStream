@@ -59,19 +59,19 @@ class YoutubeChunkedDataSourceFactory(
          * resolved by InnerTubeExtractor carry their client's UA via
          * [userAgentHint]; when absent (e.g. NewPipe/Piped sources), every
          * known client UA is tried in order until one is accepted.
+         *
+         * Derived from [YouTubeClients], never hand-copied: the ladder used to
+         * be a second set of literals that could drift from the extractor's
+         * table (and did - both were frozen on 2025 client versions).
          */
-        val KNOWN_CLIENT_USER_AGENTS = listOf(
-            // android client (InnerTubeExtractor's preferred client)
-            "com.google.android.youtube/20.10.35 (Linux; U; Android 14; en_US) gzip",
-            // ios client
-            "com.google.ios.youtube/20.10.1 (iPhone16,2; U; CPU iOS 17_4 like Mac OS X)",
-            // android_vr client (legacy default; still valid for its own URLs)
-            "com.google.android.apps.youtube.vr.oculus/1.56.21 " +
-                "(Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1) gzip"
-        )
+        val KNOWN_CLIENT_USER_AGENTS: List<String> = YouTubeClients.userAgents
 
-        /** Legacy UA constant kept for callers that don't pass a hint. */
-        private val YOUTUBE_USER_AGENT = KNOWN_CLIENT_USER_AGENTS[2]
+        /**
+         * Legacy UA for callers that don't pass a hint: the android_vr entry,
+         * unchanged in intent. Hint-less sources come from the NewPipe/Piped
+         * path, which has always been resolved under that identity.
+         */
+        internal val LEGACY_USER_AGENT: String = YouTubeClients.androidVr.userAgent
 
         /**
          * Extra headers (Referer etc.) every chunked googlevideo request
@@ -98,7 +98,7 @@ class YoutubeChunkedDataSourceFactory(
                 .followSslRedirects(true)
                 .build()
         )
-            .setUserAgent(userAgentHint ?: YOUTUBE_USER_AGENT)
+            .setUserAgent(userAgentHint ?: LEGACY_USER_AGENT)
             .createDataSource()
         return YoutubeChunkedDataSource(
             upstream,

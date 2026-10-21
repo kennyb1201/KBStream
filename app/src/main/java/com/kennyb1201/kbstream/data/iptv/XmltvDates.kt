@@ -66,11 +66,14 @@ private fun parseCompactXmltvDate(value: String): Long? {
 private fun normalizeXmltvOffset(value: String): String? {
     val offset = value.trim()
     return when {
-        offset.equals("Z", ignoreCase = true) -> "+0000"
-        offset.equals("UTC", ignoreCase = true) -> "+0000"
         OFFSET_4.matches(offset) -> offset
         OFFSET_WITH_COLON.matches(offset) -> offset.replace(":", "")
-        else -> null
+        // Audit B6: a named zone is a real spelling in the wild
+        // (`20261021120000 GMT`), and rejecting it dropped every program from
+        // that provider's guide with no user-visible cause. Only unambiguous
+        // names are listed - "IST" means three different zones, so it stays
+        // declined rather than silently landing programs hours off.
+        else -> NAMED_ZONES[offset.uppercase()]
     }
 }
 
@@ -105,3 +108,45 @@ private val XMLTV_OFFSET_FORMATTER: DateTimeFormatter =
 
 private val OFFSET_4 = Regex("[+-]\\d{4}")
 private val OFFSET_WITH_COLON = Regex("[+-]\\d{2}:\\d{2}")
+
+/**
+ * Named zones guides actually emit, as the numeric offset the parser speaks.
+ *
+ * Deliberately short and unambiguous. A wrong entry here shifts a whole
+ * provider's guide by hours with nothing on screen to explain it, so a name
+ * with more than one meaning ("IST" is India, Ireland and Israel) is left out
+ * and its programs are dropped exactly as they were before.
+ */
+private val NAMED_ZONES = mapOf(
+    "Z" to "+0000",
+    "UTC" to "+0000",
+    "GMT" to "+0000",
+    "EST" to "-0500",
+    "EDT" to "-0400",
+    "CST" to "-0600",
+    "CDT" to "-0500",
+    "MST" to "-0700",
+    "MDT" to "-0600",
+    "PST" to "-0800",
+    "PDT" to "-0700",
+    "WET" to "+0000",
+    "WEST" to "+0100",
+    "CET" to "+0100",
+    "CEST" to "+0200",
+    "EET" to "+0200",
+    "EEST" to "+0300",
+    "MSK" to "+0300",
+    "GST" to "+0400",
+    "PKT" to "+0500",
+    "ICT" to "+0700",
+    "HKT" to "+0800",
+    "SGT" to "+0800",
+    "AWST" to "+0800",
+    "JST" to "+0900",
+    "KST" to "+0900",
+    "ACST" to "+0930",
+    "AEST" to "+1000",
+    "AEDT" to "+1100",
+    "NZST" to "+1200",
+    "NZDT" to "+1300"
+)

@@ -86,6 +86,16 @@ object AppPreferences {
     private const val KEY_HERO_TRAILER_DELAY_MS = "hero_trailer_delay_ms"
 
     /**
+     * YouTube PO token minting for trailers (see data/youtube/PoTokenProvider).
+     * Device-LOCAL, and deliberately not synced: whether a box can mint at all
+     * is a property of that box (some Fire OS builds ship no usable WebView),
+     * and a TV's answer must not switch a phone's minter off. Default ON: the
+     * layer degrades to pre-token requests on its own, so there is nothing to
+     * protect a viewer from by defaulting it off.
+     */
+    private const val KEY_YOUTUBE_PO_TOKEN_ENABLED = "youtube_po_token_enabled"
+
+    /**
      * Which tracker's resume point Continue Watching believes. Synced, so the
      * whole account agrees about what "continue watching" means; every linked
      * tracker still scrobbles and receives watched marks either way.
@@ -1216,6 +1226,14 @@ object AppPreferences {
         // the 15-minute tick) otherwise.
         com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
             .requestRefresh()
+    }
+
+    // ── YouTube PO tokens (trailers) ──────────────────────────────────
+    fun getYouTubePoTokenEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_YOUTUBE_PO_TOKEN_ENABLED, true)
+
+    fun setYouTubePoTokenEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_YOUTUBE_PO_TOKEN_ENABLED, enabled).apply()
     }
 
     // ── Hero trailer autoplay (Home hero) ─────────────────────────────

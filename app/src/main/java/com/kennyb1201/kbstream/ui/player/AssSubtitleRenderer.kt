@@ -151,21 +151,32 @@ internal class AssSubtitleRenderer {
      * when there is nothing to draw. The buffer is cleared for every frame,
      * so a tick with no active subtitle returns a fully transparent image
      * rather than leaving the previous line on screen.
+     *
+     * [Rendered.changed] is libass's own "did the picture change" flag, which
+     * the tick now honours instead of repainting the overlay unconditionally
+     * (audit P5): a five-second held line used to cost ~150 native renders AND
+     * ~150 full-screen GPU composites. The flag is `ass_render_frame`'s
+     * `detect_change`, returned as of this change; against a .so built before
+     * it the return value still means "something was drawn", which is the old
+     * always-repaint behaviour - never a stale frame on screen.
      */
     @Synchronized
-    fun render(timeMs: Long): Bitmap? {
+    fun render(timeMs: Long): Rendered? {
         if (!active || width <= 0 || height <= 0) return null
         val buffer = frame ?: Bitmap
             .createBitmap(width, height, Bitmap.Config.ARGB_8888)
             .also { frame = it }
         return runCatching {
-            AssNative.nativeRenderFrame(handle, timeMs, buffer)
-            buffer
+            val changed = AssNative.nativeRenderFrame(handle, timeMs, buffer)
+            Rendered(buffer, changed)
         }.onFailure {
             Log.w(TAG, "ASS frame render failed; dropping the renderer", it)
             release()
         }.getOrNull()
     }
+
+    /** One rendered frame, and whether its pixels differ from the previous one. */
+    data class Rendered(val bitmap: Bitmap, val changed: Boolean)
 
     /**
      * Frees the native instance. The frame buffer is dropped rather than

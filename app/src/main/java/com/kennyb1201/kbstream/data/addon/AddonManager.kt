@@ -348,41 +348,68 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             return defaults
         }
 
-        return try {
-
-            val loaded =
+        /*
+         * Parsing and the catalog-order migration are separate failure domains,
+         * and NEITHER may write over the stored list when it goes wrong.
+         *
+         * This used to be one try/catch whose handler called
+         * saveToPrefs(defaultAddons()) and returned the defaults: any throw —
+         * an older build's JSON missing a new field, one corrupt entry, a
+         * failed migration save — permanently replaced that profile's add-ons
+         * with the factory list. Sideloading an older agent build against
+         * newer JSON is a routine workflow here, so the path was reachable and
+         * the wipe was silent. A read that cannot understand the blob now
+         * serves in-memory defaults, logs loudly, and leaves the blob alone:
+         * the add-ons are still there for the build that can read them.
+         */
+        val loaded =
+            try {
                 adapter.fromJson(json)
                     ?: emptyList()
+            } catch (error: Exception) {
+                Log.e(
+                    TAG,
+                    "Installed add-ons could not be parsed for profile " +
+                        "${profileId ?: "default"}; serving defaults for this " +
+                        "session and keeping the stored list",
+                    error
+                )
+                return defaultAddons()
+            }
 
-            /*
-             * IMPORTANT:
-             *
-             * Older KBStream versions stored
-             * catalog.order per addon.
-             *
-             * Convert that saved configuration
-             * into one global ordering now.
-             */
-            val normalized =
+        /*
+         * IMPORTANT:
+         *
+         * Older KBStream versions stored
+         * catalog.order per addon.
+         *
+         * Convert that saved configuration
+         * into one global ordering now.
+         */
+        val normalized =
+            try {
                 normalizeGlobalCatalogOrder(
                     loaded
                 )
-
-            if (normalized != loaded) {
-                saveToPrefs(normalized, profileId)
+            } catch (error: Exception) {
+                Log.e(
+                    TAG,
+                    "Add-on catalog order could not be normalized; using the stored order",
+                    error
+                )
+                return loaded
             }
 
-            normalized
-
-        } catch (_: Exception) {
-
-            val defaults =
-                defaultAddons()
-
-            saveToPrefs(defaults, profileId)
-
-            defaults
+        if (normalized != loaded) {
+            // The migration save is a WRITE on a read path: it is allowed to
+            // fail without costing the viewer the add-ons already loaded.
+            runCatching { saveToPrefs(normalized, profileId) }
+                .onFailure {
+                    Log.w(TAG, "Add-on catalog order could not be persisted", it)
+                }
         }
+
+        return normalized
     }
 
     private fun saveToPrefs(
@@ -1669,6 +1696,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         private const val KEY_CONFIG_SIG = "addons_config_sig"
         private const val KEY_CONFIG_EDITED_AT = "addons_config_edited_at"
         private const val KEY_CONFIG_CLOUD_AT = "addons_config_cloud_at"
+
+        private const val TAG =
+            "AddonManager"
 
         private const val TAG_AUTO_UPDATE =
             "ADDON_AUTO_UPDATE"

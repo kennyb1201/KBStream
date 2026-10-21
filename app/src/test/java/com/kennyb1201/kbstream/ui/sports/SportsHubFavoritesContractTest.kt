@@ -118,23 +118,26 @@ class SportsHubFavoritesContractTest {
     fun `each league group leads with the viewer's own games`() {
         assertTrue(
             "all three of a league's groups are ordered by the pure rule",
-            3 == Regex("val (live|upcoming|final) = SportsGameOrder.favoritesFirst").findAll(hub).count()
+            3 == Regex("SportsGameOrder\\.favoritesFirst\\(").findAll(hubFlat).count()
         )
         assertTrue(
             "and each group is ordered AFTER it is cut and date-sorted - ordering the SECTION first " +
                 "was thrown away by the partition's own sort, which is why the star only ever led the " +
                 "slate by luck",
-            hubFlat.contains("val live = SportsGameOrder.favoritesFirst(liveGames, favoriteKeys)") &&
-                hubFlat.contains("val upcoming = SportsGameOrder.favoritesFirst(upcomingGames, favoriteKeys)") &&
-                hubFlat.contains("val final = SportsGameOrder.favoritesFirst(finalGames, favoriteKeys)") &&
+            hubFlat.contains(
+                "section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs }"
+            ) &&
                 hubFlat.contains(
-                    "val upcomingGames = section.games.filter { it.state == GameState.UPCOMING }" +
-                        ".sortedBy { it.dateMs }"
-                ) &&
-                hubFlat.contains(
-                    "val finalGames = section.games.filter { it.state == GameState.FINAL }" +
+                    "section.games.filter { it.state == GameState.FINAL }" +
                         ".sortedByDescending { it.dateMs }"
                 )
+        )
+        assertTrue(
+            "and each result is remembered on its own inputs, so a 30-second live pulse does not " +
+                "re-filter and re-sort every league's slate",
+            hubFlat.contains("val live = remember(section.games, favoriteKeys) {") &&
+                hubFlat.contains("val upcoming = remember(section.games, favoriteKeys) {") &&
+                hubFlat.contains("val final = remember(section.games, favoriteKeys) {")
         )
         assertTrue(
             "and the hub groups the loaded sections, in the feed's own order",
