@@ -146,16 +146,17 @@ class SourceAddonSessionTest {
         val candidates = listOf(stream("u0"), stream("u1"))
         val addons = listOf("A", "B")
         val dead = mutableSetOf<String>()
-        var calls = 0
+        // Concurrent probes: a plain Int counter is not safe to increment here.
+        val calls = java.util.concurrent.atomic.AtomicInteger(0)
         val probe = SourcePlaybackProbe(dead) { _, _, _ ->
-            calls += 1
+            calls.incrementAndGet()
             throw SocketTimeoutException("probe timed out")
         }
 
         val pick = runBlocking { probe.pickLiveSource(candidates, addons) { emptyMap() } }
 
         assertEquals("u0", pick.url)
-        assertEquals("every candidate was still attempted", 2, calls)
+        assertEquals("every candidate was still attempted", 2, calls.get())
         assertEquals(setOf("a", "b"), dead)
     }
 
@@ -164,7 +165,9 @@ class SourceAddonSessionTest {
         val candidates = (0 until 6).map { stream("u$it") }
         val addons = candidates.indices.map { "addon$it" }
         val dead = mutableSetOf<String>()
-        val probed = mutableListOf<String>()
+        // Probes run concurrently (audit P2), so this recorder is touched from
+        // several threads - a plain ArrayList loses entries here.
+        val probed = java.util.Collections.synchronizedList(mutableListOf<String>())
         val probe = SourcePlaybackProbe(dead) { url, _, _ ->
             probed += url
             false
@@ -226,7 +229,7 @@ class SourceAddonSessionTest {
     @Test
     fun `the probe sends the source's own playback headers`() {
         val candidates = listOf(stream("u0"), stream("u1"))
-        val seen = mutableListOf<Map<String, String>>()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Map<String, String>>())
         val probe = SourcePlaybackProbe(mutableSetOf()) { _, headers, _ ->
             seen += headers
             true
