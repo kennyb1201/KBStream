@@ -470,14 +470,24 @@ android {
         // is wired in as an asset root - the same directory the KSP
         // room.schemaLocation argument above writes.
         //
-        // On the debug VARIANT rather than a test source set: local unit tests
-        // resolve assets through the merged debug assets
-        // (com/android/tools/test_config.properties -> android_merged_assets),
-        // so anything added to the `test` source set is never seen. Keeping it
-        // off `main` keeps the exported schemas out of the released APK, which
-        // costs a `testReleaseUnitTest` run the same wiring if that is ever
-        // added.
-        getByName("debug") { assets.directories.add("$projectDir/schemas") }
+        // On the debug and release VARIANTS rather than a test source set:
+        // local unit tests resolve assets through the merged assets of the
+        // variant under test (com/android/tools/test_config.properties ->
+        // android_merged_assets), so anything added to the `test` source set is
+        // never seen - and a release unit-test run reads the RELEASE merged
+        // assets, not debug's.
+        //
+        // Release is here because that run now exists (the release-variant test
+        // gate in CI) and went red the first time it was asked to be green:
+        // WatchHistoryMigrationTest could not open
+        // `...WatchHistoryDatabase/13.json` - MigrationTestHelper reads schemas
+        // from assets - and failed with FileNotFoundException on both migration
+        // tests while the same tests passed on debug. It costs the released APK
+        // 36KB of JSON, which is the schema the APK already carries in compiled
+        // form.
+        listOf("debug", "release").forEach { variant ->
+            getByName(variant) { assets.directories.add("$projectDir/schemas") }
+        }
     }
 }
 

@@ -38,43 +38,54 @@
 
         <!-- Wall clock + "Ends at" estimate, top-right of the chrome: the same
              pair both engines carry, so the Interface 24-hour toggle reads the
-             same everywhere. -->
-        <TextView
-            android:id="@+id/chrome_clock"
-            android:layout_width="wrap_content"
+             same everywhere. They share one row: two stacked lines cost 20dp of
+             the 540dp a television gives the overlay, and that is a line of the
+             synopsis. -->
+        <LinearLayout
+            android:id="@+id/chrome_clock_row"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:fontFamily="@font/oswald_medium"
-            android:maxLines="1"
-            android:textColor="@color/kb_text_hi"
-            android:textSize="18sp"
-            android:visibility="gone" />
+            android:gravity="end|center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:id="@+id/chrome_ends_at"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:fontFamily="@font/oswald_medium"
-            android:maxLines="1"
-            android:textColor="@color/kb_text_hi"
-            android:textSize="12sp"
-            android:visibility="gone" />
+            <TextView
+                android:id="@+id/chrome_clock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="18sp"
+                android:visibility="gone" />
 
-        <!-- Top section: content info, bounded + scrollable so nothing is
-             clipped on short screens. -->
-        <ScrollView
+            <TextView
+                android:id="@+id/chrome_ends_at"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:fontFamily="@font/oswald_medium"
+                android:maxLines="1"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Top section: content info. FIXED - it does not scroll.
+
+             It used to be a ScrollView, and on a television (which gives this
+             overlay 540dp, not a phone's 800+) the title block is taller than
+             the space left between the clock and the badges: the synopsis was
+             cut and the block only came back into view by scrolling it. The
+             overlay is a player's chrome, not a page - nothing on it may scroll
+             vertically. The block takes the room the bottom controls do not,
+             and the synopsis is capped so the clearlogo, the episode line and
+             the badges are always whole. -->
+        <LinearLayout
+            android:id="@+id/chrome_info"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:fillViewport="true"
-            android:scrollbars="none">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="vertical">
+            android:orientation="vertical">
 
                 <!-- Compact title block: the overview below is the only prose, so
                      it gets the room.
@@ -120,8 +131,8 @@
                     android:textSize="26sp"
                     android:visibility="gone" />
 
-                <!-- Slot: engine-only content that belongs inside the info scroll,
-                     just under the title. Empty here; each activity inflates its
+                <!-- Slot: engine-only content that belongs inside the fixed info
+                     block, just under the title. Empty here; each activity inflates its
                      own view into it (the Exo-only live program block). Empty and
                      GONE on the other engine, so the shared chrome stays exactly the
                      size it was. -->
@@ -162,6 +173,10 @@
                         android:visibility="gone" />
                 </LinearLayout>
 
+                <!-- Three lines, not five: at 540dp a television with the cast
+                     band and the source badges up has room for three, and a cap
+                     that always fits is what keeps the badges and the buttons
+                     on screen. The ellipsis is the same one it always had. -->
                 <TextView
                     android:id="@+id/chrome_overview"
                     android:layout_width="match_parent"
@@ -170,39 +185,31 @@
                     android:ellipsize="end"
                     android:fontFamily="@font/oswald_medium"
                     android:lineSpacingExtra="2dp"
-                    android:maxLines="5"
+                    android:maxLines="3"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="15sp"
                     android:visibility="gone" />
 
-            </LinearLayout>
-        </ScrollView>
+        </LinearLayout>
 
-        <!-- The source's own badge chips, PINNED below the info scroll so they
-             cannot be pushed past the fold by a long overview. A read-only strip,
-             so it is not focusable and never becomes a D-pad stop. -->
-        <HorizontalScrollView
+        <!-- The source's own badge chips, PINNED below the fixed info block. A
+             read-only strip: not focusable, so it never becomes a D-pad stop, and
+             not a scroller either - the row is fixed like the rest of the
+             overlay, and the chips are short enough to sit on one line. -->
+        <LinearLayout
+            android:id="@+id/chrome_badge_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:clipToPadding="false"
-            android:descendantFocusability="blocksDescendants"
-            android:focusable="false"
-            android:scrollbars="none">
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="2dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone" />
 
-            <LinearLayout
-                android:id="@+id/chrome_badge_row"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:layout_marginBottom="2dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone" />
-        </HorizontalScrollView>
-
-        <!-- Cast band: pinned between the info scroll and the seekbar, the same
-             placement both players use, so avatars + names are always fully
-             visible without scrolling. -->
+        <!-- Cast band: pinned between the fixed info block and the seekbar, the
+             same placement both players use. It is the one thing on the overlay
+             that scrolls, and only sideways: a title's cast is longer than any
+             screen. -->
         <LinearLayout
             android:id="@+id/chrome_cast_section"
             android:layout_width="match_parent"

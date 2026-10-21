@@ -3,8 +3,10 @@ package com.kennyb1201.kbstream.ui.player
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import coil3.load
@@ -174,6 +176,7 @@ class PlayerChrome(
     private val episodeLabel: TextView? = root.findViewById(R.id.chrome_episode_label)
     private val episodeTitle: TextView? = root.findViewById(R.id.chrome_episode_title)
     private val overview: TextView? = root.findViewById(R.id.chrome_overview)
+    private val infoBlock: View? = root.findViewById(R.id.chrome_info)
     private val clock: TextView? = root.findViewById(R.id.chrome_clock)
     private val endsAt: TextView? = root.findViewById(R.id.chrome_ends_at)
     private val seekRow: View? = root.findViewById(R.id.chrome_seekbar_row)
@@ -214,6 +217,14 @@ class PlayerChrome(
     }
 
     init {
+        // A phone is the one window too short to hold the fixed title block: its
+        // player runs landscape (see FormFactor.applyPlaybackOrientation), which
+        // leaves ~390dp where the television has 540, and the cast band, the
+        // badges and the controls alone take most of that. There the block keeps
+        // the scroll it always had, so the episode line and the synopsis stay
+        // reachable instead of being clipped. The television - the screen this
+        // chrome is really for - gets the fixed layout, straight from the XML.
+        if (!com.kennyb1201.kbstream.FormFactor.isTv) makeInfoBlockScrollable()
         wireButtons()
         wireSeekBar()
         wireFocusHold()
@@ -364,6 +375,46 @@ class PlayerChrome(
     }
 
     // ── wiring ───────────────────────────────────────────────────────────
+
+    /**
+     * Wraps the info block in a [ScrollView], for the phone only.
+     *
+     * The block is fixed in the layout because a television must never scroll
+     * its chrome (see [R.layout.player_chrome]). A phone's player is landscape
+     * on a window barely 390dp tall, and this chrome is not the phone's own - it
+     * is the television's, shared whole. There the fixed block is taller than
+     * the room the controls leave, so it would be clipped; the scroll that was
+     * removed for the television is put back here, around the block only, so the
+     * clock, the badges, the cast band and the buttons stay where they are and
+     * just the title and synopsis scroll.
+     *
+     * The block is moved with explicit layout params: its XML height is
+     * `0dp`/`weight 1`, which only means "the leftover of a column" and would
+     * collapse inside a ScrollView.
+     */
+    private fun makeInfoBlockScrollable() {
+        val parent = overlay as? ViewGroup ?: return
+        val block = infoBlock ?: return
+        val index = parent.indexOfChild(block)
+        if (index < 0) return
+        parent.removeViewAt(index)
+        val scroller = ScrollView(parent.context).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            addView(
+                block,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        parent.addView(
+            scroller,
+            index,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+    }
 
     private fun wireButtons() {
         playPauseButton?.setOnClickListener {

@@ -215,6 +215,32 @@ splash is Compose and still draws a fixed 420dp slot
 (`AutoPlayLoadSplash.LOGO_WIDTH`), so it is the one remaining place a phone can
 overhang - it is a Kotlin change and was left out of this layout-only fix.
 
+**The television's overlay does not scroll (2026-10-21).** Reported the day
+after the phone fix: "the clearlogo on the player overlay is getting cut off on
+tv unless I scroll up into it", and the rule that followed - nothing on the
+overlay scrolls except the cast row, and the clearlogo, synopsis and badges are
+fixed and all fit. The overlay's title block used to be a `ScrollView` taking
+whatever the clock, badges, cast band and control bar left. A television gives
+the overlay 540dp; the block (104dp clearlogo + episode line + five-line
+synopsis) is taller than the remainder with the cast band up, so it was clipped
+and scrolling was the only way to see it whole.
+
+The block is now a plain weighted `LinearLayout` (`chrome_info`, no scrollbar),
+the wall clock and "Ends at" share one row (two stacked lines cost a line of the
+synopsis), the synopsis is capped at three lines with its old ellipsis, and the
+badge chips are a fixed row instead of a horizontal scroller. Measured at
+960x540dp with clock, badges, eight cast tiles, a two-line episode title and a
+long synopsis all up, every block lands inside the screen with the controls on
+it, and the clearlogo keeps its full 104dp
+(`PlayerOverlayFitContractTest`).
+
+A phone's player is landscape on a window ~390dp tall, where this same chrome
+cannot hold the block plus the cast band plus the controls; there the block is
+wrapped in a `ScrollView` at construction
+(`PlayerChrome.makeInfoBlockScrollable`, `FormFactor.isTv` false), so the title
+and synopsis stay reachable instead of being clipped. The television path is
+the XML, untouched by that branch.
+
 **PiP** is unchanged and not form-gated: `enterPipMode` already refuses when the
 activity is finishing, on Amazon devices, during an engine handoff, and when the
 setting is off. Unverified on hardware like everything else below.
