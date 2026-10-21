@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,9 +17,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +47,10 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
-import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
+import com.kennyb1201.kbstream.ui.components.touch.MobileSpacing
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -59,9 +60,6 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.kb.KBFolderViewModel
 import com.kennyb1201.kbstream.ui.kb.kbFolderCardKey
 import com.kennyb1201.kbstream.ui.kb.visibleFolderRails
-import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBShapeCard
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -127,6 +125,7 @@ internal fun mobileKbWatchedKeys(
 @Composable
 fun KBFolderScreenMobile(
     folderId: String,
+    onBack: () -> Unit,
     onItemClick: (
         type: String,
         imdbId: String,
@@ -205,6 +204,7 @@ fun KBFolderScreenMobile(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 FolderHeaderMobile(
+                    onBack = onBack,
                     title = state.folder?.title?.takeIf { it.isNotBlank() } ?: "Collection",
                     logoUrl = state.folder?.titleLogoUrl?.takeIf { it.isNotBlank() },
                     logoFailed = titleLogoFailed,
@@ -237,48 +237,23 @@ fun KBFolderScreenMobile(
                 }
 
                 when {
-                    state.isLoading -> Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = KBAccent)
-                    }
+                    state.isLoading -> MobileLoading(
+                        modifier = Modifier.weight(1f)
+                    )
 
-                    state.error != null -> Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 24.dp),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = state.error.orEmpty(),
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        KBButton(
-                            label = "RETRY",
-                            onClick = { viewModel.retry(folderId) }
-                        )
-                    }
+                    state.error != null -> MobileStatus(
+                        message = state.error.orEmpty(),
+                        actionLabel = "RETRY",
+                        onAction = { viewModel.retry(folderId) },
+                        modifier = Modifier.weight(1f),
+                        centeredVertically = true
+                    )
 
-                    items.isEmpty() -> Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Nothing to show here yet.",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    items.isEmpty() -> MobileStatus(
+                        message = "Nothing to show here yet.",
+                        modifier = Modifier.weight(1f),
+                        centeredVertically = true
+                    )
 
                     else -> LazyVerticalGrid(
                         columns = GridCells.Fixed(columns),
@@ -428,41 +403,56 @@ fun KBFolderScreenMobile(
 
 @Composable
 private fun FolderHeaderMobile(
+    onBack: () -> Unit,
     title: String,
     logoUrl: String?,
     logoFailed: Boolean,
     onLogoError: () -> Unit,
     count: Int
 ) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-        if (logoUrl != null && !logoFailed) {
-            AsyncImage(
-                model = logoUrl,
-                contentDescription = title,
-                contentScale = ContentScale.Fit,
-                onError = { onLogoError() },
-                modifier = Modifier.height(32.dp)
-            )
-        } else {
-            Text(
-                text = title,
-                color = KBTextHi,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+    // The arrow sits on the screen's own edge, not inside the 16dp text
+    // gutter: in the gutter it landed ~28dp in while every other portrait
+    // screen draws it at 4dp, and the folder page's back control looked like a
+    // different control.
+    Column(modifier = Modifier.padding(vertical = 14.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(end = MobileSpacing.edge)
+        ) {
+            // The shared top-left arrow: the folder page's way back, the same
+            // pop system back performs (see AppRoot's BackHandler).
+            MobileBackButton(onBack = onBack)
+            Column(modifier = Modifier.weight(1f)) {
+                if (logoUrl != null && !logoFailed) {
+                    AsyncImage(
+                        model = logoUrl,
+                        contentDescription = title,
+                        contentScale = ContentScale.Fit,
+                        onError = { onLogoError() },
+                        modifier = Modifier.height(32.dp)
+                    )
+                } else {
+                    Text(
+                        text = title,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = when (count) {
+                        0 -> "No titles"
+                        1 -> "1 title"
+                        else -> "$count titles"
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
-        Text(
-            text = when (count) {
-                0 -> "No titles"
-                1 -> "1 title"
-                else -> "$count titles"
-            },
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(top = 4.dp)
-        )
     }
 }
 
@@ -472,24 +462,5 @@ private fun FolderSourceChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false
-            )
-        },
-        shape = KBShapeCard,
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = KBSurface,
-            labelColor = KBTextLo,
-            selectedContainerColor = KBAccent.copy(alpha = 0.28f),
-            selectedLabelColor = KBAccent
-        )
-    )
+    MobileFilterChip(label = label, selected = selected, onClick = onClick)
 }

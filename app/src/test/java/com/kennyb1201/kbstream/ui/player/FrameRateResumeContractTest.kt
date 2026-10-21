@@ -35,6 +35,10 @@ class FrameRateResumeContractTest {
 
     private val native = squash(source(NATIVE))
     private val mpv = squash(source(MPV))
+    private val match = squash(source(MATCH))
+    private val apply = match.window("private fun apply(", "private fun askSurfaceIfPossible(")
+    private val askSurface = match.window("private fun askSurface(", "private fun requestMode(")
+    private val confirm = match.window("private fun confirm(", "private fun backstopAfter(")
 
     @Test
     fun `both engines remember the rate they were told`() {
@@ -179,6 +183,69 @@ class FrameRateResumeContractTest {
         )
     }
 
+    @Test
+    fun `a resume repairs the mode and never re-asks the live surface`() {
+        val resume = apply.window("if (source == FrameRateSource.RESUME) {", "if (ENGAGE_MODE_FIRST) {")
+        assertTrue(
+            "the resume is its own branch, before the engage ladder: the open ladder asked " +
+                "the surface before decode, which is the smooth point for it",
+            resume.contains("val best = FrameRateMatch.bestMode(contentFps, modes)")
+        )
+        assertTrue(
+            "the panel being in the wrong mode is the one thing a resume repairs",
+            resume.contains("best != null && best.id != modeId -> requestMode(best, contentFps, modeId)")
+        )
+        assertTrue(
+            "a panel already right is a no-op with a diagnostics line saying so",
+            resume.contains("FrameRateMatch.describeResumeNoRequest(contentFps, best)")
+        )
+        assertTrue(
+            "and the surface is only reachable when there is no better mode at all, where " +
+                "the idempotence guard decides whether anything is actually asked",
+            resume.contains("else -> askSurfaceIfPossible(contentFps, modeId)")
+        )
+    }
+
+    @Test
+    fun `the surface hint is idempotent per surface and rate`() {
+        assertTrue(
+            "a rate already on the same surface is not re-applied: that request is what the " +
+                "field capture of 2026-10-18 links to choppy playback after pause and resume",
+            askSurface.contains(
+                "if (surface === surfaceRateSurface && request.frameRate == surfaceRateValue)"
+            )
+        )
+        assertTrue(
+            "the no-op is recorded as one, so a capture can tell it from a refused request",
+            askSurface.contains("FrameRateMatch.describeSurfaceAlreadyAt(contentFps)")
+        )
+        assertTrue(
+            "the applied rate and its surface are remembered at the one place that applies them",
+            askSurface.contains("surfaceRateSurface = surface") &&
+                askSurface.contains("surfaceRateValue = request.frameRate")
+        )
+        assertTrue(
+            "clearing the rate forgets them, so a rebuilt surface is asked again",
+            match.contains("surfaceRateSurface = null") && match.contains("surfaceRateValue = 0f")
+        )
+    }
+
+    @Test
+    fun `a paused picture gets no backstop, and both engines say when it is paused`() {
+        assertTrue(
+            "the delayed second look is dropped while playback is stopped",
+            confirm.contains("if (!isPlaybackActive()) return")
+        )
+        assertTrue(
+            "the native player answers from its own play intent",
+            native.contains("isPlaybackActive = { exoPlayer?.playWhenReady == true }")
+        )
+        assertTrue(
+            "and mpv from its pause property, at both places the matcher is built",
+            mpv.split("isPlaybackActive = { surface?.isPaused() == false }").size == 3
+        )
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)
@@ -202,8 +269,18 @@ class FrameRateResumeContractTest {
 
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
 
+    /** The squashed source between [from] and the next [to], both asserted to exist. */
+    private fun String.window(from: String, to: String): String {
+        val start = indexOf(from)
+        assertTrue("anchor missing: $from", start >= 0)
+        val end = indexOf(to, start + from.length)
+        assertTrue("anchor missing after '$from': $to", end > start)
+        return substring(start, end)
+    }
+
     private companion object {
         const val NATIVE = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val MPV = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
+        const val MATCH = "com/kennyb1201/kbstream/ui/player/FrameRateMatch.kt"
     }
 }

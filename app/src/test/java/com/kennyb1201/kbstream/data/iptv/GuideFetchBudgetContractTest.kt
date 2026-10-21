@@ -121,7 +121,21 @@ class GuideFetchBudgetContractTest {
         )
         assertTrue(
             "an abandoned source must not count towards a successful pass",
-            worker.contains(".onSuccess { didImport -> if (didImport) imported++ }")
+            worker.contains(".onSuccess { didImport ->") &&
+                worker.contains("if (didImport) {") &&
+                worker.contains("imported++")
+        )
+        // And a source that DID import is marked fresh at once, not once after
+        // the loop: two slow sources outlast the ~10-minute job window, and a
+        // kill mid-pass used to lose the marker for a guide that WAS stored -
+        // so the next run re-downloaded it.
+        val markerAt = worker.indexOf("putLong(KEY_EPG_UPDATED_AT")
+        val afterLoopAt = worker.indexOf("// One dead source must not fail")
+        assertTrue("the freshness marker write must exist", markerAt >= 0)
+        assertTrue("the loop's tail must still be findable", afterLoopAt > 0)
+        assertTrue(
+            "the freshness marker must be written inside the per-source loop",
+            markerAt < afterLoopAt
         )
     }
 

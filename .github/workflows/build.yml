@@ -655,12 +655,31 @@ jobs:
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
+      # The SAME tests on the RELEASE variant.
+      #
+      # The debug gate above cannot see the class of defect that cost two days
+      # on Trakt (and that sweep 5 found again in MDBList, Simkl and TVmaze): a
+      # reflective Moshi adapter works in a debug build and throws in a minified
+      # release one, because R8 removes the reflective default-call path. Where
+      # every read is wrapped in runCatching the failure is SILENT - dead caches,
+      # silent refetches, no crash to report. `testReleaseUnitTest` compiles and
+      # runs the suite against the variant that actually ships, so an unannotated
+      # model fails here as a test rather than as a dead cache in the field.
+      # (An on-device release smoke check is still the only gate that proves the
+      # MINIFIED APK's runtime behaviour; this closes the variant/compile half.)
+      - name: Run release-variant unit tests
+        run: ./gradlew testReleaseUnitTest --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+
       - name: Upload test report (on failure)
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: unit-test-report
-          path: app/build/reports/tests/testDebugUnitTest/
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/tests/testReleaseUnitTest/
 
       # The Android Lint gate. It runs here and not on a developer machine on
       # purpose: lint's whole-source analysis on a tree this size needs more
@@ -710,8 +729,15 @@ jobs:
       # above is what the self-update feed serves, and this is what a Play
       # upload needs. Same signing config (the release one), same daemon
       # arguments so it reuses the build already warm from assembleRelease.
-      - name: Build signed release AAB
-        run: ./gradlew bundleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+      #
+      # -PplayBuild is REQUIRED here, and it was missing: this step built the
+      # default bundle, which keeps REQUEST_INSTALL_PACKAGES and the live
+      # self-updater - so the one artifact meant for Play was the one that
+      # would be policy-flagged if it were uploaded as-is. The release APK
+      # above deliberately stays on the default variant; only the bundle is the
+      # Play artifact.
+      - name: Build signed release AAB (Play overlay)
+        run: ./gradlew bundleRelease -PplayBuild -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks
@@ -905,6 +931,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
+          # A manual dispatch carries no tag, so its versionName is "0.0.0-dev"
+          # (see Compute version name). The checks below would happily pass for
+          # it - the run number is higher and the commit does contain the
+          # published one - and the feed would then offer every install an
+          # "update" whose dialog identifies as 0.0.0-dev. Publishing is a
+          # release act: a dispatch is for building, a tag is for publishing.
+          if [[ "${VERSION_NAME}" == *-dev ]]; then
+            echo "::error::this run is an unreleased build (VERSION_NAME=${VERSION_NAME}); publishing it would offer every install a 0.0.0-dev update. Push a v* tag to publish."
+            exit 1
+          fi
           HEAD_SHA="$(git rev-parse HEAD)"
           mkdir -p /tmp/published
           if ! gh release download latest --pattern metadata.json --dir /tmp/published --clobber 2>/dev/null; then

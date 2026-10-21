@@ -94,11 +94,25 @@ internal class PlayerTouchGestures(
     // so rebuilding it on every MotionEvent would allocate tens of strings a
     // second for a label that only changes once a second anyway.
     private var hintSecond = -1L
+
+    /** The percentage the level hint currently shows, or -1 before a drag. */
+    private var hintPercent = -1
     // Double-tap session: what the last taps on one side have added up to.
     private var stepAccumMs = 0L
     private var stepSide: PlayerTouchRules.Zone? = null
     private var lastStepAtMs = 0L
     private var stepIndicator: SeekStepIndicator? = null
+
+    /**
+     * True from the moment [GestureDetector] confirms a double-tap on this
+     * gesture until the finger lifts.
+     *
+     * Without it, a double-tap whose SECOND tap drifted past the touch slop
+     * both stepped the seek and locked the SEEK axis, committing a small drag
+     * seek on top of the ±10 s step - two seeks from one intent, a few tens of
+     * milliseconds apart. A confirmed double-tap owns the rest of its gesture.
+     */
+    private var doubleTapOwnsGesture = false
 
     private val tapDetector = GestureDetector(
         context,
@@ -136,6 +150,7 @@ internal class PlayerTouchGestures(
                 )
                 stepSide = side
                 lastStepAtMs = now
+                doubleTapOwnsGesture = true
                 callbacks.stepSeek(PlayerTouchRules.doubleTapStepMs(side))
                 stepIndicator?.show(side, PlayerTouchRules.seekStepLabel(stepAccumMs))
                 return true
@@ -195,6 +210,7 @@ internal class PlayerTouchGestures(
             resetDrag()
             return true
         }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) doubleTapOwnsGesture = false
         tapDetector.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -212,6 +228,9 @@ internal class PlayerTouchGestures(
 
             MotionEvent.ACTION_MOVE -> {
                 if (pinched) return true
+                // A confirmed double-tap owns this gesture: a drifting thumb
+                // must not also become a drag seek (see doubleTapOwnsGesture).
+                if (doubleTapOwnsGesture) return true
                 val dx = event.x - downX
                 val dy = event.y - downY
                 if (dragAxis == null) dragAxis = PlayerTouchRules.axisFor(dx, dy, slop)
@@ -223,7 +242,10 @@ internal class PlayerTouchGestures(
             }
 
             MotionEvent.ACTION_UP -> {
-                if (dragAxis == PlayerTouchRules.Axis.SEEK && seeking) {
+                if (!doubleTapOwnsGesture &&
+                    dragAxis == PlayerTouchRules.Axis.SEEK &&
+                    seeking
+                ) {
                     callbacks.commitSeek(seekToMs)
                 }
                 if (dragAxis != null) callbacks.hideSeekHint()
@@ -264,21 +286,40 @@ internal class PlayerTouchGestures(
             PlayerTouchRules.Zone.LEFT -> {
                 val level = PlayerTouchRules.brightnessAfter(startBrightness, fraction)
                 callbacks.setBrightnessFraction(level)
-                callbacks.showSeekHint(PlayerTouchRules.levelHint("Brightness", level))
+                showLevelHint("Brightness", level)
             }
 
             PlayerTouchRules.Zone.RIGHT -> {
                 val level = PlayerTouchRules.volumeAfter(startVolume, fraction)
                 callbacks.setVolumeFraction(level)
-                callbacks.showSeekHint(PlayerTouchRules.levelHint("Volume", level))
+                showLevelHint("Volume", level)
             }
         }
+    }
+
+    /**
+     * The level label, rebuilt only when the PERCENTAGE it displays changes.
+     *
+     * The drag path runs once per MotionEvent, and building the string there
+     * was the one allocation the layer's own rule forbids - the seek axis
+     * already gates on the displayed second, and this is the same gate on the
+     * displayed percent. The level itself is still applied on every event: it
+     * is the label that is throttled, not the brightness or volume.
+     */
+    private fun showLevelHint(label: String, level: Float) {
+        val percent = (level.coerceIn(0f, 1f) * 100f).toInt()
+        if (percent == hintPercent) return
+        hintPercent = percent
+        callbacks.showSeekHint(PlayerTouchRules.levelHint(label, level))
     }
 
     private fun resetDrag() {
         dragAxis = null
         seeking = false
         hintSecond = -1L
+        hintPercent = -1
+        // Not doubleTapOwnsGesture: it is cleared at the next ACTION_DOWN, so
+        // this same gesture's UP (which reads it) still sees the flag.
     }
 }
 

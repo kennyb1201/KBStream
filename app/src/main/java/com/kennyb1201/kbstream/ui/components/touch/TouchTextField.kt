@@ -2,8 +2,13 @@ package com.kennyb1201.kbstream.ui.components.touch
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -62,7 +67,8 @@ fun KBTextField(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     leading: (@Composable () -> Unit)? = null,
     onDone: (() -> Unit)? = null,
-    onFocusChanged: ((Boolean) -> Unit)? = null
+    onFocusChanged: ((Boolean) -> Unit)? = null,
+    onClear: (() -> Unit)? = null
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -79,6 +85,18 @@ fun KBTextField(
             )
         },
         leadingIcon = leading,
+        trailingIcon = onClear?.let { clear ->
+            {
+                IconButton(onClick = clear) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Clear",
+                        tint = KBTextLo,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        },
         textStyle = MaterialTheme.typography.bodyMedium,
         visualTransformation = visualTransformation,
         keyboardOptions = KeyboardOptions(

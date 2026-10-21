@@ -88,6 +88,8 @@ fun StudioScreen(
     networkOrCompanyId: Int? = null,
     networkIsCompany: Boolean = false,
     originalsCompanyId: Int? = null,
+    // The phone's header arrow; the TV page draws no back control.
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = viewModel()
 ) {
@@ -103,6 +105,7 @@ fun StudioScreen(
             networkOrCompanyId = networkOrCompanyId,
             networkIsCompany = networkIsCompany,
             originalsCompanyId = originalsCompanyId,
+            onBack = onBack,
             onNavigateDetail = onNavigateDetail,
             viewModel = viewModel
         )

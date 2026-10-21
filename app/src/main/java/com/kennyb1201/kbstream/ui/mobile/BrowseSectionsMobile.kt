@@ -137,6 +137,10 @@ internal fun cardKey(item: StudioItem): String = "${item.mediaType}:${item.item.
 @Composable
 internal fun SectionsBrowseMobile(
     header: SectionsHeader,
+    // The page's way back, drawn as the shared top-left arrow. Same callback the
+    // host's system back runs (see AppRoot's BackHandler), so the browse return
+    // record below behaves identically for the arrow and the gesture.
+    onBack: () -> Unit,
     sectionsRaw: List<StudioSection>,
     isLoading: Boolean,
     error: String?,
@@ -286,7 +290,11 @@ internal fun SectionsBrowseMobile(
             modifier = Modifier.fillMaxSize()
         ) {
             item(key = "header", contentType = "header") {
-                Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    // Top-left of the header, on its own line: the card below
+                    // starts with the title and the poster fan, so an overlaid
+                    // arrow would sit on the art.
+                    MobileBackButton(onBack = onBack)
                     BrowseHeaderPanel(header = header, fanUrls = fanUrls)
                 }
             }

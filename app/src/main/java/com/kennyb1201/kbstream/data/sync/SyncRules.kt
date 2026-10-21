@@ -368,6 +368,11 @@ internal object HistoryRowRules {
             put(UPDATED_AT_FIELD, entity.updatedAt)
             put("isCompleted", entity.isCompleted)
             entity.completedAt?.let { put("completedAt", it) }
+            // Only when set, so an ordinary row's payload stays byte-identical
+            // to what every build before v14 pushes (the merge tie-break
+            // compares these payloads). A marker has to carry the flag or the
+            // receiving device would count it as a real watch again.
+            if (entity.markedWatched) put("markedWatched", true)
         }
 }
 

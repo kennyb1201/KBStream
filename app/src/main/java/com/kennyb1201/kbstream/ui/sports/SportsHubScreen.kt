@@ -203,6 +203,8 @@ private const val HUB_ENTRY_FOCUS_ATTEMPTS = 12
 fun SportsHubScreen(
     viewModel: SportsHubViewModel = viewModel(),
     modifier: Modifier = Modifier,
+    // The phone's header arrow; the TV page draws no back control.
+    onBack: () -> Unit,
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit =
         { _, _, _ -> },
     initialDetailGameId: String? = null,
@@ -215,6 +217,7 @@ fun SportsHubScreen(
         SportsHubScreenMobile(
             viewModel = viewModel,
             modifier = modifier,
+            onBack = onBack,
             onPlayChannels = onPlayChannels,
             initialDetailGameId = initialDetailGameId,
             initialDetailTournamentId = initialDetailTournamentId

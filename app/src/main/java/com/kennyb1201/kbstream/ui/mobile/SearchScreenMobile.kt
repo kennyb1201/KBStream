@@ -23,12 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,6 +63,8 @@ import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -162,6 +160,7 @@ fun SearchScreenMobile(
         val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
         val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+        val searchError by viewModel.searchError.collectAsStateWithLifecycle()
         val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
         val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
         val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
@@ -260,7 +259,11 @@ fun SearchScreenMobile(
         val chipRows = remember(visibleEntries, browseChipColumns) {
             visibleEntries.chunked(browseChipColumns)
         }
-        val showBrowser = query.isBlank() || (!isLoading && totalCount == 0)
+        // A failed search keeps the browser out of the way: the browser's
+        // chips are the "nothing matched, try browsing" answer, and they are
+        // the wrong answer when the query never reached the service.
+        val showBrowser =
+            query.isBlank() || (!isLoading && totalCount == 0 && searchError == null)
 
         Box(
             modifier = Modifier
@@ -280,13 +283,7 @@ fun SearchScreenMobile(
                             .padding(start = 4.dp, end = 12.dp, top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { backDispatcher?.onBackPressed() }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = KBTextHi
-                            )
-                        }
+                        MobileBackButton(onBack = { backDispatcher?.onBackPressed() })
                         KBTextField(
                             value = query,
                             onValueChange = viewModel::onQueryChanged,
@@ -294,6 +291,10 @@ fun SearchScreenMobile(
                             focusRequester = fieldFocus,
                             modifier = Modifier.weight(1f),
                             onDone = { viewModel.commitSearch() },
+                            onClear = {
+                                viewModel.onQueryChanged("")
+                                fieldFocus.requestFocus()
+                            },
                             leading = {
                                 Icon(
                                     imageVector = Icons.Default.Search,
@@ -303,20 +304,6 @@ fun SearchScreenMobile(
                                 )
                             }
                         )
-                        if (query.isNotBlank()) {
-                            IconButton(
-                                onClick = {
-                                    viewModel.onQueryChanged("")
-                                    fieldFocus.requestFocus()
-                                }
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Clear search",
-                                    tint = KBTextLo
-                                )
-                            }
-                        }
                     }
                 }
 
@@ -607,25 +594,24 @@ fun SearchScreenMobile(
 
                 if (isLoading) {
                     item(key = "loading") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = KBAccent)
-                        }
+                        MobileLoading()
                     }
                 }
 
-                if (!isLoading && query.isNotBlank() && totalCount == 0) {
-                    item(key = "no_results") {
-                        Text(
-                            text = "No matches found.",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                val error = searchError
+                if (!isLoading && error != null) {
+                    item(key = "search_error") {
+                        MobileStatus(
+                            message = error,
+                            actionLabel = "TRY AGAIN",
+                            onAction = { viewModel.search(query) }
                         )
+                    }
+                }
+
+                if (!isLoading && searchError == null && query.isNotBlank() && totalCount == 0) {
+                    item(key = "no_results") {
+                        MobileStatus("No matches found.")
                     }
                 }
 

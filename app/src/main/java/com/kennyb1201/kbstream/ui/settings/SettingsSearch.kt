@@ -129,6 +129,12 @@ internal object SettingsSearchIndex {
             "addon add-on extension repository manifest collection import"
         ),
         SettingSearchEntry(
+            "integrations.trakt",
+            SettingsPane.INTEGRATIONS,
+            "Trakt",
+            "scrobble tracker account connect watched history sync"
+        ),
+        SettingSearchEntry(
             "integrations.simkl",
             SettingsPane.INTEGRATIONS,
             "Simkl",

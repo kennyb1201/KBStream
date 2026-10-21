@@ -28,8 +28,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -68,13 +66,15 @@ import com.kennyb1201.kbstream.ui.components.touch.KBPanelHeading
 import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBSheetContent
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatusTone
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -148,7 +148,10 @@ internal fun mobileAddonStatusLine(
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun AddonsScreenMobile(viewModel: AddonsViewModel = viewModel()) {
+fun AddonsScreenMobile(
+    onBack: () -> Unit,
+    viewModel: AddonsViewModel = viewModel()
+) {
     val context = LocalContext.current
     val addons by viewModel.addons.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -249,8 +252,12 @@ fun AddonsScreenMobile(viewModel: AddonsViewModel = viewModel()) {
             Spacer(modifier = Modifier.height(18.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // The shared arrow, top-left of the header. It runs the pop
+                // AppRoot's BackHandler runs for this screen (returnTo), so
+                // the two answers agree - the TV page's own BACK never did.
+                MobileBackButton(onBack = onBack)
                 Text(
                     text = "ADD-ONS",
                     color = KBAccent,
@@ -346,18 +353,11 @@ fun AddonsScreenMobile(viewModel: AddonsViewModel = viewModel()) {
                 Spacer(modifier = Modifier.height(10.dp))
 
                 if (rows.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No add-ons match the filter",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    MobileStatus(
+                        message = "No add-ons match the filter",
+                        modifier = Modifier.weight(1f),
+                        centeredVertically = true
+                    )
                 } else {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -892,27 +892,13 @@ private fun MobileAddonBanner(
 @Composable
 private fun EmptyAddonsMobile(onAdd: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(KBSurface, KBShapeCard)
-                .padding(horizontal = 22.dp, vertical = 26.dp)
-        ) {
-            Text(
-                text = "NO ADD-ONS INSTALLED",
-                color = KBTextHi,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = "Add a Stremio manifest URL to get started.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 7.dp, bottom = 16.dp)
-            )
-            KBButton(label = "ADD ADD-ON", onClick = onAdd)
-        }
+        MobileStatus(
+            title = "NO ADD-ONS INSTALLED",
+            message = "Add a Stremio manifest URL to get started.",
+            actionLabel = "ADD ADD-ON",
+            onAction = onAdd,
+            tone = MobileStatusTone.Card
+        )
     }
 }
 
@@ -1088,24 +1074,10 @@ private fun CopyAddonsDialogMobile(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     profiles.forEach { profile ->
-                        val isSelected = profile.id == sourceId
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { sourceId = profile.id },
-                            label = {
-                                Text(
-                                    text = profile.name,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = if (isSelected) FontWeight.Bold else null
-                                )
-                            },
-                            shape = KBShapeCard,
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = KBSurface,
-                                labelColor = KBTextLo,
-                                selectedContainerColor = KBAccent.copy(alpha = 0.28f),
-                                selectedLabelColor = KBAccent
-                            )
+                        MobileFilterChip(
+                            label = profile.name,
+                            selected = profile.id == sourceId,
+                            onClick = { sourceId = profile.id }
                         )
                     }
                 }
@@ -1124,7 +1096,8 @@ private fun CopyAddonsDialogMobile(
                     ) {
                         items(items = sourceAddons, key = { it.manifestUrl }) { addon ->
                             val checked = addon.manifestUrl in selected
-                            FilterChip(
+                            MobileFilterChip(
+                                label = addon.displayName,
                                 selected = checked,
                                 onClick = {
                                     selected = if (checked) {
@@ -1133,21 +1106,6 @@ private fun CopyAddonsDialogMobile(
                                         selected + addon.manifestUrl
                                     }
                                 },
-                                label = {
-                                    Text(
-                                        text = addon.displayName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                shape = KBShapeCard,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    containerColor = KBSurface,
-                                    labelColor = KBTextHi,
-                                    selectedContainerColor = KBAccent.copy(alpha = 0.28f),
-                                    selectedLabelColor = KBAccent
-                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

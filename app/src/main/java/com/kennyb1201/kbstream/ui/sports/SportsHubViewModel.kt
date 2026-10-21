@@ -703,6 +703,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // is what cancels the schedule - so the round is re-armed on every
         // toggle rather than only from the panel's own switch.
         SportsNotificationWorker.syncScheduleForPrefs(getApplication())
+        // And the live tick is re-aimed: the Favorites tab polls the followed
+        // teams' leagues, so following a team whose game is already in play
+        // used to arm nothing (stale score until a tab switch), and
+        // unfollowing the last live team left the 30 s loop fetching it.
+        syncLivePoll()
     }
 
     fun setLeagueEnabled(path: String, enabled: Boolean) {

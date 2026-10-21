@@ -91,7 +91,23 @@ class EpgRefreshWorker(
             // for a guide it never stored - but it is not the run's failure
             // either: the sources after it still import.
             runCatchingCancellable { importWithinBudget(repository, url) }
-                .onSuccess { didImport -> if (didImport) imported++ }
+                .onSuccess { didImport ->
+                    if (didImport) {
+                        imported++
+                        // Stamp the freshness marker PER SOURCE, not once after
+                        // the loop. Each source has its own 8-minute budget, so
+                        // two slow ones exceed the job's ~10-minute window; a
+                        // worker killed mid-pass used to lose the marker for a
+                        // source that HAD imported, and the next run
+                        // re-downloaded it. A source that is stored stays
+                        // stored.
+                        prefs.edit()
+                            .putLong(KEY_EPG_UPDATED_AT, System.currentTimeMillis())
+                            .putString(KEY_EPG_DB_NAME, activeGuideName())
+                            .putInt(KEY_EPG_EMPTY_RUNS, 0)
+                            .apply()
+                    }
+                }
                 .onFailure { error ->
                     if (error is kotlinx.coroutines.CancellationException) throw error
                     Log.w(
@@ -127,15 +143,9 @@ class EpgRefreshWorker(
             return Result.retry()
         }
 
-        // Same key the guide screen's own staleness check reads, and written
-        // only on success: a run that imported nothing must leave the guide
-        // marked stale so the next chance retries it.
-        prefs.edit()
-            .putLong(KEY_EPG_UPDATED_AT, System.currentTimeMillis())
-            .putString(KEY_EPG_DB_NAME, activeGuideName())
-            .putInt(KEY_EPG_EMPTY_RUNS, 0)
-            .apply()
-
+        // The marker itself was written by the loop, per imported source (see
+        // the comment there): a run that imported nothing left the guide marked
+        // stale, so the next chance retries it.
         return Result.success()
     }
 

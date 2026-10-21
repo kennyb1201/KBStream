@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import java.util.Locale
+
 /**
  * Resolves Xtream-style catch-up (DVR) URL templates against a program's
  * air window. Providers advertise a template on the M3U entry
@@ -62,15 +64,22 @@ object CatchupUrls {
 
         // Formatted date pieces of the program start (UTC — providers that
         // use these tokens index their DVR by UTC broadcast time).
+        //
+        // Locale.US, NOT the device locale: `String.format` with the default
+        // locale renders digits in the locale's own numbering system, so a
+        // phone set to Arabic/Hindi/Persian produced a URL with non-ASCII
+        // numerals and catch-up failed against a server that indexes by
+        // digits. The codebase pins Locale.US for this everywhere else
+        // (EpgImportWatchdog does the same for its stamps).
         val start = java.time.Instant.ofEpochMilli(startUtcMillis)
             .atZone(java.time.ZoneOffset.UTC)
         out = out
-            .replace("$dollar{yyyy}", "%04d".format(start.year))
-            .replace("$dollar{mm}", "%02d".format(start.monthValue))
-            .replace("$dollar{dd}", "%02d".format(start.dayOfMonth))
-            .replace("$dollar{hh}", "%02d".format(start.hour))
-            .replace("$dollar{MM}", "%02d".format(start.minute))
-            .replace("$dollar{ss}", "%02d".format(start.second))
+            .replace("$dollar{yyyy}", String.format(Locale.US, "%04d", start.year))
+            .replace("$dollar{mm}", String.format(Locale.US, "%02d", start.monthValue))
+            .replace("$dollar{dd}", String.format(Locale.US, "%02d", start.dayOfMonth))
+            .replace("$dollar{hh}", String.format(Locale.US, "%02d", start.hour))
+            .replace("$dollar{MM}", String.format(Locale.US, "%02d", start.minute))
+            .replace("$dollar{ss}", String.format(Locale.US, "%02d", start.second))
 
         if (out == template) return null
         // Any leftover {placeholder} means a token family we do not speak.

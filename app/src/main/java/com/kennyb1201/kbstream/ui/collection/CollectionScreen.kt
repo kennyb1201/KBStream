@@ -83,6 +83,8 @@ import kotlinx.coroutines.delay
 fun CollectionScreen(
     collectionId: Int,
     collectionName: String,
+    // The phone's header arrow; the TV page draws no back control.
+    onBack: () -> Unit,
     onNavigateDetail: (type: String, id: String) -> Unit,
     viewModel: CollectionViewModel = viewModel()
 ) {
@@ -93,6 +95,7 @@ fun CollectionScreen(
         CollectionScreenMobile(
             collectionId = collectionId,
             collectionName = collectionName,
+            onBack = onBack,
             onNavigateDetail = onNavigateDetail,
             viewModel = viewModel
         )

@@ -6,10 +6,16 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamResponse
+import com.kennyb1201.kbstream.data.airdates.TvmazeEpisode
+import com.kennyb1201.kbstream.data.airdates.TvmazeShow
 import com.kennyb1201.kbstream.data.badges.StreamBadgeGroup
 import com.kennyb1201.kbstream.data.badges.StreamBadgePack
+import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
+import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
+import com.kennyb1201.kbstream.data.mdblist.MdbListWatchedSnapshot
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
+import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.simkl.SimklTokenResponse
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
@@ -133,6 +139,56 @@ class MoshiCodegenTest {
             .adapter(nested)
             .fromJson("""{"backdrops":[{"file_path":"/a.jpg","width":1920}]}""")
         assertEquals("/a.jpg", parsed?.backdrops?.first()?.filePath)
+    }
+
+    /**
+     * Sweep-5 M1–M3: the models whose adapters were still being built by
+     * reflection in a release build, where R8 removes the reflective
+     * default-call path. Trakt's token parse is the field proof that this
+     * throws; MDBList's disk caches, Simkl's Continue Watching cache and the
+     * TVmaze wire models were all one missing annotation away from it, and every
+     * one of those reads is wrapped in `runCatching`, so the failure was SILENT
+     * (the caches simply never hit and every cold start re-fetched).
+     */
+    @Test
+    fun `the sweep-5 models have generated adapters, not reflective ones`() {
+        val models = listOf(
+            MdbListRatings::class.java,
+            MdbListPlaybackItem::class.java,
+            MdbListWatchedSnapshot::class.java,
+            SimklContinueWatchingItem::class.java,
+            TvmazeShow::class.java,
+            TvmazeEpisode::class.java
+        )
+        models.forEach { model ->
+            val adapterClass = Class.forName(Types.generatedJsonAdapterName(model))
+            assertTrue(
+                "${adapterClass.name} is not a JsonAdapter",
+                JsonAdapter::class.java.isAssignableFrom(adapterClass)
+            )
+            // And the strict Moshi (no reflective factory) can use it: a model
+            // whose adapter only works through kotlin-reflect still resolves
+            // above but would throw in the release build the test protects.
+            codegenOnly.adapter(model)
+        }
+    }
+
+    /**
+     * The shape the disk caches actually round-trip: Moshi omits nulls on
+     * write, so the app's own cached JSON comes back with ABSENT keys. With a
+     * generated adapter that is an ordinary lookup of a field default; with the
+     * reflective factory it was a reflective default-call, which is what R8's
+     * release build rejects.
+     */
+    @Test
+    fun `an mdblist ratings cache round-trips through absent keys`() {
+        val adapter = codegenOnly.adapter(MdbListRatings::class.java)
+        val json = adapter.toJson(MdbListRatings(imdb = "8.1"))
+
+        assertEquals("""{"imdb":"8.1"}""", json)
+        val parsed = adapter.fromJson(json)
+        assertEquals("8.1", parsed?.imdb)
+        assertTrue("the absent sources stay null", parsed?.trakt == null)
     }
 
     @Test

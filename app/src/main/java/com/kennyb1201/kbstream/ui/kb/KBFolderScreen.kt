@@ -61,6 +61,8 @@ fun KBFolderScreen(
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
         com.kennyb1201.kbstream.ui.mobile.KBFolderScreenMobile(
             folderId = folderId,
+            // Same pop as system back: the folder's returnTo.
+            onBack = onBack,
             onItemClick = onItemClick,
             viewModel = viewModel
         )

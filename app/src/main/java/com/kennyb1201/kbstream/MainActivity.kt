@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.os.Bundle
 import android.os.Build
 import android.util.Log
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.getValue
@@ -1122,10 +1124,13 @@ fun AppRoot(
     onIncomingIntentConsumed: () -> Unit,
     /**
      * True only for the first activity create in this process (see
-     * `MainActivity.shellStarted`). A configuration change re-creates the
-     * activity and restores the shell's screen, and that restore is not a
-     * launch: gating it back to Who's Watching is what made a phone rotation
-     * leave the screen the viewer was on.
+     * `MainActivity.shellStarted`). A re-create that keeps the same session -
+     * a density or uiMode change, a theme/profile `recreate()` - restores the
+     * shell's screen, and that restore is not a launch: gating it back to
+     * Who's Watching is what made a phone rotation leave the screen the viewer
+     * was on. (A rotation no longer re-creates this activity - orientation is in
+     * its manifest `configChanges`, so the splash can be held sideways without
+     * losing its in-flight autoplay.)
      */
     coldLaunch: Boolean = true
 ) {
@@ -2027,6 +2032,16 @@ fun AppRoot(
         is Screen.ProfileEdit -> {
             ProfileEditScreen(
                 editingProfileId = current.editingProfileId,
+                // The phone's header arrow is a CANCEL, so it runs the same
+                // branch the system back button does: back to whatever opened
+                // this editor, else (the picker's Manage tile) the picker.
+                onBack = {
+                    screen = if (current.returnTo != null) {
+                        stableBackDestination(current.returnTo)
+                    } else {
+                        Screen.ProfilePicker()
+                    }
+                },
                 onDone = {
                     screen = if (current.returnTo != null) {
                         current.returnTo
@@ -2272,10 +2287,15 @@ fun AppRoot(
 
         is Screen.Addons -> {
 
-            // Add-on management only: the header's own BACK is gone (the
-            // remote's Back is the single way out, and it follows returnTo),
-            // and HOME / COLLECTIONS + CATALOGS are rows in Settings now.
-            AddonsScreen()
+            // Add-on management only: the TV header draws no back control (the
+            // remote's Back is the single way out, and it follows returnTo; the
+            // phone draws the shared header arrow instead), and HOME /
+            // COLLECTIONS + CATALOGS are rows in Settings now.
+            AddonsScreen(
+                // Same pop as system back on this screen (see the BackHandler's
+                // Screen.Addons branch): the add-ons page's own returnTo.
+                onBack = { screen = stableBackDestination(current.returnTo) }
+            )
         }
 
         is Screen.CatalogBuilder -> {
@@ -2481,6 +2501,9 @@ fun AppRoot(
             // sessions never open it, and the hub's first act is a scoreboard
             // fetch plus a paged read of the cached lineup.
             SportsHubScreen(
+                // The phone's header arrow lands where system back does for the
+                // hub: the guide it was opened from.
+                onBack = { screen = Screen.Guide },
                 // Playing a game is the guide's own launch, with the hub as the
                 // Back destination. There is no second player and no second
                 // channel route - a card that matched a channel hands it to the
@@ -2674,6 +2697,9 @@ fun AppRoot(
 
             ActorScreen(
                 actorId = current.personId,
+                // The header arrow performs the BackHandler's own pop for this
+                // screen, so the browse return record behaves identically.
+                onBack = { screen = stableBackDestination(current.returnTo) },
 
                 onNavigateDetail = {
                         type,
@@ -2697,6 +2723,8 @@ fun AppRoot(
                 current.networkIsCompany,
                 current.originalsCompanyId,
 
+                onBack = { screen = stableBackDestination(current.returnTo) },
+
                 onNavigateDetail = {
                         type,
                         id ->                        screen = Screen.Detail(
@@ -2713,6 +2741,8 @@ fun AppRoot(
             DecadeScreen(
                 current.decadeStart,
                 current.name,
+
+                onBack = { screen = stableBackDestination(current.returnTo) },
 
                 onNavigateDetail = {
                         type,
@@ -2733,6 +2763,8 @@ fun AppRoot(
                 current.isKeyword,
                 current.mediaType,
 
+                onBack = { screen = stableBackDestination(current.returnTo) },
+
                 onNavigateDetail = {
                         type,
                         id ->                        screen = Screen.Detail(
@@ -2749,6 +2781,8 @@ fun AppRoot(
             CollectionScreen(
                 current.id,
                 current.name,
+
+                onBack = { screen = stableBackDestination(current.returnTo) },
 
                 onNavigateDetail = {
                         type,
@@ -3420,6 +3454,36 @@ fun AppRoot(
     }
     val pending = pendingAutoPlay
     val playerSplash = current as? Screen.Player
+
+    // The phone holds the playback orientation for exactly the lifetime of the
+    // pre-playback splash above.
+    //
+    // This is the app's OWN window, not a player's: a phone's MainActivity
+    // follows the device, so held upright it is portrait and the splash used to
+    // come up vertical - only rotating when the player activity, which asks for
+    // landscape before its window exists, arrived on top and covered it. Source
+    // resolution takes seconds, so that was a visible flip mid-load.
+    //
+    // Keyed on the splash's own visibility, so it is the SAME state change that
+    // paints the splash and no tap can strand a request: a successful hand-off
+    // (the player sets its own request, so the screen is already landscape and
+    // there is no portrait bounce), a back/cancel out of the splash, and a
+    // resolve that gives up all drop the hold the moment the splash goes. On TV
+    // both helpers return before touching the activity, so the TV flow is the
+    // one it has always been.
+    val splashShowing = detailAutoPlay != null || pending != null || playerSplash != null
+    val splashActivity = LocalContext.current as? Activity
+    DisposableEffect(splashActivity, splashShowing) {
+        if (splashActivity != null && splashShowing) {
+            FormFactor.applyPlaybackOrientation(splashActivity)
+        }
+        onDispose {
+            if (splashActivity != null && splashShowing) {
+                FormFactor.releasePlaybackOrientation(splashActivity)
+            }
+        }
+    }
+
     when {
         detailAutoPlay != null -> AutoPlayLoadSplash(
             // Detail's own resolved still first, the deep link's own (usually

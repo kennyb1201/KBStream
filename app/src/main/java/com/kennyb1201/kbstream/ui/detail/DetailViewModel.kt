@@ -2137,7 +2137,9 @@ for ((metaAddon, response, error) in probeResults) {
                         episode = episode,
                         updatedAt = now,
                         isCompleted = true,
-                        completedAt = existingCompletedAt ?: now
+                        completedAt = existingCompletedAt ?: now,
+                        // A MARK, not a watch (see WatchHistoryEntity.markedWatched).
+                        markedWatched = true
                     )
 
                 runCatchingCancellable {
@@ -2847,7 +2849,9 @@ for ((metaAddon, response, error) in probeResults) {
                                     episode = episode,
                                     updatedAt = now,
                                     isCompleted = true,
-                                    completedAt = existingCompletedAtByKey[key] ?: now
+                                    completedAt = existingCompletedAtByKey[key] ?: now,
+                                    // A MARK, not a watch (see WatchHistoryEntity.markedWatched).
+                                    markedWatched = true
                                 )
                             }
                     }

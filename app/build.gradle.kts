@@ -370,6 +370,16 @@ android {
                 ?: localProps.getProperty("SENTRY_AUTH_TOKEN")
         )
         tracingInstrumentation { enabled.set(false) }
+        // Native symbols are THE crash class this app has: libmpv, the
+        // software FFmpeg decoder, the MediaCodec shim and the Dolby Vision
+        // compat layer all abort in native code, where a SIGSEGV/SIGABRT never
+        // becomes a Java exception. Only the ProGuard mapping was uploaded, so
+        // those reports arrived as raw addresses - the same as no report at
+        // all. Explicit rather than left to the plugin default, so a default
+        // flip cannot take it away without a diff.
+        uploadNativeSymbols.set(true)
+        // Sources are not needed to symbolicate; only the symbol table is.
+        includeNativeSources.set(false)
     }
 
     compileOptions {
@@ -782,6 +792,54 @@ dependencies {
     // auto-installs from its own provider, so no app code changes, and being
     // debugImplementation means nothing ships in release.
     debugImplementation(libs.leakcanary.android)
+}
+
+// ── Native ASS / Dolby Vision: fail a LOCAL release build too ─────────────
+//
+// Both JNI families live in app/src/main/jniLibs/<abi>/ and are produced by
+// scripts/build_libass.sh and scripts/build_dovi.sh (gitignored, like every
+// other built binary here). CI hard-gates both - a run that did not produce
+// them is a failed release - but a locally built release APK had no such gate,
+// so it shipped without them and BOTH fallbacks masked it: ASS/SSA typesetting
+// silently flattened to Media3's SSA decoder, and the Dolby Vision RPU rewrite
+// fell back to the Kotlin parser the MediaTek decoder stalls on.
+//
+// Wired to preReleaseBuild rather than to configuration time on purpose: a
+// debug build legitimately runs on those fallbacks (and an emulator has no
+// reason to carry either library), so failing `assembleDebug` here would be
+// wrong. The release APK and AAB are what must never be built without them.
+// The directory is resolved per task (a plain local File), so the action below
+// captures THAT rather than the build script: the configuration cache refuses
+// a task action holding a reference to the script, and a release build would
+// then lose its cache entry every time.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    val jniLibsRoot = file("src/main/jniLibs")
+    doFirst {
+        val required = mapOf(
+            "libassjni.so" to "bash scripts/build_libass.sh",
+            "libdovi.so" to "bash scripts/build_dovi.sh",
+            "libdovi_bridge.so" to "bash scripts/build_dovi.sh"
+        )
+        // The two ABIs a release actually ships (see the release ndk block).
+        val abis = listOf("arm64-v8a", "armeabi-v7a")
+        val missing = required.flatMap { (lib, script) ->
+            abis.filterNot { abi ->
+                File(jniLibsRoot, "$abi/$lib").isFile
+            }.map { abi -> "$abi/$lib (build with $script)" }
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "This release build is missing native libraries the release APK " +
+                    "must not ship without:\n  " + missing.joinToString("\n  ") +
+                    "\nWithout libassjni.so, ASS/SSA typesetting silently flattens " +
+                    "on the ExoPlayer engine; without libdovi, the Dolby Vision " +
+                    "RPU rewrite falls back to the parser the MediaTek decoder " +
+                    "stalls on (P7 -> 8.1 renders as audio over a black screen). " +
+                    "Build the libraries, or use assembleDebug for a build that " +
+                    "may fall back."
+            )
+        }
+    }
 }
 
 // The Play-build manifest overlay (see `playBuild` above). Added last, so it

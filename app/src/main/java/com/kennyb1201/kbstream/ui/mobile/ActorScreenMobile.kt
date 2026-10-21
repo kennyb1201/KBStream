@@ -58,6 +58,8 @@ import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -100,6 +102,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 @Composable
 fun ActorScreenMobile(
     actorId: Int,
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit,
     viewModel: ActorViewModel = viewModel()
 ) {
@@ -247,19 +250,25 @@ fun ActorScreenMobile(
             ) {
                 item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
                     val loaded = person
-                    ActorHeader(
-                        name = loaded?.name ?: "Actor",
-                        meta = loaded?.metaLine().orEmpty(),
-                        knownFor = topWorkCredit?.let { it.title ?: it.name },
-                        portraitUrl = loaded?.profilePath
-                            ?.let { TmdbRepository.PROFILE_BASE + it },
-                        backdropUrl = imageOverrideBackdropUrl(
-                            paths = overridePaths,
-                            tmdbId = topWorkCredit?.id,
-                            screen = ImageOverrides.SCREEN_ALL,
-                            fallbackUrl = topWorkBackdropUrl
+                    Column {
+                        // Top-left of the header, on its own line: the hero
+                        // below starts with the portrait, so an overlaid arrow
+                        // would sit on the actor's face.
+                        MobileBackButton(onBack = onBack)
+                        ActorHeader(
+                            name = loaded?.name ?: "Actor",
+                            meta = loaded?.metaLine().orEmpty(),
+                            knownFor = topWorkCredit?.let { it.title ?: it.name },
+                            portraitUrl = loaded?.profilePath
+                                ?.let { TmdbRepository.PROFILE_BASE + it },
+                            backdropUrl = imageOverrideBackdropUrl(
+                                paths = overridePaths,
+                                tmdbId = topWorkCredit?.id,
+                                screen = ImageOverrides.SCREEN_ALL,
+                                fallbackUrl = topWorkBackdropUrl
+                            )
                         )
-                    )
+                    }
                 }
 
                 when {
@@ -267,16 +276,16 @@ fun ActorScreenMobile(
                         key = "loading",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        ActorStatus("Loading…")
+                        MobileLoading()
                     }
 
                     error != null && person == null -> item(
                         key = "error",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        ActorStatus(
-                            "Error: $error",
-                            action = "TRY AGAIN",
+                        MobileStatus(
+                            message = "Error: $error",
+                            actionLabel = "TRY AGAIN",
                             onAction = { viewModel.load(actorId) }
                         )
                     }
@@ -295,7 +304,9 @@ fun ActorScreenMobile(
                             }
                             itemsIndexed(
                                 items = movies,
-                                key = { _, credit -> "movie:${credit.id}" }
+                                key = { _, credit ->
+                                    "movie:${credit.id}:${credit.character.orEmpty()}"
+                                }
                             ) { index, credit ->
                                 CreditTile(
                                     credit = credit,
@@ -331,7 +342,9 @@ fun ActorScreenMobile(
                             }
                             itemsIndexed(
                                 items = tvShows,
-                                key = { _, credit -> "tv:${credit.id}" }
+                                key = { _, credit ->
+                                    "tv:${credit.id}:${credit.character.orEmpty()}"
+                                }
                             ) { index, credit ->
                                 CreditTile(
                                     credit = credit,
@@ -363,7 +376,7 @@ fun ActorScreenMobile(
 
                         if (movies.isEmpty() && tvShows.isEmpty()) {
                             item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
-                                ActorStatus("No credits to show for this person.")
+                                MobileStatus("No credits to show for this person.")
                             }
                         }
                     }
@@ -658,26 +671,3 @@ private fun CreditTile(
     }
 }
 
-@Composable
-private fun ActorStatus(
-    message: String,
-    action: String? = null,
-    onAction: (() -> Unit)? = null
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(
-            text = message,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        if (action != null && onAction != null) {
-            KBButton(label = action, onClick = onAction)
-        }
-    }
-}

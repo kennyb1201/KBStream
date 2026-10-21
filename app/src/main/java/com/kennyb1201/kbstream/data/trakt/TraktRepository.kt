@@ -202,6 +202,19 @@ class TraktRepository private constructor(private val context: Context?) {
 
     private val snapshotMutex = Mutex()
 
+    /**
+     * Serializes token refreshes.
+     *
+     * Trakt's refresh tokens are single-use and rotate on every exchange, so
+     * two concurrent callers that both saw the expiry window open would POST
+     * the same refresh token; the loser's response (or its save) then
+     * overwrites the winner's fresh pair, and the grant can be revoked for
+     * reuse. Every refresh goes through this lock, and the due-check is done
+     * again inside it, so a caller that queued behind a completed refresh sees
+     * the new expiry and returns without a second exchange.
+     */
+    private val refreshMutex = Mutex()
+
     @Volatile
     private var cachedSnapshot: TraktWatchedSnapshot? = null
 
@@ -346,6 +359,15 @@ class TraktRepository private constructor(private val context: Context?) {
      * @return true when a usable token is held afterwards
      */
     suspend fun refreshIfDue(nowMs: Long = System.currentTimeMillis()): Boolean {
+        // Cheap pre-check outside the lock: the common case is "not due", and
+        // it must not queue behind another screen's refresh.
+        val first = store.read() ?: return false
+        if (!TraktDeviceFlowRules.refreshDue(first.expiresAtEpochMillis, nowMs)) return true
+        return refreshMutex.withLock { refreshIfDueLocked(nowMs) }
+    }
+
+    /** [refreshIfDue]'s body, run under [refreshMutex] with a re-read pair. */
+    private suspend fun refreshIfDueLocked(nowMs: Long): Boolean {
         val token = store.read() ?: return false
         if (!TraktDeviceFlowRules.refreshDue(token.expiresAtEpochMillis, nowMs)) return true
         val refresh = token.refreshToken ?: return false
@@ -801,21 +823,58 @@ class TraktRepository private constructor(private val context: Context?) {
     suspend fun playbackSessions(): List<TraktPlaybackSession> {
         if (!TraktConfig.isConfigured) return emptyList()
         val token = validAccessToken() ?: return emptyList()
-        if (!guard.tryAcquire()) return emptyList()
         val authorization = "Bearer $token"
-        val movies = runCatchingCancellable {
-            api.playbackMovies(authorization)
-        }.getOrNull()
-        val episodes = runCatchingCancellable {
-            api.playbackEpisodes(authorization)
-        }.getOrNull()
+        // PAGED. Both reads used to take `limit = 100` and no page walk, so an
+        // account with more paused sessions than that silently lost the tail of
+        // the resume merge. Each side is walked with the same header rule the
+        // watched reads use; one side failing leaves the other's answer intact.
+        val movies = readAllPlaybackRows(authorization) { page, limit ->
+            api.playbackMovies(authorization, page = page, limit = limit)
+        }
+        val episodes = readAllPlaybackRows(authorization) { page, limit ->
+            api.playbackEpisodes(authorization, page = page, limit = limit)
+        }
         return buildList {
-            movies?.body().orEmpty().forEach { row ->
+            movies.orEmpty().forEach { row ->
                 row.asPlaybackSession(isMovie = true)?.let(::add)
             }
-            episodes?.body().orEmpty().forEach { row ->
+            episodes.orEmpty().forEach { row ->
                 row.asPlaybackSession(isMovie = false)?.let(::add)
             }
+        }
+    }
+
+    /**
+     * Every paused session of one kind, page by page.
+     *
+     * Answers null on a failed page, exactly like [readAllWatchedPages]: a
+     * truncated resume list is worse than none, because the rail would look
+     * authoritative while missing sessions. The page count comes from Trakt's
+     * own `X-Pagination-Page-Count` when it sends one, and a short page ends
+     * the walk when it does not.
+     */
+    private suspend fun readAllPlaybackRows(
+        authorization: String,
+        fetch: suspend (page: Int, limit: Int) -> Response<List<TraktPlaybackItem>>
+    ): List<TraktPlaybackItem>? {
+        val rows = mutableListOf<TraktPlaybackItem>()
+        var page = 1
+        while (true) {
+            if (!guard.tryAcquire()) return null
+            val response = runCatchingCancellable {
+                fetch(page, TRAKT_PAGE_SIZE)
+            }.getOrNull() ?: return null
+            noteRetryAfter(response)
+            if (!response.isSuccessful) return null
+            val body = response.body().orEmpty()
+            rows += body
+            val pageCount = response.headers()["X-Pagination-Page-Count"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+            if (body.isEmpty()) return rows
+            if (pageCount != null && page >= pageCount) return rows
+            if (body.size < TRAKT_PAGE_SIZE) return rows
+            page += 1
         }
     }
 

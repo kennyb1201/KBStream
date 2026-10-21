@@ -52,7 +52,8 @@ import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
-import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterTile
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
@@ -89,6 +90,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 fun CollectionScreenMobile(
     collectionId: Int,
     collectionName: String,
+    onBack: () -> Unit,
     onNavigateDetail: (type: String, id: String) -> Unit,
     viewModel: CollectionViewModel = viewModel()
 ) {
@@ -193,25 +195,31 @@ fun CollectionScreenMobile(
                 modifier = Modifier.fillMaxSize()
             ) {
                 item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                    CollectionHeaderMobile(
-                        name = collection?.name ?: collectionName,
-                        overview = collection?.overview,
-                        posterUrl = imageOverridePosterUrl(
-                            paths = overridePaths,
-                            rawId = collectionId.toString(),
-                            fallbackUrl = collection?.posterPath
-                                ?.let { "${TmdbRepository.POSTER_BASE}$it" }
-                        ),
-                        backdropUrl = imageOverrideBackdropUrl(
-                            paths = overridePaths,
-                            tmdbId = collectionId,
-                            screen = ImageOverrides.SCREEN_ALL,
-                            fallbackUrl = collection?.backdropPath
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { TmdbRepository.fullResBackdropUrl(it) }
-                        ),
-                        partCount = collection?.parts?.size
-                    )
+                    Column {
+                        // Top-left of the header, above the card: the card's
+                        // first cell is the poster, so an overlaid arrow would
+                        // cover it.
+                        MobileBackButton(onBack = onBack)
+                        CollectionHeaderMobile(
+                            name = collection?.name ?: collectionName,
+                            overview = collection?.overview,
+                            posterUrl = imageOverridePosterUrl(
+                                paths = overridePaths,
+                                rawId = collectionId.toString(),
+                                fallbackUrl = collection?.posterPath
+                                    ?.let { "${TmdbRepository.POSTER_BASE}$it" }
+                            ),
+                            backdropUrl = imageOverrideBackdropUrl(
+                                paths = overridePaths,
+                                tmdbId = collectionId,
+                                screen = ImageOverrides.SCREEN_ALL,
+                                fallbackUrl = collection?.backdropPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.fullResBackdropUrl(it) }
+                            ),
+                            partCount = collection?.parts?.size
+                        )
+                    }
                 }
 
                 when {
@@ -219,16 +227,16 @@ fun CollectionScreenMobile(
                         key = "loading",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        CollectionStatus("Loading…")
+                        MobileLoading()
                     }
 
                     collection == null -> item(
                         key = "error",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        CollectionStatus(
-                            "We couldn't load this collection right now.",
-                            action = "TRY AGAIN",
+                        MobileStatus(
+                            message = "We couldn't load this collection right now.",
+                            actionLabel = "TRY AGAIN",
                             onAction = { viewModel.load(collectionId) }
                         )
                     }
@@ -237,7 +245,7 @@ fun CollectionScreenMobile(
                         key = "empty",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        CollectionStatus("This collection lists no movies yet.")
+                        MobileStatus("This collection lists no movies yet.")
                     }
 
                     else -> itemsIndexed(
@@ -457,26 +465,3 @@ private fun CollectionPartTile(
     }
 }
 
-@Composable
-private fun CollectionStatus(
-    message: String,
-    action: String? = null,
-    onAction: (() -> Unit)? = null
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(
-            text = message,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        if (action != null && onAction != null) {
-            KBButton(label = action, onClick = onAction)
-        }
-    }
-}

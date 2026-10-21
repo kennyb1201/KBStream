@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -279,6 +280,18 @@ fun SearchScreen(
     // Scroll position comes from the hoisted LazyListState (see signature):
     // Back from a drill-down restores the list at the same title. Exiting
     // Search itself resets it in MainActivity's BackHandler.
+    //
+    // FOCUS needs the process-scoped record: this screen's composition (and
+    // with it every tile's requester) is disposed for the trip, so the scroll
+    // came back on the right title with the D-pad still on the search field.
+    // The record names the tile; the retry helper covers a rail that is still
+    // putting that tile back (see SearchReturnFocus).
+    LaunchedEffect(Unit) {
+        val target = SearchReturnFocus.consume() ?: return@LaunchedEffect
+        com.kennyb1201.kbstream.ui.browse.landFocusOn(
+            titleTileFocusRequesters[target.tileKey]
+        )
+    }
 
     // Counted from the RAW lists, before the hidden filter drops rows: a viewer
     // who has hidden every hit still MATCHED something, so the "No matches
@@ -468,7 +481,23 @@ fun SearchScreen(
                 item(key = "titles_section") {
                     Column {
                         KBSectionHeader(title = "Titles")
+                        // Back from a Detail opened here puts this rail back on
+                        // the tile that was pressed (see SearchReturnFocus).
+                        // The state is created with that tile's index because
+                        // the rail re-composes at offset 0 otherwise, and a
+                        // tile past the first visible few has no focus node
+                        // to hand focus to.
+                        val railReturn = SearchReturnFocus.peek()
+                        val titlesRailState = rememberLazyListState(
+                            initialFirstVisibleItemIndex =
+                                if (railReturn?.railKey == TITLES_RAIL_FOCUS_KEY) {
+                                    railReturn.position
+                                } else {
+                                    0
+                                }
+                        )
                         LazyRow(
+                            state = titlesRailState,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(
                                 top = 2.dp,
@@ -482,14 +511,16 @@ fun SearchScreen(
                             ),
                             modifier = Modifier.offset(x = -KBFocusChipInset)
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = results,
                                 // Type-qualified: a movie and a series can share
                                 // a TMDB id, and a bare id key then collides -
                                 // LazyRow throws on duplicate keys and the two
                                 // tiles fight over one slot.
-                                key = { result: SearchTitleResult -> "${result.type}:${result.id}" }
-                            ) { result: SearchTitleResult ->
+                                key = { _, result: SearchTitleResult ->
+                                    "${result.type}:${result.id}"
+                                }
+                            ) { index, result ->
                                 // From the screen's registry rather than a
                                 // local remember, so the menu's Hide can reach
                                 // a tile it is not looking at (see
@@ -525,6 +556,13 @@ fun SearchScreen(
                                         viewModel = viewModel
                                     ),
                                     onClick = {
+                                        SearchReturnFocus.record(
+                                            SearchReturnTarget(
+                                                tileKey = tileKey,
+                                                railKey = TITLES_RAIL_FOCUS_KEY,
+                                                position = index
+                                            )
+                                        )
                                         viewModel.onResultOpened(result)
                                         onItemClick(result.meta)
                                     },
@@ -564,6 +602,23 @@ fun SearchScreen(
                             catalogType = group.catalogType
                         )
                     ) {
+                        val addonIdentity = addonRailIdentity(
+                            addonName = group.addonName,
+                            railLabel = group.railLabel,
+                            catalogType = group.catalogType
+                        )
+                        // This rail's tile-focus key space (see
+                        // searchTileFocusKey), named once for both the tiles
+                        // and the return record.
+                        val railKey = "addon\u0001$addonIdentity"
+                        // Same hand-back as the Titles rail above: a rail that
+                        // composes at offset 0 cannot focus a tile the viewer
+                        // had scrolled to.
+                        val railReturn = SearchReturnFocus.peek()
+                        val addonRailState = rememberLazyListState(
+                            initialFirstVisibleItemIndex =
+                                if (railReturn?.railKey == railKey) railReturn.position else 0
+                        )
                         SearchRail(
                             title = searchRailTitle(
                                 addonName = group.addonName,
@@ -571,9 +626,10 @@ fun SearchScreen(
                                 type = group.catalogType,
                                 showType = showRailType,
                                 showAddon = showRailAddon
-                            )
+                            ),
+                            state = addonRailState
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = group.results,
                                 // Type-qualified for the same reason the Titles
                                 // rail above is (see the comment there): an
@@ -588,20 +644,15 @@ fun SearchScreen(
                                 // already unique within the rail, and a key
                                 // that changes when the rail moves would reset
                                 // this LazyRow's scroll.
-                                key = { result: SearchTitleResult ->
+                                key = { _, result: SearchTitleResult ->
                                     "addon:${result.type}:${result.id}"
                                 }
-                            ) { result: SearchTitleResult ->
+                            ) { index, result ->
                                 // Rail identity + tile key, so the menu's Hide
                                 // can name the tile that takes a hidden one's
                                 // place (see searchTileFocusKey). The old local
                                 // `remember(result.id)` was invisible outside
                                 // this lazy row.
-                                val railKey = "addon\u0001" + addonRailIdentity(
-                                    addonName = group.addonName,
-                                    railLabel = group.railLabel,
-                                    catalogType = group.catalogType
-                                )
                                 val tileKey = searchTileFocusKey(railKey, result)
                                 val requester = remember(tileKey) {
                                     titleTileFocusRequesters.getOrPut(tileKey) {
@@ -624,6 +675,13 @@ fun SearchScreen(
                                         viewModel = viewModel
                                     ),
                                     onClick = {
+                                        SearchReturnFocus.record(
+                                            SearchReturnTarget(
+                                                tileKey = tileKey,
+                                                railKey = railKey,
+                                                position = index
+                                            )
+                                        )
                                         viewModel.onResultOpened(result)
                                         onItemClick(result.meta)
                                     },

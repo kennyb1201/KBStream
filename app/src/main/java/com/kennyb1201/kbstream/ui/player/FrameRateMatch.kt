@@ -465,6 +465,33 @@ internal object FrameRateMatch {
             "the panel moved to mode $afterModeId at ${rate(afterRate)} Hz"
         }
 
+    /**
+     * A resume found the panel already right for this content, so nothing was
+     * asked. Distinct from a refused request for the same reason
+     * [describeAlreadyInBestMode] is: a field capture must not read a no-op as
+     * a refusal.
+     */
+    fun describeResumeNoRequest(contentFps: Double, mode: DisplayModeInfo?): String {
+        val content = normalise(contentFps) ?: contentFps
+        return if (mode != null) {
+            "resumed; the panel is still in mode ${mode.id} at ${rate(mode.refreshRate)} Hz " +
+                "for ${rate(content)} fps — no request made"
+        } else {
+            "resumed; the surface already carries ${rate(content)} fps and the panel " +
+                "offers no better mode — no request made"
+        }
+    }
+
+    /**
+     * The surface already carries this rate, so asking again was refused before
+     * it reached the platform.
+     */
+    fun describeSurfaceAlreadyAt(contentFps: Double): String {
+        val content = normalise(contentFps) ?: contentFps
+        return "left the surface at ${rate(content)} fps — it already carries that rate; " +
+            "no request made"
+    }
+
     /** Which way this Android version asks, for the diagnostics row. */
     fun describePath(sdkInt: Int): String = when {
         sdkInt >= Build.VERSION_CODES.S ->
@@ -526,7 +553,20 @@ internal class FrameRateMatcher(
      * can swap it for a TextureView mid-session, so a captured reference would
      * be wrong exactly when it is needed. Null means "no surface to hand".
      */
-    private val videoSurface: () -> Surface? = { null }
+    private val videoSurface: () -> Surface? = { null },
+    /**
+     * Whether the picture is actually moving, asked only before a pending
+     * backstop fires.
+     *
+     * The ladder's second step is posted 1.5 s after the first, and a viewer who
+     * pauses inside that window would otherwise get it against a stopped
+     * picture: on a box that ignores `Surface.setFrameRate`, the request can
+     * still disturb the presentation pipeline, and the disturbance shows up as
+     * the stutter the viewer then resumes into. A paused session has nothing to
+     * repair - on the way back the resume re-offer re-runs the ladder from the
+     * top (see [apply]).
+     */
+    private val isPlaybackActive: () -> Boolean = { true }
 ) {
 
     private val originalPreferredModeId = activity.window.attributes.preferredDisplayModeId
@@ -548,6 +588,21 @@ internal class FrameRateMatcher(
 
     /** Whether a rate has been put on the player's surface. */
     private var surfaceRateApplied = false
+
+    /**
+     * The surface this session last handed a rate to, and that rate.
+     *
+     * Together they make the hint idempotent. Re-applying the same rate to the
+     * same live surface is not a no-op on every box: the field capture of
+     * 2026-10-18 saw choppy playback and "no present fence" from exactly that,
+     * when a resume re-offered a rate the surface already carried. A surface the
+     * player has swapped (a TextureView replacing a SurfaceView) is a different
+     * object, so it is asked again - which is the case the request exists for.
+     */
+    private var surfaceRateSurface: Surface? = null
+
+    /** The rate [surfaceRateSurface] was asked for. */
+    private var surfaceRateValue = 0f
 
     /** Bumped per request, so only the newest second look runs. */
     private var askSerial = 0
@@ -625,6 +680,35 @@ internal class FrameRateMatcher(
         }
         Log.i(TAG, "panel: $panel")
 
+        // A resume can only repair the MODE, never the surface.
+        //
+        // Re-offering the rate on the way back into a session used to fall
+        // through to the surface hint, which is a request against the LIVE
+        // surface mid-playback - and that is the one the field capture of
+        // 2026-10-18 links to choppy playback and "no present fence" after a
+        // pause and resume. The surface was asked at open, before decode, which
+        // is the smooth point for it; the panel is either still in the mode
+        // this session asked for (a true no-op) or the system put it back while
+        // the player was away, and then the mode request is the right repair.
+        // The only surface case left is a surface the player swapped while the
+        // viewer was away, which the idempotence guard in [askSurface] allows.
+        if (source == FrameRateSource.RESUME) {
+            val best = FrameRateMatch.bestMode(contentFps, modes)
+            when {
+                best != null && best.id != modeId -> requestMode(best, contentFps, modeId)
+                best != null -> {
+                    FrameRateDiagnostics.setOutcome(
+                        FrameRateMatch.describeResumeNoRequest(contentFps, best)
+                    )
+                    Log.i(TAG, "resume: panel already right for ${rate(contentFps)} fps; no request")
+                }
+                // No better mode than the one the panel is in: only a surface
+                // that does not already carry the rate is asked.
+                else -> askSurfaceIfPossible(contentFps, modeId)
+            }
+            return
+        }
+
         if (ENGAGE_MODE_FIRST) {
             // Mode id first: it is the request the field can verify
             // (display.mode.modeId changes) and the one that demonstrably moved
@@ -691,16 +775,27 @@ internal class FrameRateMatcher(
             ?: return false
         val surface = videoSurface() ?: return false
         if (!surface.isValid) return false
-        askSurface(surface, request, modeId, contentFps)
-        return true
+        return askSurface(surface, request, modeId, contentFps)
     }
 
+    /** True when the surface was actually asked (see the idempotence guard). */
     private fun askSurface(
         surface: Surface,
         request: SurfaceRateRequest,
         modeId: Int,
         contentFps: Double
-    ) {
+    ): Boolean {
+        // The same rate on the same surface is not a request. This is what
+        // keeps a resume - or a second offer of the same rate from the probe and
+        // the player - from re-applying the hint to a live surface, which
+        // breaks presentation on the boxes that ignore it.
+        if (surface === surfaceRateSurface && request.frameRate == surfaceRateValue) {
+            FrameRateDiagnostics.setOutcome(
+                FrameRateMatch.describeSurfaceAlreadyAt(contentFps)
+            )
+            Log.i(TAG, "surface already at ${request.frameRate} fps; no request made")
+            return false
+        }
         val strategy = request.changeFrameRateStrategy
         if (strategy != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             surface.setFrameRate(
@@ -711,9 +806,11 @@ internal class FrameRateMatcher(
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             surface.setFrameRate(request.frameRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
         } else {
-            return
+            return false
         }
         surfaceRateApplied = true
+        surfaceRateSurface = surface
+        surfaceRateValue = request.frameRate
         FrameRateDiagnostics.addRequest(
             FrameRateMatch.describeSurfaceRequest(request, strategy != null)
         )
@@ -723,6 +820,7 @@ internal class FrameRateMatcher(
             { confirm(serial, modeId, contentFps, EngageStep.SURFACE) },
             CONFIRM_DELAY_MS
         )
+        return true
     }
 
     /**
@@ -783,6 +881,10 @@ internal class FrameRateMatcher(
         step: EngageStep
     ) {
         if (released || serial != askSerial) return
+        // Nothing to repair while the picture is stopped, and a backstop that
+        // fires here is exactly the mid-session surface request this ladder is
+        // trying to avoid. The resume re-offer starts the ladder again.
+        if (!isPlaybackActive()) return
         val display = displayOf() ?: return
         val afterModeId = runCatching { display.mode.modeId }.getOrNull() ?: return
         val afterRate = runCatching { display.mode.refreshRate.toDouble() }.getOrDefault(0.0)
@@ -814,6 +916,8 @@ internal class FrameRateMatcher(
     private fun clearSurfaceRate() {
         if (!surfaceRateApplied) return
         surfaceRateApplied = false
+        surfaceRateSurface = null
+        surfaceRateValue = 0f
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val surface = videoSurface() ?: return
         if (!surface.isValid) return

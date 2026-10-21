@@ -697,8 +697,20 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     // durations of COMPLETED rows, and in-progress runtime is the saved
     // position of the rows still open. Nothing here writes.
 
-    /** Titles (shows or movies) with at least one completed row. */
-    @Query("SELECT COUNT(DISTINCT parentId) FROM watch_history WHERE isCompleted = 1")
+    // ── Viewing stats ────────────────────────────────────────────────────
+    //
+    // Every read below EXCLUDES marked-watched rows (see
+    // WatchHistoryEntity.markedWatched). A mark is a completed row with a 1 ms
+    // sentinel duration and no position: counting it made a bulk-marked show
+    // report hundreds of "finished episodes" at ~2.5 minutes each, and its
+    // completion stamps fabricated streak days. The rows themselves are
+    // untouched - badges, Continue Watching, resume and sync still read them.
+
+    /** Titles (shows or movies) with at least one completed ROW of real watch. */
+    @Query(
+        "SELECT COUNT(DISTINCT parentId) FROM watch_history " +
+            "WHERE isCompleted = 1 AND markedWatched = 0"
+    )
     suspend fun finishedTitleCount(): Int
 
     /**
@@ -717,17 +729,24 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         """
         SELECT COUNT(*) FROM watch_history
         WHERE isCompleted = 1
+          AND markedWatched = 0
           AND lower(type) NOT IN ('movie', 'channel')
         """
     )
     suspend fun completedEpisodeCount(): Int
 
     /** Completed movie rows: the one media type that is a movie outright. */
-    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND lower(type) = 'movie'")
+    @Query(
+        "SELECT COUNT(*) FROM watch_history " +
+            "WHERE isCompleted = 1 AND markedWatched = 0 AND lower(type) = 'movie'"
+    )
     suspend fun completedMovieCount(): Int
 
-    /** Runtime of everything completed: Σ durationMs over `isCompleted` rows. */
-    @Query("SELECT COALESCE(SUM(durationMs), 0) FROM watch_history WHERE isCompleted = 1")
+    /** Runtime of everything really watched: Σ durationMs over completed rows. */
+    @Query(
+        "SELECT COALESCE(SUM(durationMs), 0) FROM watch_history " +
+            "WHERE isCompleted = 1 AND markedWatched = 0"
+    )
     suspend fun finishedRuntimeMs(): Long
 
     /**
@@ -738,7 +757,7 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     @Query(
         """
         SELECT completedAt FROM watch_history
-        WHERE isCompleted = 1 AND completedAt IS NOT NULL
+        WHERE isCompleted = 1 AND markedWatched = 0 AND completedAt IS NOT NULL
         ORDER BY completedAt DESC
         """
     )
@@ -754,8 +773,14 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         SELECT parentId,
                name,
                poster,
-               COALESCE(SUM(CASE WHEN isCompleted = 1 THEN durationMs ELSE positionMs END), 0) AS ms,
-               COUNT(CASE WHEN isCompleted = 1 THEN 1 END) AS done
+               COALESCE(
+                   SUM(
+                       CASE WHEN isCompleted = 1 AND markedWatched = 0 THEN durationMs
+                            ELSE positionMs END
+                   ),
+                   0
+               ) AS ms,
+               COUNT(CASE WHEN isCompleted = 1 AND markedWatched = 0 THEN 1 END) AS done
         FROM watch_history
         GROUP BY parentId
         ORDER BY ms DESC

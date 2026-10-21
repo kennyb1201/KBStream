@@ -69,14 +69,14 @@ fun GenreChipRow(
         modifier = modifier
     ) {
         item {
-            DiscoverFilterChip(
+            MobileFilterChip(
                 label = "All",
                 selected = selectedGenreId == null,
                 onClick = { onSelect(null) }
             )
         }
         items(genres, key = { it.id }) { genre ->
-            DiscoverFilterChip(
+            MobileFilterChip(
                 label = genre.name,
                 selected = selectedGenreId == genre.id,
                 onClick = { onSelect(genre.id) }
@@ -86,18 +86,26 @@ fun GenreChipRow(
 }
 
 /**
- * One genre chip.
+ * A selected-by-tap chip: the genre strip, the folder sources, the stream
+ * add-on filter, the settings option pills and the catalog builder's rules.
  *
  * The active chip keeps the TV pair exactly: a 28% accent wash under an accent
  * label. It is not the Material 3 default (a filled secondary container) on
  * purpose - the filter strip is a set of small controls on the void, and a
  * filled chip at full accent is louder than the screen title.
+ *
+ * Five screens had grown five private copies of this (one of them with a
+ * translucent fill instead of the surface plate, which made the same control
+ * look like a different widget on Settings). They all draw this now; a caller
+ * that needs a different width or inset passes [modifier] rather than a new
+ * copy of the colours.
  */
 @Composable
-private fun DiscoverFilterChip(
+fun MobileFilterChip(
     label: String,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     FilterChip(
         selected = selected,
@@ -120,7 +128,7 @@ private fun DiscoverFilterChip(
             selectedContainerColor = KBAccent.copy(alpha = 0.28f),
             selectedLabelColor = KBAccent
         ),
-        modifier = Modifier.height(40.dp)
+        modifier = modifier.height(40.dp)
     )
 }
 

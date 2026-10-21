@@ -15,13 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,11 +52,11 @@ import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.streams.StreamItemKeys
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -414,18 +408,12 @@ private fun MobileStreamsHeader(
                         )
                     )
             )
-            IconButton(
-                onClick = onBack,
+            MobileBackButton(
+                onBack = onBack,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(4.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = KBTextHi
-                )
-            }
+            )
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -509,25 +497,7 @@ private fun MobileStreamsHeader(
 
 @Composable
 private fun MobileAddonChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                softWrap = false
-            )
-        },
-        shape = KBShapeCard,
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = KBSurface,
-            labelColor = KBTextLo,
-            selectedContainerColor = KBAccent.copy(alpha = 0.28f),
-            selectedLabelColor = KBAccent
-        )
-    )
+    MobileFilterChip(label = label, selected = selected, onClick = onClick)
 }
 
 /**

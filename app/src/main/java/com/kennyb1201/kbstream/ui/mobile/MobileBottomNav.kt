@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -33,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.Screen
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.components.touch.MobileDivider
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -165,10 +165,7 @@ fun MobileBottomNav(
             // The edge the bar needs against a poster rail scrolling behind it:
             // without it the plate and the screen are the same colour and the
             // bar reads as a gap in the content.
-            HorizontalDivider(
-                thickness = 1.dp,
-                color = KBTextLo.copy(alpha = 0.14f)
-            )
+            MobileDivider()
             // The item row: the five destinations, then the profile door in a
             // fixed slot of its own. The NavigationBar keeps `weight(1f)` so
             // the five still split what the avatar does not take - adding the

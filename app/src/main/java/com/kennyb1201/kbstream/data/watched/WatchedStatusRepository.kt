@@ -2051,7 +2051,10 @@ class WatchedStatusRepository(
                     episode = episode,
                     updatedAt = now,
                     isCompleted = true,
-                    completedAt = existingCompletedAt ?: now
+                    completedAt = existingCompletedAt ?: now,
+                    // A MARK, not a watch: excluded from the Viewing Stats
+                    // reads (see WatchHistoryEntity.markedWatched).
+                    markedWatched = true
                 )
 
             runCatchingCancellable {

@@ -123,6 +123,9 @@ internal fun bedtimeChipLabel(chip: Int): String = when (chip) {
 @Composable
 fun ProfileEditScreen(
     editingProfileId: String? = null,
+    // The phone's header arrow: a CANCEL that pops exactly as system back does
+    // (no save, no onDone). The TV page draws no back control.
+    onBack: () -> Unit,
     onDone: () -> Unit
 ) {
     // The phone entry: the same profile writes, PIN validation and parent-PIN
@@ -131,6 +134,7 @@ fun ProfileEditScreen(
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
         ProfileEditScreenMobile(
             editingProfileId = editingProfileId,
+            onBack = onBack,
             onDone = onDone
         )
         return

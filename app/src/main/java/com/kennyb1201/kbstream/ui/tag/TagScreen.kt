@@ -94,6 +94,8 @@ fun TagScreen(
     name: String,
     isKeyword: Boolean,
     type: String,
+    // The phone's header arrow; the TV page draws no back control.
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: TagViewModel = viewModel()
 ) {
@@ -106,6 +108,7 @@ fun TagScreen(
             name = name,
             isKeyword = isKeyword,
             type = type,
+            onBack = onBack,
             onNavigateDetail = onNavigateDetail,
             viewModel = viewModel
         )

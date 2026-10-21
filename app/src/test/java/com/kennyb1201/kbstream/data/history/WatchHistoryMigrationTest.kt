@@ -82,6 +82,61 @@ class WatchHistoryMigrationTest {
         )
     }
 
+    /**
+     * v13 -> v14 adds the marker flag, and it is BACKFILLED from the rows a
+     * v13 install already holds: marking an episode watched has always written
+     * `durationMs = 1, positionMs = 0`, so the rows on disk carry the marker
+     * signature even though the column did not exist yet. A completion the
+     * player filed carries a real duration and stays unflagged.
+     */
+    @Test
+    fun `the v14 migration backfills the marker flag from the rows on disk`() {
+        val db = helper.createDatabase(DB_NAME, V13)
+        insertRow(db, id = "ep1:show1", positionMs = 0L, durationMs = 1L, isCompleted = 1)
+        insertRow(db, id = "ep2:show1", positionMs = 0L, durationMs = 2_400_000L, isCompleted = 1)
+        insertRow(db, id = "ep3:show1", positionMs = 90_000L, durationMs = 2_400_000L, isCompleted = 0)
+        db.close()
+
+        val migrated = helper.runMigrationsAndValidate(
+            DB_NAME,
+            WATCH_HISTORY_DB_VERSION,
+            true,
+            *WatchHistoryDatabase.migrations.toTypedArray()
+        )
+
+        assertEquals(
+            "the mark (1 ms, 0 position) is the only row flagged as a marker",
+            1,
+            count(migrated, "watch_history", "markedWatched = 1")
+        )
+        migrated.query(
+            "SELECT id, markedWatched FROM watch_history ORDER BY id"
+        ).use { cursor ->
+            val flags = buildMap {
+                while (cursor.moveToNext()) put(cursor.getString(0), cursor.getInt(1))
+            }
+            assertEquals(
+                mapOf("ep1:show1" to 1, "ep2:show1" to 0, "ep3:show1" to 0),
+                flags
+            )
+        }
+    }
+
+    private fun insertRow(
+        db: SupportSQLiteDatabase,
+        id: String,
+        positionMs: Long,
+        durationMs: Long,
+        isCompleted: Int
+    ) {
+        db.execSQL(
+            "INSERT INTO watch_history " +
+                "(id, parentId, type, name, positionMs, durationMs, updatedAt, isCompleted) " +
+                "VALUES ('$id', 'show1', 'episode', 'Episode', $positionMs, $durationMs, " +
+                "1700000000000, $isCompleted)"
+        )
+    }
+
     /** A v11 database with one history row and one watched-status row in it. */
     private fun seedV11Database(context: Context) {
         context.deleteDatabase(DB_NAME)
@@ -119,6 +174,11 @@ class WatchHistoryMigrationTest {
             if (cursor.moveToFirst()) cursor.getInt(0) else -1
         }
 
+    private fun count(db: SupportSQLiteDatabase, table: String, where: String): Int =
+        db.query("SELECT COUNT(*) FROM `$table` WHERE $where").use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else -1
+        }
+
     private fun hasTable(db: SupportSQLiteDatabase, table: String): Boolean =
         db.query(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -130,6 +190,7 @@ class WatchHistoryMigrationTest {
     private companion object {
         const val DB_NAME = "watch_history_migration_test"
         const val V11 = 11
+        const val V13 = 13
 
         /**
          * The version 11 schema: every table v12 has EXCEPT sync_outbox, which

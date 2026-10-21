@@ -64,9 +64,15 @@ TV page and the touch twin, both routed through `Screen.Trakt` and reached from 
    reply" (the throwing poll may have been the 200 that spent the code), while a
    `404` with no throw keeps the old "that code expired" meaning. `409/410` are
    Trakt saying the code is gone either way.
-6. **Refresh is proactive.** Access tokens last 7 days; the token is refreshed
-   with a day in hand, never on a 401 in front of the first scrobble. Trakt's
-   refresh tokens are single-use, so the stored pair is always replaced.
+6. **Refresh is proactive AND serialized.** Access tokens last 7 days; the
+   token is refreshed with a day in hand, never on a 401 in front of the first
+   scrobble. Trakt's refresh tokens are single-use, so the stored pair is
+   always replaced - and because every read path calls `validAccessToken()`,
+   two callers could both pass the due-check and POST the SAME refresh token
+   (the loser's save then overwrites the winner's fresh pair, and the grant is
+   revoked for reuse). `refreshIfDue` therefore takes `refreshMutex` and redoes
+   the due-check inside it: a caller that queued behind a completed refresh
+   finds the new expiry and returns without a second exchange.
 7. **The store is its own file, and encrypted.** `<profile>.trakt_auth` cannot
    collide with `<profile>.simkl_auth` (Diagnostics and the cloud readers
    address stores by name), and there is no plaintext migration path because
@@ -128,6 +134,12 @@ record.
   transport error, an exhausted budget - keeps the previous snapshot rather
   than publishing a partial history. There is no half-merge any more: a list
   cut short would read as unwatched beyond the cut.
+- **Paused sessions are paged too.** `/sync/playback/movies` and
+  `/sync/playback/episodes` used to take `limit = 100` and no page walk, so an
+  account with more paused sessions than that silently lost the tail of the
+  resume merge. Both are walked with the same `X-Pagination-Page-Count` rule
+  (and the same per-page rate-guard slot), and each side is independent: one
+  failing leaves the other's sessions intact.
 
 ## Phase D — Trakt lists for KB folders
 

@@ -33,6 +33,7 @@ fun TagScreenMobile(
     name: String,
     isKeyword: Boolean,
     type: String,
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: TagViewModel = viewModel()
 ) {
@@ -55,6 +56,7 @@ fun TagScreenMobile(
                 title = name,
                 subtitle = if (type.lowercase() == "tv") "Series" else "Movies"
             ),
+            onBack = onBack,
             sectionsRaw = sections,
             isLoading = isLoading,
             error = error,

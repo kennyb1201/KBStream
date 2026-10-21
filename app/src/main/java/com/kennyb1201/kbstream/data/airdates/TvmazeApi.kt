@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.airdates
 
 import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
 import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -10,6 +11,7 @@ import retrofit2.http.Query
  * numeric id. Everything else the endpoint returns (image, rating, schedule)
  * is ignored by design - this source exists for one thing only, air dates.
  */
+@JsonClass(generateAdapter = true)
 data class TvmazeShow(
     @Json(name = "id") val id: Int? = null
 )
@@ -21,6 +23,7 @@ data class TvmazeShow(
  * UI works in whole days, and mixing a UTC stamp with a local-date "today" is
  * how an evening premiere gets read as tomorrow.
  */
+@JsonClass(generateAdapter = true)
 data class TvmazeEpisode(
     @Json(name = "season") val season: Int? = null,
     @Json(name = "number") val number: Int? = null,

@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
@@ -320,11 +322,15 @@ internal val SEARCH_RAIL_EDGE_PADDING = KBScreenEdge
 @Composable
 internal fun SearchRail(
     title: String,
+    // Hoisted so a rail can be put back on the tile a drill-down was opened
+    // from (see SearchReturnFocus); every other rail keeps its own.
+    state: LazyListState = rememberLazyListState(),
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     Column {
         KBSectionHeader(title = title)
         LazyRow(
+            state = state,
             horizontalArrangement = Arrangement.spacedBy(KBSpacing.md),
             contentPadding = PaddingValues(
                 top = 2.dp,

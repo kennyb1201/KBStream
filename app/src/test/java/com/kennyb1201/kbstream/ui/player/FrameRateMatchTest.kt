@@ -542,6 +542,32 @@ class FrameRateMatchTest {
     }
 
     @Test
+    fun `a resume that finds the panel right says so, and asks for nothing`() {
+        assertEquals(
+            "resumed; the panel is still in mode 1 at 60.000 Hz for 23.976 fps — " +
+                "no request made",
+            FrameRateMatch.describeResumeNoRequest(23.976, mode(1, 60.0))
+        )
+        assertEquals(
+            "resumed; the surface already carries 23.976 fps and the panel offers no " +
+                "better mode — no request made",
+            FrameRateMatch.describeResumeNoRequest(23.976, null)
+        )
+    }
+
+    @Test
+    fun `a surface that already carries the rate is not asked twice`() {
+        // Re-applying the hint to a live surface is what the field capture of
+        // 2026-10-18 links to choppy playback after a pause and resume, so the
+        // idempotence guard has to be visible in the diagnostics row as a
+        // deliberate no-op.
+        assertEquals(
+            "left the surface at 23.976 fps — it already carries that rate; no request made",
+            FrameRateMatch.describeSurfaceAlreadyAt(23.976)
+        )
+    }
+
+    @Test
     fun `a no-op is reported as one, not as a refused request`() {
         // The diagnostics row is the field's only view of this decision, and
         // "the request was not taken" would describe a request that was never

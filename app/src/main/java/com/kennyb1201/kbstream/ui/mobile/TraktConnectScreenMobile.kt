@@ -18,8 +18,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -88,6 +91,13 @@ fun TraktConnectScreenMobile(
                     .padding(horizontal = 16.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // One back control for the whole page, top-left of the header:
+                // the same arrow as every other mobile screen. The per-state
+                // word buttons it replaces sat at the bottom of each branch.
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    MobileBackButton(onBack = onBack)
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -118,11 +128,6 @@ fun TraktConnectScreenMobile(
                                     "cannot be connected. Set TRAKT_CLIENT_ID for the " +
                                     "build and reinstall."
                             )
-                            KBButton(
-                                label = "BACK",
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onBack
-                            )
                         }
 
                         uiState.isConnected -> {
@@ -145,11 +150,6 @@ fun TraktConnectScreenMobile(
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = { showDisconnectConfirm = true }
                                 )
-                                KBButton(
-                                    label = "BACK",
-                                    modifier = Modifier.fillMaxWidth(),
-                                    onClick = onBack
-                                )
                             }
                         }
 
@@ -169,6 +169,24 @@ fun TraktConnectScreenMobile(
                             // finger, so height is not the constraint.
                             uiState.verificationUrl?.let { url ->
                                 KBQrCode(url = url, size = 200.dp)
+                                // A QR is for the OTHER device. On the phone that
+                                // is showing it, it is unscannable, so a
+                                // phone-first user had to hand-type the address
+                                // from a QR they cannot read. One tap opens the
+                                // verification page in whatever browser is
+                                // installed; the code still has to be typed.
+                                val context = LocalContext.current
+                                KBButton(
+                                    label = "OPEN VERIFICATION PAGE",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                            )
+                                        }
+                                    }
+                                )
                             }
 
                             uiState.userCode?.let { code ->
@@ -206,13 +224,13 @@ fun TraktConnectScreenMobile(
                                     } else {
                                         "GENERATE CODE"
                                     },
+                                    // Disabled while polling, as Simkl's twin
+                                    // already is: a second tap restarts the
+                                    // flow and silently invalidates the code
+                                    // still on screen, mid-typing.
+                                    enabled = !uiState.isLoading && !uiState.isPolling,
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = vm::startConnect
-                                )
-                                KBButton(
-                                    label = "BACK",
-                                    modifier = Modifier.fillMaxWidth(),
-                                    onClick = onBack
                                 )
                             }
                         }
@@ -236,6 +254,12 @@ fun TraktConnectScreenMobile(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 8.dp)
                     ) {
+                        // CANCEL first: on a destructive confirm the safe
+                        // choice is the left-hand one, as on Remove add-on.
+                        KBButton(
+                            label = "CANCEL",
+                            onClick = { showDisconnectConfirm = false }
+                        )
                         KBButton(
                             label = "DISCONNECT",
                             danger = true,
@@ -243,10 +267,6 @@ fun TraktConnectScreenMobile(
                                 showDisconnectConfirm = false
                                 vm.disconnect()
                             }
-                        )
-                        KBButton(
-                            label = "CANCEL",
-                            onClick = { showDisconnectConfirm = false }
                         )
                     }
                 }

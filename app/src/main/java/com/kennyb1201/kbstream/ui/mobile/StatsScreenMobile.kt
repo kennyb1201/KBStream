@@ -34,7 +34,6 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
-import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.settings.StatsViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -82,7 +81,7 @@ fun StatsScreenMobile(
             item(key = "header") {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        KBButton(label = "BACK", onClick = onBack)
+                        MobileBackButton(onBack = onBack)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = "VIEWING STATS",

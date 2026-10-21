@@ -217,6 +217,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val isLoading: StateFlow<Boolean> =
         _isLoading.asStateFlow()
 
+    /**
+     * Set when the TMDB wave could not be reached at all.
+     *
+     * Every per-endpoint failure was previously swallowed into an empty list,
+     * so a dead connection rendered the same "No matches found." as a query
+     * with genuinely no hits - the viewer was told their show does not exist
+     * instead of that the search did not run. The message is the screen's, not
+     * the exception's: an HTTP status or a stack trace is not something to put
+     * in front of a viewer.
+     */
+    private val _searchError =
+        MutableStateFlow<String?>(null)
+
+    val searchError: StateFlow<String?> =
+        _searchError.asStateFlow()
+
     private val _addonResultGroups =
         MutableStateFlow<List<AddonResultGroup>>(
             emptyList()
@@ -487,6 +503,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         searchJob?.cancel()
         invalidateAddonSearch()
         _addonResultGroups.value = emptyList()
+        _searchError.value = null
 
         if (normalized.isBlank()) {
             _results.value = emptyList()
@@ -617,6 +634,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 _actorResults.value = emptyList()
                 _studioResults.value = emptyList()
                 _collectionResults.value = emptyList()
+                _searchError.value = SEARCH_UNAVAILABLE
             } finally {
                 _isLoading.value = false
             }
@@ -2145,6 +2163,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val TAG = "SearchViewModel"
+
+        /** What a failed search says on screen. */
+        const val SEARCH_UNAVAILABLE =
+            "We couldn't reach search just now. Check the connection and try again."
         const val PREFS_NAME = "search_prefs"
         const val KEY_RECENT_SEARCHES = "recent_searches"
         const val KEY_BROWSE_KEYWORD_IDS = "browse_keyword_ids"

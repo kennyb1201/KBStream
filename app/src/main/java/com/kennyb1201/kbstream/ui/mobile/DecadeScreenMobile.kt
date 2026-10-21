@@ -22,6 +22,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 fun DecadeScreenMobile(
     decadeStart: Int,
     name: String,
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: DecadeViewModel = viewModel()
 ) {
@@ -47,6 +48,7 @@ fun DecadeScreenMobile(
                 eyebrow = "Decade",
                 title = name
             ),
+            onBack = onBack,
             sectionsRaw = sections,
             isLoading = isLoading,
             error = error,

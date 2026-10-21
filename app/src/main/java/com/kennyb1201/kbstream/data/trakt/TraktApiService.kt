@@ -113,6 +113,7 @@ interface TraktApiService {
     @GET("sync/playback/movies")
     suspend fun playbackMovies(
         @Header("Authorization") authorization: String,
+        @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 100
     ): Response<List<TraktPlaybackItem>>
 
@@ -120,6 +121,7 @@ interface TraktApiService {
     @GET("sync/playback/episodes")
     suspend fun playbackEpisodes(
         @Header("Authorization") authorization: String,
+        @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 100
     ): Response<List<TraktPlaybackItem>>
 

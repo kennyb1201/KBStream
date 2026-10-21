@@ -84,6 +84,8 @@ import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.LandscapeCard
+import com.kennyb1201.kbstream.ui.components.touch.MobileSectionHeader
+import com.kennyb1201.kbstream.ui.components.touch.MobileSpacing
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
@@ -442,7 +444,12 @@ fun HomeScreenMobile(
                         }
 
                         is HomeEntry.Collection -> item(
-                            key = "kb:" + (entry.collection.id ?: entry.collection.title)
+                            // id AND title: two imported collections can both
+                            // have no id, and a bare title then collides when
+                            // an import repeats one - LazyColumn throws on a
+                            // duplicate key. The title is always present, so
+                            // this is unique where `id ?: title` was not.
+                            key = "kb:${entry.collection.id}:${entry.collection.title}"
                         ) {
                             MobileCollectionSection(
                                 collection = entry.collection,
@@ -1210,16 +1217,8 @@ private fun MobileSection(
     title: String,
     content: @Composable () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            text = title,
-            color = KBTextHi,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(MobileSpacing.gap)) {
+        MobileSectionHeader(title)
         content()
     }
 }
@@ -1313,7 +1312,10 @@ private fun ContinueWatchingCard(
         Text(
             text = displayBadge,
             color = KBTextHi,
-            fontSize = 9.sp,
+            // The card's other overlay chips (episodes left, time left) are
+            // labelSmall; this one was 9sp, so two badges on the same artwork
+            // were two different sizes.
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1450,7 +1452,7 @@ private fun UpcomingCard(
             Text(
                 text = "NEW SEASON",
                 color = KBTextHi,
-                fontSize = 9.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 modifier = Modifier
@@ -1463,7 +1465,7 @@ private fun UpcomingCard(
             Text(
                 text = episode.airDateLabel.uppercase(),
                 color = Color.Black,
-                fontSize = 9.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 modifier = Modifier

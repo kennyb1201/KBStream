@@ -246,6 +246,7 @@ data class SimklWatchingDetailedEpisode(
     @Json(name = "watched_at") val watchedAt: String?
 )
 
+@JsonClass(generateAdapter = true)
 data class SimklContinueWatchingItem(
     val id: String,
 

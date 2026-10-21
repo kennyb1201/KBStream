@@ -10,6 +10,7 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
@@ -47,6 +48,7 @@ import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.history.looksLikeMarkedWatchedRow
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.images.ImageOverrideEntity
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -1031,9 +1033,7 @@ object SupabaseSync {
                 emptyList()
             } else {
                 runCatching {
-                    c.from(TABLE_HISTORY)
-                        .select()
-                        .decodeList<SyncRowDto>()
+                    pullRows(TABLE_HISTORY, "item_id")
                         .mapNotNull { row -> row.itemId }
                         .filter { storedKeyMatchesProfile(it, pid) }
                         .map { storedId ->
@@ -1054,9 +1054,7 @@ object SupabaseSync {
                 emptyList()
             } else {
                 runCatching {
-                    c.from(TABLE_WATCHED)
-                        .select()
-                        .decodeList<SyncRowDto>()
+                    pullRows(TABLE_WATCHED, "item_key")
                         .mapNotNull { row ->
                             val storedKey = row.itemKey ?: return@mapNotNull null
                             if (!storedKeyMatchesProfile(storedKey, pid)) return@mapNotNull null
@@ -1664,6 +1662,47 @@ object SupabaseSync {
         }
     }
 
+    /** One PostgREST page. Supabase's default `max-rows` is 1,000. */
+    private const val PULL_PAGE_SIZE = 500
+
+    /** Hard stop on a runaway walk: 200 pages is 100k rows per table. */
+    private const val PULL_MAX_PAGES = 200
+
+    /**
+     * Reads a whole sync table, page by page.
+     *
+     * A bare `select()` is CAPPED by the server's `max-rows` (1,000 by default
+     * on Supabase) — and every pull here reads ALL profiles' rows and filters
+     * client-side, so one busy account could silently lose everything past the
+     * cap, with no error surfaced. An explicit `range` plus a stable order on
+     * the table's key column makes the cap a page size instead of a ceiling.
+     *
+     * The order is the key column rather than `updated_at`: a page boundary
+     * needs a total order, and two rows sharing an updated stamp would
+     * otherwise be able to repeat or vanish between pages.
+     */
+    private suspend fun pullRows(table: String, keyColumn: String): List<SyncRowDto> {
+        val c = client ?: return emptyList()
+        val rows = ArrayList<SyncRowDto>()
+        var page = 0
+        while (page < PULL_MAX_PAGES) {
+            val from = page.toLong() * PULL_PAGE_SIZE
+            val batch = c.from(table)
+                .select {
+                    order(keyColumn, Order.ASCENDING)
+                    range(from, from + PULL_PAGE_SIZE - 1)
+                }
+                .decodeList<SyncRowDto>()
+            rows.addAll(batch)
+            // A short page is the last one. An exactly-full last page costs one
+            // extra (empty) request rather than risking a truncated pull.
+            if (batch.size < PULL_PAGE_SIZE) return rows
+            page++
+        }
+        Log.w(TAG, "pull $table hit the page limit; the tail was not read")
+        return rows
+    }
+
     private suspend fun pullHistory(context: Context): Boolean {
         val c = client ?: return false
         // Scope the whole pull to the profile active at START: a switch
@@ -1677,9 +1716,7 @@ object SupabaseSync {
         // answer the stamp below claimed a sync that never happened.
         var ok = true
         try {
-            val rows = c.from(TABLE_HISTORY)
-                .select()
-                .decodeList<SyncRowDto>()
+            val rows = pullRows(TABLE_HISTORY, "item_id")
 
             // Which profile each title belongs to, taken from the rows of ALL
             // profiles (see recordHistoryTitleOwners) - done before the merge
@@ -1793,7 +1830,10 @@ object SupabaseSync {
                             durationMs = remote.lng("durationMs") ?: 0L,
                             updatedAt = remoteUpdated,
                             isCompleted = remote.bool("isCompleted"),
-                            completedAt = remote.lng("completedAt")
+                            completedAt = remote.lng("completedAt"),
+                            // A marker must stay a marker across devices, or
+                            // the stats reads count it again on this one.
+                            markedWatched = remote.markedWatchedRow()
                         )
                     )
                     applied++
@@ -1834,9 +1874,7 @@ object SupabaseSync {
         val pid = currentProfileId()
         var ok = true
         try {
-            val rows = c.from(TABLE_WATCHED)
-                .select()
-                .decodeList<SyncRowDto>()
+            val rows = pullRows(TABLE_WATCHED, "item_key")
 
             val db = WatchHistoryDatabase.getInstanceScoped(context)
             // Same N+1 fix as pullHistory: load the relevant local rows once
@@ -1914,9 +1952,7 @@ object SupabaseSync {
         val pid = currentProfileId()
         var ok = true
         try {
-            val rows = c.from(TABLE_OVERRIDES)
-                .select()
-                .decodeList<SyncRowDto>()
+            val rows = pullRows(TABLE_OVERRIDES, KEY_OVERRIDES)
             for (row in rows) {
                 // Bail on a mid-pull profile switch (same rule as pullHistory).
                 if (currentProfileId() != pid) return false
@@ -1962,9 +1998,7 @@ object SupabaseSync {
             .getAll()
         if (all.isEmpty()) return
         val cloudKeys = runCatching {
-            c.from(TABLE_OVERRIDES)
-                .select()
-                .decodeList<SyncRowDto>()
+            pullRows(TABLE_OVERRIDES, KEY_OVERRIDES)
                 .mapNotNull { row -> row.overrideKey }
                 .filter { storedKey -> storedKeyMatchesProfile(storedKey, pid) }
                 .map { storedKey -> unscopedKey(storedKey) }
@@ -1988,9 +2022,7 @@ object SupabaseSync {
         // scope (same rule as the three pulls above).
         var ok = true
         try {
-            val rows = c.from(TABLE_PREFS)
-                .select()
-                .decodeList<SyncRowDto>()
+            val rows = pullRows(TABLE_PREFS, "pref_key")
 
             // Pass 1: apply the account-wide profiles blob FIRST so the
             // active profile exists before scoped rows are filtered — on a
@@ -2071,9 +2103,7 @@ object SupabaseSync {
     private suspend fun cloudHistoryTombstones(): Map<String, Long> {
         val c = client ?: return emptyMap()
         return runCatching {
-            c.from(TABLE_HISTORY)
-                .select()
-                .decodeList<SyncRowDto>()
+            pullRows(TABLE_HISTORY, "item_id")
                 .mapNotNull { row ->
                     val stored = row.itemId ?: return@mapNotNull null
                     val at = HistoryTombstoneRules.deletedAt(row.payload)
@@ -2124,9 +2154,7 @@ object SupabaseSync {
     private suspend fun cloudMarkerTimestamps(): Map<String, Long> {
         val c = client ?: return emptyMap()
         return runCatching {
-            c.from(TABLE_WATCHED)
-                .select()
-                .decodeList<SyncRowDto>()
+            pullRows(TABLE_WATCHED, "item_key")
                 .mapNotNull { row ->
                     val stored = row.itemKey ?: return@mapNotNull null
                     val updated = row.payload["updatedAt"]
@@ -2883,7 +2911,8 @@ object SupabaseSync {
                         durationMs = remote.lng("durationMs") ?: 0L,
                         updatedAt = remoteUpdated,
                         isCompleted = remote.bool("isCompleted"),
-                        completedAt = remote.lng("completedAt")
+                        completedAt = remote.lng("completedAt"),
+                        markedWatched = remote.markedWatchedRow()
                     )
                 )
                 if (live) WatchedStatusRepository.invalidateAllCaches()
@@ -3330,6 +3359,23 @@ object SupabaseSync {
 
     private fun JsonObject.bool(key: String): Boolean =
         str(key)?.toBooleanStrictOrNull() ?: false
+
+    /**
+     * Whether a history row is a "marked watched" marker.
+     *
+     * The explicit flag when the payload carries one (every build from v14 on),
+     * otherwise the sentinel shape - a payload pushed by an OLDER build, which
+     * has no flag to send. The fallback is the same classification the 13 -> 14
+     * migration applies to rows already on disk.
+     */
+    private fun JsonObject.markedWatchedRow(): Boolean {
+        str("markedWatched")?.toBooleanStrictOrNull()?.let { return it }
+        return looksLikeMarkedWatchedRow(
+            isCompleted = bool("isCompleted"),
+            durationMs = lng("durationMs") ?: 0L,
+            positionMs = lng("positionMs") ?: 0L
+        )
+    }
 
     private const val SYNC_PREFS = "kbstream_sync"
     private const val KEY_REFRESH_TOKEN = "supabase_refresh_token"

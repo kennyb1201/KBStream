@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -90,6 +91,14 @@ fun SimklConnectScreenMobile(
                     .padding(horizontal = 16.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // The screen's one back control, top-left of its header - the
+                // same arrow every other mobile page draws (see
+                // MobileBackButton). It replaces the per-state word buttons
+                // that used to sit at the bottom of each branch.
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    MobileBackButton(onBack = onBack)
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -166,11 +175,6 @@ fun SimklConnectScreenMobile(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = vm::refreshSimklNow
                             )
-                            KBButton(
-                                label = "BACK",
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onBack
-                            )
                             if (!kidsProfile) {
                                 KBButton(
                                     label = "DISCONNECT",
@@ -192,6 +196,24 @@ fun SimklConnectScreenMobile(
                         // finger, so height is not the constraint.
                         uiState.verificationUrl?.let { url ->
                             KBQrCode(url = url, size = 200.dp)
+                            // The QR is for another device; on this phone it is
+                            // unscannable, so the page it names is one tap away
+                            // instead of a typed URL.
+                            val context = LocalContext.current
+                            KBButton(
+                                label = "OPEN VERIFICATION PAGE",
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(
+                                            android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse(url)
+                                            )
+                                        )
+                                    }
+                                }
+                            )
                         }
 
                         uiState.userCode?.let { code ->
@@ -242,11 +264,6 @@ fun SimklConnectScreenMobile(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = vm::generateCode
                             )
-                            KBButton(
-                                label = "BACK",
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = onBack
-                            )
                         }
                     }
                 }
@@ -269,6 +286,14 @@ fun SimklConnectScreenMobile(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
+                            // CANCEL first: this is the most destructive
+                            // confirm in the app, and the safe choice must not
+                            // be the one under the thumb's resting place.
+                            KBButton(
+                                label = "CANCEL",
+                                modifier = Modifier.weight(1f),
+                                onClick = { showDisconnectConfirm = false }
+                            )
                             KBButton(
                                 label = "DISCONNECT",
                                 danger = true,
@@ -277,11 +302,6 @@ fun SimklConnectScreenMobile(
                                     showDisconnectConfirm = false
                                     vm.disconnect()
                                 }
-                            )
-                            KBButton(
-                                label = "CANCEL",
-                                modifier = Modifier.weight(1f),
-                                onClick = { showDisconnectConfirm = false }
                             )
                         }
                     }

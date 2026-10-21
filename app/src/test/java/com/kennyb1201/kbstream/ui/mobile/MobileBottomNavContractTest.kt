@@ -592,8 +592,9 @@ class MobileBottomNavContractTest {
             bar.indexOf("icon = {") in 0 until bar.indexOf("label = {")
         )
         assertTrue(
-            "a hairline separates the plate from the content scrolling behind it",
-            bar.contains("HorizontalDivider(")
+            "a hairline separates the plate from the content scrolling behind it, " +
+                "at the app's one divider weight",
+            bar.contains("MobileDivider()")
         )
         assertTrue(
             "the phone's bottom system inset is respected",

@@ -5937,7 +5937,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 player.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
                 frameRateMatcher = FrameRateMatcher(
                     this@NativePlayerActivity,
-                    videoSurface = { videoOutputSurface() }
+                    videoSurface = { videoOutputSurface() },
+                    // The ladder's second look is dropped while playback is
+                    // paused: a backstop must not re-request the surface on a
+                    // stopped picture (see FrameRateMatcher).
+                    isPlaybackActive = { exoPlayer?.playWhenReady == true }
                 )
                 // The player's own onTracksChanged report is the confirmation;
                 // but an addon stream often carries no fps at all, so race a

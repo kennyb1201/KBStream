@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -182,6 +183,7 @@ data class MdbListUserList(
  * any network/parse problem or a blank key yields null so the detail screen
  * simply omits the ratings row.
  */
+@JsonClass(generateAdapter = true)
 data class MdbListRatings(
     val imdb: String? = null,
     val tmdb: String? = null,
@@ -201,6 +203,7 @@ data class MdbListRatings(
  * One paused MDBList playback session (GET /sync/playback), shaped for the
  * Continue Watching rail merge.
  */
+@JsonClass(generateAdapter = true)
 data class MdbListPlaybackItem(
     val sessionId: Int,
     val progress: Double,
@@ -226,6 +229,7 @@ data class MdbListPlaybackItem(
  * never in a "completed" set. Episode keys carry the real per-episode
  * watch state.
  */
+@JsonClass(generateAdapter = true)
 data class MdbListWatchedSnapshot(
     val movieKeys: Set<String> = emptySet(),
     val startedShowKeys: Set<String> = emptySet(),
@@ -361,7 +365,18 @@ object MdbListClient {
         val body = runCatching { response.peekBody(200).string() }.getOrDefault("")
         val daily = body.contains("Daily API limit", ignoreCase = true)
         val now = System.currentTimeMillis()
-        val until = if (daily) nextUtcMidnight(now) else now + 60_000L
+        // A non-daily 429 asks for a pause of its OWN length (delta-seconds),
+        // and the fixed minute ignored it: too short for a server that asked
+        // for five, and a hot loop for one that asked for zero. The floor
+        // stays a minute and the ceiling a day, so neither extreme can turn
+        // the backoff into a retry storm or a week-long silence.
+        val retryAfterSeconds = response.header("Retry-After")?.trim()?.toLongOrNull()
+        val until = when {
+            daily -> nextUtcMidnight(now)
+            retryAfterSeconds != null ->
+                now + (retryAfterSeconds * 1_000L).coerceIn(60_000L, 24 * 60 * 60 * 1_000L)
+            else -> now + 60_000L
+        }
         if (until <= budget.limitedUntilMs) return
         budget.limitedUntilMs = until
         Log.w(
@@ -1565,10 +1580,19 @@ object MdbListClient {
             // stamps the time, as the cache comment there says.
             var blockedByLocalBudget = false
 
+            // Set when a page anywhere in the walk answers non-2xx. The walk
+            // stops and the stale copy is served (see the return below): the
+            // old code returned an EMPTY snapshot from here, which blanked
+            // every MDBList-fed badge until the next good refresh - the very
+            // copy the budget-block path in this same function serves on
+            // purpose.
+            var failedMidWalk = false
+
             val result = withContext(Dispatchers.IO) {
             runCatching {
                 var cursor: String? = null
                 var guard = 0
+                var root: JSONObject?
                 do {
                     val url = buildString {
                         append("$BASE/sync/watched?apikey=$apiKey&limit=1000")
@@ -1577,7 +1601,7 @@ object MdbListClient {
                             append(java.net.URLEncoder.encode(cursor, "UTF-8"))
                         }
                     }
-                    val root = client.newCall(
+                    root = client.newCall(
                         Request.Builder().url(url).get().build()
                     ).execute().use { response ->
                         if (!response.isSuccessful) {
@@ -1591,17 +1615,19 @@ object MdbListClient {
                             if (isLocalBudgetBlock(response.code, response.message)) {
                                 Log.w(TAG, "sync/watched blocked by the local MDBList budget")
                                 blockedByLocalBudget = true
-                                return@withContext MdbListWatchedSnapshot()
+                            } else {
+                                failedMidWalk = true
+                                Log.w(
+                                    TAG,
+                                    "sync/watched failed code=${response.code} " +
+                                        response.body?.string().orEmpty().take(200)
+                                )
                             }
-                            Log.w(
-                                TAG,
-                                "sync/watched failed code=${response.code} " +
-                                    response.body?.string().orEmpty().take(200)
-                            )
-                            return@withContext MdbListWatchedSnapshot()
+                            null
+                        } else {
+                            JSONObject(response.body?.string().orEmpty())
                         }
-                        JSONObject(response.body?.string().orEmpty())
-                    }
+                    } ?: break
 
                     root.optJSONArray("movies")?.let { arr ->
                         for (i in 0 until arr.length()) {
@@ -1644,6 +1670,24 @@ object MdbListClient {
                         ?.takeIf { it.isNotBlank() }
                     guard += 1
                 } while (cursor != null && guard < 50)
+
+                // A spend budget stops the walk up front: the caller's block
+                // path below owns that answer.
+                if (blockedByLocalBudget) return@withContext MdbListWatchedSnapshot()
+
+                if (failedMidWalk) {
+                    // A PARTIAL snapshot is not an option - a key that is not
+                    // in it reads as "not watched", so half a history flips
+                    // badges the wrong way. Serve the last good copy instead:
+                    // memory first, then the disk row at ANY age.
+                    val stale = cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
+                        ?: jsonCacheDao?.getByKey(snapshotDiskKey(apiKey))?.let { row ->
+                            runCatching { snapshotJsonAdapter.fromJson(row.json) }
+                                .getOrNull()
+                                ?.takeIf { !it.isEmpty }
+                        }
+                    return@withContext stale ?: MdbListWatchedSnapshot()
+                }
 
                 MdbListWatchedSnapshot(
                     movieKeys = movieKeys,

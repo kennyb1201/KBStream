@@ -25,8 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -77,6 +75,9 @@ import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.MobileEyebrow
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.components.touch.MobileSpacing
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
@@ -290,7 +291,7 @@ private fun PaneHeaderMobile(pane: SettingsPane, onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            KBButton(label = "BACK", onClick = onBack)
+            MobileBackButton(onBack = onBack)
             Spacer(modifier = Modifier.padding(start = 12.dp))
             Text(
                 text = pane.label,
@@ -326,13 +327,10 @@ private fun PaneScroll(content: @Composable () -> Unit) {
 
 @Composable
 private fun SettingsSectionMobile(title: String, first: Boolean = false) {
-    Text(
-        text = title.uppercase(),
-        color = KBAccent,
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(top = if (first) 2.dp else 18.dp, bottom = 6.dp)
-    )
+    // The shared eyebrow: the builder and the panes were drawing this label
+    // with their own top/bottom insets, which is why one group sat 18dp down
+    // and another 20dp.
+    MobileEyebrow(title, first = first)
 }
 
 @Composable
@@ -412,13 +410,23 @@ private fun SettingsNavRowMobile(
     }
 }
 
+/**
+ * One labelled row of option chips.
+ *
+ * There were three of these - one for an Int choice, one for a String choice
+ * (MPV's vo modes) and one for the subtitle language, which hard-coded
+ * `PlayerTrackBridge.LANGUAGE_OPTIONS` inside the helper. They drew the same
+ * label, the same FlowRow and the same pills, so the only thing the third copy
+ * saved its callers was passing the option list. The generic one now takes any
+ * [options] pair list; the language rows pass their list themselves.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SettingsChoiceMobile(
+private fun <T> SettingsChoiceMobile(
     label: String,
-    options: List<Pair<String, Int>>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
+    options: List<Pair<String, T>>,
+    selected: T,
+    onSelect: (T) -> Unit,
     description: String? = null
 ) {
     Text(
@@ -428,8 +436,8 @@ private fun SettingsChoiceMobile(
         modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
     )
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(MobileSpacing.chip),
+        verticalArrangement = Arrangement.spacedBy(MobileSpacing.chip)
     ) {
         options.forEach { (optionLabel, value) ->
             SettingsPillMobile(
@@ -446,71 +454,6 @@ private fun SettingsChoiceMobile(
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(top = 4.dp)
         )
-    }
-}
-
-/** The same chip row for a choice stored as a string (MPV's vo modes). */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun SettingsChoiceStringMobile(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit,
-    description: String? = null
-) {
-    Text(
-        text = label,
-        color = KBTextHi,
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
-    )
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        options.forEach { (optionLabel, value) ->
-            SettingsPillMobile(
-                label = optionLabel,
-                selected = selected == value,
-                onClick = { onSelect(value) }
-            )
-        }
-    }
-    description?.let {
-        Text(
-            text = it,
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(top = 4.dp)
-        )
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun SettingsLanguageChoiceMobile(
-    label: String,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    Text(
-        text = label,
-        color = KBTextHi,
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
-    )
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        PlayerTrackBridge.LANGUAGE_OPTIONS.forEach { (optionLabel, code) ->
-            SettingsPillMobile(
-                label = optionLabel,
-                selected = selected == code,
-                onClick = { onSelect(code) }
-            )
-        }
     }
 }
 
@@ -549,26 +492,7 @@ internal fun dvCompatDescription(mode: Int): String =
 
 @Composable
 private fun SettingsPillMobile(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false
-            )
-        },
-        shape = KBShapeCard,
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = KBTextHi.copy(alpha = 0.06f),
-            labelColor = KBTextLo,
-            selectedContainerColor = KBAccent.copy(alpha = 0.24f),
-            selectedLabelColor = KBAccent
-        )
-    )
+    MobileFilterChip(label = label, selected = selected, onClick = onClick)
 }
 
 @Composable
@@ -1068,7 +992,7 @@ private fun PlaybackPaneMobile() {
         // Only meaningful where libmpv exists; on an older device the TV page's
         // own gate keeps the row off, and the preference is left untouched.
         if (PlayerEngine.isMpvAvailable()) {
-            SettingsChoiceStringMobile(
+            SettingsChoiceMobile(
                 label = "MPV video output",
                 options = listOf(
                     "Auto" to AppPreferences.MPV_VO_AUTO,
@@ -1598,8 +1522,9 @@ private fun LanguagePaneMobile() {
 
     PaneScroll {
         SettingsSectionMobile("Audio Language", first = true)
-        SettingsLanguageChoiceMobile(
+        SettingsChoiceMobile(
             label = "Preferred audio language",
+            options = PlayerTrackBridge.LANGUAGE_OPTIONS,
             selected = audioLang,
             onSelect = { code ->
                 audioLang = code
@@ -1608,8 +1533,9 @@ private fun LanguagePaneMobile() {
         )
 
         SettingsSectionMobile("Subtitles")
-        SettingsLanguageChoiceMobile(
+        SettingsChoiceMobile(
             label = "Preferred subtitle language",
+            options = PlayerTrackBridge.LANGUAGE_OPTIONS,
             selected = subtitleLang,
             onSelect = { code ->
                 subtitleLang = code
@@ -2479,7 +2405,9 @@ private fun ExternalPlayerPickerMobile(
                 )
             }
             KBButton(
-                label = "Choose custom app…",
+                // Caps like every other button label; this one was the only
+                // button in the app drawn in sentence case.
+                label = "CHOOSE CUSTOM APP…",
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onChooseCustom
             )

@@ -159,6 +159,9 @@ private fun creditHidden(
 @Composable
 fun ActorScreen(
     actorId: Int,
+    // The phone's header arrow. The TV page draws no back control (the remote
+    // is the way out), so this only reaches ActorScreenMobile.
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit,
     viewModel: ActorViewModel = viewModel()
 ) {
@@ -168,6 +171,7 @@ fun ActorScreen(
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
         ActorScreenMobile(
             actorId = actorId,
+            onBack = onBack,
             onNavigateDetail = onNavigateDetail,
             viewModel = viewModel
         )
@@ -974,7 +978,13 @@ private fun ActorCreditRail(
     ) {
         itemsIndexed(
             items = credits,
-            key = { _, credit -> credit.id }
+            // One row per (title, character): TMDB's person credits carry a
+            // row per role, so a performer with two roles in one production
+            // (routine for animation voice casts) repeats the id and LazyRow
+            // would throw on the duplicate key - the same defect the Detail
+            // cast rail has. The return target still names the bare id
+            // (returnIndex matches on it), so back-to-card keeps working.
+            key = { _, credit -> "credit:${credit.id}:${credit.character.orEmpty()}" }
         ) { index, credit ->
             val requester = remember(credit.id) { FocusRequester() }
             val cardKey = credit.id.toString()

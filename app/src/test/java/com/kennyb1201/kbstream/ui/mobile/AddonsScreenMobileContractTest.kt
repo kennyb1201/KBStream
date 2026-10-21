@@ -70,10 +70,16 @@ class AddonsScreenMobileContractTest {
         val mobileCall = screen.indexOf("AddonsScreenMobile(")
         assertTrue("AddonsScreen must branch on FormFactor.isTv", dispatch >= 0)
         assertTrue("the mobile branch must call AddonsScreenMobile", mobileCall > dispatch)
-        val branch = screen.substring(dispatch, mobileCall + 60)
+        // The call is multi-line now that it carries the header arrow's
+        // callback, so the branch runs to the if-block's own closing brace.
+        val branch = screen.substring(dispatch, screen.indexOf("}", mobileCall))
         assertTrue(
             "the branch must hand over the same ViewModel",
             branch.contains("viewModel = viewModel")
+        )
+        assertTrue(
+            "the branch must hand the phone the same pop system back runs",
+            branch.contains("onBack = onBack")
         )
         assertTrue(
             "the branch must return, so the TV page never composes on a phone",
@@ -81,7 +87,7 @@ class AddonsScreenMobileContractTest {
         )
         assertTrue(
             "the TV page must still own the master-detail list",
-            screen.substringAfter("AddonsScreenMobile(viewModel = viewModel)").contains(
+            screen.substringAfter("AddonsScreenMobile(").contains(
                 "AddonListCard("
             )
         )

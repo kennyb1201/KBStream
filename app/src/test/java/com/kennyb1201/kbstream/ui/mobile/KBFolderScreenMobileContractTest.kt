@@ -104,8 +104,10 @@ class KBFolderScreenMobileContractTest {
             mobile.contains("com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu")
         )
         assertTrue(
-            "the retry control is the touch button",
-            mobile.contains("com.kennyb1201.kbstream.ui.components.touch.KBButton")
+            "the loading and retry states are the shared touch status, which " +
+                "owns the touch button's retry",
+            mobile.contains("com.kennyb1201.kbstream.ui.components.touch.MobileStatus") &&
+                mobile.contains("actionLabel = \"RETRY\"")
         )
         assertFalse(
             "the mobile folder must not import a tv-material3 widget",

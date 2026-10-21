@@ -20,8 +20,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -81,6 +79,7 @@ import com.kennyb1201.kbstream.ui.addons.parseCustomIds
 import com.kennyb1201.kbstream.ui.addons.parseVoteCountInput
 import com.kennyb1201.kbstream.ui.addons.voteCountOptionsWithCustom
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
@@ -246,7 +245,7 @@ private fun BuilderHeaderMobile(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            KBButton(label = "BACK", onClick = onBack)
+            MobileBackButton(onBack = onBack)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -1071,26 +1070,7 @@ private fun BuilderNumbersMobile(
 
 @Composable
 private fun BuilderChipMobile(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false
-            )
-        },
-        shape = KBShapeCard,
-        colors = FilterChipDefaults.filterChipColors(
-            containerColor = KBTextHi.copy(alpha = 0.06f),
-            labelColor = KBTextLo,
-            selectedContainerColor = KBAccent.copy(alpha = 0.24f),
-            selectedLabelColor = KBAccent
-        )
-    )
+    MobileFilterChip(label = label, selected = selected, onClick = onClick)
 }
 
 @OptIn(ExperimentalLayoutApi::class)

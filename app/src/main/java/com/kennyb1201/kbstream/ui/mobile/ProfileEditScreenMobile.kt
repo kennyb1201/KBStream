@@ -98,6 +98,7 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
 @Composable
 fun ProfileEditScreenMobile(
     editingProfileId: String? = null,
+    onBack: () -> Unit,
     onDone: () -> Unit
 ) {
     val context = LocalContext.current
@@ -313,6 +314,12 @@ fun ProfileEditScreenMobile(
                 .padding(horizontal = 16.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // The arrow is a CANCEL: it pops exactly as system back does (no
+            // save, no onDone). Top-left of the form, like every other page.
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MobileBackButton(onBack = onBack)
+            }
+
             // Manage mode: pick which profile to edit, or a new one.
             if (editingProfileId == null && profiles.isNotEmpty()) {
                 FlowRow(

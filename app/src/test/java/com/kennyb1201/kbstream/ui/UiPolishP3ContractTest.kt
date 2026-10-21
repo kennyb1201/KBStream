@@ -70,7 +70,7 @@ class UiPolishP3ContractTest {
         val search = source(SEARCH)
         assertTrue(
             "a full sentence, with the stop its sibling status lines end on",
-            search.contains("message = \"No matches found.\"")
+            search.contains("\"No matches found.\"")
         )
         assertTrue(
             "the Titles rail keeps 4dp under its posters, like the suggestion " +

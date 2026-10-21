@@ -87,13 +87,20 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AddonsScreen(
+    // The phone's header arrow, on the same pop system back runs (returnTo).
+    // The TV page deliberately draws no back control - the remote is the way
+    // out there - so this only reaches AddonsScreenMobile.
+    onBack: () -> Unit,
     viewModel: AddonsViewModel = viewModel()
 ) {
     // The phone entry: the same activity-scoped ViewModel and the same
     // management calls, laid out as a list with a detail sheet. One branch; the
     // TV page below is unchanged (see AddonsScreenMobile).
     if (!com.kennyb1201.kbstream.FormFactor.isTv) {
-        com.kennyb1201.kbstream.ui.mobile.AddonsScreenMobile(viewModel = viewModel)
+        com.kennyb1201.kbstream.ui.mobile.AddonsScreenMobile(
+            onBack = onBack,
+            viewModel = viewModel
+        )
         return
     }
 

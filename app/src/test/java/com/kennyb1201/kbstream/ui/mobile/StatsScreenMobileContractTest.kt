@@ -13,8 +13,9 @@ import org.junit.Test
  * re-derived: the same [com.kennyb1201.kbstream.ui.settings.StatsViewModel],
  * the same four headline numbers, the same `ViewingStats` formatting, the same
  * streak and top-show wording. What the port changes is the shape (two rows of
- * two headline plates instead of one row of four) and the controls (BACK is the
- * only thing that can be pressed, exactly as the TV plates take no focus).
+ * two headline plates instead of one row of four) and the controls (the back
+ * arrow is the only thing that can be pressed, exactly as the TV plates take no
+ * focus).
  */
 class StatsScreenMobileContractTest {
 
@@ -76,8 +77,9 @@ class StatsScreenMobileContractTest {
         val mobile = mobileStats()
         assertTrue("the screen must apply MobileTheme", mobile.contains("MobileTheme {"))
         assertTrue(
-            "BACK is the touch twin",
-            mobile.contains("com.kennyb1201.kbstream.ui.components.touch.KBButton")
+            "the screen's one control is the shared mobile back arrow, not a text BACK",
+            mobile.contains("MobileBackButton(onBack = onBack)") &&
+                !mobile.contains("label = \"BACK\"")
         )
         assertFalse(
             "mobile stats must not import a tv-material3 widget",
@@ -130,8 +132,14 @@ class StatsScreenMobileContractTest {
     fun `the mobile stats are read-only and stack the headline plates`() {
         val mobile = mobileStats()
         assertEquals(
-            "BACK is the only pressable control - the headline numbers are readouts",
+            "the back arrow is the only pressable control - the headline numbers " +
+                "are readouts",
             1,
+            Regex("MobileBackButton\\(").findAll(mobile).count()
+        )
+        assertEquals(
+            "and no word button is left on the page",
+            0,
             Regex("KBButton\\(").findAll(mobile).count()
         )
         assertFalse(

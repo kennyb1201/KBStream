@@ -63,7 +63,8 @@ class ViewingStatsDaoTest {
         positionMs: Long = 0L,
         durationMs: Long = 0L,
         isCompleted: Boolean = false,
-        completedAt: Long? = null
+        completedAt: Long? = null,
+        markedWatched: Boolean = false
     ) = WatchHistoryEntity(
         id = id,
         parentId = parentId,
@@ -75,7 +76,28 @@ class ViewingStatsDaoTest {
         durationMs = durationMs,
         updatedAt = 1_700_000_000_000L,
         isCompleted = isCompleted,
-        completedAt = completedAt
+        completedAt = completedAt,
+        markedWatched = markedWatched
+    )
+
+    /**
+     * A mark row exactly as the mark paths write it: completed, duration 1 ms,
+     * no position - and the explicit flag that says it is a mark.
+     */
+    private fun mark(
+        id: String,
+        parentId: String,
+        type: String = "series",
+        completedAt: Long = 1_700_000_000_000L
+    ) = row(
+        id = id,
+        parentId = parentId,
+        type = type,
+        positionMs = 0L,
+        durationMs = 1L,
+        isCompleted = true,
+        completedAt = completedAt,
+        markedWatched = true
     )
 
     @Test
@@ -172,6 +194,104 @@ class ViewingStatsDaoTest {
         // Titles finished still counts every completed parent, channels
         // included - it is the distinct-parent number, not a per-kind one.
         assertEquals(6, dao.finishedTitleCount())
+    }
+
+    // ── Sweep 5: a mark is not a watch ──────────────────────────────────
+
+    @Test
+    fun `marked-watched rows move none of the six reads`() = runBlocking {
+        // One real completion (a 42-minute episode) beside a whole marked
+        // season: those five marks carry the 1 ms / 0 position sentinel and the
+        // explicit flag. They must not count as finished episodes, titles,
+        // movies, runtime, completion days or top-show episodes.
+        dao.upsertRaw(
+            row(
+                "ep1", "show1", name = "Show One",
+                positionMs = 2_520_000L, durationMs = 2_520_000L,
+                isCompleted = true, completedAt = 1_700_000_100_000L
+            )
+        )
+        (1..5).forEach { episode ->
+            dao.upsertRaw(
+                mark(
+                    id = "mark:show2:s1:e$episode",
+                    parentId = "show2",
+                    completedAt = 1_700_000_200_000L + episode
+                )
+            )
+        }
+
+        assertEquals("only the real finish is a finished episode", 1, dao.completedEpisodeCount())
+        assertEquals("and the marked show is not a finished title", 1, dao.finishedTitleCount())
+        assertEquals("no marker may invent a finished movie", 0, dao.completedMovieCount())
+        assertEquals(
+            "runtime is the real duration only - the marks contribute 1 ms each",
+            2_520_000L,
+            dao.finishedRuntimeMs()
+        )
+        assertEquals(
+            "the streak sees the real completion day, not five mark days",
+            listOf(1_700_000_100_000L),
+            dao.completionTimes()
+        )
+
+        val show1 = dao.topShows().single { it.parentId == "show1" }
+        assertEquals(1, show1.done)
+        assertEquals(2_520_000L, show1.ms)
+        // The marked show must not rank on its marks; a row still exists in
+        // the table (badges, Continue Watching, resume and sync read it), it
+        // simply contributes nothing to the stats projection.
+        val show2 = dao.topShows().firstOrNull { it.parentId == "show2" }
+        assertEquals("a mark must not add a finished episode", 0, show2?.done ?: 0)
+        assertEquals("nor 5 ms of runtime", 0L, show2?.ms ?: 0L)
+    }
+
+    @Test
+    fun `a mark promoted to a real completion counts once`() = runBlocking {
+        // The player can play a marked episode to the end, which upserts the
+        // SAME row in place with the real position/duration and the flag
+        // cleared. That watch is then a real one - exactly once, not twice.
+        dao.upsertRaw(mark(id = "ep1", parentId = "show1"))
+        assertEquals(0, dao.completedEpisodeCount())
+        assertEquals(0L, dao.finishedRuntimeMs())
+
+        dao.upsertRaw(
+            row(
+                "ep1", "show1",
+                positionMs = 2_400_000L, durationMs = 2_400_000L,
+                isCompleted = true, completedAt = 1_700_000_300_000L,
+                markedWatched = false
+            )
+        )
+
+        assertEquals(1, dao.completedEpisodeCount())
+        assertEquals(1, dao.finishedTitleCount())
+        assertEquals(2_400_000L, dao.finishedRuntimeMs())
+        assertEquals(listOf(1_700_000_300_000L), dao.completionTimes())
+        assertEquals(1, dao.topShows().single().done)
+    }
+
+    @Test
+    fun `a completion with an unknown duration is not treated as a mark`() = runBlocking {
+        // The reason the exclusion is an explicit flag rather than a predicate
+        // over the sentinel: a player that reached the end without ever
+        // learning the file's length writes exactly the sentinel shape
+        // (`effectiveDuration = position.coerceAtLeast(1L)`, position reset to
+        // 0). That is a real finish and must keep counting.
+        dao.upsertRaw(
+            row(
+                "ep1", "show1",
+                positionMs = 0L, durationMs = 1L,
+                isCompleted = true, completedAt = 1_700_000_400_000L,
+                markedWatched = false
+            )
+        )
+
+        assertEquals(1, dao.completedEpisodeCount())
+        assertEquals(1, dao.finishedTitleCount())
+        assertEquals(1L, dao.finishedRuntimeMs())
+        assertEquals(listOf(1_700_000_400_000L), dao.completionTimes())
+        assertEquals(1, dao.topShows().single().done)
     }
 
     @Test

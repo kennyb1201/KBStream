@@ -5,7 +5,10 @@
          declares 24), so no tools:overrideLibrary is needed here. -->
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.PICTURE_IN_PICTURE" />
+    <!-- No PICTURE_IN_PICTURE permission: it is not a platform permission. PiP
+         is granted per activity by android:supportsPictureInPicture, which the
+         two player activities already declare; the line here was dead weight
+         that only ever showed up in the scanned permission list. -->
     <!-- In-app self-update: lets the system offer the install prompt for a
          downloaded APK (sideloaded builds are not Play-managed). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -190,12 +193,24 @@
              resizeableActivity is manifest-only, and true is what a phone needs
              for multi-window and foldable continuity; Android TV does not use
              multi-window, so the TV layout should be unaffected. -->
+        <!-- configChanges: MainActivity asks for landscape while its own
+             pre-playback splash is up (the splash is a screen of THIS window,
+             not the player's - see AppRoot in MainActivity.kt). Declaring the
+             rotation here is what makes that request rotate the window instead
+             of re-creating the activity: a re-create mid-resolve would drop the
+             in-flight autoplay (its pending target is composition state) and
+             repaint the splash portrait, which is the flip the request exists
+             to remove. The three player activities already declare this same
+             set. density and uiMode are deliberately NOT here, so those still
+             re-create as before, and screenOrientation above is untouched: it
+             is the TV policy, and a phone still clears it in onCreate. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:resizeableActivity="true"
             android:screenOrientation="landscape"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
             android:theme="@style/Theme.KBStream.Splash"
             android:windowSoftInputMode="stateHidden|adjustResize">
             <intent-filter>

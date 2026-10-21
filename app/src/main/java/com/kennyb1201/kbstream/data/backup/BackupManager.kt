@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.history.looksLikeMarkedWatchedRow
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
@@ -271,6 +272,9 @@ object BackupManager {
         put("updatedAt", updatedAt)
         put("isCompleted", isCompleted)
         put("completedAt", completedAt)
+        // Carried so a restore does not turn every mark back into a "finished
+        // episode" on the Viewing Stats screen.
+        if (markedWatched) put("markedWatched", true)
     }
 
     private fun JSONObject.toWatchHistoryEntity(): WatchHistoryEntity =
@@ -293,7 +297,18 @@ object BackupManager {
             durationMs = optLong("durationMs"),
             updatedAt = optLong("updatedAt"),
             isCompleted = optBoolean("isCompleted", false),
-            completedAt = optNullableLong("completedAt")
+            completedAt = optNullableLong("completedAt"),
+            // Absent in a backup written before v14: classify those from the
+            // sentinel, exactly as the 13 -> 14 migration does.
+            markedWatched = if (has("markedWatched")) {
+                optBoolean("markedWatched", false)
+            } else {
+                looksLikeMarkedWatchedRow(
+                    isCompleted = optBoolean("isCompleted", false),
+                    durationMs = optLong("durationMs"),
+                    positionMs = optLong("positionMs")
+                )
+            }
         )
 
     private fun WatchedStatusEntity.toJson(): JSONObject = JSONObject().apply {

@@ -197,7 +197,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     // --- Touch layer (phones only; the TV path never reaches any of it) ------
     private var mpvTouchGestures: PlayerTouchGestures? = null
-    private var lastTouchHintAtMs = 0L
+
+    /** The drag-feedback bubble, created on first use and reused after that. */
+    private var touchHint: TextView? = null
+    private val touchHintHandler = Handler(Looper.getMainLooper())
+    private val touchHintHider = Runnable { touchHint?.visibility = View.GONE }
     // Panel refresh-rate matching (Settings → Playback → Match Content Frame
     // Rate), created the first time mpv reports a rate and null when the
     // setting is off — which is what makes the call sites no-ops.
@@ -1122,7 +1126,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     this@MpvPlayerActivity,
                     // mpv draws into its own SurfaceView, so the frame-rate
                     // request rides on that view's surface.
-                    videoSurface = { surface?.holder?.surface }
+                    videoSurface = { surface?.holder?.surface },
+                    // A paused picture has nothing for the ladder's second
+                    // look to repair (see FrameRateMatcher).
+                    isPlaybackActive = { surface?.isPaused() == false }
                 )
             }
             if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
@@ -1319,7 +1326,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (frameRateMatcher == null) {
             frameRateMatcher = FrameRateMatcher(
                 this@MpvPlayerActivity,
-                videoSurface = { surface?.holder?.surface }
+                videoSurface = { surface?.holder?.surface },
+                isPlaybackActive = { surface?.isPaused() == false }
             )
         }
         if (!FrameRateProbe.isProbeable(currentUrl)) return
@@ -1816,8 +1824,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 }
             },
             onPause = {
-                surface?.setPaused(true)
-                keepControlsVisible()
+                // Same guard as the KEYCODE_MEDIA_PAUSE arm above: an external
+                // transport pause (Bluetooth remote, headset, assistant, a
+                // remote app) landing before the first frame must not park the
+                // session on frame 1 - the Fire TV symptom class this guard
+                // exists for. Nothing is on screen to pause yet.
+                if (sessionHasPlayed()) {
+                    surface?.setPaused(true)
+                    keepControlsVisible()
+                }
             },
             onSkipNext = { skipToNextEpisode() },
             onSkipPrevious = {
@@ -2069,6 +2084,47 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * was in, which is the same promise the Exo player's gesture layer makes
      * (see [PlayerTouchRules.playAfterSeek]).
      */
+    /**
+     * The drag-feedback bubble: a single label over the bottom of the video.
+     *
+     * Built in code rather than in `activity_mpv_player.xml` for the same reason
+     * the gesture layer itself is phone-only - the TV layout file must not grow
+     * a view it never shows - and reused, so showing a new drag label allocates
+     * nothing. Matches the native player's scrub hint (see
+     * NativePlayerActivity.ensureScrubHint).
+     */
+    private fun ensureTouchHint(): TextView {
+        touchHint?.let { return it }
+        val density = resources.displayMetrics.density
+        val hint = TextView(this).apply {
+            textSize = 15f
+            setTextColor(android.graphics.Color.WHITE)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xCC14181E.toInt())
+                cornerRadius = 24f * density
+            }
+            setPadding(
+                (18f * density).toInt(),
+                (8f * density).toInt(),
+                (18f * density).toInt(),
+                (8f * density).toInt()
+            )
+            visibility = View.GONE
+            elevation = 12f * density
+        }
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        content.addView(
+            hint,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            ).apply { bottomMargin = (56f * density).toInt() }
+        )
+        touchHint = hint
+        return hint
+    }
+
     private fun attachPhoneTouchGestures(target: View) {
         val gestures = PlayerTouchGestures(
             this,
@@ -2099,15 +2155,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 }
 
                 override fun showSeekHint(text: String) {
-                    // A Toast is this engine's only feedback surface, and a drag
-                    // calls this on every move: one line per third of a second.
-                    val now = System.currentTimeMillis()
-                    if (now - lastTouchHintAtMs < 350L) return
-                    lastTouchHintAtMs = now
-                    showToast(text)
+                    // The same in-layout bubble the native player draws, not a
+                    // Toast: a Toast per 350 ms QUEUES them, so a long drag left
+                    // a train of popups trailing the finger after release.
+                    // A single reused TextView just re-labels itself.
+                    val hint = ensureTouchHint()
+                    hint.text = text
+                    hint.visibility = View.VISIBLE
+                    touchHintHandler.removeCallbacks(touchHintHider)
+                    touchHintHandler.postDelayed(touchHintHider, 700L)
                 }
 
-                override fun hideSeekHint() = Unit
+                override fun hideSeekHint() {
+                    touchHintHandler.removeCallbacks(touchHintHider)
+                    touchHint?.visibility = View.GONE
+                }
 
                 override fun commitSeek(targetMs: Long) = seekTo(targetMs)
 
@@ -5543,25 +5605,42 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     return true
                 }
 
-                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                KeyEvent.KEYCODE_MEDIA_PLAY,
-                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                // The combined key toggles; the DEDICATED keys are
+                // idempotent, exactly as the main player's dispatch treats
+                // them. Routing all three through togglePause() meant a plain
+                // Play from a CEC remote or a one-button media keyboard PAUSED
+                // a playing file, and a Pause while paused resumed it.
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     // A finished session stays finished: a play press after the
                     // end (stray remote button, Bluetooth remote, assistant)
                     // must not restart the episode from the top. Replay is an
                     // explicit seek or a fresh session, not a toggle.
                     if (endedHandled) return true
-                    // MEDIA_PAUSE only, and only before the first frame: the
-                    // same startup guard the main player's two PAUSE arms carry.
-                    // Fire OS emits spurious MEDIA_PAUSE events around HDMI-CEC
-                    // and voice-remote activity, including while the load splash
-                    // is still up, and pausing then parked the session on frame
-                    // 1 with nothing to resume it. Nothing is on screen to pause
-                    // until the playhead has moved, so the press is swallowed.
-                    if (event.keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE && !sessionHasPlayed()) {
-                        return true
-                    }
                     surface?.togglePause()
+                    showControls()
+                    return true
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    if (endedHandled) return true
+                    // Idempotent, and harmless before the first frame (there is
+                    // nothing to resume; mpv is already headed for play).
+                    surface?.setPaused(false)
+                    showControls()
+                    return true
+                }
+
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (endedHandled) return true
+                    // Before the first frame: the same startup guard the main
+                    // player's two PAUSE arms carry. Fire OS emits spurious
+                    // MEDIA_PAUSE events around HDMI-CEC and voice-remote
+                    // activity, including while the load splash is still up, and
+                    // pausing then parked the session on frame 1 with nothing to
+                    // resume it. Nothing is on screen to pause until the
+                    // playhead has moved, so the press is swallowed.
+                    if (!sessionHasPlayed()) return true
+                    surface?.setPaused(true)
                     showControls()
                     return true
                 }
@@ -5856,6 +5935,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // ends on a key-up that will never come. onStop lands the scrub on the
         // ordinary path; this is the safety net under that.
         mpvScrubHandler.removeCallbacksAndMessages(null)
+        touchHintHandler.removeCallbacksAndMessages(null)
+        touchHint = null
         surface?.release()
         surface = null
         clearChapters()

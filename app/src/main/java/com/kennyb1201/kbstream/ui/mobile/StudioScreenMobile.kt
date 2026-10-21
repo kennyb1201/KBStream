@@ -32,6 +32,7 @@ fun StudioScreenMobile(
     networkOrCompanyId: Int? = null,
     networkIsCompany: Boolean = false,
     originalsCompanyId: Int? = null,
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: StudioViewModel = viewModel()
 ) {
@@ -93,6 +94,7 @@ fun StudioScreenMobile(
                 description = companyInfo?.description,
                 logoUrls = logoUrls
             ),
+            onBack = onBack,
             sectionsRaw = sections,
             isLoading = isLoading,
             error = error,

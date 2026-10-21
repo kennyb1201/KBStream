@@ -96,6 +96,25 @@ class CatchupUrlsTest {
     }
 
     @Test
+    fun `date pieces use ASCII digits in a locale with its own numerals`() {
+        // `"%02d".format(...)` without an explicit Locale renders digits in the
+        // DEFAULT locale's numbering system. On a phone set to Arabic (Egypt)
+        // the old code produced a URL with Arabic-Indic numerals, which the
+        // provider's index does not match, so catch-up silently failed on a
+        // template that is otherwise correct. Locale.US pins ASCII digits.
+        val previous = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG"))
+            assertEquals(
+                "http://h/2026/09/21/12/00/00.ts",
+                build("http://h/\${yyyy}/\${mm}/\${dd}/\${hh}/\${MM}/\${ss}.ts")
+            )
+        } finally {
+            java.util.Locale.setDefault(previous)
+        }
+    }
+
+    @Test
     fun `a template with no recognized token is declined`() {
         // Substituting nothing would point somewhere that is not this broadcast.
         assertNull(build("http://host/static/index.ts"))

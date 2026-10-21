@@ -167,24 +167,38 @@ fun CatalogGridScreenMobile(
             // The one loading frame (plus a possible cold-restore wait). The
             // skeleton rows are the cards' own footprint, so the page does not
             // jump when the posters land.
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(columns),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                userScrollEnabled = false,
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(KBVoid)
             ) {
-                items(columns * if (landscape) 3 else 2) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(if (landscape) 16f / 9f else 2f / 3f)
-                            .background(KBSurface, KBShapeCard)
-                    )
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    userScrollEnabled = false,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(columns * if (landscape) 3 else 2) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(if (landscape) 16f / 9f else 2f / 3f)
+                                .background(KBSurface, KBShapeCard)
+                        )
+                    }
                 }
+                // The screen's way back is here from the first frame: the
+                // catalog can take a moment to seed (and gives up after five
+                // seconds), and a skeleton with no visible exit is exactly the
+                // dead end this pass removes.
+                MobileBackButton(
+                    onBack = onBack,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                )
             }
             return@MobileTheme
         }
@@ -211,23 +225,32 @@ fun CatalogGridScreenMobile(
                 modifier = Modifier.fillMaxSize()
             ) {
                 item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-                    Column(modifier = Modifier.padding(bottom = 2.dp)) {
-                        Text(
-                            text = openHeader.title,
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = openHeader.addonName,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    ) {
+                        // The screen already had onBack + a BackHandler and
+                        // drew nothing; this is the drawn control, on the same
+                        // pop the handler performs.
+                        MobileBackButton(onBack = onBack)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = openHeader.title,
+                                color = KBTextHi,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = openHeader.addonName,
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                     }
                 }
 

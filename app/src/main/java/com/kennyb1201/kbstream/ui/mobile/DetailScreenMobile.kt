@@ -28,7 +28,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -95,8 +94,11 @@ import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
+import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
+import com.kennyb1201.kbstream.ui.components.touch.MobileDivider
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
+import com.kennyb1201.kbstream.ui.components.touch.MobileSectionHeader
 import com.kennyb1201.kbstream.ui.components.touch.episodeRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
@@ -121,7 +123,6 @@ import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
-import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -1073,7 +1074,18 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
-                                items(cast.take(20), key = { it.id }) { member ->
+                                // One row per (person, character): TMDB repeats a
+                                // performer who plays two roles in one title
+                                // (routine for animation voice casts), and the
+                                // bare id made LazyRow throw — the page was
+                                // unopenable for those titles. Same composite
+                                // key as the TV cast rail.
+                                items(
+                                    cast.take(20),
+                                    key = { member ->
+                                        "person${member.id}${member.character.orEmpty()}"
+                                    }
+                                ) { member ->
                                     CastTile(
                                         member = member,
                                         onClick = { onNavigateActor(member.id) }
@@ -1755,18 +1767,12 @@ private fun MobileDetailHeader(
                     )
                 )
         )
-        IconButton(
-            onClick = onBack,
+        MobileBackButton(
+            onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = KBTextHi
-            )
-        }
+        )
         // A playing trailer needs a way out that is not "press TRAILER again":
         // the hero is a video surface, so a close mark on it is the affordance
         // a thumb looks for.
@@ -2139,65 +2145,36 @@ private fun ReviewDialog(
 ) {
     var revealed by remember(review.id) { mutableStateOf(!review.spoiler) }
 
+    // The app's dialog plate, not a hand-built Surface: this one had grown its
+    // own inset, corner and close row, which made it the only dialog on a phone
+    // that did not look like a dialog. The panel owns the heading (the author,
+    // in the panel's accent caps) and the spacing between children.
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = KBShapePanel,
-            color = KBSurfaceRaised,
-            contentColor = KBTextHi,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = review.author,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        review.authorDetails?.rating?.let { rating ->
-                            Text(
-                                text = "★ %.1f".format(rating),
-                                color = KBAccent,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Close",
-                            tint = KBTextLo
-                        )
-                    }
-                }
+        KBDialogPanel(title = "Review", subtitle = review.author) {
+            review.authorDetails?.rating?.let { rating ->
+                Text(
+                    text = "★ %.1f".format(rating),
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
 
-                if (revealed) {
-                    Text(
-                        text = review.content,
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                } else {
-                    Text(
-                        text = "This review contains spoilers.",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontStyle = FontStyle.Italic
-                    )
-                    KBButton(label = "REVEAL SPOILER") {
-                        revealed = true
-                    }
+            if (revealed) {
+                Text(
+                    text = review.content,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            } else {
+                Text(
+                    text = "This review contains spoilers.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontStyle = FontStyle.Italic
+                )
+                KBButton(label = "REVEAL SPOILER") {
+                    revealed = true
                 }
             }
         }
@@ -2314,17 +2291,10 @@ private fun MediaThumb(
     }
 }
 
+/** The shared rail heading, so this page cannot drift from the others. */
 @Composable
 private fun MobileSectionTitle(text: String) {
-    Text(
-        text = text,
-        color = KBTextHi,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = 16.dp)
-    )
+    MobileSectionHeader(text)
 }
 
 /**
@@ -2410,15 +2380,10 @@ private fun DetailFactRow(fact: DetailFact) {
     }
 }
 
-/** The hairline between two facts, the block's own rule rather than a divider. */
+/** The hairline between two facts, at the app's one divider weight. */
 @Composable
 private fun DetailFactDivider() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(KBTextLo.copy(alpha = 0.2f))
-    )
+    MobileDivider()
 }
 
 /** One season chip's long-press subject. */

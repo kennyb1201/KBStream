@@ -77,6 +77,8 @@ import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
+import com.kennyb1201.kbstream.ui.components.touch.MobileStatusTone
 import com.kennyb1201.kbstream.ui.sports.GameDetailRow
 import com.kennyb1201.kbstream.ui.sports.LeagueSection
 import com.kennyb1201.kbstream.ui.sports.LeagueView
@@ -92,7 +94,6 @@ import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -128,6 +129,7 @@ import com.kennyb1201.kbstream.ui.theme.OswaldFamily
 fun SportsHubScreenMobile(
     viewModel: SportsHubViewModel = viewModel(),
     modifier: Modifier = Modifier,
+    onBack: () -> Unit,
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit =
         { _, _, _ -> },
     initialDetailGameId: String? = null,
@@ -174,6 +176,24 @@ fun SportsHubScreenMobile(
         initialFirstVisibleItemIndex = viewModel.hubScrollIndex,
         initialFirstVisibleItemScrollOffset = viewModel.hubScrollOffset
     )
+
+    // Entering a league starts at THAT league's top - the rule the TV hub
+    // already applies, and the one thing the phone page was missing. One list
+    // state is shared by every tab, so switching NFL -> NHL in place opened the
+    // new slate at the old one's offset, which is an index into a different
+    // list; and a fresh entry with live games in hand starts at the top too,
+    // because "where I was reading" is stale when the slate is in play. The
+    // first composition is exempt so the ViewModel's restore above still wins.
+    var lastLeaguePath by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(selectedPath) {
+        val path = selectedPath
+        val switched = lastLeaguePath != null && lastLeaguePath != path
+        val freshWithLive = lastLeaguePath == null &&
+            sections.firstOrNull { it.league.path == path }
+                ?.games.orEmpty().any { it.state == GameState.LIVE }
+        lastLeaguePath = path
+        if (switched || freshWithLive) listState.scrollToItem(0)
+    }
 
     DisposableEffect(Unit) {
         viewModel.resumeLivePoll()
@@ -229,6 +249,7 @@ fun SportsHubScreenMobile(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 SportsHeaderMobile(
+                    onBack = onBack,
                     onLeaguesClick = { showLeagues = true },
                     onRefreshClick = viewModel::refresh
                 )
@@ -262,6 +283,7 @@ fun SportsHubScreenMobile(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     placeholder = "Search teams or events…",
+                    onClear = { searchQuery = "" },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
@@ -515,16 +537,23 @@ fun SportsHubScreenMobile(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SportsHeaderMobile(
+    onBack: () -> Unit,
     onLeaguesClick: () -> Unit,
     onRefreshClick: () -> Unit
 ) {
     Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
-        Text(
-            text = "SPORTS HUB",
-            color = KBAccent,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Top-left of the header, the same arrow as every other mobile
+            // page. It runs the hub's own back destination (the guide), which
+            // is what system back does here.
+            MobileBackButton(onBack = onBack)
+            Text(
+                text = "SPORTS HUB",
+                color = KBAccent,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
         Text(
             text = "Live scores • tap to watch • long-press a game to follow its teams",
             color = KBTextLo,
@@ -657,30 +686,17 @@ private fun SportsStatusMobile(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null
 ) {
-    Column(
+    // The card is the shared status card; Sports keeps only its wording. The
+    // 24dp outer inset it used to add by hand is the screen gutter every other
+    // portrait status already had.
+    MobileStatus(
+        message = message,
+        title = title,
+        actionLabel = actionLabel,
+        onAction = onAction,
+        tone = MobileStatusTone.Card,
         modifier = modifier
-            .padding(24.dp)
-            .fillMaxWidth()
-            .background(KBSurface, KBShapeCard)
-            .padding(18.dp)
-    ) {
-        Text(
-            text = title,
-            color = KBTextHi,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = message,
-            color = KBTextLo,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        if (actionLabel != null && onAction != null) {
-            Spacer(modifier = Modifier.height(12.dp))
-            KBButton(label = actionLabel, onClick = onAction)
-        }
-    }
+    )
 }
 
 // ── The slate ──────────────────────────────────────────────────────────

@@ -100,6 +100,8 @@ import kotlinx.coroutines.delay
 fun DecadeScreen(
     decadeStart: Int,
     name: String,
+    // The phone's header arrow; the TV page draws no back control.
+    onBack: () -> Unit,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
     viewModel: DecadeViewModel = viewModel()
 ) {
@@ -110,6 +112,7 @@ fun DecadeScreen(
         DecadeScreenMobile(
             decadeStart = decadeStart,
             name = name,
+            onBack = onBack,
             onNavigateDetail = onNavigateDetail,
             viewModel = viewModel
         )

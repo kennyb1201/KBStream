@@ -719,7 +719,11 @@ Parity notes (not bugs to fix):
   `successorIndexAfter` hand-offs and every return-focus loop exist to keep a
   D-pad off a dying node, and a touch screen has no focus to strand.
 - The phone shares the hoisted `LazyListState` with the TV column (only one is
-  ever composed), so Back from a result still lands where the viewer left it.
+  ever composed), so Back from a result still lands where the viewer left it -
+  **and keeps the tile highlighted**, which the hoisted scroll alone did not
+  do: the screen swap disposes every tile's requester, so `SearchReturnFocus`
+  (one process-scoped record: tile key, rail, index) restores the rail's
+  offset and hands the focus back to the tile that was pressed.
 
 ### Library
 
@@ -956,7 +960,11 @@ Parity notes (not bugs to fix):
   LIVE card was already full-width on TV.
 - The D-pad's focus-restore and scroll fallback have no touch twin; the scroll
   position is still remembered across the player through the ViewModel, and a
-  tab switch starts at the new league's top.
+  tab switch starts at the new league's top (`listState.scrollToItem(0)` on a
+  path change - one list state is shared by every tab, so without it the new
+  slat opened at the old league's offset). A fresh entry with live games in
+  hand also starts at the top: the remembered offset is stale when the slate
+  is in play.
 - The six standings columns collapse onto two lines per row (the counts, then
   PCT/GB/STRK) rather than being dropped - the table says no less than the TV's.
 
@@ -1111,7 +1119,11 @@ destructive disconnect are the same code. Connected shows the account name,
 the two watched counts, the continue-watching fetch state and the view model's
 status/error lines, with REFRESH / BACK / DISCONNECT; not connected shows the
 verification URL and the code in the same large type, with GENERATE CODE /
-BACK.
+BACK - plus OPEN VERIFICATION PAGE, which hands the address to the browser:
+
+the QR beside it is drawn for the OTHER device, so on the phone showing it the
+QR is unscannable and the address was something to type by hand. Trakt's phone
+connect has the same button (and the same disabled-while-polling GENERATE CODE).
 
 Both safety rules survive: a kids profile gets no DISCONNECT button at all,
 and the press opens a confirmation that names the wipe (every resume position,
@@ -1152,6 +1164,11 @@ Parity notes (not bugs to fix):
 - The form is one vertical scroll of full-width fields and chip rows: a phone
   has no 0.6-width field row or D-pad focus order to reproduce. The verified
   focus retries on the parent-PIN prompt have no touch twin.
+- The parent PIN is DEVICE-LOCAL while profiles sync. On a second device that
+  has taken a sync of a PIN-less kids profile, the first person at the exit gate
+  is the one who sets the parent PIN - so set it on a new device before handing
+  the remote over. A deployment note, not a code path: a synced credential would
+  have to travel through the same cloud account that curates the profile.
 
 ### Streams
 - TV-only by design: focus-entry latch and scroll-reset effects.

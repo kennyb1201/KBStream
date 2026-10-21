@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.flow
  * bump arrives without the Migration that carries it — the mistake that would
  * otherwise only show up as a wipe on a user's device.
  */
-internal const val WATCH_HISTORY_DB_VERSION = 13
+internal const val WATCH_HISTORY_DB_VERSION = 14
 
 @Database(
     entities = [
@@ -82,7 +82,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             get() = listOf(
                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                MIGRATION_12_13
+                MIGRATION_12_13, MIGRATION_13_14
             )
 
         /**
@@ -462,6 +462,35 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                         PRIMARY KEY(`key`)
                     )
                     """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * v14: watch history learns which completed rows are MARKERS.
+         *
+         * A mark ("Mark as Watched", a season chip) writes a completed row with
+         * `durationMs = 1` and `positionMs = 0`; the Viewing Stats reads counted
+         * it as a real finished episode, so a bulk-marked show reported hundreds
+         * of finished episodes at a couple of minutes each and stamped a
+         * completion day for every mark.
+         *
+         * The column is added with the entity's own default, and the rows
+         * ALREADY on disk are classified once from the sentinel - the only
+         * place the sentinel is ever used for classification. From here on the
+         * mark paths set the flag themselves, because a playback completion
+         * with an unknown duration can produce exactly the same 1 ms / 0
+         * position shape and must keep counting.
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `watch_history` ADD COLUMN `markedWatched` " +
+                        "INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "UPDATE `watch_history` SET `markedWatched` = 1 " +
+                        "WHERE `isCompleted` = 1 AND `durationMs` <= 1 AND `positionMs` = 0"
                 )
             }
         }

@@ -30,15 +30,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -88,6 +85,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBPanelHeading
 import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBSheetContent
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.iptv.formatCatchupWindow
 import com.kennyb1201.kbstream.ui.iptv.formatRemainingLabel
@@ -629,6 +627,7 @@ fun GuideScreenMobile(
                     onValueChange = { query = it },
                     placeholder = "Search channels",
                     keyboardType = KeyboardType.Text,
+                    onClear = { query = "" },
                     leading = {
                         Icon(
                             imageVector = Icons.Filled.Search,
@@ -649,24 +648,10 @@ fun GuideScreenMobile(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(groups, key = { "group:" + it }) { label ->
-                    FilterChip(
+                    MobileFilterChip(
+                        label = label,
                         selected = label == currentGroup,
-                        onClick = { selectedGroup = label },
-                        label = {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        },
-                        shape = KBShapeCard,
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = KBSurface,
-                            labelColor = KBTextLo,
-                            selectedContainerColor = KBAccent.copy(alpha = 0.28f),
-                            selectedLabelColor = KBAccent
-                        )
+                        onClick = { selectedGroup = label }
                     )
                 }
             }
@@ -880,13 +865,7 @@ private fun MobileGuideTopBar(
             .padding(start = 4.dp, end = 4.dp, top = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = KBTextHi
-            )
-        }
+        MobileBackButton(onBack = onBack)
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -1336,13 +1315,7 @@ private fun MobileGuideSetup(
                 .padding(start = 4.dp, end = 8.dp, top = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = KBTextHi
-                )
-            }
+            MobileBackButton(onBack = onBack)
             Text(
                 text = "LIVE TV SETUP",
                 color = KBTextHi,
