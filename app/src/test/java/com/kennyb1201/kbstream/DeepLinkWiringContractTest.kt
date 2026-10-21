@@ -98,8 +98,11 @@ class DeepLinkWiringContractTest {
             main.contains("LaunchedEffect(incomingIntent)")
         )
         assertTrue(
-            "the cold path still reads the activity's own intent",
-            main.contains("applyLaunchIntentExtras((context as? android.app.Activity)?.intent)")
+            "the cold path still reads the activity's own intent - through " +
+                "LocalActivity, because a Context is not guaranteed to BE one " +
+                "(lint's ContextCastToActivity is an error, not a style note)",
+            main.contains("applyLaunchIntentExtras(hostActivity?.intent)") &&
+                main.contains("val hostActivity = LocalActivity.current")
         )
         assertTrue(
             "the destination decision lives in the pure table",

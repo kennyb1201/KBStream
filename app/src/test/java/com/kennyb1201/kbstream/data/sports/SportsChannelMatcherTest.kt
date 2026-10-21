@@ -167,23 +167,44 @@ class SportsChannelMatcherTest {
     }
 
     @Test
-    fun `tier one wins over a tier two network hit`() {
-        // The game is on YES (matched by its guide row), and the playlist also
-        // carries a channel literally called "ESPN" because the feed lists it
-        // as a broadcast. The EPG hit is the one that is actually the game.
+    fun `the named network leads a guide hit that does not agree with it`() {
+        // The game says ESPN carries it; the guide's only row is on YES. The
+        // network still gets its vote in the list - ahead of the stranger's
+        // claim, which is what the field report asked for - and the guide hit
+        // stays behind it as a backup rather than being dropped.
         val yes = channel("yes", "YES Network")
         val espn = channel("espn", "ESPN")
         val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
 
-        val hit = SportsChannelMatcher.match(
+        val feeds = SportsChannelMatcher.matches(
             game = game,
-            channels = listOf(espn, yes),
+            channels = listOf(yes, espn),
             programs = listOf(
                 program("yes", "Yankees vs. Red Sox", firstPitch, firstPitch + 3 * 60 * minute)
             ),
         )
 
-        assertEquals(yes, hit)
+        assertEquals(listOf(espn, yes), feeds)
+    }
+
+    @Test
+    fun `a guide hit that agrees with the named network leads its family`() {
+        // The guide says the game is on ESPN2 - a feed the ESPN broadcast name
+        // resolves to - so that row is the head and the rest of the family is
+        // not guessed in ahead of it.
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(espn, espn2),
+            programs = listOf(
+                program("espn2", "Yankees vs. Red Sox", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertEquals(listOf(espn2), feeds)
     }
 
     @Test
@@ -900,6 +921,163 @@ class SportsChannelMatcherTest {
                 programs = listOf(program("mlb", "Yankees vs Red Sox", firstPitch, firstPitch + minute)),
             )
         )
+    }
+
+    // ── The broadcast network outranks guide order (2026-10-20) ─────
+    //
+    // Kenny's live game: broadcast ESPN, and the hub offered ESPN+3 and NFL
+    // RedZone with the plain ESPN channel missing entirely. Three rules
+    // composed into that: a title hit anywhere suppressed the description pass
+    // everywhere, any guide hit suppressed the network tier outright, and guide
+    // hits ranked on start-closeness alone. The tests below pin each half of
+    // the fix, and the first one pins the report itself.
+
+    @Test
+    fun `the field case - the named network leads its variant and the weak row is gone`() {
+        val espn = channel("espn", "ESPN")
+        val espn3 = channel("espn3", "ESPN+3")
+        val redZone = channel("redzone", "NFL RedZone")
+        val lightning = team("TB", "Tampa Bay Lightning", home = false)
+        val panthers = team("FLA", "Florida Panthers", home = true)
+        val game = game(lightning, panthers, broadcasts = listOf("ESPN"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(redZone, espn3, espn),
+            programs = listOf(
+                // ESPN's own guide row: a generic title, the teams only in the
+                // synopsis. This is the hit the title short-circuit used to
+                // suppress.
+                program(
+                    "espn",
+                    "NHL Hockey",
+                    firstPitch,
+                    firstPitch + 180 * minute,
+                    description = "The Tampa Bay Lightning visit the Florida " +
+                        "Panthers at Amerant Bank Arena.",
+                ),
+                // The variant's row TITLES the game, at the same minute - which
+                // is what put it at the head on guide order alone.
+                program("espn3", "Lightning vs Panthers", firstPitch, firstPitch + 180 * minute),
+                // Cross-sport: "Tampa Bay" is also the Buccaneers, so this is a
+                // WEAK hit and must not sit beside real ones.
+                program(
+                    "redzone",
+                    "Tampa Bay at Florida",
+                    firstPitch,
+                    firstPitch + 180 * minute,
+                    description = "NFL RedZone",
+                ),
+            ),
+        )
+
+        assertEquals(
+            "the plain channel the game names leads, its variant keeps its place " +
+                "as a corroborated backup, and the weak cross-sport row is gone",
+            listOf(espn, espn3),
+            feeds
+        )
+    }
+
+    @Test
+    fun `an agreeing description hit beats a stranger's title hit`() {
+        // Rule A: the guide's synopsis on the channel the game actually names
+        // outranks a title hit on a channel nothing about the game points to.
+        val espn = channel("espn", "ESPN")
+        val stranger = channel("other", "Some Sports Channel")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(stranger, espn),
+            programs = listOf(
+                program("other", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute),
+                program(
+                    "espn",
+                    "MLB Baseball",
+                    firstPitch,
+                    firstPitch + 180 * minute,
+                    description = "Yankees and Red Sox meet tonight.",
+                ),
+            ),
+        )
+
+        assertEquals("the named network's row leads; the stranger stays behind", listOf(espn, stranger), feeds)
+    }
+
+    @Test
+    fun `the named network is offered when no guide row names it`() {
+        // Rule B: the guide has a row for the game, but on a channel the game's
+        // broadcast name does not resolve to. The network's own feeds are still
+        // offered - ahead of the stranger - instead of the tier being skipped.
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val stranger = channel("other", "Some Sports Channel")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(stranger, espn, espn2),
+            programs = listOf(
+                program("other", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute)
+            ),
+        )
+
+        assertEquals(listOf(espn, espn2, stranger), feeds)
+    }
+
+    @Test
+    fun `a weak-only slate still answers with its weak hit`() {
+        // Rule C is about ranking, not about refusing: when nothing names both
+        // sides strongly, a city-only hit is still the best evidence there is.
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+        )
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(program("rsn", "Tampa Bay vs Florida", firstPitch, firstPitch + 180 * minute)),
+        )
+
+        assertEquals(listOf(rsn), feeds)
+    }
+
+    @Test
+    fun `a weak hit ranks below the named network when both are all there is`() {
+        val espn = channel("espn", "ESPN")
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+            broadcasts = listOf("ESPN"),
+        )
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(rsn, espn),
+            programs = listOf(program("rsn", "Tampa Bay vs Florida", firstPitch, firstPitch + 180 * minute)),
+        )
+
+        assertEquals("the game's own network is ahead of a city-only guess", listOf(espn, rsn), feeds)
+    }
+
+    @Test
+    fun `a guide hit the broadcast name cannot resolve adds no fill-in`() {
+        // ESPN+ is a streaming exclusive: it resolves to nothing on either path,
+        // so an ESPN+-streamed game is still found by the guide alone.
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN+"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(program("rsn", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute)),
+        )
+
+        assertEquals(listOf(rsn), feeds)
     }
 
     // ── Tier 1b: the description names both teams ───────────────────

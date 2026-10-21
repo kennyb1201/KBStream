@@ -10,7 +10,8 @@ import org.junit.Test
  * That the Media row is wired into the detail page the way its rules say.
  *
  * [DetailMediaRowTest] pins the rule; this pins that the page asks it - the
- * section is painted LAST, under More Like This, the row is ONE entry of the
+ * section is painted LAST, under the collection, More Like This and the review
+ * rail, the row is ONE entry of the
  * vertical chain however many rails it holds inside it, the tab strip walks the
  * pages itself while the cards hand DOWN to the chain, and the two lists it
  * draws are the ones the detail call already carries.
@@ -27,20 +28,22 @@ class DetailMediaRowWiringContractTest {
     private val chain: String by lazy { normalized(stripComments(read(CHAIN_FILE))) }
 
     @Test
-    fun `the section is painted last, under More Like This`() {
+    fun `the section is painted last, under the reviews`() {
         val collection = screen.indexOf("if (hasCollectionRow) {")
         val media = screen.indexOf("if (hasMediaRow) {")
         val recs = screen.indexOf("if (hasMoreLikeThisRow) {")
+        val reviews = screen.indexOf("if (reviews.isNotEmpty()) {")
 
         assertTrue("the collection rail is painted on this page", collection >= 0)
         assertTrue("so is the Media row", media >= 0)
         assertTrue("and so is More Like This", recs >= 0)
+        assertTrue("and the review rail", reviews >= 0)
         assertTrue(
-            "the Media row renders AFTER both rails painted above it, which is " +
-                "what makes UP out of its tab strip the recommendations and DOWN " +
-                "off its cards the bottom of the page - the order the chain " +
-                "walks",
-            collection < recs && recs < media
+            "the Media row renders AFTER every rail painted above it - the " +
+                "collection, More Like This and the reviews - which is what " +
+                "makes UP out of its tab strip the review rail and DOWN off " +
+                "its cards the bottom of the page: the order the chain walks",
+            collection < recs && recs < reviews && reviews < media
         )
         assertTrue(
             "and it carries a section header like every other row",
@@ -64,8 +67,9 @@ class DetailMediaRowWiringContractTest {
             screen.contains("hasMediaRow = mediaTabs.isNotEmpty()")
         )
         assertTrue(
-            "so UP out of the row resolves to More Like This and DOWN to nothing " +
-                "at all, with no idea that two rails live inside it",
+            "so UP out of the row resolves to the review rail above it and " +
+                "DOWN to nothing at all, with no idea that two rails live " +
+                "inside it",
             screen.contains("DetailRow.COLLECTION, DetailRow.MORE_LIKE_THIS, DetailRow.MEDIA -> {")
         )
         assertTrue(

@@ -701,6 +701,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 type = normalizedType,
                 tmdbId = tmdbId
             )
+            // A cloud session is a resume too: the button has to offer RESUME
+            // for it, exactly as it does for a local row.
+            publishPlayButtonLabel()
         }
 
         val localCompletedEntries = runCatchingCancellable {
@@ -732,6 +735,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             resumeMatchesCompletedEpisode(heldResume, localCompletedEntries)
         ) {
             _resumeInfo.value = null
+            publishPlayButtonLabel()
         }
 
         // Follow the table from here on: the one-shot read above is only the
@@ -769,6 +773,85 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // longer has.
             _resumeInfo.value = null
             resumeFromLocalHistory = false
+        }
+
+        // The Play button is labelled from the resume row this just published:
+        // a movie that now has a position says RESUME, not PLAY, and one whose
+        // row was finished while the page was away goes back to PLAY. Doing it
+        // here means the one-shot read AND every later history emission move
+        // the label, so the button cannot describe a state the cards beside it
+        // have already left behind.
+        publishPlayButtonLabel()
+    }
+
+    /**
+     * Re-derives [playButtonText] from the state the Play press would act on.
+     *
+     * The label is a promise about the press (see [detailPlayLabel]): "Resume"
+     * only when the press really continues something, with the episode pair the
+     * screens will start, printed unpadded. Called wherever an input changes -
+     * the resume row, the loaded season, its target episode, the title type -
+     * rather than only where the label used to be assigned, which is why a
+     * half-watched movie used to keep saying "Play".
+     */
+    private fun publishPlayButtonLabel() {
+        val resume = _resumeInfo.value?.takeIf { it.positionMs > 0L }
+
+        if (mediaType != "series") {
+            _playButtonText.value = detailPlayLabel(
+                isMovie = true,
+                resuming = resume != null
+            )
+            return
+        }
+
+        // The episode the Play press would start: the resume episode while the
+        // season on screen is its own, else the season's target episode (see
+        // the screens' playCurrent). A resume for ANOTHER season is not this
+        // button's, so it must not label it.
+        val season = _loadedSeason.value
+        val target = _targetEpisode.value
+        val resumeEpisode = namedEpisodeNumber(resume?.episode)
+        val resumingHere = target != null &&
+            resume != null &&
+            resumeEpisode != null &&
+            resume.season == season
+
+        // The target episode's OWN paused row. A show can hold several
+        // in-progress episodes, and the newest row is not always the one this
+        // press starts - the play paths resume from the target's own row
+        // (see `openEpisode` on both screens), so the label has to read the
+        // same row or a paused episode is still offered as "Play S2 E3".
+        val targetProgress =
+            target?.let { episode ->
+                _inProgressByStreamId.value[episode.streamId]
+                    ?.takeIf { it.positionMs > 0L }
+            }
+
+        _playButtonText.value = when {
+            resumingHere ->
+                detailPlayLabel(
+                    isMovie = false,
+                    resuming = true,
+                    season = resume.season,
+                    episode = resumeEpisode
+                )
+
+            target != null && targetProgress != null ->
+                detailPlayLabel(
+                    isMovie = false,
+                    resuming = true,
+                    season = season,
+                    episode = target.episodeNumber
+                )
+
+            else ->
+                detailPlayLabel(
+                    isMovie = false,
+                    resuming = false,
+                    season = season,
+                    episode = target?.episodeNumber
+                )
         }
     }
 
@@ -1809,9 +1892,7 @@ for ((metaAddon, response, error) in probeResults) {
                         !isWatched
                     } ?: _episodes.value.firstOrNull()
                     _targetEpisode.value = targetEp
-                    _playButtonText.value = targetEp?.let {
-                        "Play S${season}E${it.episodeNumber}"
-                    } ?: "Play"
+                    publishPlayButtonLabel()
                 } finally {
                     if (latestEpisodeSeasonRequest == season) {
                         _episodesLoading.value = false
@@ -1870,20 +1951,7 @@ for ((metaAddon, response, error) in probeResults) {
                     }
 
                     _targetEpisode.value = targetEp
-
-                    if (
-                        resume != null &&
-                        resumeEpisode != null &&
-                        resume.season == season &&
-                        resume.positionMs > 0L
-                    ) {
-                        _playButtonText.value = "Resume S${resume.season}E$resumeEpisode"
-                    } else if (targetEp != null) {
-                        val e = targetEp.episodeNumber
-                        _playButtonText.value = "Play S${season}E${e}"
-                    } else {
-                        _playButtonText.value = "Play"
-                    }
+                    publishPlayButtonLabel()
 
                 } else {
                     Log.e("KBStream", "episodes ignored stale result for season=$season imdbId=$imdbId")
@@ -2227,6 +2295,7 @@ for ((metaAddon, response, error) in probeResults) {
                 _resumeInfo.value?.takeUnless { row ->
                     row.season == season && (row.episode ?: -1) in validEpisodes
                 }
+            publishPlayButtonLabel()
 
             // 2. Optimistic in-memory state so badges light up instantly.
             val newKeys =
@@ -2904,6 +2973,7 @@ for ((metaAddon, response, error) in probeResults) {
                 emptyMap()
             _resumeInfo.value =
                 null
+            publishPlayButtonLabel()
 
             // 3. Optimistic in-memory state so the badges light up instantly.
             val pairs =

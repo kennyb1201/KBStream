@@ -52,11 +52,13 @@ data class TeamVariants(
  *     involving either team, that choice is remembered and wins outright (see
  *     the `remembered` argument). A pick that is gone from the playlist falls
  *     through to the tiers below.
- *  1. **EPG program match** (strongest of the heuristics). The program airing at
- *     the game's start names BOTH teams - first in its TITLE, and - only when no
- *     title does - in its DESCRIPTION. This finds the game on any network -
- *     national, an RSN, or a team channel - without knowing the network in
- *     advance. A single-team hit is a pregame show or a repeat, not the game.
+ *  1. **EPG program match.** The program airing at the game's start names BOTH
+ *     teams - first in its TITLE, and then in its DESCRIPTION (a synopsis can
+ *     be a preview show, so it is the weaker text). This finds the game on any
+ *     network - national, an RSN, or a team channel - without knowing the
+ *     network in advance. A single-team hit is a pregame show or a repeat, not
+ *     the game, and a hit that names one side by its CITY alone is weaker
+ *     still: it is only used when no full hit exists (see [guideFeeds]).
  *  2. **Broadcast network match.** ESPN's own `broadcasts[].names` resolved
  *     against the playlist by normalized name. "ESPN" must not land on "ESPN2"
  *     - or on "ESPN AU" - when an ESPN feed is in the playlist: exact, then the
@@ -64,8 +66,14 @@ data class TeamVariants(
  *     A streaming-exclusive name ([STREAMING_EXCLUSIVES]) never matches here at
  *     all - no cable channel carries it - so a game ESPN+ streams is found by
  *     the EPG tier (the RSN or local channel simulcasting it) or the team's own
- *     RSN. If tier 1 keeps missing those, that is a bug in `epgHits` (team-name
+ *     RSN. If tier 1 keeps missing those, that is a bug in [guideFeeds] (team-name
  *     variants, window width) to fix THERE, not a reason to widen tier 2.
+ *
+ * The two are not exclusive. The guide says WHAT is airing, the broadcast list
+ * says WHERE the game is carried, and a viewer reads both as facts about their
+ * own playlist - so the feeds the named network resolves to lead the guide's
+ * hits when the guide agrees with the network, and are offered ahead of a
+ * stranger's hit when it does not (see [guideFeeds]).
  *  3. **Team RSN fallback.** A small static map of team abbreviation -> the
  *     regional networks that carry them, home team first. Last resort, and
  *     best-effort by design.
@@ -288,7 +296,7 @@ internal object SportsChannelMatcher {
             remembered(game.home.favoriteKey),
             remembered(game.away.favoriteKey),
         ).filter { it.id in present }
-        val epg = epgHits(game, programs, channelById, variants)
+        val epg = guideFeeds(game, programs, channelById, variants, channelIndex)
         if (epg.isNotEmpty()) return leadWith(recalled, cap(epg))
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
@@ -366,21 +374,21 @@ internal object SportsChannelMatcher {
      * meant?" rather than "which channel carries it?" - and it does that with
      * the SAME team names the EPG tier reads: the forms [strongVariants]
      * resolves (full name, abbreviation, nickname, short-form aliases) and the
-     * city alone, which [namesBothTeams] also accepts as a weaker form. Nothing
-     * about a name lives here; [searchVariants] is the one place that says what
-     * a team answers to.
+     * city alone, which [namesBothTeamsStrength] also accepts as a weaker form.
+     * Nothing about a name lives here; [searchVariants] is the one place that
+     * says what a team answers to.
      *
      * Partial input matches, because typing is incremental on a remote: see
      * [matchesWords] for the two shapes a query can have (half a name, or a
      * whole name inside something longer), and [searchVariants] for what a team
      * answers to.
      *
-     * Two additions over [namesBothTeams], both because this is a viewer typing
-     * rather than a program title: the feed's own short name ([SportsTeam.shortName]
-     * - "Yankees", where the tier deliberately reads the last word of the
-     * display name instead) and the city alone, both of which are what a person
-     * actually types. The tiers are untouched by this: it is a separate entry
-     * point, not a change to [strongVariants].
+     * Two additions over [namesBothTeamsStrength], both because this is a
+     * viewer typing rather than a program title: the feed's own short name
+     * ([SportsTeam.shortName] - "Yankees", where the tier deliberately reads the
+     * last word of the display name instead) and the city alone, both of which
+     * are what a person actually types. The tiers are untouched by this: it is a
+     * separate entry point, not a change to [strongVariants].
      */
     fun matchesQuery(game: SportsGame, query: String): Boolean {
         val typed = words(query)
@@ -412,7 +420,7 @@ internal object SportsChannelMatcher {
      * Everything [strongVariants] reads - which now includes the feed's short
      * name, so a guide and a search box agree on it - plus the city on its own,
      * which [matchesQuery] allows for search but a tier does not (see
-     * [namesBothTeams]).
+     * [namesBothTeamsStrength]).
      */
     private fun searchVariants(team: SportsTeam): List<List<String>> = buildList {
         addAll(strongVariants(team))
@@ -481,43 +489,185 @@ internal object SportsChannelMatcher {
 
     // ── Tier 1 ───────────────────────────────────────────────────────
 
+    /** One guide row that names both sides, and what ranking it needs. */
+    private data class GuideHit(
+        val channel: IptvChannel,
+        /** |row start - game start|, the tiebreak INSIDE a group. */
+        val distanceMs: Long,
+        /** True when the row named both sides by a real name, not a city. */
+        val strong: Boolean,
+        /** True when the row's TITLE named them - the stronger text. */
+        val title: Boolean,
+    )
+
     /**
-     * The channels whose guide row names both teams, titles first.
+     * The guide's feeds for [game], ordered by what the game says about itself.
      *
-     * A title naming both teams IS the game, so it is read on its own and, when
-     * it finds anything, the description pass never runs. Only when no title
-     * matches do descriptions get a turn - strictly weaker, because a synopsis
-     * naming both teams can be a preview show rather than the game.
+     * The old rule answered with the title pass whenever it found anything and
+     * never looked at descriptions at all, and the hub's tier 2 was skipped
+     * outright the moment a guide row hit. Three defects composed into one
+     * field report (Kenny, 2026-10-20): a Lightning game whose broadcast was
+     * ESPN offered **ESPN+3**, plus **NFL RedZone**, and the plain **ESPN**
+     * channel - the one the game named - was not in the list at all.
+     *
+     *  - ESPN's own guide row is generic ("NHL Hockey") with the teams in the
+     *    DESCRIPTION, so the title hit on ESPN+3 suppressed it.
+     *  - The network never got in at all: a non-empty guide list returned before
+     *    the broadcast names were ever consulted.
+     *  - The two rows started at the same minute, so guide order decided the
+     *    head between them.
+     *
+     * So the hits are GROUPED by whether the game's broadcast names resolve to
+     * them (the same [ChannelIndex.channelsFor] tier 2 uses, aliases and
+     * [STREAMING_EXCLUSIVES] included), and the groups are ordered:
+     *
+     *  1. Agreeing channels - the network the game names, in the order that name
+     *     resolved them, so the plain channel leads the variant that merely
+     *     shares its name and both lead a stranger.
+     *  2. The named network itself, when NO guide hit agrees - the network still
+     *     gets its vote in the list, ahead of a stranger's claim.
+     *  3. Everyone else. A TITLE hit beats a DESCRIPTION hit everywhere it can
+     *     be seen (a stranger's rows, and two rows for one feed), and rows that
+     *     start closest to kick-off come first when nothing else separates them.
+     *     Agreeing feeds are ordered by the name's own resolution first: the
+     *     field case is exactly that, where ESPN+3's title hit sat at the same
+     *     minute as ESPN's description hit and the plain channel still had to
+     *     lead.
+     *
+     * A WEAK hit - one side named by its city alone, which is how "Tampa Bay"
+     * can read as the Buccaneers - is never mixed in with real hits: it is
+     * dropped when any strong hit exists, and otherwise ranks below the
+     * named network's fill-in. RedZone's weak hit in the field case is exactly
+     * that, and it is gone.
+     *
+     * The grouping itself adds no work to the match loop: it partitions hit
+     * lists it was handed and reads the pass's already-built [ChannelIndex].
+     * What it does cost is the description half running ALONGSIDE the title half
+     * rather than behind it, which is the point of rule A - the old short-circuit
+     * is what hid ESPN's row - and it reads only the rows inside
+     * [EPG_WINDOW_MS], the same window the description pass always read.
      */
-    private fun epgHits(
+    private fun guideFeeds(
         game: SportsGame,
         programs: List<MatcherProgram>,
         channelById: Map<String, IptvChannel>,
         variants: TeamVariants,
+        channelIndex: ChannelIndex,
     ): List<IptvChannel> {
-        val titleHits = programHits(game, programs, channelById, variants) { it.title }
-        if (titleHits.isNotEmpty()) return titleHits
-        return programHits(game, programs, channelById, variants) { it.description.orEmpty() }
+        val titleHits = guideHits(game, programs, channelById, variants, title = true) { it.title }
+        val descriptionHits =
+            guideHits(game, programs, channelById, variants, title = false) {
+                it.description.orEmpty()
+            }
+        if (titleHits.isEmpty() && descriptionHits.isEmpty()) return emptyList()
+
+        val agreement = broadcastAgreement(game, channelIndex)
+        // Titles before descriptions, whatever group a hit lands in: the
+        // preview-show doctrine is about the TEXT, not about the network.
+        val hits = titleHits + descriptionHits
+        val agreeing = hits.filter { it.channel.id in agreement }
+        val strangers = hits.filter { it.channel.id !in agreement }
+
+        val strongAgreeing = agreeing.filter { it.strong }
+        val strongStrangers = strangers.filter { it.strong }
+        // Any strong hit makes every weak one noise (rule C): a city alone is
+        // not evidence beside a row that names both teams.
+        if (strongAgreeing.isNotEmpty() || strongStrangers.isNotEmpty()) {
+            val head = strongAgreeing.ordered(agreement)
+            val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
+            return head + fill + strongStrangers.ordered(emptyMap())
+        }
+
+        // Weak hits only: still a last resort, and still behind the network the
+        // game names when none of them agrees with it.
+        val weakAgreeing = agreeing.filterNot { it.strong }
+        val weakStrangers = strangers.filterNot { it.strong }
+        val head = weakAgreeing.ordered(agreement)
+        val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
+        return head + fill + weakStrangers.ordered(emptyMap())
     }
 
-    private fun programHits(
+    /**
+     * The rows whose [textOf] names both sides, with the facts the grouping
+     * needs. [title] marks which pass this is, so a title hit outranks a
+     * description hit for the same channel.
+     */
+    private fun guideHits(
         game: SportsGame,
         programs: List<MatcherProgram>,
         channelById: Map<String, IptvChannel>,
         variants: TeamVariants,
+        title: Boolean,
         textOf: (MatcherProgram) -> String,
-    ): List<IptvChannel> {
-        val hits = programs.filter { program ->
-            overlapsWindow(program, game.dateMs) &&
-                namesBothTeams(textOf(program), game.away, game.home, variants)
+    ): List<GuideHit> = programs
+        .asSequence()
+        .filter { overlapsWindow(it, game.dateMs) }
+        .mapNotNull { program ->
+            val strength = namesBothTeamsStrength(textOf(program), game.away, game.home, variants)
+            if (strength == TeamNameStrength.NONE) return@mapNotNull null
+            val channel = channelById[program.channelId] ?: return@mapNotNull null
+            GuideHit(
+                channel = channel,
+                distanceMs = abs(program.startMs - game.dateMs),
+                strong = strength == TeamNameStrength.STRONG,
+                title = title,
+            )
         }
-        if (hits.isEmpty()) return emptyList()
-        // The program whose start sits closest to the game's own start comes
-        // first, when a provider carries the same game on more than one channel.
-        return hits
-            .sortedBy { abs(it.startMs - game.dateMs) }
-            .mapNotNull { channelById[it.channelId] }
+        .toList()
+
+    /**
+     * [hits] in the order their group reads: by the position the broadcast name
+     * resolved them to, then title before description, then closest to
+     * kick-off.
+     *
+     * The resolution position is what puts the NAMED feed ahead of its own
+     * family - broadcast "ESPN" resolves to ESPN first and ESPN+3 second - which
+     * is what the field report asked for: the plain channel leads, the variant
+     * sits behind it as a corroborated backup. A stranger's hit has no position
+     * (empty [agreement]), so the same ordering reads as "title first, then
+     * closest", exactly as the old single-tier list did.
+     */
+    private fun List<GuideHit>.ordered(agreement: Map<String, Int>): List<IptvChannel> =
+        sortedWith(
+            compareBy<GuideHit>(
+                { agreement[it.channel.id] ?: Int.MAX_VALUE },
+                { if (it.title) 0 else 1 },
+                { it.distanceMs }
+            )
+        ).map { it.channel }
+
+    /**
+     * The playlist channels the game's own broadcast names resolve to, with the
+     * position each was resolved at (see [ChannelIndex.channelsFor]).
+     *
+     * The SAME path tier 2 takes, so an alias resolves here as it does there and
+     * a streaming-exclusive name resolves to nothing here as it does there.
+     */
+    private fun broadcastAgreement(
+        game: SportsGame,
+        channelIndex: ChannelIndex,
+    ): Map<String, Int> {
+        if (game.broadcastNames.isEmpty()) return emptyMap()
+        val rank = HashMap<String, Int>()
+        game.broadcastNames.forEach { name ->
+            channelIndex.channelsFor(name).forEachIndexed { index, channel ->
+                rank.putIfAbsent(channel.id, index)
+            }
+        }
+        return rank
     }
+
+    /**
+     * The named networks' own feeds, for rule B: used only when the guide has
+     * hits but none of them is a channel the game's broadcast names resolve to.
+     *
+     * Broadcast names only - never the RSN map - because this is the game's own
+     * claim about where it is carried, not the matcher's last-resort guess.
+     */
+    private fun broadcastFillIn(
+        game: SportsGame,
+        channelIndex: ChannelIndex,
+    ): List<IptvChannel> = game.broadcastNames.flatMap { channelIndex.channelsFor(it) }
 
     /**
      * The channels whose guide row titles a tournament by name.
@@ -557,32 +707,47 @@ internal object SportsChannelMatcher {
     private fun overlapsWindow(program: MatcherProgram, startMs: Long): Boolean =
         program.startMs <= startMs + EPG_WINDOW_MS && program.endMs >= startMs - EPG_WINDOW_MS
 
+    /** How well a guide text names the game's two sides. */
+    private enum class TeamNameStrength {
+        /** At least one side is not named at all - or only by its city. */
+        NONE,
+
+        /** Both named, but at least one by its city alone. */
+        WEAK,
+
+        /** Both named by a real name ([strongVariants]). */
+        STRONG,
+    }
+
     /**
-     * True when [text] names BOTH sides.
+     * How well [text] names BOTH sides of the game.
      *
      * A side is named STRONGLY by its full name, abbreviation, nickname or a
      * short-form alias, or WEAKLY by its city alone. Both sides must be named,
      * and a city-alone hit only counts when the other side carries a real name
      * ("Tampa Bay vs Florida", "Tampa Bay vs Panthers") - a lone "Tampa Bay" is
      * a travel show, not a game, so it must never match on its own.
+     *
+     * The distinction existed only as a boolean until the field case: "Tampa
+     * Bay" is also the Buccaneers, so a cross-sport row can weakly name a
+     * Lightning game. [guideFeeds] uses the WEAK answer to keep those rows
+     * behind every real hit instead of letting them into the list.
      */
-    private fun namesBothTeams(
+    private fun namesBothTeamsStrength(
         text: String,
         away: SportsTeam,
         home: SportsTeam,
         variants: TeamVariants,
-    ): Boolean {
+    ): TeamNameStrength {
         val tokens = words(text)
-        if (tokens.isEmpty()) return false
+        if (tokens.isEmpty()) return TeamNameStrength.NONE
         val awayStrong = namesStrongTeam(tokens, variants.away)
         val homeStrong = namesStrongTeam(tokens, variants.home)
-        val awayCity = cityNamesTeam(tokens, away)
-        val homeCity = cityNamesTeam(tokens, home)
-        if (!(awayStrong || awayCity) || !(homeStrong || homeCity)) return false
-        if (awayStrong && homeStrong) return true
-        // At least one side rests on its city alone: allowed only because the
-        // other side carries a real name (checked above).
-        return awayCity || homeCity
+        if (awayStrong && homeStrong) return TeamNameStrength.STRONG
+        val awayNamed = awayStrong || cityNamesTeam(tokens, away)
+        val homeNamed = homeStrong || cityNamesTeam(tokens, home)
+        // Both sides named, and at least one of them only by its city.
+        return if (awayNamed && homeNamed) TeamNameStrength.WEAK else TeamNameStrength.NONE
     }
 
     /**

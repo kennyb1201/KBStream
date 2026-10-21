@@ -309,6 +309,25 @@ class DetailScreenMobileContractTest {
     }
 
     @Test
+    fun `the reviews are painted under the collection and More Like This, above the Media row`() {
+        val mobile = mobileDetail()
+        val collection = mobile.indexOf("item(key = \"collection\") {")
+        val recs = mobile.indexOf("item(key = \"recommendations\") {")
+        val reviews = mobile.indexOf("item(key = \"reviews\") {")
+        val media = mobile.indexOf("item(key = \"media\") {")
+
+        assertTrue("the reviews are on the phone's page", reviews >= 0)
+        assertTrue(
+            "and they are painted under the collection and More Like This - the " +
+                "rails that lead to the next title - and above the Media row, " +
+                "the same order the television paints (see DetailRow)",
+            collection in 0 until recs &&
+                recs < reviews &&
+                reviews < media
+        )
+    }
+
+    @Test
     fun `the touch menus cover episodes, seasons and posters`() {
         val mobile = mobileDetail()
         assertTrue(
@@ -493,10 +512,40 @@ class DetailScreenMobileContractTest {
         ).forEach { pref ->
             assertTrue("the hero trailer must follow $pref", mobile.contains(pref))
         }
+        // One effect does the dwell AND the resolve, keyed on a request
+        // COUNTER. The version this replaced had two: one that set a
+        // `trailerRequested` flag after the dwell, and a resolve keyed on that
+        // flag which cleared it. Clearing a key cancels the effect that is
+        // running, so every resolve died a frame in and the phone's hero never
+        // left the backdrop - the "trailers aren't autoplaying on mobile"
+        // report.
+        assertFalse(
+            "the flag the resolve used to clear must not come back",
+            mobile.contains("trailerRequested")
+        )
         assertTrue(
-            "and autoplay is what starts it on its own, after the dwell",
-            mobile.contains("if (trailerKey == null || !trailerAutoplay || heroTrailer != null)") &&
-                mobile.contains("delay(trailerDelayMs)")
+            "the request is a counter the resolve can read without changing it",
+            mobile.contains("var trailerRequest by remember(trailerKey) {") &&
+                mobile.contains("mutableIntStateOf(0)")
+        )
+        assertTrue(
+            "and the dwell and the resolve are one effect keyed on it",
+            Regex(
+                "LaunchedEffect\\(\\s*trailerKey,\\s*trailerAutoplay,\\s*" +
+                    "trailerDelayMs,\\s*trailerRequest\\s*\\)"
+            ).containsMatchIn(mobile) &&
+                mobile.contains("delay(trailerDelayMs)") &&
+                mobile.contains("if (!trailerAutoplay) return@LaunchedEffect")
+        )
+        assertTrue(
+            "the request is consumed by its own counter, which is not a key: " +
+                "writing a key inside the effect is what cancelled the resolve",
+            mobile.contains("trailerServed = trailerRequest") &&
+                !Regex("LaunchedEffect\\([^)]*trailerServed").containsMatchIn(mobile)
+        )
+        assertFalse(
+            "and nothing in the page may reset the request counter itself",
+            Regex("trailerRequest\\s*=").containsMatchIn(mobile)
         )
 
         // The press no longer leaves the page.
@@ -509,7 +558,7 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "the same pick the button offers is the one that plays",
             mobile.contains("TrailerPick.best(tmdbDetail?.videos?.results)") &&
-                mobile.contains("trailerRequested = true")
+                mobile.contains("trailerRequest += 1")
         )
 
         // The shared resolve, the one-shot retry, and the pool's release.
@@ -579,6 +628,44 @@ class DetailScreenMobileContractTest {
      * it must arrive at the picker marked as a manual pick or Auto-select
      * jumps straight to the player and the list is never seen.
      */
+    @Test
+    fun `the play button carries the view model's label, so it says what the press does`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the button is labelled from the ViewModel's derived label - the " +
+                "same string the television's button reads - rather than a \"Play\" " +
+                "of the page's own making",
+            mobile.contains("label = playButtonText")
+        )
+        assertFalse(
+            "and the page must not build a label of its own: a fixed string here " +
+                "is exactly how a half-watched film went back to offering \"Play\"",
+            mobile.contains("\"Play S") || mobile.contains("\"Resume S")
+        )
+    }
+
+    @Test
+    fun `the episode cards tick from the season's watched set`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the season's watched set - Simkl, Trakt, MDBList and this profile's " +
+                "own marks - is the same set the season and episode menus mark from",
+            mobile.contains("WatchedEpisodeState.effectiveWatchedEpisodesForSeason(") &&
+                mobile.contains("val watchedInSeason = remember(")
+        )
+        assertTrue(
+            "and a card's watched state reads it: checking only completed stream " +
+                "ids left an episode the menu had just marked, or a tracker had " +
+                "reported watched, without its checkmark",
+            mobile.contains("episode.episodeNumber in watchedInSeason")
+        )
+        assertTrue(
+            "the spoiler-free mask must use the same answer as the tick, not the " +
+                "completed ids alone",
+            mobile.contains("watched = isWatched")
+        )
+    }
+
     @Test
     fun `the play button's hold opens the streams picker for the same episode`() {
         val mobile = mobileDetail()

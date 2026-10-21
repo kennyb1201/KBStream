@@ -2330,7 +2330,8 @@ fun DetailScreen(
     /**
      * The Media row's tab strip: LEFT/RIGHT walk the pages of the row, DOWN
      * steps into the cards of the page that is now active, and UP is the
-     * chain's press out of the row - the More Like This rail above it.
+     * chain's press out of the row - the review rail above it, or More Like
+     * This on a title with no reviews.
      *
      * A tab strip is a row inside a row, which is the one shape the page's
      * chain does not model ([DetailRow.MEDIA] is a single row as far as the
@@ -2552,10 +2553,10 @@ fun DetailScreen(
             val networks = tmdbDetail?.networks.orEmpty()
             val companies = tmdbDetail?.productionCompanies.orEmpty()
             // The genre chips live in the fixed header above the list and the
-            // review rail is the section between the production chips and the
-            // collection; both are read here - with the same expression that
-            // renders them - so their presence in the chain means "on screen",
-            // exactly like every other row's.
+            // review rail is the section between More Like This and the Media
+            // row; both are read here - with the same expression that renders
+            // them - so their presence in the chain means "on screen", exactly
+            // like every other row's.
             val tmdbGenres = tmdbDetail?.genres.orEmpty()
             val reviews = allReviews.ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
             val hasProductionRow = companies.isNotEmpty()
@@ -4896,91 +4897,6 @@ fun DetailScreen(
                             }
                         }
 
-                        // Bundled page-1 reviews plus extra pages fetched in
-                        // the background (allReviews) - more reviews appear as
-                        // the additional pages land. `reviews` itself is read
-                        // once above, so the chain's presence and this guard are
-                        // the same value.
-                        if (reviews.isNotEmpty()) {
-                            item(key = "reviewsheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = "REVIEWS",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
-
-                            item(key = REVIEWS_ROW_KEY, contentType = "section-row") {
-                                LazyRow(
-                                    contentPadding =
-                                        PaddingValues(
-                                            start = 24.dp,
-                                            end = 24.dp,
-                                            top = 10.dp,
-                                            bottom = 10.dp
-                                        ),
-                                    modifier = Modifier
-                                        .padding(
-                                            bottom = 12.dp
-                                        )
-                                        .focusGroup()
-                                        .focusRestorer()
-                                ) {
-                                    itemsIndexed(
-                                        reviews.take(60),
-                                        key = { _, review -> review.id }
-                                    ) { reviewIndex, review ->
-                                        val reviewFocusRequester =
-                                            remember(review.id) {
-                                                FocusRequester()
-                                            }
-                                        // Filed by column like every rail in the
-                                        // list, so a press into the review rail
-                                        // from the production chips above (or
-                                        // the collection below) is aimed at the
-                                        // review in the column it came from (see
-                                        // focusRow).
-                                        registerChipColumn(
-                                            REVIEWS_ROW_KEY,
-                                            reviewIndex,
-                                            reviewFocusRequester
-                                        )
-
-                                        ReviewCard(
-                                            review = review,
-                                            onClick = {
-                                                lastReviewTileFocusRequester =
-                                                    reviewFocusRequester
-                                                selectedReview = it
-                                            },
-                                            modifier = Modifier
-                                                .focusRequester(
-                                                    reviewFocusRequester
-                                                )
-                                                // The review rail is a chain row
-                                                // of its own now, so its cards
-                                                // answer UP and DOWN through the
-                                                // page's one handoff: UP reaches
-                                                // the production chips, DOWN the
-                                                // collection (see
-                                                // DetailFocusChain).
-                                                .onPreviewKeyEvent(
-                                                    detailRowVerticalFocus(
-                                                        DetailRow.REVIEWS,
-                                                        reviewIndex,
-                                                        detailRowPresence
-                                                    )
-                                                )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-
                         if (hasCollectionRow) {
                             item(key = "collectionheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -5306,8 +5222,9 @@ fun DetailScreen(
                                                 .focusRequester(requester)
                                                 // The same handoff as the rails
                                                 // above: UP reaches the
-                                                // collection, DOWN the Media row
-                                                // painted below this one.
+                                                // collection, DOWN the review
+                                                // rail painted below this one (or
+                                                // the Media row, with no reviews).
                                                 .onPreviewKeyEvent(
                                                     detailRowVerticalFocus(
                                                         DetailRow.MORE_LIKE_THIS,
@@ -5321,10 +5238,98 @@ fun DetailScreen(
                             }
                         }
 
+                        // Bundled page-1 reviews plus extra pages fetched in
+                        // the background (allReviews) - more reviews appear as
+                        // the additional pages land. `reviews` itself is read
+                        // once above, so the chain's presence and this guard are
+                        // the same value.
+                        //
+                        // Painted here, under Collection and More Like This and
+                        // above the Media row: the reviews are an addendum to a
+                        // title the viewer has already decided about, while the
+                        // collection and the recommendations are how they find
+                        // the next one (see DetailRow's painted order).
+                        if (reviews.isNotEmpty()) {
+                            item(key = "reviewsheader", contentType = "section-header") {
+                                KBSectionHeader(
+                                    title = "REVIEWS",
+                                    modifier = Modifier.padding(
+                                        start = KBScreenEdge,
+                                        top = 14.dp
+                                    )
+                                )
+                            }
+
+                            item(key = REVIEWS_ROW_KEY, contentType = "section-row") {
+                                LazyRow(
+                                    contentPadding =
+                                        PaddingValues(
+                                            start = 24.dp,
+                                            end = 24.dp,
+                                            top = 10.dp,
+                                            bottom = 10.dp
+                                        ),
+                                    modifier = Modifier
+                                        .padding(
+                                            bottom = 12.dp
+                                        )
+                                        .focusGroup()
+                                        .focusRestorer()
+                                ) {
+                                    itemsIndexed(
+                                        reviews.take(60),
+                                        key = { _, review -> review.id }
+                                    ) { reviewIndex, review ->
+                                        val reviewFocusRequester =
+                                            remember(review.id) {
+                                                FocusRequester()
+                                            }
+                                        // Filed by column like every rail in the
+                                        // list, so a press into the review rail
+                                        // from the More Like This rail above (or
+                                        // the Media row below) is aimed at the
+                                        // review in the column it came from (see
+                                        // focusRow).
+                                        registerChipColumn(
+                                            REVIEWS_ROW_KEY,
+                                            reviewIndex,
+                                            reviewFocusRequester
+                                        )
+
+                                        ReviewCard(
+                                            review = review,
+                                            onClick = {
+                                                lastReviewTileFocusRequester =
+                                                    reviewFocusRequester
+                                                selectedReview = it
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(
+                                                    reviewFocusRequester
+                                                )
+                                                // The review rail is a chain row
+                                                // of its own now, so its cards
+                                                // answer UP and DOWN through the
+                                                // page's one handoff: UP reaches
+                                                // More Like This, DOWN the Media
+                                                // row (see DetailFocusChain).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.REVIEWS,
+                                                        reviewIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         // The Media row - the title's videos, its other
                         // backdrops and its posters - is painted LAST, under
-                        // More Like This: one row of the chain, several rails
-                        // inside it.
+                        // More Like This and the reviews: one row of the chain,
+                        // several rails inside it.
                         if (hasMediaRow) {
                             item(key = "mediaheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -5403,9 +5408,9 @@ fun DetailScreen(
                                         }
                                         // Filed by column like every other rail,
                                         // so a press into this one from the
-                                        // More Like This rail above it is aimed
-                                        // at the column it came from (see
-                                        // focusRow).
+                                        // review rail above it (More Like This
+                                        // when there are none) is aimed at the
+                                        // column it came from (see focusRow).
                                         registerChipColumn(
                                             MEDIA_ROW_KEY,
                                             cardIndex,

@@ -1502,7 +1502,10 @@ private fun UpcomingCard(
                 modifier = Modifier.padding(top = 1.dp)
             )
             Text(
-                text = "S%02d · E%02d".format(episode.season, episode.episode),
+                // The television card's own rule, so the two rails number an
+                // episode the same way: `S2 E8`, unpadded. An Upcoming row
+                // always names a real pair, so the rule cannot answer null.
+                text = tvUpNextEpisodeLabel(episode.season, episode.episode).orEmpty(),
                 color = KBTextHi.copy(alpha = 0.78f),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,

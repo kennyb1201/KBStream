@@ -221,10 +221,20 @@ class HomeScreenMobileContractTest {
                 mobile.contains("UpNextBadge.NEXT_UP -> KBSteel")
         )
         // Upcoming: the air-date chip on top, the calendar date leading the
-        // bottom block, the S/E line the TV card prints.
-        listOf("\"NEW SEASON\"", "episode.airDateFull", "S%02d · E%02d").forEach { marker ->
+        // bottom block, and the S/E line the TV card prints - from the TV's own
+        // rule, so the two rails cannot number an episode two ways ("S2 E8",
+        // not "S02 · E08").
+        listOf(
+            "\"NEW SEASON\"",
+            "episode.airDateFull",
+            "tvUpNextEpisodeLabel(episode.season, episode.episode)"
+        ).forEach { marker ->
             assertTrue("the Upcoming card must draw $marker", mobile.contains(marker))
         }
+        assertFalse(
+            "and it must not keep a padded pair of its own",
+            mobile.contains("S%02d · E%02d")
+        )
     }
 
     @Test

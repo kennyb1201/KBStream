@@ -400,16 +400,27 @@ internal fun upNextPlayerNameOrUnknown(name: String?, hasArtwork: Boolean): Stri
     upNextDisplayTitleOrNull(name, hasArtwork) ?: UNKNOWN_SHOW_NAME
 
 /**
- * The small season/episode label a Continue Watching card carries - "S02 · E08".
+ * The small season/episode label a rail card carries - "S2 E8".
+ *
+ * Both Home rails that print a pair read it: the Continue Watching hero line and
+ * cards, and the Upcoming cards, so "S02 · E08" beside "S2 E8" on one screen is
+ * not a thing that can happen. The Continue Watching long-press menu reads it
+ * too.
  *
  * Extracted from the card so the one thing that must never happen here can be
  * pinned by a test: printing an episode number the sources never really named.
  * A tracker and an add-on both spell "no episode" as 0 (see
  * [com.kennyb1201.kbstream.data.namedEpisodeNumber]), and formatting that
- * straight through is what put a rail of cards reading "S02 · E00" over blank
+ * straight through is what put a rail of cards reading "S2 E0" over blank
  * artwork in front of a viewer. The season half is still worth saying on its
  * own; when neither half is a real number the label goes away rather than
- * becoming an empty "S02 · E00" shape.
+ * becoming an empty "S2 E0" shape.
+ *
+ * The pair is UNPADDED ("S2 E8", not "S02 · E08"): this is a glanceable corner
+ * caption, not a column to sort by, and the zeroes only made the numbers read
+ * like a form field. The television rail, its hero line and the phone's own
+ * card all format through here, so the three cannot number one episode two
+ * ways.
  */
 internal fun upNextEpisodeLabel(
     season: Int?,
@@ -420,16 +431,13 @@ internal fun upNextEpisodeLabel(
 
     return when {
         season != null && named != null ->
-            "S%02d · E%02d".format(
-                season,
-                named
-            )
+            "S$season E$named"
 
         season != null ->
-            "S%02d".format(season)
+            "S$season"
 
         named != null ->
-            "E%02d".format(named)
+            "E$named"
 
         else ->
             null
@@ -514,12 +522,12 @@ internal fun localHistoryParentIdsForShow(
 
 /**
  * The Home hero's Continue Watching line: the card's own season/episode label
- * behind its action prefix ("Resume  •  S02 · E08").
+ * behind its action prefix ("Resume  •  S2 E8").
  *
  * The hero sits directly above the rail, and it used to format the season and
  * episode itself. That meant the card's own rule (see [upNextEpisodeLabel])
  * only ever reached the rail: for the very card whose corner had been fixed,
- * the hero still read "Resume  •  S02 · E00", which is what made the fix look
+ * the hero still read "Resume  •  S2 E0", which is what made the fix look
  * like it had not taken. Both surfaces now spell the pair the same way, and a
  * prefix with nothing to attach to stays a bare prefix.
  */

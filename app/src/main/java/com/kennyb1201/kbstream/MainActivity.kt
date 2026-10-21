@@ -1,12 +1,12 @@
 package com.kennyb1201.kbstream
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.os.Bundle
 import android.os.Build
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1204,6 +1204,13 @@ fun AppRoot(
     val transitionMs = screenTransitionMs(rememberReducedMotion())
 
     val context = LocalContext.current
+    // The activity this composition is hosted in. Asked for through
+    // LocalActivity rather than by casting the Context: a Context is not
+    // guaranteed to BE an Activity (ContextCastToActivity), and a themed
+    // context wrapper is exactly the case where the cast quietly returns null.
+    // Both users of it - the launch-intent read below and the pre-playback
+    // orientation hold - want the real window.
+    val hostActivity = LocalActivity.current
 
     // First-run onboarding: shown over the app until the user taps
     // "Start Browsing". The flag lives in SharedPreferences so it survives
@@ -1615,7 +1622,7 @@ fun AppRoot(
     // watch history (self-healing, cheap).
     LaunchedEffect(Unit) {
         val handledByExtras =
-            applyLaunchIntentExtras((context as? android.app.Activity)?.intent)
+            applyLaunchIntentExtras(hostActivity?.intent)
 
         // Safety net: if the app was killed while a next-episode handoff was
         // pending (process death between the player finishing and this
@@ -3472,7 +3479,9 @@ fun AppRoot(
     // both helpers return before touching the activity, so the TV flow is the
     // one it has always been.
     val splashShowing = detailAutoPlay != null || pending != null || playerSplash != null
-    val splashActivity = LocalContext.current as? Activity
+    // The activity this composition lives in, read once at the top of the shell
+    // (see [hostActivity]) rather than by casting the Context.
+    val splashActivity = hostActivity
     DisposableEffect(splashActivity, splashShowing) {
         if (splashActivity != null && splashShowing) {
             FormFactor.applyPlaybackOrientation(splashActivity)

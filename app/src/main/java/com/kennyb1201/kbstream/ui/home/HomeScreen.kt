@@ -2279,10 +2279,15 @@ private fun UpcomingEpisodeCard(
                     modifier = Modifier.padding(top = 1.dp).kbFocusMarquee(focused)
                 )
 
-                val seLabel = "S%02d · E%02d".format(
+                // The season/episode label the Continue Watching rail prints,
+                // from its own rule: `S2 E8`, unpadded and spelled once for
+                // both rails and both form factors (see [upNextEpisodeLabel]).
+                // An Upcoming row always names a real pair, so the rule cannot
+                // answer null here.
+                val seLabel = upNextEpisodeLabel(
                     upcoming.season,
                     upcoming.episode
-                )
+                ).orEmpty()
                 // Show title -> S·E line -> episode title line.
                 Text(
                     text = seLabel,
@@ -5038,11 +5043,14 @@ fun HomeScreen(
                 // that only offers one episode's resume just cluttered the
                 // menu the viewer opens to keep watching.
                 subtitle = buildString {
-                    val seasonEpisode = listOfNotNull(
-                        menuItem.season?.let { "S%02d".format(it) },
-                        namedEpisodeNumber(menuItem.episode)
-                            ?.let { "E%02d".format(it) }
-                    ).joinToString(" · ")
+                    // The rail's own rule, so the menu over a card numbers the
+                    // episode the way the card under it does - "S2 E5", not
+                    // "S02 · E05" - and the phone's menu cannot spell it
+                    // differently either (it reads the same rule).
+                    val seasonEpisode = upNextEpisodeLabel(
+                        menuItem.season,
+                        menuItem.episode
+                    ).orEmpty()
                     if (seasonEpisode.isNotBlank()) {
                         append(seasonEpisode)
                     }

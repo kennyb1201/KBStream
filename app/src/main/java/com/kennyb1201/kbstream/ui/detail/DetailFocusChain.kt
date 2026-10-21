@@ -24,11 +24,11 @@ internal enum class DetailFocusDirection { UP, DOWN }
  * The order is the PAINTED order, which is not the order the rails are listed
  * in the source: under the fixed header's title/PLAY row the genre chips, then
  * the tag rail, then the episode section, the people rail, the network rail,
- * the production companies, the review rail, the collection rail, More Like
- * This and finally the Media row (see the `genrerow`, `keywordsrow`,
- * `peoplerow`, `networkrow`, `productionrow`, `reviewsrow`, `collectionrow`,
- * `recsrow` and `mediarow` items). A chain that did not mirror the screen would
- * send UP into a row the viewer can see is below them.
+ * the production companies, the collection rail, More Like This, the review
+ * rail and finally the Media row (see the `genrerow`, `keywordsrow`,
+ * `peoplerow`, `networkrow`, `productionrow`, `collectionrow`, `recsrow`,
+ * `reviewsrow` and `mediarow` items). A chain that did not mirror the screen
+ * would send UP into a row the viewer can see is below them.
  *
  * Rows that carry no vertical handler of their own are deliberately absent:
  * the overview block, the ratings strip and the fact cards are leaf surfaces
@@ -69,8 +69,14 @@ internal enum class DetailRow {
     /** The production-company chips. */
     PRODUCTION,
 
+    /** The collection rail: this title's other parts. */
+    COLLECTION,
+
+    /** The More Like This recommendations rail. */
+    MORE_LIKE_THIS,
+
     /**
-     * The review rail, painted between the production chips and the collection.
+     * The review rail, painted after More Like This and above the Media row.
      *
      * It is a focusable rail of cards like any other, so the chain has to name
      * it: left out, a UP or DOWN press on a review card fell to the default
@@ -79,21 +85,15 @@ internal enum class DetailRow {
      */
     REVIEWS,
 
-    /** The collection rail: this title's other parts. */
-    COLLECTION,
-
-    /** The More Like This recommendations rail. */
-    MORE_LIKE_THIS,
-
     /**
      * The Media row - the title's videos, its other backdrops and its posters,
      * as one row with a tab strip on top of it - painted LAST, under More Like
      * This.
      *
      * The chain names it ONCE, because what it is for is the handoff between
-     * rows: UP is the More Like This rail above it and DOWN is the bottom of the
-     * page, exactly as if the row held a single rail, which is what makes a DOWN
-     * off it the END of the page - consumed, with the focus staying on the card
+     * rows: UP is the review rail above it (More Like This when the title has no
+     * reviews) and DOWN is the bottom of the page, exactly as if the row held a
+     * single rail, which is what makes a DOWN off it the END of the page - consumed, with the focus staying on the card
      * or the strip the viewer is holding, never thrown back to the top (see the
      * screen's handler). Which of its pages the viewer is looking at, and the
      * LEFT/RIGHT presses that swap them, never leave the row and are the row's

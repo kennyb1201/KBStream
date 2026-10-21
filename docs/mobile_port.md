@@ -588,6 +588,31 @@ surface rows (`ImageOverrides.choose/reset`). Reviews (page 1 plus the
 background pages the ViewModel fetched) open full with a spoiler gate, and the
 collection rail opens each part by its resolved IMDb id.
 
+**The Play button says what the press does, and the pairs are unpadded
+(2026-10-21).** A film with a saved position offered "Play" for a press that
+resumed it, and a paused episode offered "Play S2E3" for the same reason: the
+label was a fixed string written by whoever last touched the page. It is now
+derived in the ViewModel (`publishPlayButtonLabel` -> `detailPlayLabel`) from
+the resume row, the loaded season and its target episode, so it reads
+`Resume` / `Play` for a film and `Resume S2 E3` / `Play S2 E3` for a series, and
+it moves as those do - a finished film goes back to `Play` without a reload.
+Both Detail screens read the same state flow, so the phone and the TV cannot
+promise different things about one press. The pair is also printed unpadded
+everywhere it is a glance rather than a column: the Continue Watching hero and
+cards (`upNextEpisodeLabel`) read `S2 E8`, not `S02 · E08`. The phone's episode
+cards also tick from the season's watched set now (`watchedInSeason`), the same
+set the menus mark into and the trackers fill - checking only completed stream
+ids is why an episode marked watched (or synced from Simkl/Trakt/MDBList)
+showed no checkmark until the page was reloaded.
+
+**The reviews sit last before the Media row (2026-10-21)**, on the phone and on
+TV alike: under the collection and More Like This, above Media. The rails that
+lead to the next title come first, and the reviews - an addendum to a title the
+viewer has already decided about - follow them. The TV page's focus chain
+(`DetailRow`) is declared in that same painted order, so UP out of the review
+cards is More Like This and DOWN is the Media row, and the phone is pinned to
+the same order by `DetailScreenMobileContractTest`.
+
 **The hero trailer plays in the hero (2026-10-20).** The page's TRAILER button
 used to hand the resolved YouTube source to `NativePlayerActivity`, so a press
 left the page for the fullscreen player. It now plays in the Detail hero
@@ -610,6 +635,20 @@ the page releases it too. Media-row video cards are unchanged: they open the
 fullscreen player, because they are the individual videos the viewer picked.
 (`DetailScreenMobileContractTest` pins the wiring; `HeroTrailerResumeTest`
 already pins the retry rule the hero reuses.)
+
+**The phone's hero trailer never actually resolved (2026-10-21).** Reported as
+"trailers aren't autoplaying or following the trailer autoplay setting in hero
+on details on mobile". The settings were read correctly; the resolve was
+cancelled. The page armed playback with a `trailerRequested` flag that the
+resolve effect both was keyed on and cleared, and clearing a `LaunchedEffect`
+key recomposes with a new one - which CANCELS the coroutine that just started,
+a frame into its network resolve. So every autoplay (and every TRAILER press)
+was thrown away and the hero stayed on the backdrop. The dwell and the resolve
+are now one effect keyed on `trailerRequest`, a counter nothing inside the
+effect writes, which is the shape Home's hero already used; a retry also
+invalidates the cached signed URL before re-resolving, as Home does.
+(`DetailScreenMobileContractTest` now asserts the effect's keys, that the dwell
+lives in the same effect, and that nothing assigns the request counter.)
 
 Long-press menus cover the episode rows (watched toggle, previous, season,
 entire series, play from beginning, play manually), the season chips (season,

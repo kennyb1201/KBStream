@@ -405,6 +405,28 @@ fun DetailScreenMobile(
             }
         }
 
+        // The episodes of the season on screen this profile has watched: Simkl,
+        // Trakt and MDBList plus its own marks, i.e. the same set the season and
+        // episode menus read before offering "Mark as Unwatched" - and the same
+        // set the television's cards tick from. The cards read it (see
+        // `episodeVisual`) instead of only the completed-stream ids, which is
+        // why a watched episode marked from the menu (or synced from a tracker)
+        // showed no checkmark until the page was reloaded: nothing had been
+        // COMPLETED locally for it, only marked.
+        val watchedInSeason = remember(
+            id,
+            currentSeason,
+            simklWatchedEpisodes,
+            watchedEpisodeKeys
+        ) {
+            WatchedEpisodeState.effectiveWatchedEpisodesForSeason(
+                parentId = id,
+                season = currentSeason,
+                simklWatchedEpisodes = simklWatchedEpisodes,
+                watchedEpisodeKeys = watchedEpisodeKeys
+            )
+        }
+
         // The aired size of the season on screen: what a history row written
         // from this page stores as its season total, and what the episode menu
         // hands the player. An unaired episode is in the listing but not in
@@ -642,44 +664,65 @@ fun DetailScreenMobile(
         // position in one value is what stops a fresh resolve inheriting a
         // dead position (see HeroTrailerPlayback).
         var heroTrailer by remember(trailerKey) { mutableStateOf<HeroTrailerPlayback?>(null) }
-        // One resolve request at a time: set by the button or the autoplay
-        // effect, consumed by the resolve below, set again by a retry.
-        var trailerRequested by remember(trailerKey) { mutableStateOf(false) }
+        // A play request from the viewer - the TRAILER button, or nothing.
+        //
+        // A COUNTER, not a `requested` flag the resolve clears. Clearing a
+        // state that is one of the resolve's own LaunchedEffect keys recomposes
+        // with a new key, and a new key CANCELS the coroutine that just started
+        // - so every request (the button's, and every one the autoplay effect
+        // made) was thrown away a frame into its resolve and the hero stayed on
+        // the backdrop. That is the "trailers aren't autoplaying on mobile"
+        // report. Bumping a counter only asks for one more resolve; nothing the
+        // resolve does changes its own keys.
+        var trailerRequest by remember(trailerKey) { mutableIntStateOf(0) }
+        // The highest request the resolve effect has answered. Written INSIDE
+        // the effect and deliberately not one of its keys: it is how a request
+        // is consumed without the effect cancelling itself. Not part of the
+        // gate either - a viewer who closed the trailer and then touched a
+        // setting must not have it restart behind them.
+        var trailerServed by remember(trailerKey) { mutableIntStateOf(0) }
         // The retry handoff: where a mid-stream failure died, read (and
-        // cleared) by the resolve that retries it.
+        // cleared) by the resolve that retries it. Not a key either - it is
+        // consumed, not requested.
         var trailerResumeMs by remember(trailerKey) { mutableLongStateOf(0L) }
         // One retry per trailer, the Home hero's own cap: a stale signed URL is
-        // recoverable, a dead video is not.
+        // recoverable, a dead video is not. Only the failure callback moves it.
         var trailerAttempt by remember(trailerKey) { mutableIntStateOf(0) }
 
         fun stopHeroTrailer() {
             heroTrailer = null
-            trailerRequested = false
             TrailerPlayerPool.releaseForReuse()
         }
 
+        // The dwell AND the resolve, in one effect - the shape Home's hero uses
+        // and for the same reason: a second effect that only sets a "go" flag
+        // is a key the resolve would then have to change.
+        //
         // With autoplay on the trailer starts itself after the same dwell Home
         // waits; with it off the backdrop stays up and the TRAILER button is
-        // the only way in - which still plays here, not fullscreen.
-        LaunchedEffect(trailerKey, trailerAutoplay, trailerDelayMs) {
-            if (trailerKey == null || !trailerAutoplay || heroTrailer != null) {
-                return@LaunchedEffect
+        // the only way in - which still plays here, not fullscreen. A press
+        // while the dwell is running skips the rest of it: the request counter
+        // changed, so this effect restarted and is past the wait.
+        LaunchedEffect(trailerKey, trailerAutoplay, trailerDelayMs, trailerRequest) {
+            val key = trailerKey ?: return@LaunchedEffect
+            // Already playing the thing this effect would resolve.
+            if (heroTrailer != null) return@LaunchedEffect
+            // An unanswered request is the viewer asking right now (the button,
+            // or a retry); no request means autoplay decides.
+            val asked = trailerRequest > trailerServed
+            if (!asked) {
+                if (!trailerAutoplay) return@LaunchedEffect
+                delay(trailerDelayMs)
+                // Re-read AFTER the dwell: a press during the wait has already
+                // resolved and started the trailer, and resolving again would
+                // restart it mid-scene.
+                if (heroTrailer != null) return@LaunchedEffect
             }
-            delay(trailerDelayMs)
-            // Re-read the state AFTER the dwell: a press during the wait has
-            // already resolved and started the trailer, and requesting again
-            // would re-resolve and restart it mid-scene.
-            if (heroTrailer == null) trailerRequested = true
-        }
-
-        // The resolve: one-shot request in, one source out, through the shared
-        // launcher (its cache, its coalescing mutex, its failure memory).
-        LaunchedEffect(trailerRequested, trailerAttempt, trailerKey) {
-            val key = trailerKey
-            if (!trailerRequested || key == null) return@LaunchedEffect
-            trailerRequested = false
+            trailerServed = trailerRequest
             val resumeFrom = trailerResumeMs
             trailerResumeMs = 0L
+            // The shared launcher: its cache, its coalescing mutex, its
+            // failure memory.
             val source = TrailerPlayerLauncher.resolvePlayableUrl(key).getOrNull()
             if (source != null) {
                 heroTrailer = HeroTrailerPlayback(source, resumeFrom)
@@ -702,13 +745,20 @@ fun DetailScreenMobile(
         fun episodeVisual(episode: ResolvedEpisode): EpisodeVisual {
             val started = inProgressByStreamId[episode.streamId] != null ||
                 resumeInfo?.episodeStreamId == episode.streamId
+            // Watched is the SEASON's watched set or a completed stream id:
+            // the set is what the long-press menu marks into and what the
+            // trackers deliver, and the id covers a row filed under another id
+            // flavor of the same show (see WatchedEpisodeState).
+            val isWatched =
+                episode.episodeNumber in watchedInSeason ||
+                    completedEpisodeIds.contains(episode.streamId)
             return EpisodeVisual(
                 hiddenTitle = SpoilerFree.hidesIdentity(
                     enabled = spoilerFreeEnabled,
-                    watched = completedEpisodeIds.contains(episode.streamId),
+                    watched = isWatched,
                     started = started
                 ),
-                isWatched = completedEpisodeIds.contains(episode.streamId),
+                isWatched = isWatched,
                 unavailable = currentSeason !in staleSeasons &&
                     isEpisodeUnavailable(episode.airDate, today),
                 progress = inProgressByStreamId[episode.streamId]
@@ -846,7 +896,10 @@ fun DetailScreenMobile(
                             if (trailerAttempt < 1) {
                                 trailerResumeMs = positionMs
                                 trailerAttempt += 1
-                                trailerRequested = true
+                                // A retry must re-sign: the cached source is
+                                // the URL that just died.
+                                trailerKey?.let { TrailerPlayerLauncher.invalidate(it) }
+                                trailerRequest += 1
                             }
                         },
                         onCloseTrailer = { stopHeroTrailer() },
@@ -891,9 +944,12 @@ fun DetailScreenMobile(
                                     if (heroTrailer != null) {
                                         stopHeroTrailer()
                                     } else {
+                                        // A press is a request: bump the counter
+                                        // the resolve is keyed on (see above -
+                                        // a flag it cleared would cancel it).
                                         trailerAttempt = 0
                                         trailerResumeMs = 0L
-                                        trailerRequested = true
+                                        trailerRequest += 1
                                     }
                                 }
                             }
@@ -1159,27 +1215,8 @@ fun DetailScreenMobile(
                     }
                 }
 
-                // Reviews and the collection are derived above, with the rest
-                // of the page state (a `remember` cannot live in the list DSL).
-                if (reviews.isNotEmpty()) {
-                    item(key = "reviews") {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MobileSectionTitle("Reviews")
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                items(reviews.take(60), key = { it.id }) { review ->
-                                    ReviewTile(
-                                        review = review,
-                                        onClick = { selectedReview = review }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
+                // The collection is derived above, with the rest of the page
+                // state (a `remember` cannot live in the list DSL).
                 if (collectionParts.isNotEmpty() && collection != null) {
                     item(key = "collection") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1272,8 +1309,32 @@ fun DetailScreenMobile(
                     }
                 }
 
-                // The Media row is last, under More Like This, exactly as on
-                // TV: the title's videos, its other stills and its posters.
+                // Reviews sit after the collection and More Like This, in the
+                // order the television paints them (see DetailRow): the reviews
+                // are an addendum to a title the viewer has already decided
+                // about, while those two rails are how they find the next one.
+                if (reviews.isNotEmpty()) {
+                    item(key = "reviews") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MobileSectionTitle("Reviews")
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(reviews.take(60), key = { it.id }) { review ->
+                                    ReviewTile(
+                                        review = review,
+                                        onClick = { selectedReview = review }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // The Media row is last, under More Like This and the reviews,
+                // exactly as on TV: the title's videos, its other stills and its
+                // posters.
                 if (mediaTabs.isNotEmpty()) {
                     item(key = "media") {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

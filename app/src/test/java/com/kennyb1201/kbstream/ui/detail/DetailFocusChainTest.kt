@@ -115,8 +115,8 @@ class DetailFocusChainTest {
         val collectionLast = presence(people = true, production = true, collection = true)
         assertNull(
             "the collection rail is the bottom of the chain when no More Like " +
-                "This is painted - the review rail above it and the bottom " +
-                "spacer below are not rows the chain names",
+                "This is painted - the review rail, the Media row and the " +
+                "bottom spacer below it are not rows this page has",
             DetailFocusChain.nextRow(
                 DetailRow.COLLECTION,
                 DetailFocusDirection.DOWN,
@@ -191,12 +191,13 @@ class DetailFocusChainTest {
     }
 
     @Test
-    fun `the Media row is the last row, below More Like This`() {
+    fun `the Media row is the last row, under the reviews`() {
         // The row is one entry of the chain however many rails it holds inside
-        // itself, which is the whole point of naming it here: UP out of it is
-        // the recommendations rail painted above it and DOWN out of it is the
-        // bottom of the page, and only the row's own tab strip knows there are
-        // two pages in between.
+        // itself, which is the whole point of naming it here: DOWN out of it is
+        // the bottom of the page, and only the row's own tab strip knows there
+        // are two pages in between. This page has no reviews, so the row above
+        // the Media row is the recommendations rail - the step onto the review
+        // rail when there is one is the test above's.
         val movie = presence(production = true, collection = true, media = true, moreLikeThis = true)
         assertEquals(
             DetailRow.MORE_LIKE_THIS,
@@ -339,32 +340,44 @@ class DetailFocusChainTest {
     }
 
     @Test
-    fun `the review rail is a row of its own between production and collection`() {
-        val page = presence(production = true, reviews = true, collection = true)
+    fun `the review rail is a row of its own between More Like This and the Media row`() {
+        val page = presence(moreLikeThis = true, reviews = true, media = true)
         assertEquals(
+            "DOWN out of the recommendations reaches the review rail painted " +
+                "under it",
             DetailRow.REVIEWS,
-            DetailFocusChain.nextRow(DetailRow.PRODUCTION, DetailFocusDirection.DOWN, page)
+            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.DOWN, page)
         )
         assertEquals(
-            DetailRow.COLLECTION,
+            DetailRow.MEDIA,
             DetailFocusChain.nextRow(DetailRow.REVIEWS, DetailFocusDirection.DOWN, page)
         )
         assertEquals(
-            DetailRow.PRODUCTION,
+            DetailRow.MORE_LIKE_THIS,
             DetailFocusChain.nextRow(DetailRow.REVIEWS, DetailFocusDirection.UP, page)
         )
         assertEquals(
             DetailRow.REVIEWS,
-            DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.UP, page)
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, page)
         )
         assertEquals(
-            "a title with no reviews steps straight from production to collection, " +
-                "exactly as before the rail was named",
-            DetailRow.COLLECTION,
+            "and the collection stays ABOVE it - the reviews are an addendum " +
+                "painted under the rails that lead to the next title",
+            DetailRow.MORE_LIKE_THIS,
             DetailFocusChain.nextRow(
-                DetailRow.PRODUCTION,
+                DetailRow.COLLECTION,
                 DetailFocusDirection.DOWN,
-                presence(production = true, collection = true)
+                presence(collection = true, moreLikeThis = true, reviews = true)
+            )
+        )
+        assertEquals(
+            "a title with no reviews steps straight from More Like This to the " +
+                "Media row, exactly as before the rail moved",
+            DetailRow.MEDIA,
+            DetailFocusChain.nextRow(
+                DetailRow.MORE_LIKE_THIS,
+                DetailFocusDirection.DOWN,
+                presence(moreLikeThis = true, media = true)
             )
         )
     }

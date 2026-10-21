@@ -109,7 +109,7 @@ class DetailFocusChainWiringContractTest {
         )
         assertTrue(
             "the review cards keep their column too, so the rail is reachable " +
-                "from the production chips above and the collection below",
+                "from More Like This above and the Media row below",
             detail.contains(
                 "detailRowVerticalFocus( DetailRow.REVIEWS, reviewIndex, " +
                     "detailRowPresence )"
@@ -383,17 +383,17 @@ class DetailFocusChainWiringContractTest {
             "PEOPLE",
             "NETWORK",
             "PRODUCTION",
-            "REVIEWS",
             "COLLECTION",
             "MORE_LIKE_THIS",
+            "REVIEWS",
             "MEDIA"
         ).forEach { row ->
             val at = body.indexOf(row)
             assertTrue(
                 "the chain must declare $row, in the order it is painted - " +
                     "people above networks above production companies, and the " +
-                    "collection rail above More Like This above the Media row, " +
-                    "which is painted last of all",
+                    "collection rail above More Like This above the review rail " +
+                    "above the Media row, which is painted last of all",
                 at > lastIndex
             )
             lastIndex = at
