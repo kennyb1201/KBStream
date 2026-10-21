@@ -1407,15 +1407,34 @@ fun AppRoot(
             if (pending.isNextEpisodeAdvance) null
             else PlayedLinkCache.get(context, pending.streamKey)
         if (cached != null) {
-            Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
-            pendingAutoPlay = null
-            // The link cache stores sources, not their add-ons, so a replay
-            // hands the player an unknown-add-on list: nothing is skipped and
-            // nothing is demoted off a stale name, which is the safe default
-            // (see SourceAddonSession).
-            screen = pending.toPlayerScreen(cached.played, cached.sources, emptyList())
-                .copy(linkCacheKey = pending.streamKey)
-            return@LaunchedEffect
+            // The replay answers to the viewer's ceiling too. A link remembered
+            // before the ceiling was set (or before it was lowered) would
+            // otherwise be the one way a 4K starts under a 1080p cap: this
+            // branch never reaches the capped pick below, because it never
+            // resolves anything.
+            val replay = AutoPlayQuality.cappedPick(
+                pick = cached.played,
+                candidates = cached.sources,
+                season = pending.target.season,
+                episode = pending.target.episode,
+                runtimeMinutes = pending.target.runtimeMinutes,
+                cap = AppPreferences.getMaxAutoPlayQuality(context)
+            )
+            if (replay != null) {
+                Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
+                pendingAutoPlay = null
+                // The link cache stores sources, not their add-ons, so a replay
+                // hands the player an unknown-add-on list: nothing is skipped
+                // and nothing is demoted off a stale name, which is the safe
+                // default (see SourceAddonSession).
+                screen = pending.toPlayerScreen(replay, cached.sources, emptyList())
+                    .copy(linkCacheKey = pending.streamKey)
+                return@LaunchedEffect
+            }
+            // Every cached source is taller than the ceiling: resolve afresh,
+            // where the whole ranked list - beyond the ten the cache keeps - is
+            // in front of the cap.
+            Log.i(TAG, "played-link replay is above the auto-play ceiling; resolving")
         }
         val resolved = streamsViewModel.resolve(
             pending.target.contentType,
@@ -1883,13 +1902,11 @@ fun AppRoot(
             MobileNavDestination.Settings -> navToSettings()
         }
     }
-    // The bar's profile door. Same picker Home's top-bar chip opened, and the
-    // same return rule: the picker hands back the screen it was opened from, so
-    // a switch on Search lands back on Search under the new profile instead of
-    // dropping the viewer on Home. The rules behind the door (PIN/exit gates,
-    // kids restrictions) are the picker's and are untouched - this only moves
-    // the button. Only the five top-level screens ever show the bar, which is
-    // why `screen` here is always one of them.
+    // The bar's profile door. Same picker Home's top-bar chip opened and the
+    // same PIN/exit gates; only the button moved. `returnTo` is where BACK goes
+    // (the bar only draws on the five top-level screens, so it is always one of
+    // them), while CHOOSING a profile always lands on Home - see the picker's
+    // onSelect below, which is the single place that rule lives for every door.
     val onMobileSwitchProfile: () -> Unit = {
         screen = Screen.ProfilePicker(returnTo = screen)
     }
@@ -1978,23 +1995,26 @@ fun AppRoot(
         is Screen.ProfilePicker -> {
             ProfilePickerScreen(
                 onSelect = {
-                    // Switching profiles: return to where the picker was
-                    // opened from (Settings/top bar path), or Home for the
-                    // cold-launch entry picker. HomeViewModel's
-                    // observeProfileSwitches reloads all rails for the new
-                    // profile.
-                    val destination = current.returnTo ?: Screen.Home
-                    screen = destination
+                    // Choosing a profile ALWAYS starts it on Home, whichever
+                    // door the picker was opened from - the bottom bar's
+                    // avatar, Home's top-bar chip, Settings' Profiles row or
+                    // the cold-launch picker. It used to hand back the screen
+                    // the picker was opened on, so a switch made from Search
+                    // (or Library, Live TV or Settings) dropped the viewer into
+                    // the PREVIOUS profile's screen with the new profile's
+                    // rails still loading under it. `returnTo` is still what
+                    // Back leaves for - not choosing a profile is not a
+                    // switch. HomeViewModel's observeProfileSwitches reloads
+                    // all rails for the new identity.
+                    screen = Screen.Home
                     // Entering Home is the same loading beat as a cold
                     // launch's - every rail is being reloaded for the new
                     // identity - so put the splash back until the rails land
                     // rather than showing a profile the viewer just chose the
                     // skeleton stack.
-                    if (destination is Screen.Home) {
-                        splashTarget = LaunchSplashTarget.HOME
-                        splashArmed = true
-                        splashArmKey += 1
-                    }
+                    splashTarget = LaunchSplashTarget.HOME
+                    splashArmed = true
+                    splashArmKey += 1
                 },
                 onManage = {
                     screen = Screen.ProfileEdit(

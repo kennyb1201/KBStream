@@ -187,7 +187,7 @@ object StreamRanker {
      */
     private val RELEASE_SIGNAL = Regex(
         (
-            listOf("""\b(2160p|1440p|1080p|720p|480p|4k)\b""") +
+            listOf("""\b(2160p|2160i|1440p|1080p|1080i|fhd|720p|480p|4k|uhd)\b""") +
                 RELEASE_TIERS.map { (pattern, _) -> pattern.pattern }
             ).joinToString("|")
     )
@@ -543,6 +543,24 @@ object StreamRanker {
     }
 
     /**
+     * The spellings of each resolution tier, as [resolutionRankOf] reads them.
+     *
+     * A bare `"2160p" in text` list was blind to how releases actually name
+     * 4K: `UHD` is the commonest tag of all (and "UHD BluRay" names no pixel
+     * count), `2160i` exists, and a release that writes `3840x2160` names the
+     * resolution twice without ever writing the word. Every alias the ranker
+     * cannot read is a 4K copy it scores as unlabeled - which is both a ranking
+     * miss and, worse, a source the auto-play quality ceiling lets past as
+     * "claims nothing" (see [AutoPlayQuality]). Read here only, so the two
+     * cannot drift apart.
+     */
+    private val RES_2160 = Regex("""\b(2160p|2160i|4k|uhd)\b|3840\s?[x×]\s?2160""")
+    private val RES_1440 = Regex("""\b1440p\b""")
+    private val RES_1080 = Regex("""\b(1080p|1080i|fhd)\b""")
+    private val RES_720 = Regex("""\b720p\b""")
+    private val RES_480 = Regex("""\b480p\b""")
+
+    /**
      * The resolution tier a stream's own text claims: 5 = 2160p/4K, 4 = 1440p,
      * 3 = 1080p, 2 = 720p, 1 = 480p, and 0 when it claims no resolution at all.
      *
@@ -553,16 +571,16 @@ object StreamRanker {
      * decided from one reading of the resolution instead of a second, drifting
      * copy of these tokens.
      */
-    internal fun resolutionRank(stream: Stream): Int {
-        val text = searchableText(stream)
-        return when {
-            "2160p" in text || "4k" in text -> 5
-            "1440p" in text -> 4
-            "1080p" in text -> 3
-            "720p" in text -> 2
-            "480p" in text -> 1
-            else -> 0
-        }
+    internal fun resolutionRank(stream: Stream): Int = resolutionRankOf(searchableText(stream))
+
+    /** [resolutionRank] for text a caller has already read (see [searchableText]). */
+    internal fun resolutionRankOf(text: String): Int = when {
+        RES_2160.containsMatchIn(text) -> 5
+        RES_1440.containsMatchIn(text) -> 4
+        RES_1080.containsMatchIn(text) -> 3
+        RES_720.containsMatchIn(text) -> 2
+        RES_480.containsMatchIn(text) -> 1
+        else -> 0
     }
 
     /**
@@ -661,12 +679,16 @@ object StreamRanker {
         // stream is the viewer's own call, through Settings -> auto-play quality
         // cap (`max_auto_play_quality`, see [AutoPlayQuality]), which moves the
         // auto-play pick and never the picker's order.
-        when {
-            "2160p" in text || "4k" in text -> score += 200
-            "1440p" in text -> score += 175
-            "1080p" in text -> score += 150
-            "720p" in text -> score += 100
-            "480p" in text -> score += 50
+        // The tiers come from [resolutionRankOf], not a second list of tokens:
+        // the ceiling reads the same function, and a copy that read only
+        // "2160p"/"4k" scored a `UHD` remux as unlabeled while the ceiling
+        // below let it through for the same reason.
+        when (resolutionRankOf(text)) {
+            5 -> score += 200
+            4 -> score += 175
+            3 -> score += 150
+            2 -> score += 100
+            1 -> score += 50
         }
 
         // HDR is a signal on every box; Dolby Vision is one only where it can be
@@ -819,9 +841,9 @@ object StreamRanker {
      */
     private fun fakeQualityPenalty(stream: Stream, text: String): Int {
         val sizeGb = sizeInGb(stream, text) ?: return 0
-        return when {
-            ("2160p" in text || "4k" in text) && sizeGb < MIN_PLAUSIBLE_4K_GB -> 300
-            "1080p" in text && sizeGb < MIN_PLAUSIBLE_1080P_GB -> 200
+        return when (resolutionRankOf(text)) {
+            5 -> if (sizeGb < MIN_PLAUSIBLE_4K_GB) 300 else 0
+            3 -> if (sizeGb < MIN_PLAUSIBLE_1080P_GB) 200 else 0
             else -> 0
         }
     }

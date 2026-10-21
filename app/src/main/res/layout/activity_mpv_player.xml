@@ -75,13 +75,17 @@
             android:contentDescription="Backdrop"
             android:scaleType="centerCrop" />
 
+        <!-- The MPV engine's own copy of the splash slot: capped at the same
+             420dp instead of a fixed box, so a phone scales the logo down whole
+             rather than clipping its edges (see activity_player.xml). -->
         <ImageView
             android:id="@+id/mpv_loading_logo"
-            android:layout_width="420dp"
+            android:layout_width="wrap_content"
             android:layout_height="140dp"
             android:layout_gravity="center"
             android:adjustViewBounds="true"
             android:contentDescription="Clear logo"
+            android:maxWidth="420dp"
             android:scaleType="fitCenter"
             android:visibility="gone" />
 

@@ -4,6 +4,7 @@ import com.kennyb1201.kbstream.Screen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -524,16 +525,36 @@ class MobileBottomNavContractTest {
     }
 
     @Test
-    fun `the shell points the avatar at the picker and comes back to the screen it left`() {
+    fun `the shell points the avatar at the picker, and choosing a profile starts on Home`() {
         val main = activity()
         assertTrue(
             "the bar's avatar is handed a callback",
             main.contains("onSwitchProfile = onMobileSwitchProfile")
         )
         assertTrue(
-            "that callback opens the same picker Home's chip opened, returning to " +
-                "the screen the viewer is on rather than always to Home",
+            "that callback opens the same picker Home's chip opened, and `returnTo` " +
+                "is what BACK leaves for",
             main.contains("screen = Screen.ProfilePicker(returnTo = screen)")
+        )
+
+        // Choosing a profile is not Back. The rule lives in the picker's own
+        // onSelect, so the bar's avatar, Home's chip, Settings' Profiles row and
+        // the cold-launch picker cannot disagree about it.
+        val select = main.substringAfter("is Screen.ProfilePicker -> {")
+            .substringBefore("onManage = {")
+        assertTrue(
+            "every profile switch must start the new profile on Home",
+            !select.isEmpty() && select.contains("screen = Screen.Home")
+        )
+        assertFalse(
+            "it must not hand back the screen the picker was opened on - that is " +
+                "how a switch made on Search landed on the previous profile's " +
+                "Search",
+            select.contains("current.returnTo ?: Screen.Home")
+        )
+        assertTrue(
+            "and Home is the cold-launch loading beat, so the splash is re-armed",
+            select.contains("splashArmKey += 1")
         )
         assertTrue(
             "TV is untouched: the shell still hands Home the chip's callback",

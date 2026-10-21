@@ -596,6 +596,12 @@ fun DetailScreen(
             id = id,
             onNavigateDetail = onNavigateDetail,
             onNavigateActor = onNavigateActor,
+            // A network or production-company chip opens that Studio page,
+            // exactly as the TV page's chips do (the same arguments).
+            onNavigateStudio = onNavigateStudio,
+            // The genre and keyword chips open the same Tag route the TV
+            // page's rails push, with the same four arguments.
+            onNavigateTag = onNavigateTag,
             onNavigateStreams = onNavigateStreams,
             // The rest of the route's own state: a Continue Watching deep link
             // carries its target, the cover splash is painted from the art it
@@ -7612,7 +7618,13 @@ private fun extractYear(
                 it.all(Char::isDigit)
         }
 
-private fun formatSeriesYearRange(
+/**
+ * `2022-` while a series is still running, `2019-2023` once it has stopped.
+ *
+ * Internal rather than private because the phone's Show Details block prints
+ * the same span under its Release Info row: one rule, two layouts.
+ */
+internal fun formatSeriesYearRange(
     firstAirDate: String?,
     lastAirDate: String?,
     status: String?

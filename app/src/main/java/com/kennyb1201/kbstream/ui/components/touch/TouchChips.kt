@@ -33,6 +33,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -161,6 +162,54 @@ fun TouchChoiceChip(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+/**
+ * A chip that LEAVES the page: the detail page's genre and keyword chips.
+ *
+ * The touch twin of the TV page's `GenreChip` / `KeywordChip` in
+ * `ui/detail/DetailScreen.kt`, which open the Tag screen for the genre or the
+ * keyword they name. Those two chips differ on purpose, and so do these:
+ * [emphasized] is the genre - a filled pill on the page's surface with the
+ * bright label - while a keyword is an outline in the dim label colour, and its
+ * caller passes the `#` that marks it as one.
+ *
+ * Nothing here is ever "selected". A chip in these rails says what the title
+ * is, not which filter is on, so there is no selected state to carry.
+ */
+@Composable
+fun TouchLinkChip(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    emphasized: Boolean = true
+) {
+    Surface(
+        onClick = onClick,
+        shape = KBShapePill,
+        color = if (emphasized) KBSurface else Color.Transparent,
+        contentColor = if (emphasized) KBTextHi else KBTextLo,
+        border = if (emphasized) {
+            null
+        } else {
+            BorderStroke(1.dp, KBTextLo.copy(alpha = 0.35f))
+        },
+        modifier = modifier
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                // A chip is one line by definition (see GenreChipRow).
                 maxLines = 1,
                 softWrap = false
             )

@@ -351,6 +351,20 @@ fun StreamsScreen(
         }
     }
 
+    // The other case auto-play starts nothing on purpose: every source is
+    // taller than the viewer's auto-play ceiling (see AutoPlayQuality). Said in
+    // words for the mismatch notice's reason - the picker opening instead of
+    // the player reads as a bug unless the screen says why.
+    val ceilingNotice = remember(streams, season, episode) {
+        AutoPlayQuality.ceilingNotice(
+            streams = streams,
+            season = season,
+            episode = episode,
+            runtimeMinutes = runtimeMinutes,
+            cap = AppPreferences.getMaxAutoPlayQuality(context)
+        )
+    }
+
     // The still the viewer chose for THIS screen, when they chose one: the
     // backdrop the route carried is TMDB's own primary still, and a viewer who
     // picked a different one on the title's Media row asked for it here too
@@ -418,7 +432,7 @@ fun StreamsScreen(
                 episodeTitle = episodeTitle,
                 runtimeMinutes = runtimeMinutes,
                 sourceLabel = sourceLabel,
-                mismatchNotice = mismatchNotice
+                mismatchNotice = mismatchNotice ?: ceilingNotice
             )
 
             // The row is drawn whenever the screen has a control for it, and

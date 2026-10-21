@@ -84,6 +84,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -493,12 +494,16 @@ private fun PreviewPanelMobile(preview: CatalogBuilderViewModel.PreviewState) {
                                     .background(KBSurface)
                             )
                         }
-                        Text(
-                            text = meta.name,
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
+                        // The shared caption block, not a hand-rolled title: a
+                        // preview tile is a poster surface like any other, and
+                        // the hand-rolled line was the one place on the phone
+                        // where Settings' poster-title/year/rating switches
+                        // still had no effect.
+                        TouchPosterCaptions(
+                            title = meta.name,
+                            year = meta.yearOrNull?.toString(),
+                            rating = meta.imdbRating?.toDoubleOrNull()
+                                ?: meta.tmdbRating,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }

@@ -77,17 +77,39 @@
                 android:orientation="vertical">
 
                 <!-- Compact title block: the overview below is the only prose, so
-                     it gets the room. -->
-                <ImageView
-                    android:id="@+id/chrome_clear_logo"
-                    android:layout_width="400dp"
-                    android:layout_height="104dp"
-                    android:layout_marginTop="8dp"
-                    android:layout_marginBottom="6dp"
-                    android:adjustViewBounds="true"
-                    android:contentDescription="Clear logo"
-                    android:scaleType="fitCenter"
-                    android:visibility="gone" />
+                     it gets the room.
+
+                     The clearlogo slot is the header's width, capped at the TV's
+                     400dp - not a fixed 400dp box. `fitCenter` was never the
+                     problem: the BOX was. On a phone the header is ~260-330dp
+                     wide, the 400dp box overflowed it, and the parent clipped the
+                     box - so the art's edges were cut off with it. Bound this way
+                     the slot takes whatever the header has and stops at 400dp, so
+                     the logo scales down whole on a phone and is pixel-identical
+                     on a TV, where 400dp is always on offer (the bias keeps it
+                     left-aligned at 0 exactly as the old box was). -->
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    xmlns:app="http://schemas.android.com/apk/res-auto"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <ImageView
+                        android:id="@+id/chrome_clear_logo"
+                        android:layout_width="0dp"
+                        android:layout_height="104dp"
+                        android:layout_marginTop="8dp"
+                        android:layout_marginBottom="6dp"
+                        android:adjustViewBounds="true"
+                        android:contentDescription="Clear logo"
+                        android:scaleType="fitCenter"
+                        android:visibility="gone"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintHorizontal_bias="0"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
+                        app:layout_constraintWidth_max="400dp" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
 
                 <TextView
                     android:id="@+id/chrome_item_name"

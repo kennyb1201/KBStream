@@ -374,6 +374,52 @@ class DetailScreenMobileContractTest {
     }
 
     @Test
+    fun `the genre and keyword chips open the Tag pages the TV chips do`() {
+        val mobile = mobileDetail()
+
+        assertTrue(
+            "the phone page must take the route's tag callback, as the TV page does",
+            mobile.contains("onNavigateTag: (Int, String, Boolean, String) -> Unit")
+        )
+        assertTrue(
+            "and the route must hand it over to the mobile branch",
+            detailScreen().substringAfter("DetailScreenMobile(")
+                .substringBefore("val scope = rememberCoroutineScope()")
+                .contains("onNavigateTag = onNavigateTag")
+        )
+
+        assertTrue(
+            "the title's genres are a chip rail, not a line of text",
+            mobile.contains("val tmdbGenres = tmdbDetail?.genres.orEmpty()") &&
+                mobile.contains("items(tmdbGenres, key = { \"genre:\" + it.id })")
+        )
+        assertTrue(
+            "a genre chip opens that genre's page with the TV's arguments",
+            mobile.contains("onNavigateTag(genre.id, genre.name, false, type)")
+        )
+
+        assertTrue(
+            "the TMDB keywords are drawn too, from the same listing the TV row reads",
+            mobile.contains("tmdbDetail?.keywords?.list().orEmpty()") &&
+                mobile.contains("items(keywords, key = { \"keyword:\" + it.id })")
+        )
+        assertTrue(
+            "a keyword chip is the keyword page, and it keeps the TV chip's hash mark",
+            mobile.contains("label = \"#\" + keyword.name") &&
+                mobile.contains(
+                    "onNavigateTag( keyword.id, keyword.name, true, type )"
+                )
+        )
+
+        assertTrue(
+            "the meta line no longer names the genres as dead text beside the chips",
+            !mobile.substringAfter("private fun detailMetaLine(")
+                .substringBefore("private fun episodeTargetTitle(")
+                .contains("detail.genres")
+        )
+    }
+
+    @Test
     fun `the MDBList ratings strip is drawn from the shared source rule`() {
         val mobile = mobileDetail()
 
@@ -399,6 +445,164 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "and each brand mark keeps its own colour",
             mobile.contains("colorFilter = ColorFilter.tint(source.tint)")
+        )
+
+        // One line, not two: the strip under a paragraph of synopsis used to
+        // wrap its last chips onto a second row that read as more body text.
+        val strip = mobile.substringAfter("private fun MobileRatingsStrip(")
+            .substringBefore("/** One season chip's long-press subject. */")
+        assertTrue(
+            "the phone takes the best-known brands through the shared rule",
+            strip.contains("mobileRatingSources(sources)")
+        )
+        assertTrue(
+            "a single row that scrolls sideways rather than wrapping",
+            strip.contains("Row(") &&
+                strip.contains("horizontalScroll(rememberScrollState())")
+        )
+        assertFalse(
+            "no wrapping layout may creep back in",
+            strip.contains("FlowRow(") || strip.contains("verticalArrangement")
+        )
+    }
+
+    @Test
+    fun `the trailer plays in the phone's hero under the trailer settings`() {
+        val mobile = mobileDetail()
+
+        // The one renderer: the TV Home hero's pooled player, not a second
+        // ExoPlayer stack written for this page.
+        val header = mobile.substringAfter("private fun MobileDetailHeader(")
+            .substringBefore("/** One episode row")
+        assertTrue(
+            "the hero must draw the shared inline trailer player",
+            header.contains("HeroInlineTrailerPlayer(")
+        )
+        assertTrue(
+            "with the resolved source, its start position and the mute switch",
+            header.contains("source = trailerPlayback.source") &&
+                header.contains("startPositionMs = trailerPlayback.startPositionMs") &&
+                header.contains("muted = trailerMuted")
+        )
+
+        // The trailer settings, the same three that govern Home's hero.
+        listOf(
+            "AppPreferences.getHeroTrailerAutoplay(context)",
+            "AppPreferences.getHeroTrailerDelayMs(context)",
+            "AppPreferences.getHeroTrailerMuted(context)"
+        ).forEach { pref ->
+            assertTrue("the hero trailer must follow $pref", mobile.contains(pref))
+        }
+        assertTrue(
+            "and autoplay is what starts it on its own, after the dwell",
+            mobile.contains("if (trailerKey == null || !trailerAutoplay || heroTrailer != null)") &&
+                mobile.contains("delay(trailerDelayMs)")
+        )
+
+        // The press no longer leaves the page.
+        val cta = mobile.substringAfter("item(key = \"cta\")")
+            .substringBefore("item(key = \"tags\")")
+        assertFalse(
+            "the TRAILER button must play in the hero, not open the fullscreen player",
+            cta.contains("DetailTrailerLaunch.play(")
+        )
+        assertTrue(
+            "the same pick the button offers is the one that plays",
+            mobile.contains("TrailerPick.best(tmdbDetail?.videos?.results)") &&
+                mobile.contains("trailerRequested = true")
+        )
+
+        // The shared resolve, the one-shot retry, and the pool's release.
+        assertTrue(
+            "every resolve goes through the shared launcher",
+            mobile.contains("TrailerPlayerLauncher.resolvePlayableUrl(key)")
+        )
+        assertTrue(
+            "a mid-stream failure retries once, from where it died",
+            mobile.contains("if (trailerAttempt < 1) {") &&
+                mobile.contains("trailerResumeMs = positionMs")
+        )
+        assertTrue(
+            "and that position is consumed with the resolve that uses it",
+            mobile.contains("val resumeFrom = trailerResumeMs") &&
+                mobile.contains("trailerResumeMs = 0L")
+        )
+        assertTrue(
+            "stopping and leaving the page silence the pooled player",
+            mobile.contains("TrailerPlayerPool.releaseForReuse()")
+        )
+    }
+
+    @Test
+    fun `the phone draws the network and production chips and the details block`() {
+        val mobile = mobileDetail()
+        val detail = detailScreen()
+
+        assertTrue(
+            "the phone page takes the Studio callback the TV page's chips hand over",
+            mobile.contains("onNavigateStudio: (Int, String, Boolean) -> Unit")
+        )
+        assertTrue(
+            "and the form-factor branch passes it through",
+            detail.substringAfter("DetailScreenMobile(")
+                .substringBefore("viewModel = viewModel")
+                .contains("onNavigateStudio = onNavigateStudio")
+        )
+        assertTrue(
+            "a series names its networks, a title its production companies - the " +
+                "TV page's two rails, by their own headings",
+            mobile.contains("MobileSectionTitle(\"Networks\")") &&
+                mobile.contains("MobileSectionTitle(\"Production\")")
+        )
+        assertTrue(
+            "each chip opens that company's Studio page, a network flagged as one",
+            mobile.contains("TouchStudioChip(") &&
+                mobile.contains("onNavigateStudio(network.id, network.name, true)") &&
+                mobile.contains("onNavigateStudio(company.id, company.name, false)")
+        )
+        assertTrue(
+            "the facts block is the shared rule under the reference's heading",
+            mobile.contains("detailFacts(normalizedType, tmdbDetail)") &&
+                mobile.contains(
+                    "MobileSectionTitle(detailFactsTitle(normalizedType == \"movie\"))"
+                ) &&
+                mobile.contains("DetailFactRow(fact)") &&
+                mobile.contains("DetailFactDivider()")
+        )
+    }
+
+    /**
+     * The TV's long press on the Play button ("Play Manually") had no phone
+     * twin, so a movie had no way at all to reach the source list from this
+     * page - the only picker door was an episode row's long press. A hold on
+     * the Play button is that door now, for the episode a tap would start, and
+     * it must arrive at the picker marked as a manual pick or Auto-select
+     * jumps straight to the player and the list is never seen.
+     */
+    @Test
+    fun `the play button's hold opens the streams picker for the same episode`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the play CTA must carry the hold",
+            mobile.contains("onLongClick = { openCurrentStreams() }")
+        )
+        assertTrue(
+            "the hold must build the same target a tap would, flagged manual",
+            mobile.contains("fun openCurrentStreams()") &&
+                mobile.contains("openMovie(fromStart = false, manual = true)") &&
+                mobile.contains("openEpisode(it, currentSeason, manual = true)")
+        )
+        assertTrue(
+            "the manual marker must be keyed the way the picker keys its streams, " +
+                "or it never matches and the picker auto-selects anyway",
+            mobile.contains(
+                "ManualSourceSelection.request(\"\${target.contentType}:\${target.streamId}\")"
+            )
+        )
+        assertTrue(
+            "and a tap must still be the plain resume path",
+            mobile.contains("fun playCurrent()") &&
+                mobile.contains("openEpisode(it, currentSeason)")
         )
     }
 }

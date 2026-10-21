@@ -654,8 +654,20 @@ internal data class HeroTrailerPlayback(
     val startPositionMs: Long = 0L
 )
 
+/**
+ * The app's one inline trailer renderer: a pooled ExoPlayer in a `PlayerView`,
+ * driven by the source [HeroTrailerPlayback] carries.
+ *
+ * Internal rather than private because the phone's Detail page draws it too - a
+ * trailer pressed on that page plays in its hero, with the trailer settings
+ * applied, exactly as Home's hero plays it - and a second implementation of
+ * this stack (chunked googlevideo requests, the adaptive video+audio merge, the
+ * start/re-buffer watchdogs, the identity-refusal handling) is how the two
+ * would drift. The owner still owns the stops: a clean end, a failure and a
+ * navigation away are the caller's callbacks here, not this composable's.
+ */
 @Composable
-private fun HeroInlineTrailerPlayer(
+internal fun HeroInlineTrailerPlayer(
     source: PlayableSource,
     muted: Boolean,
     /**
@@ -3326,6 +3338,10 @@ fun HomeScreen(
         HomeScreenMobile(
             onItemClick = onItemClick,
             onOpenDetailTarget = onOpenDetailTarget,
+            // The Continue Watching menu's "Play Manually" is the one phone
+            // route that needs the shell's streams screen: the card's tap and
+            // its other rows stay on the callbacks above.
+            onOpenStreams = onOpenStreams,
             // Search / Live TV / Library / Settings are NOT handed to the
             // phone screen any more: they are the shell's bottom bar items, and
             // the shell calls the very same callbacks this screen holds. TV

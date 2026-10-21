@@ -423,4 +423,66 @@ class HomeScreenMobileContractTest {
             home.contains("fun MobileSection(")
         )
     }
+
+    /**
+     * A Continue Watching long press is the TV card's menu, and every row has
+     * to do what its label says. The row that was wrong was "Go to Details":
+     * it opened the episode's PLAY target, so Detail auto-played the file
+     * instead of showing the page - and because the shared menu derives "Play
+     * Manually" / "Play from Beginning" from the details row, both of those
+     * resumed it too.
+     */
+    @Test
+    fun `a Continue Watching long press offers the tv rows and each does its own thing`() {
+        val mobile = mobileHome()
+        val menu = mobile.substringAfter("continueWatchingMenu?.let { item ->")
+            .substringBefore("// Raised from a long press on a rail card")
+
+        listOf("Go to Details", "Play Manually", "Play from Beginning")
+            .forEach { label ->
+                assertTrue(
+                    "the Continue Watching menu must offer \"$label\"",
+                    menu.contains("label = \"$label\"")
+                )
+            }
+
+        val detailsRow = menu.substringAfter("label = \"Go to Details\"")
+            .substringBefore("label = \"Play Manually\"")
+        assertTrue(
+            "\"Go to Details\" must ask for the page, not the episode's target",
+            detailsRow.contains("mode = UpNextOpen.DETAILS")
+        )
+        val manualRow = menu.substringAfter("label = \"Play Manually\"")
+            .substringBefore("label = \"Play from Beginning\"")
+        assertTrue(
+            "\"Play Manually\" must open the streams picker",
+            manualRow.contains("mode = UpNextOpen.STREAMS")
+        )
+
+        assertTrue(
+            "the shell must hand the phone screen the streams route - the row " +
+                "has nowhere to go without it",
+            homeScreen().contains("onOpenStreams = onOpenStreams") &&
+                mobile.contains("onOpenStreams: (MetaPreview, StreamsTarget, String?) -> Unit")
+        )
+        assertTrue(
+            "\"Go to Details\" must reach the Details route with no play target",
+            mobile.contains("UpNextOpen.DETAILS -> onOpenDetails(detail)")
+        )
+        assertTrue(
+            "\"Play Manually\" must reach the streams route",
+            mobile.contains("UpNextOpen.STREAMS -> onOpenStreams(detail, target, item.poster)")
+        )
+        assertTrue(
+            "\"Play from Beginning\" must start at 0 rather than resume",
+            mobile.contains("val fromStart = mode == UpNextOpen.FROM_BEGINNING") &&
+                mobile.contains(
+                    "resumePositionMs = if (fromStart) 0L else item.startPositionMs"
+                )
+        )
+        assertFalse(
+            "the pre-fix route - every row running the resume opener - must be gone",
+            menu.contains("onOpen = onOpenDetailTarget")
+        )
+    }
 }

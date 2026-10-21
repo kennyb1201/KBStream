@@ -214,6 +214,20 @@ fun StreamsScreenMobile(
             }
         }
 
+        // The other case auto-play starts nothing on purpose: every source is
+        // taller than the viewer's auto-play ceiling (see AutoPlayQuality), so
+        // the list opens instead of the player. The same words the TV picker
+        // uses, from the same rule.
+        val ceilingNotice = remember(streams, season, episode) {
+            AutoPlayQuality.ceilingNotice(
+                streams = streams,
+                season = season,
+                episode = episode,
+                runtimeMinutes = runtimeMinutes,
+                cap = AppPreferences.getMaxAutoPlayQuality(context)
+            )
+        }
+
         // The still the viewer chose for this title's streams page, when they
         // chose one - the same override the TV screen honours.
         val overridePaths = rememberImageOverridePaths()
@@ -239,7 +253,7 @@ fun StreamsScreenMobile(
                     episodeTitle = episodeTitle,
                     runtimeMinutes = runtimeMinutes,
                     sourceLabel = sourceLabel,
-                    mismatchNotice = mismatchNotice,
+                    mismatchNotice = mismatchNotice ?: ceilingNotice,
                     onBack = { backDispatcher?.onBackPressed() }
                 )
             }

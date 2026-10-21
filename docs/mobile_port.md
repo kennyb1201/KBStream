@@ -96,8 +96,19 @@ The phone now has one persistent bottom bar, owned by the shell:
   then the palette and initial), observing `ProfileManager.activeProfile` the
   way Home's chip did. It is not a sixth destination - no selected state, no
   label, a fixed 56dp slot beside the five equal shares - and tapping it opens
-  the same picker Home's chip opened, returning to the screen it left. The
-  picker's own gates (PIN/exit, kids) are untouched by the move.
+  the same picker Home's chip opened. Back returns to the screen it left;
+  choosing a profile always starts on Home (see below). The picker's own gates
+  (PIN/exit, kids) are untouched by the move.
+
+**A profile switch always starts on Home (2026-10-20).** The picker's `onSelect`
+used to hand back `returnTo`, the screen it was opened from, so a switch made on
+Search, Library, Live TV or Settings dropped the viewer onto the PREVIOUS
+profile's screen with the new profile's rails still loading underneath it.
+Choosing a profile now sets `Screen.Home` unconditionally and re-arms the launch
+splash for the rails that are about to load; `returnTo` is still what Back
+leaves for, and the cold-launch picker already landed on Home. One rule in one
+place, so the bar's avatar, Home's chip and Settings' Profiles row cannot
+disagree. (`MobileBottomNavContractTest`, `LaunchSplashWiringContractTest`.)
 
 The Continue Watching card's episode line prints the episode pair only
 (`S02 · E08`, from the same rule the TV rail uses). It used to lead with the
@@ -109,8 +120,8 @@ episode title, then the tracker's own text ("Paused 34%").
 `MobileBottomNavContractTest` pins the host, its nesting inside the shell column
 (by brace depth), the visibility rule, the shared wiring, the re-tap-to-top
 path, the header change, the profile avatar as a door (not a destination, with
-the picker's resolution and a return to the screen it left) and the bar's
-styling.
+the picker's resolution, Back returning to the opener and a switch starting on
+Home) and the bar's styling.
 
 ## Shell: coming back from another app
 
@@ -186,6 +197,23 @@ entire landscape picture letterboxed into a sliver behind the controls. It is
 runtime layout, not a second XML file, and it restores the declared params on
 rotation because `configChanges` keeps the activity alive (both players now
 re-apply it from `onConfigurationChanged`).
+
+**The clearlogo slots fit the phone (2026-10-21).** The overlay's title graphic
+was clipped on a phone - its edges cut off - and `fitCenter` was not the cause:
+both slots were fixed TV-sized boxes (`chrome_clear_logo` 400dp, the two
+splash logos 420dp), a phone header cannot give 400dp, and the parent clipped
+the box with the art's edges inside it. The overlay's slot is now measured by
+its header and capped at 400dp (`ConstraintLayout` +
+`layout_constraintWidth_max`, bias 0, so it is left-aligned exactly where the
+old box was); both splashes - the Exo activity's `splash_clear_logo` and the
+MPV activity's `mpv_loading_logo` - are `wrap_content` with a 420dp cap, which
+is the same art at the same centre on a TV and the screen's width on a phone.
+At TV widths the caps never bind, so the TV draws what it always did; heights,
+`fitCenter`, `adjustViewBounds`, margins and the text-title fallback are
+untouched. (`PlayerClearLogoSlotContractTest`.) The shell's own pre-player
+splash is Compose and still draws a fixed 420dp slot
+(`AutoPlayLoadSplash.LOGO_WIDTH`), so it is the one remaining place a phone can
+overhang - it is a Kotlin change and was left out of this layout-only fix.
 
 **PiP** is unchanged and not form-gated: `enterPipMode` already refuses when the
 activity is finishing, on Amazon devices, during an engine handoff, and when the
@@ -313,6 +341,17 @@ blank" rule - in the browse sections, the catalog grid, Library, Search, actor
 credits, collection parts, and Detail's collection and More Like This rails.
 Lines that are not the caption (Library's source label) are not gated by it.
 
+The 2026-10-20 audit for "does every screen obey the three switches" found one
+last hand-rolled title: the Catalog Builder's PREVIEW strip, on **both** form
+factors, which drew `meta.name` under its poster and so kept showing titles
+with the switch off (and never showed the year or rating it had). It draws the
+shared block now - `TouchPosterCaptions` on the phone, `PosterCaptions` on the
+TV - and `PosterCaptionsMobileContractTest` pins the pair. The catalog grid
+("Open in Grid") was already converted on both platforms; the audit's full list
+is Home's own rails (no captions by design - see the prefs note above), the
+catalog grid, browse sections, Library, Search, actor credits, collection
+parts, Detail's rails, KB folders and the builder preview.
+
 **A Settings change now reaches the screen it changes.** The synced-pref
 revision (`PrefsPayloadApplier.revision`) used to tick only when a PULLED blob
 differed, so a local edit moved the switch in Settings and nothing else: every
@@ -357,6 +396,27 @@ cap the phone on the same profile. It is out of
 setter still writes the key and ticks the local revision but no longer enqueues
 a display blob, so picking a ceiling on one device leaves every other device
 where it was.
+
+**The ceiling is enforced on every auto-play path (2026-10-20).** "Set to
+1080p and it is still autoplaying 4K" had three causes, all of which let a copy
+the viewer excluded start by itself:
+
+- the resolution reader knew `2160p` and `4k` only, so a `UHD` or `2160i` or
+  `3840x2160` copy was read as *unlabeled* — and an unlabeled source was
+  admitted by the ceiling. `StreamRanker.resolutionRankOf` now owns the tokens
+  and the ranker's resolution bonus reads the same function;
+- an unlabeled head was taken ahead of a source that plainly declared 1080p.
+  A declared copy at or under the ceiling now wins, and an unlabeled one is
+  only the fallback;
+- the played-link replay (`MainActivity`'s cache hit) returned before the
+  capped pick ever ran, so a link remembered from before the setting was
+  lowered was replayed at its old height. It now replays under the ceiling and
+  falls through to a fresh resolve when the cached list has nothing to offer.
+
+When every source for the episode is plainly taller than the ceiling, nothing
+is auto-started and the picker opens with all of them listed — which is what
+the setting's own copy says it does — and the picker prints why
+(`AutoPlayQuality.ceilingNotice`, the same sentence on both form factors).
 
 ## The last two gaps: onboarding and the catalog grid
 
@@ -407,7 +467,30 @@ discover screen and can be removed from Home with a long press; the synced
 landscape pref draws backdrop+clearlogo cards with their rank; spoiler-free mode
 hides episode identities; a Continue Watching tap re-verifies the stored resume
 root against TMDB before opening, and a long press raises the TV card's menu
-(details, watched/unwatched, remove from the row, hide).
+(details, play manually, play from beginning, watched/unwatched, remove from the
+row, hide).
+
+**A long-press row does what its label says (2026-10-21).** The phone's Continue
+Watching menu had the TV card's wording but not its wiring: its "Go to Details"
+row opened the episode's *play* target, so Detail auto-played the file instead of
+showing the page - and because the shared sheet derives "Play Manually" / "Play
+from Beginning" from the details row, both of those resumed it as well. The menu
+now carries all three rows explicitly, through one `UpNextOpen` destination
+(`DETAILS` opens the page with no target, `STREAMS` goes to the picker, and
+`FROM_BEGINNING` plays from 0), which is the TV card's own three-row shape. The
+rest of the phone's long-press menus were checked against the same rule at the
+same time - every "Go to Details" on Detail, Library, Search, the browse pages,
+collections, actor pages, KB folders and the catalog grid navigates to the page
+rather than playing, and the tab/channel/follow menus do what their rows say.
+(`HomeScreenMobileContractTest`.)
+
+**Long-press rows are label-only, as they are on TV.** The phone sheet used to
+print each action's description under its label "because there is vertical
+room"; that doubled the height of every menu for text nobody reads before
+tapping, and the label already says what the row does ("Mark Entire Series as
+Unwatched" needs no gloss). `PosterContextAction.description` is still carried
+for the surfaces that spell a consequence out elsewhere; the sheet stops drawing
+it. (`MobileTouchTwinContractTest`.)
 
 **The Browse chips are cards, not pills.** The row of search/browse shortcuts
 used to be a `LazyRow` of text pills - the category's name on an accent wash -
@@ -479,6 +562,29 @@ surface rows (`ImageOverrides.choose/reset`). Reviews (page 1 plus the
 background pages the ViewModel fetched) open full with a spoiler gate, and the
 collection rail opens each part by its resolved IMDb id.
 
+**The hero trailer plays in the hero (2026-10-20).** The page's TRAILER button
+used to hand the resolved YouTube source to `NativePlayerActivity`, so a press
+left the page for the fullscreen player. It now plays in the Detail hero
+itself, through the TV Home hero's own renderer (`HeroInlineTrailerPlayer` in
+`ui/home/HomeScreen.kt`, now `internal`): the same pooled ExoPlayer, the same
+`YoutubeChunkedDataSourceFactory` (chunked googlevideo requests with the
+signing client's UA), the same adaptive video+audio merge, the same start and
+re-buffer watchdogs, and the same one-shot retry from where a mid-stream
+failure died. A second implementation of that stack is how the two would drift,
+which is why it is shared rather than copied.
+
+It follows the trailer settings exactly as Home's hero does: **Hero Trailer
+Autoplay** decides whether it starts on its own (after **Hero Trailer Delay**,
+with `Now` = immediately), and **Mute Hero Trailers** decides whether it is
+heard. All three are read through `PrefsPayloadApplier.revision`, so a toggle
+made on another device lands here. With autoplay off the backdrop stays up and
+the button still plays the trailer in the hero; a second press - or the hero's
+close mark - puts the backdrop back and releases the pooled player, and leaving
+the page releases it too. Media-row video cards are unchanged: they open the
+fullscreen player, because they are the individual videos the viewer picked.
+(`DetailScreenMobileContractTest` pins the wiring; `HeroTrailerResumeTest`
+already pins the retry rule the hero reuses.)
+
 Long-press menus cover the episode rows (watched toggle, previous, season,
 entire series, play from beginning, play manually), the season chips (season,
 entire series, View on Simkl) and the collection / More Like This posters (go to
@@ -498,8 +604,8 @@ choice is no longer a control on the Detail page. RAIL draws the television's
 episode cards through the shared touch twin `ui/components/touch/
 KBEpisodeTouch.kt` (`KBEpisodeRailTouch` / `KBEpisodeRailCardTouch`): the TV
 card's 260x170 frame and gradient, the caption over the still, the episode
-badge, watched tick, resume bar, UNAVAILABLE mark, spoiler-free mask, and the
-TV card's bottom line - runtime (`42m`, or `12m left` while part-watched),
+badge, the app's watched marker, resume bar, UNAVAILABLE mark, spoiler-free
+mask, and the TV card's bottom line - runtime (`42m`, or `12m left` while part-watched),
 the yellow IMDb chip with the episode's score, and the air date (formatted by
 the TV page's own `formatEpisodeAirDate`, so one date cannot print two ways). The vertical row draws the
 same runtime rule and the same `EpisodeRatingChip`, and suppresses the score on
@@ -514,6 +620,16 @@ Size - nothing published to the sync blob, and the TV page does not read it
 `PrefsPayloadApplier.revision`, so a Settings change repaints it even when it
 is still on the back stack.
 
+**Watched episodes wear the app's marker (2026-10-20).** Both phone episode
+layouts used to hand-roll a tick: a small gold check on a plain scrim, at one
+size on the rail card and another on the row's thumbnail, matching no other
+surface. Both now draw `WatchedCheckBadge` - the disc, gold ring and glyph every
+poster tile, Home rail and TV episode card already use - so "watched" is one
+marker in one language. The row's 132x74 thumbnail asks the same badge for an
+18dp diameter (the parameter is new; 26dp remains the default everywhere else)
+rather than for a different shape, and neither layout keeps a tick of its own
+(`DetailEpisodeRailMobileContractTest`).
+
 **Detail's poster captions and ratings (2026-10-20).** The collection and More
 Like This rails were the two phone surfaces still drawing a bare poster: their
 title/year/rating toggles looked broken because the shared
@@ -526,20 +642,53 @@ RATINGS row, with TMDB's own score as the fallback chip - so an MDBList
 account sees its IMDb/RT/Metacritic/Trakt/Letterboxd/MAL scores on the phone
 too, not only on the television.
 
+That strip is **one line** (2026-10-20). Seven chips wrapped onto a second row
+under the synopsis, where the stray chips read as more body text; the phone now
+takes the head of the shared list through `mobileRatingSources`
+(`MOBILE_RATING_SOURCE_LIMIT` = 4: IMDb, Rotten Tomatoes, TMDB, Metacritic,
+which is the order the list already ranks them in), and the row scrolls
+sideways instead of wrapping when a large font scale widens four chips past a
+narrow screen. An absent source promotes the next one rather than leaving a
+gap, and the TV page still draws all seven - it has the width.
+(`MdbListRatingChipsTest`, `DetailScreenMobileContractTest`.)
+
+**Networks, Production and the details block (2026-10-20).** The phone page had
+neither of the TV's company rails and no facts block, so a show's channel, a
+film's studios, its certification, origin and run were all unreachable here. It
+now draws **Networks** (series) and **Production** with
+`ui/components/touch/TouchStudioChip.kt`, the touch twin of `StudioChip`: the TV
+chip's white 120x54 plate, the company's TMDB mark fitted inside it (the name
+when TMDB sent no logo), and a tap opening that company's Studio page through
+the same `onNavigateStudio(id, name, isNetwork)` the TV chips call. Below them,
+**Movie Details** / **Show Details** is the rows block: Status (series only),
+Release Info, Runtime, Certification, Origin Country, each a label/value row
+with a hairline between. The rules live in `ui/mobile/MobileDetailFacts.kt` and
+read the TV meta line's own helpers (`certification`, `releaseYear`,
+`displayRuntimeMinutes`, and now-internal `formatSeriesYearRange`), so the two
+layouts cannot disagree about a span or a rating; a row TMDB cannot fill is
+dropped rather than printed as a dash, and Origin Country is country names,
+capped at three. (`MobileDetailFactsTest`, `DetailScreenMobileContractTest`.)
+
 Parity notes (not bugs to fix):
 - The season mark/unmark arithmetic lives in `ui/mobile/MobileDetailRules.kt`
   (pinned by `MobileDetailRulesTest`), because the TV page keeps its inline
   copies: no unaired episode is included, a season whose row disagrees with the
   show-level pointer is left whole, and the loaded season uses its resolved
   listing rather than TMDB's count.
-- The TV's long press on the Play button ("Play Manually" / "Play from
-  Beginning") has no phone twin: START OVER is an explicit button beside the
-  resume action, and a manual pick is the episode row's own tap.
-- The TV page's genre, keyword and network chips are not drawn as controls on
-  the Detail page itself: they open the Tag / Studio pages, which are now
-  ported, so the same chips are available where the TV page leads. The meta
-  line still names the genres; the cast tiles open the actor page, which is
-  ported too.
+- The TV's long press on the Play button is a HOLD on the phone's Play button:
+  it opens the streams picker for the episode a tap would start, marked as a
+  manual pick (`ManualSourceSelection`) so Auto-select cannot jump past the
+  list. "Play from Beginning" stays the explicit START OVER button beside the
+  resume action - the half of the TV menu a phone should not hide behind a
+  gesture.
+- The TV page's genre and keyword chips are drawn on the Detail page, as
+  `TouchLinkChip` rails under the calls to action: a genre chip and a
+  `#`-prefixed keyword chip each open the Tag page for that id, through the
+  route's own `onNavigateTag` and with the TV chip's arguments. They moved the
+  genres out of the meta line - the same two genres as text that went nowhere,
+  directly beside the chips that do, is worse than either alone. The network
+  and production-company chips are drawn too (see the section above), and both
+  open the ported Studio page.
 
 ### Search
 

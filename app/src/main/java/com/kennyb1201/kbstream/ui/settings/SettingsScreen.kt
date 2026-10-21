@@ -2114,12 +2114,22 @@ fun SettingsScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Auto", "4K", "1080p", "720p").forEachIndexed { index, label ->
+                    // The stored value is the cap constant itself, not the
+                    // chip's position: the two agreed by luck, and a list that
+                    // ever gains a tier (1440p) would silently write "4K"
+                    // when the viewer pressed "1080p". The phone picker passes
+                    // the constant the same way.
+                    listOf(
+                        "Auto" to AutoPlayQuality.CAP_AUTO,
+                        "4K" to AutoPlayQuality.CAP_2160,
+                        "1080p" to AutoPlayQuality.CAP_1080,
+                        "720p" to AutoPlayQuality.CAP_720
+                    ).forEach { (label, cap) ->
                         KBCard(onClick = {
-                            maxAutoPlayQuality = index
-                            AppPreferences.setMaxAutoPlayQuality(context, index)
+                            maxAutoPlayQuality = cap
+                            AppPreferences.setMaxAutoPlayQuality(context, cap)
                         }) {
-                            PillChip(label, maxAutoPlayQuality == index)
+                            PillChip(label, maxAutoPlayQuality == cap)
                         }
                     }
                 }
@@ -2129,9 +2139,9 @@ fun SettingsScreen(
                         AutoPlayQuality.CAP_2160 ->
                             "Auto-play may start anything up to 4K. Taller sources are still listed."
                         AutoPlayQuality.CAP_1080 ->
-                            "Auto-play never starts above 1080p: a 4K remux stays in the picker, but the automatic pick takes the best 1080p or lower copy."
+                            "Auto-play never starts above 1080p: a 4K remux stays in the picker, but the automatic pick takes the best 1080p or lower copy. If every copy is taller, the picker opens instead of starting one."
                         AutoPlayQuality.CAP_720 ->
-                            "Auto-play never starts above 720p. The picker is unchanged, so a taller copy can still be chosen by hand."
+                            "Auto-play never starts above 720p: the automatic pick takes the best 720p or lower copy, and the picker opens instead when every copy is taller. A taller copy can still be chosen by hand."
                         else ->
                             "Auto-play takes whatever the ranker puts first, including 4K - handy to lift when the network is busy."
                     },

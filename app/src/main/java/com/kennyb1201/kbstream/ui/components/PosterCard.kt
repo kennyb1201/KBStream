@@ -22,6 +22,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,7 +40,13 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 @Composable
 fun WatchedCheckBadge(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * The disc's diameter. 26dp is the size every poster tile draws; a small
+     * surface (the phone's 132x74 episode thumbnail) asks for a compact marker
+     * of the same family rather than a disc a third of its own height.
+     */
+    diameter: Dp = 26.dp
 ) {
     // The markers' gold is the app's own accent, not a literal of its own:
     // they were once painted the LIGHT end of the launcher play-button
@@ -56,7 +63,7 @@ fun WatchedCheckBadge(
     val accent = KBAccent
     Box(
         modifier = modifier
-            .size(26.dp)
+            .size(diameter)
             .clip(CircleShape)
             // A more opaque scrim is what buys the glyph its contrast: the
             // badge must stay legible over a bright poster as well as a dark
@@ -72,7 +79,9 @@ fun WatchedCheckBadge(
         Text(
             text = "✓",
             color = accent,
-            fontSize = 15.sp
+            // 15sp at the 26dp default, scaled with the disc so a compact
+            // marker keeps the glyph inside its ring.
+            fontSize = (diameter.value * (15f / 26f)).sp
         )
     }
 }
@@ -86,7 +95,9 @@ fun WatchedCheckBadge(
  */
 @Composable
 fun WatchedEyeBadge(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** The disc's diameter; see [WatchedCheckBadge] - the two always match. */
+    diameter: Dp = 26.dp
 ) {
     // Same live-accent read as [WatchedCheckBadge], for the same reason: the
     // eye and the check are one marker family and must track the profile's
@@ -94,7 +105,7 @@ fun WatchedEyeBadge(
     val accent = KBAccent
     Box(
         modifier = modifier
-            .size(26.dp)
+            .size(diameter)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.92f))
             .border(1.5.dp, accent, CircleShape),
@@ -104,7 +115,7 @@ fun WatchedEyeBadge(
             imageVector = Icons.Filled.Visibility,
             contentDescription = "Started, not finished",
             tint = accent,
-            modifier = Modifier.size(15.dp)
+            modifier = Modifier.size(diameter * (15f / 26f))
         )
     }
 }

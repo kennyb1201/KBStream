@@ -505,6 +505,12 @@ dependencies {
     // the LiveData/RxJava half and is not needed here.
     implementation(libs.androidx.paging.compose)
 
+    // One view in the whole app draws with it: the player's clearlogo slot in
+    // player_chrome.xml, where `layout_constraintWidth_max` is the only way to
+    // say "the header's width, capped at the TV's 400dp". See the version note
+    // in gradle/libs.versions.toml.
+    implementation(libs.androidx.constraintlayout)
+
     implementation(libs.androidx.compose.runtime)
 
     implementation(libs.androidx.tv.material)

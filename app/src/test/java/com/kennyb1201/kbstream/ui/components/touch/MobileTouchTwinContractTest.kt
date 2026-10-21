@@ -221,4 +221,26 @@ class MobileTouchTwinContractTest {
                 .contains("import androidx.tv.material3.MaterialTheme")
         )
     }
+
+    /**
+     * The sheet's rows are label-only, like the TV menu's. The phone used to
+     * print every action's description under its label; that doubled the height
+     * of every long-press menu for text nobody reads before tapping - the label
+     * already says what the row does.
+     */
+    @Test
+    fun `long press rows are label-only, as on a tv`() {
+        val menu = touch("TouchContextMenu.kt")
+        assertFalse(
+            "the row must not draw a description line again",
+            menu.contains("description?.takeIf") ||
+                menu.contains("description = action.description")
+        )
+        assertTrue(
+            "the row must still be a full-width tap target with its label",
+            menu.contains("private fun SheetActionRow(") &&
+                menu.contains("text = label") &&
+                menu.contains("clickable(onClick = onClick)")
+        )
+    }
 }

@@ -14,14 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,6 +34,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
+import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -222,23 +218,17 @@ fun KBEpisodeRailCardTouch(
             }
         }
 
+        // The app's own watch marker, not a tick of this card's making: the
+        // same disc, gold ring and glyph every poster tile draws (see
+        // `WatchedCheckBadge`), so an episode read as a rail card says
+        // "watched" in the one language the rest of the app uses. This used to
+        // be a smaller, scrim-less check that matched nothing else.
         if (isWatched) {
-            Box(
+            WatchedCheckBadge(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(KBVoid.copy(alpha = 0.9f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Check,
-                    contentDescription = "Watched",
-                    tint = KBAccent,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
+            )
         }
 
         if (unavailable) {

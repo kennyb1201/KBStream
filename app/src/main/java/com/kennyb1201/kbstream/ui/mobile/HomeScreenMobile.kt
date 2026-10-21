@@ -159,6 +159,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 fun HomeScreenMobile(
     onItemClick: (MetaPreview) -> Unit,
     onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
+    // The Continue Watching menu's "Play Manually": the shell's own streams
+    // route (the one the TV card uses), so a phone pick reaches the picker with
+    // the same manual-selection marker and never auto-selects a source.
+    onOpenStreams: (MetaPreview, StreamsTarget, String?) -> Unit,
     onOpenCatalogGrid: (Rail) -> Unit,
     onOpenKBFolder: (String) -> Unit = {},
     onOpenBrowseShortcut: (BrowseHomeShortcut) -> Unit = {},
@@ -387,7 +391,11 @@ fun HomeScreenMobile(
                                                                 item = item,
                                                                 viewModel = viewModel,
                                                                 scope = scope,
-                                                                onOpen = onOpenDetailTarget
+                                                                mode = UpNextOpen.RESUME,
+                                                                onOpenDetails = onItemClick,
+                                                                onOpenDetailTarget =
+                                                                    onOpenDetailTarget,
+                                                                onOpenStreams = onOpenStreams
                                                             )
                                                         },
                                                         onLongClick = {
@@ -668,6 +676,14 @@ fun HomeScreenMobile(
                 PosterContextMenu(
                     title = item.showTitle ?: item.title,
                     subtitle = if (hidesTitle) null else upNextEpisodeLabel(item),
+                    // The TV card's own three playback rows, in the same order
+                    // and through the same targets. The details row used to be
+                    // the ONLY row here, and it opened the episode's play
+                    // target - so a long press on "Go to Details" resumed the
+                    // file instead of showing the page, and the menu's derived
+                    // "Play Manually" / "Play from Beginning" rows (which run
+                    // the details row's action) resumed it too. Each row now
+                    // names what it does; see [UpNextOpen].
                     actions = listOf(
                         PosterContextAction(
                             label = "Go to Details",
@@ -678,7 +694,44 @@ fun HomeScreenMobile(
                                 item = item,
                                 viewModel = viewModel,
                                 scope = scope,
-                                onOpen = onOpenDetailTarget
+                                mode = UpNextOpen.DETAILS,
+                                onOpenDetails = onItemClick,
+                                onOpenDetailTarget = onOpenDetailTarget,
+                                onOpenStreams = onOpenStreams
+                            )
+                        },
+                        PosterContextAction(
+                            label = "Play Manually",
+                            description = if (item.startPositionMs > 0L) {
+                                "Open the streams picker - still resumes at your progress"
+                            } else {
+                                "Open the streams picker"
+                            }
+                        ) {
+                            continueWatchingMenu = null
+                            openUpNextVerified(
+                                item = item,
+                                viewModel = viewModel,
+                                scope = scope,
+                                mode = UpNextOpen.STREAMS,
+                                onOpenDetails = onItemClick,
+                                onOpenDetailTarget = onOpenDetailTarget,
+                                onOpenStreams = onOpenStreams
+                            )
+                        },
+                        PosterContextAction(
+                            label = "Play from Beginning",
+                            description = "Start this episode over from the beginning"
+                        ) {
+                            continueWatchingMenu = null
+                            openUpNextVerified(
+                                item = item,
+                                viewModel = viewModel,
+                                scope = scope,
+                                mode = UpNextOpen.FROM_BEGINNING,
+                                onOpenDetails = onItemClick,
+                                onOpenDetailTarget = onOpenDetailTarget,
+                                onOpenStreams = onOpenStreams
                             )
                         },
                         PosterContextAction(
@@ -1593,16 +1646,40 @@ private fun UpcomingEpisode.detail(): MetaPreview =
  * builds). The lookup is bounded: a slow or failed answer keeps the stored id
  * and opens anyway, because a tap must never hang on the network.
  */
+/**
+ * What a Continue Watching press does, once the item's resume root has been
+ * re-verified. One enum rather than three booleans (the TV card's shape), so a
+ * row cannot ask for two of them at once.
+ *
+ *  - [RESUME] is the card's own tap: Detail opens with the episode's play
+ *    target and auto-plays it, resuming saved progress.
+ *  - [DETAILS] is the menu's "Go to Details": the page, with NO play target,
+ *    so nothing starts - this is the row that used to resume the file.
+ *  - [STREAMS] is "Play Manually": the shell's streams route, which the picker
+ *    opens without auto-selecting a source.
+ *  - [FROM_BEGINNING] is "Play from Beginning": Detail, auto-playing at 0.
+ */
+private enum class UpNextOpen { RESUME, DETAILS, STREAMS, FROM_BEGINNING }
+
 private fun openUpNextVerified(
     item: UpNextItem,
     viewModel: HomeViewModel,
     scope: CoroutineScope,
-    onOpen: (MetaPreview, StreamsTarget, String?) -> Unit
+    mode: UpNextOpen,
+    onOpenDetails: (MetaPreview) -> Unit,
+    onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
+    onOpenStreams: (MetaPreview, StreamsTarget, String?) -> Unit
 ) {
+    // "Go to Details" is the page, not this episode: there is no stream to
+    // resolve, so it skips the lookup (the TV card's details row does the same).
+    if (mode == UpNextOpen.DETAILS) {
+        openUpNext(item, mode, onOpenDetails, onOpenDetailTarget, onOpenStreams)
+        return
+    }
     val stored = item.episodeStreamId
     val type = item.parentType
     if (stored.isNullOrBlank() || type.isNullOrBlank()) {
-        openUpNext(item, onOpen)
+        openUpNext(item, mode, onOpenDetails, onOpenDetailTarget, onOpenStreams)
         return
     }
     scope.launch {
@@ -1618,13 +1695,23 @@ private fun openUpNextVerified(
                 )
             }.getOrNull()
         } ?: stored
-        openUpNext(item, onOpen, verifiedStreamId = verified)
+        openUpNext(
+            item = item,
+            mode = mode,
+            onOpenDetails = onOpenDetails,
+            onOpenDetailTarget = onOpenDetailTarget,
+            onOpenStreams = onOpenStreams,
+            verifiedStreamId = verified
+        )
     }
 }
 
 private fun openUpNext(
     item: UpNextItem,
+    mode: UpNextOpen,
+    onOpenDetails: (MetaPreview) -> Unit,
     onOpenDetailTarget: (MetaPreview, StreamsTarget, String?) -> Unit,
+    onOpenStreams: (MetaPreview, StreamsTarget, String?) -> Unit,
     // The root the verification pass returned, when one ran (see
     // [openUpNextVerified]). Null keeps the stored id.
     verifiedStreamId: String? = null
@@ -1659,6 +1746,10 @@ private fun openUpNext(
             item.title
         }
 
+    // "Play from Beginning" is the one row that wants position 0 applied as-is:
+    // a target carrying no position of its own resumes the saved watch-history
+    // progress instead, which is exactly what the other three rows want.
+    val fromStart = mode == UpNextOpen.FROM_BEGINNING
     val target = StreamsTarget(
         contentType = parentType,
         streamId = verifiedStreamId ?: item.episodeStreamId ?: parentId,
@@ -1671,9 +1762,16 @@ private fun openUpNext(
         ),
         season = item.season,
         episode = namedEpisode,
-        resumePositionMs = item.startPositionMs,
+        resumePositionMs = if (fromStart) 0L else item.startPositionMs,
+        startFromBeginning = fromStart,
         runtimeMinutes = item.runtimeMinutes?.takeIf { it > 0 }
     )
 
-    onOpenDetailTarget(detail, target, item.poster)
+    when (mode) {
+        // No target: Detail is the destination, not a launchpad for the episode.
+        UpNextOpen.DETAILS -> onOpenDetails(detail)
+        UpNextOpen.STREAMS -> onOpenStreams(detail, target, item.poster)
+        UpNextOpen.RESUME,
+        UpNextOpen.FROM_BEGINNING -> onOpenDetailTarget(detail, target, item.poster)
+    }
 }

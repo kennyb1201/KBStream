@@ -78,11 +78,18 @@
             android:scaleType="centerCrop"
             android:contentDescription="Backdrop" />
 
+        <!-- Whichever way the art is sized, the SLOT must fit the screen: a
+             fixed 420dp box overhangs a phone and the splash clipped the logo's
+             edges with it. wrap_content + maxWidth gives the art its 420dp slot
+             wherever there is room and the screen's width where there is not -
+             the slot is centred either way, so the TV draws exactly what it did
+             (same art, same size, same centre). -->
         <ImageView
             android:id="@+id/splash_clear_logo"
-            android:layout_width="420dp"
+            android:layout_width="wrap_content"
             android:layout_height="140dp"
             android:layout_gravity="center"
+            android:maxWidth="420dp"
             android:scaleType="fitCenter"
             android:adjustViewBounds="true"
             android:contentDescription="Clear logo" />

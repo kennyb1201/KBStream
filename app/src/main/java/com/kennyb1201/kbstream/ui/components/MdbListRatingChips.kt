@@ -94,6 +94,32 @@ internal fun mdbListRatingSources(
 )
 
 /**
+ * How many sources the phone's rating strip shows. Four is what a 360dp screen
+ * holds on one line (IMDb, Rotten Tomatoes, TMDB, Metacritic), which is the
+ * whole point of the subset: the strip is a glance, not a scoreboard.
+ */
+internal const val MOBILE_RATING_SOURCE_LIMIT = 4
+
+/**
+ * The phone's share of [mdbListRatingSources]: the best-known brands only.
+ *
+ * That list's order IS the popularity ranking - IMDb, Rotten Tomatoes, TMDB and
+ * Metacritic first, then Trakt, Letterboxd and MyAnimeList - so taking the head
+ * of it is "the ratings people look for" without a second table to keep in
+ * step. A source that sent nothing is simply absent from the list, so the next
+ * one takes its place instead of leaving a hole: a title with no Rotten
+ * Tomatoes score shows IMDb, TMDB, Metacritic and Trakt.
+ *
+ * The TV page keeps drawing all seven (it has the width for them); only the
+ * phone is trimmed, and it trims here rather than at the call site so the two
+ * surfaces cannot disagree about which four those are.
+ */
+internal fun mobileRatingSources(
+    sources: List<RatingChipSource>,
+    limit: Int = MOBILE_RATING_SOURCE_LIMIT
+): List<RatingChipSource> = sources.take(limit.coerceAtLeast(0))
+
+/**
  * The source marks as a wrapping row of chips, used by the detail page's
  * RATINGS strip.
  *

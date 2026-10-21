@@ -112,6 +112,28 @@ class PosterCaptionsMobileContractTest {
     }
 
     @Test
+    fun `a catalog builder preview is a poster surface too`() {
+        // The last hand-rolled title line in the tree was the builder's PREVIEW
+        // strip - on both form factors - so a viewer who had switched poster
+        // titles off still saw them on the one poster row that is not a browsing
+        // screen. The caption there is the shared block now, which also gives
+        // the tile the year and rating it never drew.
+        val mobilePreview = source(
+            "com/kennyb1201/kbstream/ui/mobile/CatalogBuilderScreenMobile.kt"
+        )
+        assertTrue(
+            "CatalogBuilderScreenMobile's preview must draw its captions through " +
+                "TouchPosterCaptions",
+            mobilePreview.contains("TouchPosterCaptions(")
+        )
+        val tvPreview = source("com/kennyb1201/kbstream/ui/addons/CatalogBuilderScreen.kt")
+        assertTrue(
+            "and so must its TV twin, through PosterCaptions",
+            tvPreview.contains("PosterCaptions(")
+        )
+    }
+
+    @Test
     fun `the settings switches are the ones the phone's own Settings screen writes`() {
         // The phone Settings page and the caption block have to name the same
         // three prefs, or the toggle a viewer flips is not the one tiles read.

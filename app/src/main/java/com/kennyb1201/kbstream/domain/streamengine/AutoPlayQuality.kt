@@ -51,21 +51,31 @@ internal object AutoPlayQuality {
      *
      * [pick] is what [EpisodeMatch.autoplayPick] chose with no ceiling in mind;
      * [candidates] is the same ranked list it read. When no ceiling is set, or
-     * the pick already sits at or under it, the pick is returned untouched — a
-     * cap may only ever move auto-play *down* the list, never up.
+     * the pick already DECLARES a resolution at or under it, the pick is
+     * returned untouched — a cap may only ever move auto-play *down* the list,
+     * never up.
      *
-     * Otherwise the first source at or under the ceiling wins, keeping the
-     * ranker's own order among the qualifiers. The episode rules are re-applied
-     * here rather than trusted from [pick]: a lower-ranked source at the cap is
-     * only a candidate when it is still *this* episode — never one that
-     * declares another episode of the season, and never a whole-season pack.
-     * A source that declares no resolution at all counts as under the ceiling
-     * (an unlabeled file is not evidence of a big one); only a source that
-     * plainly claims more than the cap is skipped.
+     * Otherwise a source that declares its own resolution at or under the
+     * ceiling wins, keeping the ranker's own order among the qualifiers. The
+     * episode rules are re-applied here rather than trusted from [pick]: a
+     * lower-ranked source at the cap is only a candidate when it is still
+     * *this* episode — never one that declares another episode of the season,
+     * and never a whole-season pack.
      *
-     * When nothing qualifies the pick is returned anyway: a congestion ceiling
-     * is a preference, not a veto, and refusing to play anything because every
-     * copy of the episode is 4K would be a worse answer than starting one.
+     * An unlabeled copy is only the fallback behind those declared ones. Both
+     * are allowed — an unlabeled file is not evidence of a big one — but only
+     * the declared copy is *evidence of a small one*, and the unlabeled head is
+     * exactly where a 4K remux hides behind a fill-only size hint. Preferring
+     * the unlabeled head is what made a declared 1080p ceiling start 4K: the
+     * head said nothing, so the ceiling saw nothing to apply. A title whose
+     * sources carry no resolution labels at all still behaves as it always did.
+     *
+     * When every copy plainly claims MORE than the ceiling, this returns null
+     * and auto-play starts nothing: the picker opens with the whole list, one
+     * tap from playing. That is what the setting says it does ("never starts
+     * above 1080p", "never starts above 720p"), and a ceiling that quietly
+     * started the 4K anyway is the report this rule exists to answer. It is
+     * still not a veto on playing the title — only on picking for the viewer.
      */
     fun cappedPick(
         pick: Stream?,
@@ -77,16 +87,78 @@ internal object AutoPlayQuality {
     ): Stream? {
         if (pick == null || cap == CAP_AUTO) return pick
         val limit = capRank(cap)
-        // A cap moves the pick down, never up: when the episode rules already
-        // landed at or under the ceiling, that is the answer, even if a taller
+        // A cap moves the pick down, never up: a pick that already declares a
+        // resolution at or under the ceiling is the answer, even if a taller
         // source exists higher in some other sense.
-        if (StreamRanker.resolutionRank(pick).let { rank -> rank == 0 || rank <= limit }) return pick
-        val withinCap = candidates.firstOrNull { stream ->
+        val pickRank = StreamRanker.resolutionRank(pick)
+        if (pickRank in 1..limit) return pick
+        val eligible = candidates.filter { stream ->
             !stream.url.isNullOrBlank() &&
-                qualifiesForEpisode(stream, season, episode, runtimeMinutes) &&
-                StreamRanker.resolutionRank(stream).let { rank -> rank == 0 || rank <= limit }
+                qualifiesForEpisode(stream, season, episode, runtimeMinutes)
         }
-        return withinCap ?: pick
+        // 1. a copy that SAYS it fits ...
+        eligible.firstOrNull { StreamRanker.resolutionRank(it) in 1..limit }
+            ?.let { return it }
+        // 2. ... then one that says nothing, the pick itself first because that
+        //    is where the ranker and the episode rules already landed ...
+        if (pickRank == 0) return pick
+        eligible.firstOrNull { StreamRanker.resolutionRank(it) == 0 }?.let { return it }
+        // 3. ... and otherwise nothing, so the picker opens instead of a copy
+        //    the viewer's own ceiling excludes.
+        return null
+    }
+
+    /**
+     * The name the Settings pickers use for a cap: "Auto", "4K", "1080p",
+     * "720p".
+     *
+     * Here rather than in either picker so a notice on the phone and the same
+     * notice on the TV cannot call the same ceiling two things.
+     */
+    fun name(cap: Int): String = when (cap) {
+        CAP_2160 -> "4K"
+        CAP_1080 -> "1080p"
+        CAP_720 -> "720p"
+        else -> "Auto"
+    }
+
+    /**
+     * The sentence the picker shows when the ceiling, and nothing else, is why
+     * auto-play started nothing — or null when it is not the reason.
+     *
+     * [cappedPick] answers null in that case and both pickers then simply stay
+     * open (see its call sites), which without a word on screen reads as its
+     * own bug: a viewer who pressed Play lands on a list of sources with no
+     * explanation. The same shape as the picker's wrong-episode notice, and for
+     * the same reason.
+     *
+     * Only when EVERY candidate for this episode plainly declares more than the
+     * ceiling: an unlabeled source would have been taken by [cappedPick], and a
+     * list with no candidates at all is the wrong-episode case's business, not
+     * this one's.
+     */
+    fun ceilingNotice(
+        streams: List<Stream>,
+        season: Int?,
+        episode: Int?,
+        runtimeMinutes: Int?,
+        cap: Int
+    ): String? {
+        if (cap == CAP_AUTO || streams.isEmpty()) return null
+        val limit = capRank(cap)
+        val candidates = streams.filter { stream ->
+            !stream.url.isNullOrBlank() &&
+                qualifiesForEpisode(stream, season, episode, runtimeMinutes)
+        }
+        if (candidates.isEmpty()) return null
+        val everyCandidateTaller = candidates.all { stream ->
+            StreamRanker.resolutionRank(stream).let { rank -> rank != 0 && rank > limit }
+        }
+        if (!everyCandidateTaller) return null
+        val subject = if (season == null || episode == null) "title" else "episode"
+        return "Every source for this $subject is above your ${name(cap)} auto-play " +
+            "ceiling, so none was started. Pick one below, or raise Maximum " +
+            "auto-play quality in Settings."
     }
 
     /**

@@ -9,8 +9,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,12 +23,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -39,8 +37,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,16 +78,20 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.TrailerPick
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.RatingChipSource
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
+import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
@@ -95,12 +100,18 @@ import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailTouch
 import com.kennyb1201.kbstream.ui.components.touch.episodeRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.touch.TouchStudioChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
+import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
+import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
+import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.detail.DetailViewModel
 import com.kennyb1201.kbstream.ui.detail.MediaCardItem
 import com.kennyb1201.kbstream.ui.detail.MediaTab
@@ -118,6 +129,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import java.time.LocalDate
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -149,12 +161,16 @@ import kotlinx.coroutines.launch
  *    More Like This / collection posters (watched toggles, previous/season/
  *    whole-series marks, play from beginning, library add, hide);
  *  - spoiler-free mode hides an unstarted episode's name on the row and in its
- *    menu, exactly as it does on TV.
+ *    menu, exactly as it does on TV;
+ *  - the title's genres and its TMDB keywords are chips under the calls to
+ *    action, and a tap opens that genre's or keyword's Tag page - the two rails
+ *    the TV page draws, with the same route they push there.
  *
- * The one TV affordance with no phone twin is the long press on the Play
- * button ("Play Manually" / "Play from Beginning"): on a phone "Play from
- * Beginning" is the explicit START OVER button beside the resume action, and a
- * manual source pick is the episode row's own tap into the picker.
+ * The Play button carries the TV's secondary action as a HOLD: a tap plays the
+ * same episode START OVER would start over, and a hold opens the streams
+ * picker for it without auto-selecting a source (see [openCurrentStreams]).
+ * "Play from Beginning" stays the explicit START OVER button beside it - the
+ * one half of the TV menu that a phone should not hide behind a gesture.
  *
  * Play: a movie waits for the verified stream root ([DetailViewModel.awaitStreamRootId])
  * and then opens the streams screen with the saved resume position, exactly the
@@ -170,6 +186,10 @@ fun DetailScreenMobile(
     id: String,
     onNavigateDetail: (String, String) -> Unit,
     onNavigateActor: (Int) -> Unit,
+    // A network or production-company chip opens its Studio page: (id, name,
+    // isNetwork), the same three arguments the TV page's chips hand over.
+    onNavigateStudio: (Int, String, Boolean) -> Unit,
+    onNavigateTag: (Int, String, Boolean, String) -> Unit,
     onNavigateStreams: (
         StreamsTarget,
         String,
@@ -314,6 +334,12 @@ fun DetailScreenMobile(
         }
         val overview = meta?.description ?: tmdbDetail?.overview ?: initialOverview
         val cast = tmdbDetail?.credits?.cast.orEmpty()
+        // The TV page's two tag rails: the title's genres, and the TMDB keywords
+        // it also draws (the `#`-prefixed row). Both open the Tag screen for the
+        // chip that was pressed, with the route's own media type - the same
+        // arguments the TV chips hand `onNavigateTag`.
+        val tmdbGenres = tmdbDetail?.genres.orEmpty()
+        val keywords = remember(tmdbDetail) { tmdbDetail?.keywords?.list().orEmpty() }
         // The trailer the button OFFERS is the trailer it PLAYS (one pick, one
         // rule - see TrailerPick): a series files its promos as Teaser/Clip.
         val trailerVideo = remember(tmdbDetail) {
@@ -390,8 +416,18 @@ fun DetailScreenMobile(
         fun openStreams(
             target: StreamsTarget,
             description: String?,
-            playedCast: List<TmdbCastMember>
+            playedCast: List<TmdbCastMember>,
+            // The Play button's HOLD: the viewer asked for the source list,
+            // not for a source, so the picker must not auto-select one. The
+            // marker is keyed the way StreamsViewModel keys the streams it
+            // loads (`type:id`), or the picker never matches it and Auto-select
+            // jumps straight to the player. Same handoff the TV's "Play
+            // Manually" row makes.
+            manual: Boolean = false
         ) {
+            if (manual) {
+                ManualSourceSelection.request("${target.contentType}:${target.streamId}")
+            }
             onNavigateStreams(
                 target,
                 id,
@@ -407,7 +443,8 @@ fun DetailScreenMobile(
         fun openEpisode(
             episode: ResolvedEpisode,
             episodeSeason: Int,
-            fromStart: Boolean = false
+            fromStart: Boolean = false,
+            manual: Boolean = false
         ) {
             val progress = inProgressByStreamId[episode.streamId]
             val resumeRow = resumeInfo?.takeIf {
@@ -446,14 +483,15 @@ fun DetailScreenMobile(
                         ?: episode.runtimeMinutes?.takeIf { it > 0 }
                 ),
                 episode.overview ?: overview,
-                cast
+                cast,
+                manual = manual
             )
         }
 
         // The movie target both the Play button and START OVER build. The root
         // is the verified one: for a catalog whose id is not the IMDb id the
         // stream add-ons key on, the route id is another title's.
-        fun openMovie(fromStart: Boolean) {
+        fun openMovie(fromStart: Boolean, manual: Boolean = false) {
             scope.launch {
                 val root = runCatching { viewModel.awaitStreamRootId(id) }
                     .getOrDefault(id)
@@ -473,7 +511,8 @@ fun DetailScreenMobile(
                             ?: tmdbDetail?.runtime?.takeIf { it > 0 }
                     ),
                     overview,
-                    cast
+                    cast,
+                    manual = manual
                 )
             }
         }
@@ -493,6 +532,26 @@ fun DetailScreenMobile(
                 resumeInfo?.season == currentSeason
             val episode = if (resumeHere) targetEpisode else episodes.firstOrNull()
             episode?.let { openEpisode(it, currentSeason) }
+        }
+
+        /**
+         * The Play button's HOLD on a phone: the source picker for the very
+         * episode a tap would start, and no auto-select, so it opens the list
+         * instead of the player. This is the phone's answer to the TV's
+         * long press on Play ("Play Manually"), which the port left out - the
+         * only way to reach the picker from this page was to long-press an
+         * episode row, which a movie does not have. START OVER remains the
+         * from-the-beginning gesture.
+         */
+        fun openCurrentStreams() {
+            if (normalizedType == "movie") {
+                openMovie(fromStart = false, manual = true)
+                return
+            }
+            val resumeHere = targetEpisode != null &&
+                resumeInfo?.season == currentSeason
+            val episode = if (resumeHere) targetEpisode else episodes.firstOrNull()
+            episode?.let { openEpisode(it, currentSeason, manual = true) }
         }
 
         // ---- deep-link auto-play ----
@@ -554,6 +613,84 @@ fun DetailScreenMobile(
         val displayRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
         val episodeRail = remember(displayRevision) {
             AppPreferences.getDetailEpisodeRail(context)
+        }
+
+        // ---- the hero trailer ----
+        // The trailer plays IN this page's hero, through the same pooled
+        // ExoPlayer the TV Home hero draws with (HeroInlineTrailerPlayer),
+        // instead of the fullscreen player a Media-row card still opens. The
+        // trailer settings govern it exactly as they govern Home's hero:
+        // autoplay decides whether it starts on its own, the dwell decides how
+        // long the page settles first, and the mute switch decides whether it
+        // is heard. All three are synced prefs, so the revision is the read -
+        // a toggle on another device lands here, and the TRAILER button works
+        // either way.
+        val trailerMuted = remember(displayRevision) {
+            AppPreferences.getHeroTrailerMuted(context)
+        }
+        val trailerAutoplay = remember(displayRevision) {
+            AppPreferences.getHeroTrailerAutoplay(context)
+        }
+        val trailerDelayMs = remember(displayRevision) {
+            AppPreferences.getHeroTrailerDelayMs(context)
+        }
+        val trailerKey = remember(trailerVideo) {
+            trailerVideo?.key?.takeIf { it.isNotBlank() }
+        }
+        // Null = the backdrop is showing. Keeping the source and its start
+        // position in one value is what stops a fresh resolve inheriting a
+        // dead position (see HeroTrailerPlayback).
+        var heroTrailer by remember(trailerKey) { mutableStateOf<HeroTrailerPlayback?>(null) }
+        // One resolve request at a time: set by the button or the autoplay
+        // effect, consumed by the resolve below, set again by a retry.
+        var trailerRequested by remember(trailerKey) { mutableStateOf(false) }
+        // The retry handoff: where a mid-stream failure died, read (and
+        // cleared) by the resolve that retries it.
+        var trailerResumeMs by remember(trailerKey) { mutableLongStateOf(0L) }
+        // One retry per trailer, the Home hero's own cap: a stale signed URL is
+        // recoverable, a dead video is not.
+        var trailerAttempt by remember(trailerKey) { mutableIntStateOf(0) }
+
+        fun stopHeroTrailer() {
+            heroTrailer = null
+            trailerRequested = false
+            TrailerPlayerPool.releaseForReuse()
+        }
+
+        // With autoplay on the trailer starts itself after the same dwell Home
+        // waits; with it off the backdrop stays up and the TRAILER button is
+        // the only way in - which still plays here, not fullscreen.
+        LaunchedEffect(trailerKey, trailerAutoplay, trailerDelayMs) {
+            if (trailerKey == null || !trailerAutoplay || heroTrailer != null) {
+                return@LaunchedEffect
+            }
+            delay(trailerDelayMs)
+            // Re-read the state AFTER the dwell: a press during the wait has
+            // already resolved and started the trailer, and requesting again
+            // would re-resolve and restart it mid-scene.
+            if (heroTrailer == null) trailerRequested = true
+        }
+
+        // The resolve: one-shot request in, one source out, through the shared
+        // launcher (its cache, its coalescing mutex, its failure memory).
+        LaunchedEffect(trailerRequested, trailerAttempt, trailerKey) {
+            val key = trailerKey
+            if (!trailerRequested || key == null) return@LaunchedEffect
+            trailerRequested = false
+            val resumeFrom = trailerResumeMs
+            trailerResumeMs = 0L
+            val source = TrailerPlayerLauncher.resolvePlayableUrl(key).getOrNull()
+            if (source != null) {
+                heroTrailer = HeroTrailerPlayback(source, resumeFrom)
+            }
+        }
+
+        // Leaving the page silences the pooled player. The composable's own
+        // cleanup deliberately leaves that to its owner (during a hero
+        // crossfade the outgoing instance must not stop the incoming one on the
+        // shared player), so the owner is this page.
+        DisposableEffect(Unit) {
+            onDispose { TrailerPlayerPool.releaseForReuse() }
         }
 
         // One episode's state, derived once. BOTH layouts read this - the
@@ -623,6 +760,18 @@ fun DetailScreenMobile(
                 tmdbFallback = tmdbDetail?.voteAverage?.takeIf { it > 0.0 }
             )
         }
+        // The TV page's NETWORK and PRODUCTION rails: the companies behind the
+        // title, each chip opening that company's Studio page. The phone had
+        // neither, so a show's channel and a film's studios were unreachable
+        // from here.
+        val networks = tmdbDetail?.networks.orEmpty()
+        val productionCompanies = tmdbDetail?.productionCompanies.orEmpty()
+        // ...and the Movie / Show Details block: the same facts the TV page
+        // prints as one meta line, laid out as labeled rows for a phone (see
+        // MobileDetailFacts.kt, which owns the rules).
+        val facts = remember(normalizedType, tmdbDetail) {
+            detailFacts(normalizedType, tmdbDetail)
+        }
 
         fun openCollectionPart(part: TmdbCollectionPart) {
             scope.launch {
@@ -686,6 +835,20 @@ fun DetailScreenMobile(
                         backdropUrl = heroBackdropUrl,
                         logoUrl = clearLogoUrl,
                         metaLine = detailMetaLine(normalizedType, tmdbDetail),
+                        trailerPlayback = heroTrailer,
+                        trailerMuted = trailerMuted,
+                        onTrailerEnded = { stopHeroTrailer() },
+                        // The Home hero's own retry rule and cap: re-resolve a
+                        // fresh signed URL once, from where it died, and no
+                        // more than once for the same trailer.
+                        onTrailerFailed = { positionMs ->
+                            if (trailerAttempt < 1) {
+                                trailerResumeMs = positionMs
+                                trailerAttempt += 1
+                                trailerRequested = true
+                            }
+                        },
+                        onCloseTrailer = { stopHeroTrailer() },
                         onBack = { backDispatcher?.onBackPressed() }
                     )
                 }
@@ -704,13 +867,33 @@ fun DetailScreenMobile(
                         ) {
                             KBButton(
                                 label = playButtonText,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                // Hold for the source list (the TV's long
+                                // press on this button); a tap still plays.
+                                onLongClick = { openCurrentStreams() }
                             ) {
                                 playCurrent()
                             }
+                            // The trailer button plays in the hero above it,
+                            // not in the fullscreen player: a second press (or
+                            // the hero's own close mark) puts the backdrop
+                            // back. Media-row cards still open the full player -
+                            // they are the videos themselves, chosen one by one.
                             trailerVideo?.let {
-                                KBButton(label = "TRAILER") {
-                                    DetailTrailerLaunch.play(context, scope, it)
+                                KBButton(
+                                    label = if (heroTrailer != null) {
+                                        "STOP TRAILER"
+                                    } else {
+                                        "TRAILER"
+                                    }
+                                ) {
+                                    if (heroTrailer != null) {
+                                        stopHeroTrailer()
+                                    } else {
+                                        trailerAttempt = 0
+                                        trailerResumeMs = 0L
+                                        trailerRequested = true
+                                    }
                                 }
                             }
                         }
@@ -723,6 +906,55 @@ fun DetailScreenMobile(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 openMovie(fromStart = true)
+                            }
+                        }
+                    }
+                }
+
+                // The title's tags, directly under the calls to action where
+                // the meta line's genre list used to sit: a genre or a keyword
+                // is a control here, not a caption, and each one opens its Tag
+                // page exactly as the TV chip does.
+                if (tmdbGenres.isNotEmpty() || keywords.isNotEmpty()) {
+                    item(key = "tags") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (tmdbGenres.isNotEmpty()) {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(tmdbGenres, key = { "genre:" + it.id }) { genre ->
+                                        TouchLinkChip(
+                                            label = genre.name,
+                                            onClick = {
+                                                onNavigateTag(genre.id, genre.name, false, type)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            if (keywords.isNotEmpty()) {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(keywords, key = { "keyword:" + it.id }) { keyword ->
+                                        TouchLinkChip(
+                                            // The TV keyword chip's own mark: a
+                                            // keyword is a tag, not a genre.
+                                            label = "#" + keyword.name,
+                                            emphasized = false,
+                                            onClick = {
+                                                onNavigateTag(
+                                                    keyword.id,
+                                                    keyword.name,
+                                                    true,
+                                                    type
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -846,6 +1078,69 @@ fun DetailScreenMobile(
                                         member = member,
                                         onClick = { onNavigateActor(member.id) }
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // A series names its network(s); every title names its
+                // production companies. Both are the TV page's own rails, in
+                // its own order, with the chip that opens the Studio page.
+                if (normalizedType != "movie" && networks.isNotEmpty()) {
+                    item(key = "networks") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MobileSectionTitle("Networks")
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(networks, key = { "network:" + it.id }) { network ->
+                                    TouchStudioChip(
+                                        name = network.name,
+                                        logoPath = network.logoPath,
+                                        onClick = {
+                                            onNavigateStudio(network.id, network.name, true)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (productionCompanies.isNotEmpty()) {
+                    item(key = "production") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MobileSectionTitle("Production")
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(productionCompanies, key = { "company:" + it.id }) { company ->
+                                    TouchStudioChip(
+                                        name = company.name,
+                                        logoPath = company.logoPath,
+                                        onClick = {
+                                            onNavigateStudio(company.id, company.name, false)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // The facts block, after the companies: Status (series only),
+                // Release Info, Runtime, Certification, Origin Country.
+                if (facts.isNotEmpty()) {
+                    item(key = "facts") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MobileSectionTitle(detailFactsTitle(normalizedType == "movie"))
+                            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                facts.forEachIndexed { index, fact ->
+                                    DetailFactRow(fact)
+                                    if (index != facts.lastIndex) DetailFactDivider()
                                 }
                             }
                         }
@@ -1413,6 +1708,12 @@ private fun MobileDetailHeader(
     backdropUrl: String?,
     logoUrl: String?,
     metaLine: String,
+    /** The hero trailer, or null while the backdrop is what shows. */
+    trailerPlayback: HeroTrailerPlayback?,
+    trailerMuted: Boolean,
+    onTrailerEnded: () -> Unit,
+    onTrailerFailed: (positionMs: Long) -> Unit,
+    onCloseTrailer: () -> Unit,
     onBack: () -> Unit
 ) {
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
@@ -1428,6 +1729,19 @@ private fun MobileDetailHeader(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+        // The shared hero player, over the still: its shutter is transparent,
+        // so until the first frame lands the backdrop above is exactly what a
+        // viewer sees (the same hand-off Home's hero makes).
+        if (trailerPlayback != null) {
+            HeroInlineTrailerPlayer(
+                source = trailerPlayback.source,
+                muted = trailerMuted,
+                startPositionMs = trailerPlayback.startPositionMs,
+                onEnded = onTrailerEnded,
+                onFailed = onTrailerFailed,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1452,6 +1766,23 @@ private fun MobileDetailHeader(
                 contentDescription = "Back",
                 tint = KBTextHi
             )
+        }
+        // A playing trailer needs a way out that is not "press TRAILER again":
+        // the hero is a video surface, so a close mark on it is the affordance
+        // a thumb looks for.
+        if (trailerPlayback != null) {
+            IconButton(
+                onClick = onCloseTrailer,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Stop trailer",
+                    tint = KBTextHi
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -1535,23 +1866,17 @@ private fun EpisodeRow(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+            // The same marker the poster tiles and the rail card draw
+            // (`WatchedCheckBadge`), at the compact size this 132x74 still
+            // leaves room for: the row and the rail must not say "watched" two
+            // different ways. This used to be a tick of the row's own making.
             if (isWatched) {
-                Box(
+                WatchedCheckBadge(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(KBVoid.copy(alpha = 0.9f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = "Watched",
-                        tint = KBAccent,
-                        modifier = Modifier.size(12.dp)
-                    )
-                }
+                        .padding(4.dp),
+                    diameter = 18.dp
+                )
             }
             progress?.let { fraction ->
                 Box(
@@ -2003,27 +2328,33 @@ private fun MobileSectionTitle(text: String) {
 }
 
 /**
- * The title's critic/audience scores as a wrapping strip - the touch twin of
- * the TV page's RATINGS row.
+ * The title's critic/audience scores on ONE line - the touch twin of the TV
+ * page's RATINGS row, trimmed to what a phone can read at a glance.
  *
  * The sources and their order come from the shared [mdbListRatingSources]
  * rule, so the phone and the TV cannot disagree about which score belongs to
- * which brand. The marks are tinted with each source's own colour and the
- * values use the accent, as on the TV; the chips wrap so seven sources fit a
- * 360dp screen without a horizontal scroll the thumb would have to discover.
+ * which brand; the phone takes the head of that list through the shared
+ * [mobileRatingSources] (IMDb, Rotten Tomatoes, TMDB, Metacritic), because
+ * seven chips became two lines under a paragraph of synopsis and read as a
+ * second block of body text. The marks are tinted with each source's own
+ * colour and the values use the accent, as on the TV.
+ *
+ * The row scrolls sideways rather than wrapping: a larger font scale can widen
+ * four chips past a narrow screen, and a strip that scrolls a little still
+ * reads as one line where a wrapped one kicks a stray chip onto a second.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MobileRatingsStrip(
     sources: List<RatingChipSource>,
     modifier: Modifier = Modifier
 ) {
-    FlowRow(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        sources.forEach { source ->
+        mobileRatingSources(sources).forEach { source ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -2047,6 +2378,47 @@ private fun MobileRatingsStrip(
             }
         }
     }
+}
+
+/**
+ * One row of the Movie / Show Details block: the label in the muted colour on
+ * the left, the value right-aligned, wrapping when it has to (Origin Country
+ * is the long one).
+ */
+@Composable
+private fun DetailFactRow(fact: DetailFact) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = fact.label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = fact.value,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1.4f)
+        )
+    }
+}
+
+/** The hairline between two facts, the block's own rule rather than a divider. */
+@Composable
+private fun DetailFactDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(KBTextLo.copy(alpha = 0.2f))
+    )
 }
 
 /** One season chip's long-press subject. */
@@ -2080,7 +2452,7 @@ private data class PosterMenuTarget(
     val name: String
 )
 
-/** `★ 8.2 · 2024 · 2h 10m · Drama, Sci-Fi`, from whatever TMDB answered. */
+/** `★ 8.2 · 2024 · 2h 10m`, from whatever TMDB answered. */
 private fun detailMetaLine(type: String, detail: TmdbDetail?): String {
     if (detail == null) return ""
     val year = (detail.releaseDate ?: detail.firstAirDate)?.take(4)?.takeIf { it.length == 4 }
@@ -2091,11 +2463,14 @@ private fun detailMetaLine(type: String, detail: TmdbDetail?): String {
     } else {
         detail.episodeRunTime.firstOrNull()?.takeIf { it > 0 }?.let { "${it}m" }
     }
+    // The genres used to be a comma-joined tail here. They are chips now (see
+    // the page's `tags` item), so naming them twice - once as text that goes
+    // nowhere and once as controls that open the Tag page - read as though the
+    // plain one were the interactive one.
     return listOfNotNull(
         detail.voteAverage?.takeIf { it > 0.0 }?.let { "★ " + String.format("%.1f", it) },
         year,
-        runtime,
-        detail.genres.take(2).joinToString(", ") { it.name }.takeIf { it.isNotBlank() }
+        runtime
     ).joinToString("  ·  ")
 }
 

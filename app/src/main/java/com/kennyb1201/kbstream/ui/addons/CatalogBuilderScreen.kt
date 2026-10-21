@@ -67,6 +67,7 @@ import com.kennyb1201.kbstream.data.catalogs.splitIds
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -1406,13 +1407,14 @@ private fun PreviewCard(meta: MetaPreview, context: android.content.Context) {
                 )
             }
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = meta.name,
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+        // The shared caption block, not a hand-rolled title: a preview tile is
+        // a poster surface like any other, and the hand-rolled line ignored the
+        // Settings poster-title/year/rating switches.
+        PosterCaptions(
+            title = meta.name,
+            year = meta.yearOrNull?.toString(),
+            rating = meta.imdbRating?.toDoubleOrNull() ?: meta.tmdbRating,
+            modifier = Modifier.padding(top = 4.dp)
         )
     }
 }

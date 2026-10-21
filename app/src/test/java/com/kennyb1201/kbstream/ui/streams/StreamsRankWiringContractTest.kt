@@ -202,6 +202,50 @@ class StreamsRankWiringContractTest {
     }
 
     @Test
+    fun `every auto-play path applies the viewer's quality ceiling`() {
+        listOf(
+            "com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt",
+            "com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt"
+        ).forEach { path ->
+            val screen = source(path)
+            assertTrue(
+                "$path must cap the automatic pick: without it a 1080p ceiling " +
+                    "still starts a 4K head",
+                screen.contains("AutoPlayQuality.cappedPick(") &&
+                    screen.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+            )
+            assertTrue(
+                "and it must say so when the ceiling is why nothing started, or " +
+                    "the picker opening instead of the player reads as a bug: $path",
+                screen.contains("AutoPlayQuality.ceilingNotice(") &&
+                    screen.contains("mismatchNotice = mismatchNotice ?: ceilingNotice")
+            )
+        }
+    }
+
+    @Test
+    fun `a remembered link is replayed under the same ceiling`() {
+        val activity = source("com/kennyb1201/kbstream/MainActivity.kt")
+        val replay = activity
+            .substringAfter("if (cached != null) {")
+            .substringBefore("val resolved = streamsViewModel.resolve(")
+
+        assertTrue(
+            "the cache-hit branch returns before the capped pick below it ever " +
+                "runs, so a link remembered before the cap was set is exactly how " +
+                "a 4K starts under a 1080p ceiling",
+            replay.contains("AutoPlayQuality.cappedPick(") &&
+                replay.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+        )
+        assertTrue(
+            "and a cache whose every source is over the ceiling must fall through " +
+                "to a fresh resolve rather than start the cached link",
+            replay.contains("if (replay != null)") &&
+                replay.contains("return@LaunchedEffect")
+        )
+    }
+
+    @Test
     fun `the runtime reaches the resolve from the screen`() {
         assertTrue(
             "load takes the runtime and hands it to the fetch",

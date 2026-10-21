@@ -275,12 +275,17 @@ class LaunchSplashWiringContractTest {
             "the verdict reaches the shared, tested rule rather than an inline copy",
             activity.contains("railsStale = splashRailsStale")
         )
+        // Scoped to the pick handler's own block: choosing a profile always
+        // starts on Home, so the re-arm is unconditional there (there is no
+        // longer an `if (destination is Screen.Home)` to point at).
+        val pick = activity.substringAfter("is Screen.ProfilePicker -> {")
+            .substringBefore("onManage = {")
         assertTrue(
             "and the pick handler still re-arms on the way into Home, which is the " +
                 "beat those rails exist to cover",
-            activity.contains("if (destination is Screen.Home)") &&
-                activity.contains("splashTarget = LaunchSplashTarget.HOME") &&
-                activity.contains("splashArmKey += 1")
+            pick.contains("screen = Screen.Home") &&
+                pick.contains("splashTarget = LaunchSplashTarget.HOME") &&
+                pick.contains("splashArmKey += 1")
         )
     }
 

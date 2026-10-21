@@ -10,11 +10,14 @@ import org.junit.Test
  * The viewer's ceiling on what auto-play starts.
  *
  * The ranker already weighs this device's decode headroom; this is the missing
- * input the ranker cannot see — tonight's network — and these tests pin both
- * directions of it: that a cap moves auto-play *down* to a copy it can serve,
- * and that it never invents a source the episode rules would not have allowed
- * in the first place (a wrong episode, a season pack) or refuses to play
- * anything at all when every copy is taller than the cap.
+ * input the ranker cannot see — tonight's network — and these tests pin what it
+ * means in practice: a cap moves auto-play *down* to a copy it can serve, it
+ * never invents a source the episode rules would not have allowed (a wrong
+ * episode, a season pack), it prefers a copy that declares a fitting
+ * resolution over one that declares none, and when every copy plainly claims
+ * more than the ceiling it starts nothing and leaves the picker — the setting's
+ * own promise is "never above 1080p", and the report this answers is "set to
+ * 1080p and it is autoplaying 4k".
  */
 class AutoPlayQualityTest {
 
@@ -38,6 +41,35 @@ class AutoPlayQualityTest {
         assertEquals(2, StreamRanker.resolutionRank(s("Movie 720p")))
         assertEquals(1, StreamRanker.resolutionRank(s("Movie 480p")))
         assertEquals(0, StreamRanker.resolutionRank(s("Movie WEB-DL")))
+    }
+
+    @Test
+    fun `every spelling of 4K counts as 4K, not as unlabeled`() {
+        // The ceiling treats an unlabeled source as allowed, so a 4K copy the
+        // reader cannot see is a 4K copy the ceiling cannot stop - which is the
+        // "set to 1080p and it still started 4K" report. These are the tags
+        // releases use when they never write "2160p".
+        listOf(
+            "Movie 2024 UHD BluRay REMUX",
+            "Movie 2024 2160i HDTV",
+            "Movie 2024 3840x2160 WEB-DL",
+            "Movie 2024 UHD Bluray DTS"
+        ).forEach { name ->
+            assertEquals(name, 5, StreamRanker.resolutionRank(s(name)))
+        }
+    }
+
+    @Test
+    fun `an FHD tag is a 1080p copy`() {
+        assertEquals(3, StreamRanker.resolutionRank(s("Movie 2024 FHD WEB-DL")))
+    }
+
+    @Test
+    fun `a 4K ceiling still admits a 4K copy`() {
+        assertEquals(
+            ranked[0],
+            AutoPlayQuality.cappedPick(ranked[0], ranked, null, null, null, AutoPlayQuality.CAP_2160)
+        )
     }
 
     @Test
@@ -91,9 +123,23 @@ class AutoPlayQualityTest {
     }
 
     @Test
-    fun `a source that declares no resolution counts as under the ceiling`() {
+    fun `a declared copy under the ceiling beats an unlabeled one`() {
+        // The old rule took the first unlabeled source, which is where a 4K
+        // remux hides behind a size hint: the head was "unknown", so a 1080p
+        // ceiling started it while a labeled 1080p sat below. A copy that SAYS
+        // it fits now wins over one that says nothing.
         val unlabeled = s("Movie WEB-DL")
         val candidates = listOf(s("Movie 2160p"), unlabeled, s("Movie 1080p"))
+        assertEquals(
+            candidates[2],
+            AutoPlayQuality.cappedPick(candidates[0], candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `an unlabeled copy is still the fallback when nothing declares a resolution`() {
+        val unlabeled = s("Movie WEB-DL")
+        val candidates = listOf(s("Movie 2160p"), unlabeled, s("Movie UHD"))
         assertEquals(
             unlabeled,
             AutoPlayQuality.cappedPick(candidates[0], candidates, null, null, null, AutoPlayQuality.CAP_1080)
@@ -101,10 +147,13 @@ class AutoPlayQualityTest {
     }
 
     @Test
-    fun `when every copy is taller than the cap the pick is kept rather than refusing to play`() {
-        val allUhd = listOf(s("Movie 2160p A"), s("Movie 4K B"))
-        assertEquals(
-            allUhd[0],
+    fun `when every copy plainly claims more than the cap nothing is auto-started`() {
+        // The setting's own copy says auto-play "never starts above 1080p", and
+        // the picker still lists every source one tap away. Starting the 4K
+        // anyway is the report this rule answers: "set to 1080p and it is
+        // autoplaying 4k".
+        val allUhd = listOf(s("Movie 2160p A"), s("Movie 4K B"), s("Movie UHD C"))
+        assertNull(
             AutoPlayQuality.cappedPick(allUhd[0], allUhd, null, null, null, AutoPlayQuality.CAP_1080)
         )
     }
@@ -124,6 +173,33 @@ class AutoPlayQualityTest {
             candidates[2],
             AutoPlayQuality.cappedPick(candidates[0], candidates, null, null, null, AutoPlayQuality.CAP_1080)
         )
+    }
+
+    // ── what the picker says when the ceiling blocked everything ─────────────
+
+    @Test
+    fun `the ceiling is named the way the Settings pickers name it`() {
+        assertEquals("Auto", AutoPlayQuality.name(AutoPlayQuality.CAP_AUTO))
+        assertEquals("4K", AutoPlayQuality.name(AutoPlayQuality.CAP_2160))
+        assertEquals("1080p", AutoPlayQuality.name(AutoPlayQuality.CAP_1080))
+        assertEquals("720p", AutoPlayQuality.name(AutoPlayQuality.CAP_720))
+    }
+
+    @Test
+    fun `the picker explains a ceiling that blocked every source`() {
+        val allUhd = listOf(s("Movie 2160p A"), s("Movie UHD B"))
+        assertEquals(
+            "Every source for this title is above your 1080p auto-play ceiling, so " +
+                "none was started. Pick one below, or raise Maximum auto-play " +
+                "quality in Settings.",
+            AutoPlayQuality.ceilingNotice(allUhd, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+        // Not when the viewer asked for Auto (nothing was blocked) ...
+        assertNull(AutoPlayQuality.ceilingNotice(allUhd, null, null, null, AutoPlayQuality.CAP_AUTO))
+        // ... nor when a source would have been taken ...
+        assertNull(AutoPlayQuality.ceilingNotice(ranked, null, null, null, AutoPlayQuality.CAP_1080))
+        // ... nor on an empty list, which is the picker's other message.
+        assertNull(AutoPlayQuality.ceilingNotice(emptyList(), null, null, null, AutoPlayQuality.CAP_1080))
     }
 
     // ── the episode rules still hold under a cap ─────────────────────────────

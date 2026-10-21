@@ -99,4 +99,51 @@ class MdbListRatingChipsTest {
         // The label is the icon's content description, so it must be unique too.
         assertEquals(sources.size, sources.map { it.name }.distinct().size)
     }
+
+    @Test
+    fun `the phone strip takes the four best-known brands`() {
+        val all = mdbListRatingSources(
+            MdbListRatings(
+                imdb = "8.8",
+                rottenTomatoes = "94%",
+                tmdb = "8.1",
+                metacritic = "78/100",
+                trakt = "91%",
+                letterboxd = "82%",
+                myAnimeList = "8.4"
+            )
+        )
+
+        // The list's own order is the popularity ranking, so the phone takes
+        // its head; the TV page still draws every source it was given.
+        assertEquals(
+            listOf("IMDb", "Rotten Tomatoes", "TMDB", "Metacritic"),
+            mobileRatingSources(all).map { it.name }
+        )
+        assertEquals(MOBILE_RATING_SOURCE_LIMIT, mobileRatingSources(all).size)
+        assertEquals("the TV page keeps all seven", 7, all.size)
+    }
+
+    @Test
+    fun `an absent source lets the next one take its place`() {
+        val sources = mdbListRatingSources(
+            MdbListRatings(
+                imdb = "8.8",
+                tmdb = "8.1",
+                metacritic = "78/100",
+                trakt = "91%",
+                letterboxd = "82%"
+            )
+        )
+
+        assertEquals(
+            listOf("IMDb", "TMDB", "Metacritic", "Trakt"),
+            mobileRatingSources(sources).map { it.name }
+        )
+        // Fewer scores than the limit is not padded with anything.
+        assertEquals(
+            listOf("IMDb", "TMDB"),
+            mobileRatingSources(sources.take(2)).map { it.name }
+        )
+    }
 }

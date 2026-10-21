@@ -29,6 +29,13 @@ compose-bom = "2026.09.00"
 tv-material = "1.1.0"
 tv-foundation = "1.0.0"
 profileinstaller = "1.4.1"
+# Not a layout system this app adopted: a ConstraintLayout is used for exactly
+# one view - the player's clearlogo slot - because it is the only container in
+# the framework that can express "as wide as the header, never wider than the
+# TV's 400dp". `layout_constraintWidth_max` has no LinearLayout/FrameLayout
+# equivalent, and the fixed box it replaces clipped the art on phones (see
+# player_chrome.xml). Nothing else in the app draws with it.
+constraintlayout = "2.2.2"
 recyclerview = "1.4.0"
 room = "2.8.5"
 work = "2.12.0"
@@ -69,6 +76,7 @@ androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-ru
 androidx-paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging-compose" }
 androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
+androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 androidx-tv-material = { module = "androidx.tv:tv-material", version.ref = "tv-material" }
 androidx-tv-foundation = { module = "androidx.tv:tv-foundation", version.ref = "tv-foundation" }
 

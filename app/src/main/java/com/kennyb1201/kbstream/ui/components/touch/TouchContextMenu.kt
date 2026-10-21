@@ -69,9 +69,14 @@ import com.kennyb1201.kbstream.work.NewEpisodeWorker
  * takes every tap, and system Back closes it through `ModalBottomSheet`'s own
  * handler, so none of that has anything left to do.
  *
- * Descriptions are drawn here, unlike the TV rows which show only the label:
- * a phone menu has the vertical room, and "Mark Entire Series as Watched" is
- * the kind of row whose consequence is worth spelling out before it is tapped.
+ * Rows are label-only, exactly as the TV menu draws them. The phone used to
+ * print each action's description under its label because there was vertical
+ * room for it, but the sheet is a list of things to do, not an explanation of
+ * them - the label already says what the row does (``Mark Entire Series as
+ * Unwatched`` needs no gloss), and the extra lines doubled the height of every
+ * menu for text nobody reads before tapping. The description strings are still
+ * carried by [PosterContextAction] for the surfaces that spell the consequence
+ * out elsewhere; this sheet simply stops drawing them.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -239,7 +244,6 @@ fun PosterContextMenu(
             rows.forEach { action ->
                 SheetActionRow(
                     label = action.label,
-                    description = action.description,
                     isDestructive = action.isDestructive,
                     onClick = {
                         if (action.label == "Play Manually") {
@@ -274,8 +278,7 @@ fun PosterContextMenu(
 }
 
 /**
- * One row of the sheet: the label, its consequence, and a full-width tap
- * target.
+ * One row of the sheet: the label and a full-width tap target.
  *
  * A destructive row is drawn in [KBDanger] rather than filled red; the same
  * affordance the TV row and [KBButton] use, because hiding a title is a
@@ -284,7 +287,6 @@ fun PosterContextMenu(
 @Composable
 private fun SheetActionRow(
     label: String,
-    description: String?,
     isDestructive: Boolean,
     onClick: () -> Unit
 ) {
@@ -304,15 +306,5 @@ private fun SheetActionRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        description?.takeIf { it.isNotBlank() }?.let { line ->
-            Text(
-                text = line,
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
     }
 }

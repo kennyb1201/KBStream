@@ -185,10 +185,10 @@ class DetailEpisodeRailMobileContractTest {
             twin.contains("if (!hiddenTitle)")
         )
         assertTrue(
-            "the card carries the episode badge, the watched tick, the resume bar " +
-                "and the UNAVAILABLE mark",
+            "the card carries the episode badge, the watched marker, the resume " +
+                "bar and the UNAVAILABLE mark",
             twin.contains("EPISODE \$number") &&
-                twin.contains("contentDescription = \"Watched\"") &&
+                twin.contains("WatchedCheckBadge(") &&
                 twin.contains("fraction.coerceIn") &&
                 twin.contains("\"UNAVAILABLE\"")
         )
@@ -248,6 +248,32 @@ class DetailEpisodeRailMobileContractTest {
         assertTrue(
             "and hands the formatted label to the card",
             mobile.contains("airDate = episode.airDate")
+        )
+    }
+
+    @Test
+    fun `both mobile episode layouts wear the app's watched marker`() {
+        // "Watched" is one marker everywhere (the poster tiles', the Home
+        // rail's, the TV episode card's): the row and the rail card each used
+        // to draw a tick of their own making, at their own size, on their own
+        // scrim, which is how an episode card came to be the only surface in
+        // the app that said it differently.
+        listOf("the vertical row" to mobileRow(), "the rail card" to railCard())
+            .forEach { (name, source) ->
+                assertTrue(
+                    "$name must draw the shared watched marker",
+                    source.contains("WatchedCheckBadge(")
+                )
+                assertFalse(
+                    "$name must not keep a second watched tick beside it",
+                    source.contains("Icons.Filled.Check") ||
+                        source.contains("contentDescription = \"Watched\"")
+                )
+            }
+        assertTrue(
+            "a small thumbnail asks the same badge for a smaller diameter rather " +
+                "than a different shape",
+            "diameter = 18.dp" in mobileRow()
         )
     }
 
