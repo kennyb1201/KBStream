@@ -848,6 +848,17 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 // Play build only. Without `-PplayBuild` this block adds nothing and the
 // release manifest is unchanged.
 androidComponents {
+    // AGP 9 does not build a unit-test component for a MINIFIED variant unless
+    // it is asked for, so `testReleaseUnitTest` did not exist at all and CI's
+    // release-variant gate failed on "task not found" instead of running the
+    // suite. The gate exists because a reflective Moshi adapter works in a
+    // debug build and can throw in a release one; the opt-in is what makes the
+    // task real. `enableUnitTest` is on the application variant builder here,
+    // which is the type this module's variants are.
+    beforeVariants(selector().withBuildType("release")) { variantBuilder ->
+        (variantBuilder as? com.android.build.api.variant.HasUnitTestBuilder)
+            ?.enableUnitTest = true
+    }
     onVariants { variant ->
         if (playBuild) {
             variant.sources.manifests.addStaticManifestFile(
