@@ -34,6 +34,43 @@ interface PoTokenProvider {
 
     /** Drop all cached tokens (identity refused / visitor changed). */
     fun invalidate()
+
+    /**
+     * Whether the token layer is on for this device.
+     *
+     * Callers check this before paying for a pre-warm's watch-config fetch: with
+     * minting off there is no warm page to want. The mint paths re-check the
+     * switch themselves, so a pre-warm that races a flip still mints nothing.
+     */
+    fun isEnabled(): Boolean = true
+
+    /**
+     * Loads the minter's page AHEAD of a resolve (a pre-warm).
+     *
+     * A resolve's mint pays for a cold WebView - process spin-up, page load and
+     * the page's own BotGuard bootstrap - out of a budget sized for the mint
+     * alone. The field capture behind this (0.9.23, Moto G: `pot.gvs:
+     * state=failed:timeout latency=6027ms`, `pot.player: state=none`) is that
+     * cost with nothing left over, and it is paid again on every cold trailer.
+     * Warming moves it off the critical path: the page and its token machinery
+     * are already loaded, so a resolve either spends the cached player token or
+     * points the warm page at its own video.
+     *
+     * [videoId] is the trailer the caller expects to play when it knows one (the
+     * video-scoped token can then be minted too); null warms the page alone.
+     *
+     * A default no-op, like the rest of this interface: an implementation with
+     * nothing to warm simply does nothing, and no caller needs a null check.
+     */
+    suspend fun warmUp(visitorData: String, videoId: String? = null) = Unit
+
+    /**
+     * Drops the warm page (memory pressure), leaving the cached tokens.
+     *
+     * Default no-op. The next [warmUp] re-warms; a resolve arriving first simply
+     * takes today's cold path.
+     */
+    fun releaseWarm() = Unit
 }
 
 /**
@@ -78,6 +115,17 @@ object PoTokens {
         installed.invalidate()
     }
 
+    /**
+     * Drops the warm page, if the installed provider keeps one.
+     *
+     * Called from MainApplication's memory-pressure hook: the page is the memory,
+     * the cached tokens are strings, so pressure takes the page and the next
+     * trailer trigger re-warms it (see [PoTokenProvider.releaseWarm]).
+     */
+    fun releaseWarm() {
+        installed.releaseWarm()
+    }
+
     /** Test seam: back to the no-op provider. */
     fun resetForTest() {
         installed = NoPoTokenProvider
@@ -97,7 +145,13 @@ object PoTokens {
 data class MintedPoTokens(
     val playerToken: String? = null,
     val gvsToken: String? = null,
-    val visitorData: String? = null
+    val visitorData: String? = null,
+    /**
+     * Whether this came off the pre-warmed page ([WebViewPoTokenMinter]'s kept
+     * WebView) or a mint that created and destroyed its own. Diagnostic, and the
+     * origin the trace prints (see [PoTokenState.SOURCE_WARM]).
+     */
+    val warm: Boolean = false
 )
 
 /**
@@ -114,11 +168,40 @@ interface PoTokenMinter {
     suspend fun mint(videoId: String, visitorData: String): MintedPoTokens?
 }
 
+/**
+ * A minter that can keep one page loaded between mints (see
+ * [PoTokenProvider.warmUp]).
+ *
+ * Separate from [PoTokenMinter] so the caching contract stays testable against a
+ * plain fake: a provider whose minter is not warming behaves exactly as before.
+ */
+interface WarmingPoTokenMinter : PoTokenMinter {
+    /**
+     * Loads the page for [visitorData] without a resolve waiting on it; null when
+     * the page produced nothing (still warmed - the next mint reuses it).
+     *
+     * [videoId] lets the video-scoped token be minted too; null warms the page on
+     * a constant placeholder video, which is all the player-context token needs.
+     */
+    suspend fun warm(visitorData: String, videoId: String?): MintedPoTokens?
+
+    /** Drops the warm page. Safe to call when there is none. */
+    fun releaseWarm()
+}
+
 /** The states the diagnostics report names (see [PoTokenTrace]). */
 internal object PoTokenState {
     const val NONE = "none"
     const val MINTED = "minted"
     const val CACHED = "cached"
+
+    /**
+     * Where a token came from: the pre-warmed page, or the mint a resolve ran
+     * itself. Recorded on every mint/cache line so a field capture can say which
+     * path produced the token that was spent - the whole point of the pre-warm.
+     */
+    const val SOURCE_WARM = "warm"
+    const val SOURCE_LIVE = "live"
 
     fun failed(error: Throwable): String = "failed:" + error.javaClass.simpleName
 

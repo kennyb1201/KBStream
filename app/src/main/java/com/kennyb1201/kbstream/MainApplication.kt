@@ -449,6 +449,13 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             }
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                 MemoryPressure.releaseBrowsingCaches()
+                // The trailer pre-warm's WebView is the reclaimable half of the
+                // PO-token layer: a cached token is a string, a live page is a
+                // renderer. Dropping the page here and re-warming on the next
+                // trigger is the whole resource rule (see PoTokens.releaseWarm).
+                runCatching {
+                    com.kennyb1201.kbstream.data.youtube.PoTokens.releaseWarm()
+                }
             }
         }
     }

@@ -408,6 +408,45 @@ object InnerTubeExtractor {
         return ResolveTokens(player, gvs)
     }
 
+    /**
+     * Loads the PO-token minter's page AHEAD of a resolve (a pre-warm).
+     *
+     * Called from the moments a trailer is seconds-to-minutes away: a detail
+     * screen showing a title with a trailer, the hero arming one, and - deferred
+     * - a settled cold launch. The field capture behind this (0.9.23, Moto G) is
+     * a GVS mint that spent its whole 6 s budget on a COLD WebView and produced
+     * nothing (`pot.gvs: state=failed:timeout latency=6027ms`, `pot.player:
+     * state=none`), so the resolve ran tokenless and the chunks hit the mid-play
+     * wall. The fix is to move that work off the critical path, not to widen the
+     * budget: the ladder stays 5 s script < 6 s GVS budget < 10 s provider.
+     *
+     * Never throws and never becomes a dependency of a resolve: a pre-warm that
+     * fails is a pre-warm that did not happen, and the resolve then mints exactly
+     * as it did before (cold path, same budgets). With minting off there is
+     * nothing to warm, which is checked first - no fetch, no WebView.
+     */
+    suspend fun prewarmPoTokens(videoId: String? = null) {
+        val provider = PoTokens.provider()
+        if (!provider.isEnabled()) return
+        withContext(Dispatchers.IO) {
+            // The visitor the resolve will present comes from the watch config,
+            // so warming without it would mint tokens bound to a visitor this
+            // device never sends (a bind mismatch, refused at playback).
+            val config = runCatching {
+                ensureWatchConfig(videoId ?: WebViewPoTokenMinter.WARM_PAGE_VIDEO_ID)
+            }.getOrNull() ?: return@withContext
+            val visitor = config.visitorData?.takeIf { it.isNotBlank() }
+                ?: return@withContext
+            try {
+                provider.warmUp(visitor, videoId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (error: Throwable) {
+                Log.w(TAG, "PO token pre-warm failed (${error.javaClass.simpleName})")
+            }
+        }
+    }
+
     /** A bounded wait for one token; any failure or timeout means "no token". */
     private suspend fun tokenWithinBudget(
         budgetMs: Long,

@@ -2371,6 +2371,12 @@ private fun HomeHeroHost(
             AppPreferences.getHeroTrailerAutoplay(context)
         ) {
             runCatchingCancellable {
+                // Tokens first: the mint is the part that pays for a COLD WebView,
+                // and a resolve that finds the page already loaded (plus a cached
+                // player token) is the whole point of the pre-warm - see
+                // InnerTubeExtractor.prewarmPoTokens and the 0.9.23 capture whose
+                // GVS mint spent 6027ms of a 6s budget on the cold path.
+                InnerTubeExtractor.prewarmPoTokens(key)
                 TrailerPlayerLauncher.resolvePlayableUrl(
                     key,
                     recordFailure = false

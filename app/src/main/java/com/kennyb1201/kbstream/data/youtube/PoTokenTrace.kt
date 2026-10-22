@@ -32,9 +32,20 @@ object PoTokenTrace {
     /** The event line a refusal leaves behind. */
     internal const val CLEARED_EVENT = "pot.cache: cleared"
 
+    /** [recordWarm]'s vocabulary: no page, a page loading, a page holding tokens. */
+    internal const val WARM_COLD = "cold"
+    internal const val WARM_WARMING = "warming"
+    internal const val WARM_READY = "ready"
+
     private val contextLines = LinkedHashMap<String, String>()
 
     private var resolveLine: String? = null
+
+    /**
+     * The pre-warm's state, always printable: an unset line reads `state=cold`,
+     * which is a fact too (this box never warmed).
+     */
+    private var warmLine: String? = null
 
     private var eventLine: String? = null
 
@@ -53,7 +64,8 @@ object PoTokenTrace {
         state: String,
         latencyMs: Long? = null,
         bind: String? = null,
-        spent: Boolean? = null
+        spent: Boolean? = null,
+        source: String? = null
     ) {
         val line = StringBuilder("pot.${context.label}: state=$state")
         if (latencyMs != null && latencyMs >= 0L) line.append(" latency=${latencyMs}ms")
@@ -61,7 +73,27 @@ object PoTokenTrace {
         // Only a withheld token says so. "state=minted bind=mismatch" alone
         // leaves the next question - did we spend it anyway? - unanswered.
         if (spent == false) line.append(" spent=no")
+        // Where the token came from: the pre-warmed page or a mint the resolve
+        // ran itself. The next capture has to be able to say "the resolve spent a
+        // warm token" without inferring it from a latency.
+        if (source != null) line.append(" source=$source")
         contextLines[context.label] = line.toString()
+    }
+
+    /**
+     * Records where the pre-warm stands.
+     *
+     * [playerToken] is whether a cached player-context token is in hand at this
+     * moment - the one half of the warm state that outlives the page, and the
+     * half a resolve can spend with no mint at all. Null when it is not the
+     * question being answered (the `warming` state).
+     */
+    @Synchronized
+    fun recordWarm(state: String, playerToken: Boolean? = null) {
+        warmLine = buildString {
+            append("pot.warm: state=$state")
+            if (playerToken != null) append(" playerToken=${if (playerToken) "yes" else "no"}")
+        }
     }
 
     /**
@@ -101,13 +133,21 @@ object PoTokenTrace {
         eventLine = CLEARED_EVENT
     }
 
-    /** Oldest-first, stable order: the two contexts, the resolve, then events. */
+    /**
+     * Oldest-first, stable order: the two contexts, the resolve, the pre-warm,
+     * then events.
+     *
+     * The pre-warm line is printed even when it was never recorded, as
+     * `state=cold`: a capture from a device that never warmed has to be able to
+     * say so rather than leave the reader to notice the absence.
+     */
     @Synchronized
     fun lines(): List<String> = buildList {
         PoTokenContext.values().forEach { context ->
             contextLines[context.label]?.let { add(it) }
         }
         resolveLine?.let { add(it) }
+        add(warmLine ?: "pot.warm: state=$WARM_COLD")
         eventLine?.let { add(it) }
     }
 
@@ -116,6 +156,7 @@ object PoTokenTrace {
     fun clear() {
         contextLines.clear()
         resolveLine = null
+        warmLine = null
         eventLine = null
     }
 }

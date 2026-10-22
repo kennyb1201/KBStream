@@ -123,6 +123,7 @@ import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
@@ -1002,6 +1003,15 @@ fun DetailScreen(
     // this matters for series, which TMDB frequently files as a "Teaser".
     val trailerVideo = remember(tmdbDetail) {
         TrailerPick.best(tmdbDetail?.videos?.results)
+    }
+    // PO-token pre-warm: a title that HAS a trailer means the press is seconds to
+    // minutes away, and the cold WebView is what a resolve pays its whole mint
+    // budget for (see InnerTubeExtractor.prewarmPoTokens). Off the main thread
+    // and never on the screen's path; a pre-warm that fails changes nothing.
+    LaunchedEffect(trailerVideo?.key) {
+        trailerVideo?.key?.takeIf { it.isNotBlank() }?.let { key ->
+            InnerTubeExtractor.prewarmPoTokens(key)
+        }
     }
     // TMDB's English clearlogo, or nothing. The add-on's own `logo` (fanart.tv
     // etc.) used to be the fallback, but it is a bare URL with no language on

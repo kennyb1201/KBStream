@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.youtube
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -67,16 +69,29 @@ internal class WebViewPoTokenProvider(
 
     private val lock = Any()
 
-    /** The player token and the visitor it was minted for. */
-    private var player: Pair<String, String>? = null
+    /**
+     * A cached token with the page it was minted on.
+     *
+     * The origin travels with the token - not as a separate record - so a cache
+     * hit can state `source=warm|live` on the same line as `state=cached`. The
+     * next field capture then says whether the pre-warm paid off instead of
+     * leaving it to be inferred from a latency.
+     */
+    private data class CachedToken(val value: String, val source: String)
+
+    /** The player token, the visitor it was minted for, and where it came from. */
+    private var player: Triple<String, String, String>? = null
 
     /** videoId -> GVS token, least-recently used first out. */
-    private val gvsTokens = object : LinkedHashMap<String, String>(maxGvsTokens, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+    private val gvsTokens = object : LinkedHashMap<String, CachedToken>(maxGvsTokens, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedToken>?): Boolean =
             size > maxGvsTokens
     }
 
     private val mintMutex = Mutex()
+
+    /** Whether a player-context token is in hand, for the pre-warm trace line. */
+    private fun hasPlayerToken(): Boolean = synchronized(lock) { player != null }
 
     override suspend fun playerToken(visitorData: String): String? {
         if (!enabled()) {
@@ -84,9 +99,13 @@ internal class WebViewPoTokenProvider(
             return null
         }
         synchronized(lock) {
-            player?.let { (visitor, token) ->
+            player?.let { (visitor, token, source) ->
                 if (visitor == visitorData) {
-                    PoTokenTrace.record(PoTokenContext.PLAYER, PoTokenState.CACHED)
+                    PoTokenTrace.record(
+                        PoTokenContext.PLAYER,
+                        PoTokenState.CACHED,
+                        source = source
+                    )
                     return token
                 }
             }
@@ -108,16 +127,24 @@ internal class WebViewPoTokenProvider(
             PoTokenTrace.record(PoTokenContext.GVS, PoTokenState.NONE)
             return null
         }
-        synchronized(lock) { gvsTokens[videoId] }?.let {
-            PoTokenTrace.record(PoTokenContext.GVS, PoTokenState.CACHED)
-            return it
+        synchronized(lock) { gvsTokens[videoId] }?.let { cached ->
+            PoTokenTrace.record(
+                PoTokenContext.GVS,
+                PoTokenState.CACHED,
+                source = cached.source
+            )
+            return cached.value
         }
 
         return mintMutex.withLock {
             // A concurrent resolve may have minted while this one waited.
-            synchronized(lock) { gvsTokens[videoId] }?.let {
-                PoTokenTrace.record(PoTokenContext.GVS, PoTokenState.CACHED)
-                return@withLock it
+            synchronized(lock) { gvsTokens[videoId] }?.let { cached ->
+                PoTokenTrace.record(
+                    PoTokenContext.GVS,
+                    PoTokenState.CACHED,
+                    source = cached.source
+                )
+                return@withLock cached.value
             }
 
             val startedAt = System.nanoTime()
@@ -165,75 +192,162 @@ internal class WebViewPoTokenProvider(
                 return@withLock null
             }
 
-            val bind = bindState(minted.visitorData, visitorData)
-            val gvsState =
-                if (minted.gvsToken != null) PoTokenState.MINTED else PoTokenState.NONE
-            val playerState =
-                if (minted.playerToken != null) PoTokenState.MINTED else PoTokenState.NONE
+            if (!adopt(minted, videoId, visitorData, elapsedMs)) return@withLock null
+            minted.gvsToken
+        }
+    }
 
-            if (bind == "mismatch") {
-                // A PO token is bound to the visitor it was minted for, so a
-                // token minted for ANOTHER visitor is not a token for this
-                // resolve: spending it is a refusal with extra steps. Neither
-                // token is cached or returned - the resolve then takes exactly
-                // the tokenless path it would have taken with no mint at all -
-                // and both lines say why (`spent=no`).
-                //
-                // Never the visitor string itself: it is a live session
-                // identifier, and the state is what a capture needs.
-                PoTokenTrace.record(
-                    PoTokenContext.GVS,
-                    gvsState,
-                    elapsedMs,
-                    bind = bind,
-                    // Only a token that exists can be withheld; the other half
-                    // of a partial mint has nothing to say beyond `state=none`.
-                    spent = if (minted.gvsToken != null) false else null
-                )
-                PoTokenTrace.record(
-                    PoTokenContext.PLAYER,
-                    playerState,
-                    null,
-                    bind = bind,
-                    spent = if (minted.playerToken != null) false else null
-                )
-                Log.w(
-                    TAG,
-                    "PO token minted for a different visitor than the watch config " +
-                        "holds (gvs=$gvsState player=$playerState bind=$bind " +
-                        "${elapsedMs}ms); withholding both, resolving without one"
-                )
-                return@withLock null
-            }
+    /**
+     * Applies one mint's result to the caches and the trace.
+     *
+     * Shared by the resolve's mint and the pre-warm's, so the binding rule is
+     * stated once: a token minted for another visitor is not a token for this
+     * resolve, and a warm mint is cached with its origin just like a live one.
+     *
+     * @return false when the mint was refused for a visitor mismatch (nothing
+     * cached, nothing spent); true otherwise.
+     */
+    private fun adopt(
+        minted: MintedPoTokens,
+        videoId: String,
+        visitorData: String,
+        elapsedMs: Long?
+    ): Boolean {
+        val bind = bindState(minted.visitorData, visitorData)
+        val source =
+            if (minted.warm) PoTokenState.SOURCE_WARM else PoTokenState.SOURCE_LIVE
+        val gvsState =
+            if (minted.gvsToken != null) PoTokenState.MINTED else PoTokenState.NONE
+        val playerState =
+            if (minted.playerToken != null) PoTokenState.MINTED else PoTokenState.NONE
 
-            synchronized(lock) {
-                minted.playerToken?.let { player = visitorData to it }
-                minted.gvsToken?.let { gvsTokens[videoId] = it }
-            }
-
+        if (bind == "mismatch") {
+            // A PO token is bound to the visitor it was minted for, so a
+            // token minted for ANOTHER visitor is not a token for this
+            // resolve: spending it is a refusal with extra steps. Neither
+            // token is cached or returned - the resolve then takes exactly
+            // the tokenless path it would have taken with no mint at all -
+            // and both lines say why (`spent=no`).
+            //
+            // Never the visitor string itself: it is a live session
+            // identifier, and the state is what a capture needs.
             PoTokenTrace.record(
                 PoTokenContext.GVS,
                 gvsState,
                 elapsedMs,
-                bind = bind
+                bind = bind,
+                // Only a token that exists can be withheld; the other half
+                // of a partial mint has nothing to say beyond `state=none`.
+                spent = if (minted.gvsToken != null) false else null,
+                source = source
             )
             PoTokenTrace.record(
                 PoTokenContext.PLAYER,
                 playerState,
                 null,
-                bind = bind
+                bind = bind,
+                spent = if (minted.playerToken != null) false else null,
+                source = source
             )
-            // A SUCCESS is a warning too, on purpose: it is the line that tells
-            // a field capture the minter works on this box, and it used to be
-            // only in the diagnostics report - which a refusal now survives,
-            // but which a support log without the report still would not show.
             Log.w(
                 TAG,
-                "PO token minted gvs=$gvsState player=$playerState bind=$bind " +
-                    "${elapsedMs}ms for $videoId"
+                "PO token minted for a different visitor than the watch config " +
+                    "holds (gvs=$gvsState player=$playerState bind=$bind " +
+                    "source=$source ${elapsedMs ?: 0}ms); withholding both, resolving without one"
             )
-            minted.gvsToken
+            return false
         }
+
+        synchronized(lock) {
+            minted.playerToken?.let { player = Triple(visitorData, it, source) }
+            minted.gvsToken?.let { gvsTokens[videoId] = CachedToken(it, source) }
+        }
+
+        PoTokenTrace.record(
+            PoTokenContext.GVS,
+            gvsState,
+            elapsedMs,
+            bind = bind,
+            source = source
+        )
+        PoTokenTrace.record(
+            PoTokenContext.PLAYER,
+            playerState,
+            null,
+            bind = bind,
+            source = source
+        )
+        // A SUCCESS is a warning too, on purpose: it is the line that tells
+        // a field capture the minter works on this box, and it used to be
+        // only in the diagnostics report - which a refusal now survives,
+        // but which a support log without the report still would not show.
+        Log.w(
+            TAG,
+            "PO token minted gvs=$gvsState player=$playerState bind=$bind " +
+                "source=$source ${elapsedMs ?: 0}ms for $videoId"
+        )
+        return true
+    }
+
+    override fun isEnabled(): Boolean = enabled()
+
+    /**
+     * Loads the minter's page ahead of a resolve (see [PoTokenProvider.warmUp]).
+     *
+     * The mint is the resolve's own - same minter, same binding rule, same
+     * budget - and it runs under the same mutex, so a pre-warm and a resolve
+     * cannot drive one page at once. It runs on the caller's coroutine (a
+     * screen's effect, or the deferred app-start one), never on a timer: with
+     * nothing to warm there is no work and no page.
+     *
+     * A pre-warm that overruns or fails is NOT a viewer-visible failure. The page
+     * stays loaded for the resolve that follows, and the trace says `cold` so a
+     * capture can see the pre-warm did not produce tokens here.
+     */
+    override suspend fun warmUp(visitorData: String, videoId: String?) {
+        if (!enabled()) return
+        val warming = minter as? WarmingPoTokenMinter ?: return
+        if (visitorData.isBlank()) return
+
+        PoTokenTrace.recordWarm(PoTokenTrace.WARM_WARMING)
+        mintMutex.withLock {
+            val startedAt = System.nanoTime()
+            val minted = try {
+                withTimeout(mintTimeoutMs) { warming.warm(visitorData, videoId) }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(
+                    TAG,
+                    "PO token pre-warm exceeded ${mintTimeoutMs}ms; the resolve mints on " +
+                        "the warm page instead"
+                )
+                null
+            } catch (e: CancellationException) {
+                PoTokenTrace.recordWarm(PoTokenTrace.WARM_COLD, hasPlayerToken())
+                throw e
+            } catch (error: Throwable) {
+                Log.w(TAG, "PO token pre-warm failed (${error.javaClass.simpleName})")
+                null
+            }
+            val adopted = minted?.let {
+                adopt(it, videoId ?: WebViewPoTokenMinter.WARM_PAGE_VIDEO_ID, visitorData, elapsedMs(startedAt))
+            } ?: false
+            PoTokenTrace.recordWarm(
+                if (adopted) PoTokenTrace.WARM_READY else PoTokenTrace.WARM_COLD,
+                hasPlayerToken()
+            )
+        }
+    }
+
+    /**
+     * Drops the warm page on memory pressure, keeping the cached tokens.
+     *
+     * The page is the memory; a player token is a string. The next trigger
+     * re-warms, and a resolve arriving before that takes the cold path it always
+     * had.
+     */
+    override fun releaseWarm() {
+        (minter as? WarmingPoTokenMinter)?.releaseWarm()
+        PoTokenTrace.recordWarm(PoTokenTrace.WARM_COLD, hasPlayerToken())
     }
 
     override fun invalidate() {
@@ -264,8 +378,18 @@ internal class WebViewPoTokenProvider(
 }
 
 /**
- * The WebView half: one offscreen WebView, created on the main thread for the
- * duration of one mint and destroyed when it ends (or times out).
+ * The WebView half: one offscreen WebView, created once and kept warm.
+ *
+ * A cold mint - the only kind before the pre-warm - created a WebView, spun up
+ * the WebView process, loaded the embed page and waited for the page's BotGuard
+ * to bootstrap, all inside a budget sized for the mint. The 0.9.23 field capture
+ * is that bill: `pot.gvs: state=failed:timeout latency=6027ms` with `pot.player:
+ * state=none`, i.e. the whole window eaten before observation could run. So the
+ * page is now loaded AHEAD of a resolve ([warm]) and the view is kept, with the
+ * same settings, the same bridge and the same injected script; a mint then only
+ * points it at its own video. [mint] reuses that page when it exists and falls
+ * back to create-and-destroy when it does not, so a cold resolve behaves exactly
+ * as it did.
  *
  * The page is the video's own embed page - the same page the watch config is
  * minted from - and its own player does the BotGuard work. The injected script
@@ -287,7 +411,20 @@ internal class WebViewPoTokenMinter(
      * that cannot run in a unit test.
      */
     private val setCookie: (url: String, cookie: String) -> Unit = ::setWebViewCookie
-) : PoTokenMinter {
+) : WarmingPoTokenMinter {
+
+    /**
+     * One WebView and the bridge its page reports through, kept between mints.
+     * Holding the pair (rather than two nullable fields) is what makes "one warm
+     * page" true by construction.
+     */
+    private class WarmPage(val view: WebView, val bridge: PoTokenJsBridge)
+
+    /** The process's single warm page, or null when none is loaded. */
+    private var warmPage: WarmPage? = null
+
+    /** Destroying a WebView has to happen on the main thread; pressure can call in anywhere. */
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         private const val TAG = "PoTokenMinter"
@@ -310,6 +447,18 @@ internal class WebViewPoTokenMinter(
         internal const val MINT_SCRIPT_FALLBACK_MS = 5_000L
 
         /**
+         * The video a warm-up loads when the caller does not know which trailer
+         * is coming (a cold launch: the page still has to be BOOTED, and only a
+         * video's embed page does that).
+         *
+         * A long-lived, widely embeddable trailer - the same id the watch page
+         * fallback uses - chosen only because the embed page must exist; the
+         * token this mint produces is the player-context one, which is not bound
+         * to a video at all.
+         */
+        internal const val WARM_PAGE_VIDEO_ID = "dQw4w9WgXcQ"
+
+        /**
          * The cookie that makes the page's BotGuard mint for the visitor the
          * watch config carries. Without it the page is a fresh cookie jar, i.e.
          * a DIFFERENT visitor, and every token it mints is bound to a session
@@ -330,37 +479,80 @@ internal class WebViewPoTokenMinter(
                 Log.w(TAG, "No usable WebView on this device; PO tokens unavailable")
                 return@withContext null
             }
-            val webView = runCatching { WebView(appContext) }.getOrNull()
-                ?: return@withContext null
 
+            // Warm first: the page is already loaded and configured, so this
+            // mint is a navigation rather than a process start.
+            warmPage?.let { page ->
+                val minted = try {
+                    mintOn(page, videoId, visitorData)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (error: Throwable) {
+                    // A page that threw is not a page worth keeping: drop it so
+                    // the next mint starts clean instead of failing forever.
+                    Log.w(TAG, "Minting on the warm page failed; dropping it", error)
+                    dropWarmPage(page)
+                    null
+                }
+                return@withContext minted?.copy(warm = true)
+            }
+
+            val page = createPage() ?: return@withContext null
             try {
-                mintOn(webView, videoId, visitorData)
+                mintOn(page, videoId, visitorData)
             } finally {
-                runCatching { webView.stopLoading() }
-                runCatching { webView.destroy() }
+                destroy(page)
             }
         }
 
     /**
-     * Puts the watch config's visitor into the WebView's cookie jar.
+     * Loads the page ahead of a resolve, once.
      *
-     * Called before [WebView.loadUrl], because the page reads the cookie when it
-     * boots - seeding afterwards would hand the load a session that already
-     * decided which visitor it is.
+     * No second page is created when one is already warm: a repeated trigger (a
+     * detail screen recomposing, the hero re-arming) re-navigates the SAME view,
+     * which is what keeps this at one warm WebView per process.
      */
-    internal fun seedVisitor(visitorData: String) {
-        if (visitorData.isBlank()) return
-        runCatching { setCookie(YOUTUBE_ORIGIN, visitorCookie(visitorData)) }
-            .onFailure {
-                Log.w(TAG, "PO token mint could not seed the visitor cookie")
+    override suspend fun warm(visitorData: String, videoId: String?): MintedPoTokens? =
+        withContext(Dispatchers.Main.immediate) {
+            if (!webViewAvailable()) {
+                Log.w(TAG, "No usable WebView on this device; PO tokens unavailable")
+                return@withContext null
             }
+            val page = warmPage ?: (createPage() ?: return@withContext null).also { warmPage = it }
+            val minted = try {
+                mintOn(page, videoId ?: WARM_PAGE_VIDEO_ID, visitorData)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (error: Throwable) {
+                Log.w(TAG, "PO token pre-warm failed; dropping the warm page", error)
+                dropWarmPage(page)
+                null
+            }
+            return@withContext minted?.copy(warm = true)
+        }
+
+    override fun releaseWarm() {
+        val page = warmPage ?: return
+        warmPage = null
+        mainHandler.post { destroy(page) }
     }
 
-    private suspend fun mintOn(
-        webView: WebView,
-        videoId: String,
-        visitorData: String
-    ): MintedPoTokens? {
+    private fun dropWarmPage(page: WarmPage) {
+        if (warmPage === page) warmPage = null
+        destroy(page)
+    }
+
+    private fun destroy(page: WarmPage) {
+        runCatching { page.view.stopLoading() }
+        runCatching { page.view.destroy() }
+    }
+
+    /**
+     * One WebView, configured once: the settings, the bridge and the script
+     * injection are exactly what a cold mint used to do on every call.
+     */
+    private fun createPage(): WarmPage? {
+        val webView = runCatching { WebView(appContext) }.getOrNull() ?: return null
         val bridge = PoTokenJsBridge()
         with(webView.settings) {
             javaScriptEnabled = true
@@ -378,12 +570,40 @@ internal class WebViewPoTokenMinter(
                 view.evaluateJavascript(MINT_SCRIPT, null)
             }
         }
+        // Never attached to a window, and never given a user: the page runs
+        // offscreen exactly as a cold mint's did, only longer.
+        return WarmPage(webView, bridge)
+    }
+
+    /**
+     * Puts the watch config's visitor into the WebView's cookie jar.
+     *
+     * Called before [WebView.loadUrl], because the page reads the cookie when it
+     * boots - seeding afterwards would hand the load a session that already
+     * decided which visitor it is.
+     */
+    internal fun seedVisitor(visitorData: String) {
+        if (visitorData.isBlank()) return
+        runCatching { setCookie(YOUTUBE_ORIGIN, visitorCookie(visitorData)) }
+            .onFailure {
+                Log.w(TAG, "PO token mint could not seed the visitor cookie")
+            }
+    }
+
+    private suspend fun mintOn(
+        page: WarmPage,
+        videoId: String,
+        visitorData: String
+    ): MintedPoTokens? {
+        // One answer per navigation: the bridge's previous result belongs to the
+        // page that just went away.
+        page.bridge.reset()
         // Before the load: the page's BotGuard mints for whichever visitor its
         // cookie jar presents, and a fresh WebView's jar is an empty one.
         seedVisitor(visitorData)
-        webView.loadUrl(youtubeEmbedUrl(videoId))
+        page.view.loadUrl(youtubeEmbedUrl(videoId))
 
-        val json = bridge.await() ?: return null
+        val json = page.bridge.await() ?: return null
         return parse(json)
     }
 
@@ -524,7 +744,7 @@ internal class PoTokenJsBridge {
         const val NAME = "KBTokenBridge"
     }
 
-    private val result = CompletableDeferred<String?>()
+    private var result = CompletableDeferred<String?>()
 
     @JavascriptInterface
     fun report(json: String) {
@@ -532,4 +752,14 @@ internal class PoTokenJsBridge {
     }
 
     suspend fun await(): String? = result.await()
+
+    /**
+     * Ready for the next navigation. The bridge outlives one mint on a warm page
+     * (its JavascriptInterface registration is per WebView), so the answer slot
+     * is what has to be renewed. A late report for the previous page simply
+     * completes a deferred nobody is awaiting.
+     */
+    fun reset() {
+        result = CompletableDeferred()
+    }
 }

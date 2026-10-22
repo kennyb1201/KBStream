@@ -92,7 +92,13 @@ class PoTokenEvidenceTest {
     fun `a refusal before any resolve does not invent a resolve line`() {
         PoTokenTrace.recordInvalidated()
 
-        assertEquals(listOf(PoTokenTrace.CLEARED_EVENT), PoTokenTrace.lines())
+        val lines = PoTokenTrace.lines()
+        assertTrue(
+            "the pre-warm line is printed even when nothing warmed - a refusal before any " +
+                "resolve must still not invent a resolve: $lines",
+            lines.none { it.startsWith("pot.resolve:") }
+        )
+        assertEquals(PoTokenTrace.CLEARED_EVENT, lines.last())
     }
 
     // ── one ladder: script inside budget inside timeout ───────────────────
@@ -243,7 +249,7 @@ class PoTokenEvidenceTest {
         val source = read(WEB_VIEW_PROVIDER).replace(Regex("\\s+"), " ")
 
         val seedAt = source.indexOf("seedVisitor(visitorData)")
-        val loadAt = source.indexOf("webView.loadUrl(youtubeEmbedUrl(videoId))")
+        val loadAt = source.indexOf("loadUrl(youtubeEmbedUrl(videoId))")
         assertTrue("the seeding must be in the mint path", seedAt >= 0)
         assertTrue("the load must still be there", loadAt >= 0)
         assertTrue(

@@ -109,6 +109,7 @@ import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchLinkChip
 import com.kennyb1201.kbstream.ui.detail.DetailMediaRow
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
@@ -676,6 +677,13 @@ fun DetailScreenMobile(
         }
         val trailerKey = remember(trailerVideo) {
             trailerVideo?.key?.takeIf { it.isNotBlank() }
+        }
+        // PO-token pre-warm: the trailer here is a press (or a dwell) away, and
+        // the cold WebView is what a resolve pays its whole mint budget for - the
+        // 0.9.23 capture is exactly that (see
+        // InnerTubeExtractor.prewarmPoTokens). Nothing on this screen waits for it.
+        LaunchedEffect(trailerKey) {
+            trailerKey?.let { key -> InnerTubeExtractor.prewarmPoTokens(key) }
         }
         // Null = the backdrop is showing. Keeping the source and its start
         // position in one value is what stops a fresh resolve inheriting a

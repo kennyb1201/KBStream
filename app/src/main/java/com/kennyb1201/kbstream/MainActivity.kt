@@ -180,6 +180,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
@@ -187,6 +188,16 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+
+/**
+ * How long after the first frame the app-start PO-token pre-warm waits.
+ *
+ * Long enough for the launch's own work (Home's rail loaders, the splash hand-off)
+ * to be past the point where a WebView's process start and a page load would
+ * compete for it; short enough that a viewer who goes straight to a trailer still
+ * finds the minter warming.
+ */
+private const val PO_TOKEN_WARM_DELAY_MS = 2_500L
 
 /** Screen-level log tag for this activity (startup lines use TAG_STARTUP). */
 private const val TAG = "MAIN"
@@ -1199,6 +1210,18 @@ fun AppRoot(
         com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.collect {
             com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(themeMirrorContext)
         }
+    }
+
+    // Deferred PO-token pre-warm for a cold launch (see
+    // InnerTubeExtractor.prewarmPoTokens). The effect body only runs once the
+    // first composition is done, and the delay keeps the embed page's load off
+    // the launch itself - a cold start that goes straight to a trailer then finds
+    // a warm page instead of paying for one inside the resolve's budget. There
+    // is no timer: re-mints come from resolves finding the cache stale, and from
+    // the trailer triggers on detail and the hero.
+    LaunchedEffect(Unit) {
+        delay(PO_TOKEN_WARM_DELAY_MS)
+        InnerTubeExtractor.prewarmPoTokens()
     }
 
     // Guard against the autoplay loop: StreamsScreen auto-selects the top
