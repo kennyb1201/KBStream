@@ -15,9 +15,10 @@ import org.junit.runner.RunWith
 
 /**
  * The field-evidence half of the PO-token layer: what a capture must still say
- * after a refusal, that the mint windows actually nest, that a token bound to
- * another visitor is not spent, and that the mint page is made to BE the watch
- * config's visitor.
+ * after a refusal, that the mint windows actually nest, that a token is spent
+ * under the visitor it was minted under (the resolve moves to the page's
+ * identity, not the other way round), and that the mint page is seeded with the
+ * watch config's visitor in the first place.
  *
  * Why this exists at all: the 0.9.20 capture that followed the first trailer
  * deaths contained exactly one token line, `pot.cache: cleared`. The trace had
@@ -162,59 +163,83 @@ class PoTokenEvidenceTest {
         )
     }
 
-    // ── a mismatched token is not spent ───────────────────────────────────
+    // ── a token is spent under the visitor it was minted for ─────────────
 
     @Test
-    fun `a token minted for another visitor is withheld from the resolve`() = runBlocking {
-        val minter = EchoMinter(visitor = "someone-else")
-        val provider = WebViewPoTokenProvider(minter)
+    fun `a token minted for another visitor moves the resolve to that visitor`() =
+        runBlocking {
+            val provider = WebViewPoTokenProvider(EchoMinter(visitor = PAGE_VISITOR))
 
-        assertNull(
-            "a token bound to another session is a refusal with extra steps",
-            provider.gvsToken(VIDEO_ID, "vis")
-        )
-        assertNull(
-            "and the player token minted in that same session goes too",
-            provider.playerToken("vis")
-        )
+            assertEquals(
+                "the mint's token is spent, not withheld",
+                "gvs",
+                provider.gvsToken(VIDEO_ID, SCRAPED_VISITOR)
+            )
+            assertEquals(
+                "and the player half of that same session with it",
+                "player",
+                provider.playerToken(SCRAPED_VISITOR)
+            )
+            val effective = provider.effectiveVisitor(SCRAPED_VISITOR)
+            assertEquals(
+                "the request presents the page's identity, which is the one the " +
+                    "tokens were minted under",
+                PAGE_VISITOR,
+                effective
+            )
+            assertEquals(
+                "and the extractor's rule is exactly that",
+                PAGE_VISITOR,
+                InnerTubeExtractor.presentedVisitor(SCRAPED_VISITOR, effective)
+            )
 
-        // What the resolve then sends: today's tokenless shapes, byte for byte.
-        assertFalse(
-            InnerTubeExtractor.playerRequestPayload(VIDEO_ID, YouTubeClients.android, null)
-                .has("serviceIntegrityDimensions")
-        )
-        assertEquals(
-            SIGNED_URL,
-            (PlayableSource.Muxed(SIGNED_URL, userAgent = "ua").withPotToken(null)
-                as PlayableSource.Muxed).url
-        )
-
-        val lines = PoTokenTrace.lines()
-        assertTrue(
-            "the capture must say the token was minted AND withheld, not that " +
-                "nothing happened: $lines",
-            lines.any { it.contains("bind=mismatch") && it.contains("spent=no") }
-        )
-    }
+            val lines = PoTokenTrace.lines()
+            assertTrue(
+                "a capture must name the adoption rather than a refusal: $lines",
+                lines.any { it.contains("bind=adopted") }
+            )
+            assertFalse(
+                "a good mint must not be discarded for failing to match a scrape: $lines",
+                lines.any { it.contains("spent=no") }
+            )
+        }
 
     @Test
     fun `a matching or unknown visitor is spent as before`() = runBlocking {
-        listOf<String?>(
+        listOf(
             // match: the page echoes the seeded visitor.
-            "vis",
+            "vis" to "bind=match",
             // unknown: the page exposed no visitor at all.
-            null
-        ).forEach { pageVisitor ->
+            null to "bind=unknown"
+        ).forEach { (pageVisitor, expectedBind) ->
             PoTokenTrace.clear()
             val provider = WebViewPoTokenProvider(EchoMinter(visitor = pageVisitor))
 
             assertEquals("gvs", provider.gvsToken(VIDEO_ID, "vis"))
             assertEquals("player", provider.playerToken("vis"))
+            assertEquals(
+                "without an adoption the request keeps the scraped visitor: $pageVisitor",
+                "vis",
+                provider.effectiveVisitor("vis")
+            )
+            val lines = PoTokenTrace.lines()
+            assertTrue(
+                "the capture still says how the two visitors related: $lines",
+                lines.any { it.contains(expectedBind) }
+            )
             assertFalse(
                 "nothing is withheld: $pageVisitor",
                 PoTokenTrace.lines().any { it.contains("spent=no") }
             )
         }
+    }
+
+    @Test
+    fun `the request falls back to the scraped visitor when nothing was adopted`() {
+        assertEquals("scraped", InnerTubeExtractor.presentedVisitor("scraped", null))
+        assertEquals("scraped", InnerTubeExtractor.presentedVisitor("scraped", "   "))
+        assertEquals("page", InnerTubeExtractor.presentedVisitor("scraped", "page"))
+        assertNull(InnerTubeExtractor.presentedVisitor(null, null))
     }
 
     // ── the mint page is the watch config's visitor ───────────────────────
@@ -297,8 +322,7 @@ class PoTokenEvidenceTest {
 
         const val VIDEO_ID = "gc0t8AfMP6k"
 
-        const val SIGNED_URL =
-            "https://rr3---sn-abc.googlevideo.com/videoplayback?expire=1800000000&id=o-abc" +
-                "&itag=18&sig=abc%3D&lsig=x&n=zzz"
+        const val SCRAPED_VISITOR = "CgtzY3JhcGVkLXZpcxIK"
+        const val PAGE_VISITOR = "CgtwYWdlLXZpc2l0b3ISCg"
     }
 }

@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.youtube
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -141,13 +142,112 @@ class PoTokenProviderTest {
     }
 
     @Test
-    fun `a page visitor that does not match is recorded, not hidden`() = runBlocking {
-        val minter = FakeMinter().apply { visitorEcho = "someone-else" }
+    fun `a page visitor that differs is adopted, not withheld`() = runBlocking {
+        // The field capture this replaces: `pot.gvs: state=minted bind=mismatch
+        // spent=no source=warm` - a successful mint thrown away because the page
+        // presented the visitor YouTube issued it rather than the scraped one.
+        val minter = FakeMinter().apply { visitorEcho = "page-visitor" }
         val provider = WebViewPoTokenProvider(minter)
+
+        assertEquals(
+            "the mint's token is spent, not discarded",
+            "gvs",
+            provider.gvsToken("v1", "request-visitor")
+        )
+        assertEquals(
+            "and so is the player half of the same session",
+            "player",
+            provider.playerToken("request-visitor")
+        )
+        assertEquals(
+            "the request moves to the identity the tokens were minted under",
+            "page-visitor",
+            provider.effectiveVisitor("request-visitor")
+        )
+        val lines = PoTokenTrace.lines()
+        assertTrue(
+            "and the trace says which of the two it was: $lines",
+            lines.any { it.contains("bind=adopted") }
+        )
+        assertFalse(
+            "nothing is withheld any more: $lines",
+            lines.any { it.contains("spent=no") }
+        )
+    }
+
+    @Test
+    fun `a matching page visitor is a match, not an adoption`() = runBlocking {
+        val provider = WebViewPoTokenProvider(FakeMinter())
 
         provider.gvsToken("v1", "vis")
 
-        assertTrue(PoTokenTrace.lines().any { it.contains("bind=mismatch") })
+        assertTrue(PoTokenTrace.lines().any { it.contains("bind=match") })
+        assertFalse(PoTokenTrace.lines().any { it.contains("bind=adopted") })
+        assertEquals("nothing to translate", "vis", provider.effectiveVisitor("vis"))
+    }
+
+    @Test
+    fun `a cached gvs token is never spent under another identity`() = runBlocking {
+        // The cache-hit path used to perform no visitor check at all, so a token
+        // minted for one session was served to a request presenting another.
+        val minter = FakeMinter()
+        val provider = WebViewPoTokenProvider(minter)
+
+        assertEquals("gvs", provider.gvsToken("v1", "visA"))
+        assertEquals("gvs", provider.gvsToken("v1", "visB"))
+
+        assertEquals(
+            "the other identity is a miss and a fresh mint, not a spend",
+            2,
+            minter.mints.size
+        )
+        assertTrue(PoTokenTrace.lines().any { it.startsWith("pot.gvs: state=minted") })
+    }
+
+    @Test
+    fun `a bound resolve hits the cache instead of minting again`() = runBlocking {
+        val minter = FakeMinter().apply { visitorEcho = "page" }
+        val provider = WebViewPoTokenProvider(minter)
+
+        provider.gvsToken("v1", "request")
+        val mints = minter.mints.size
+
+        assertEquals("gvs", provider.gvsToken("v1", "request"))
+        assertEquals(
+            "the binding is what makes the second call a cache hit",
+            mints,
+            minter.mints.size
+        )
+        assertTrue(PoTokenTrace.lines().any { it.startsWith("pot.gvs: state=cached") })
+    }
+
+    @Test
+    fun `a mint with no page visitor adopts nothing`() = runBlocking {
+        val provider = WebViewPoTokenProvider(FakeMinter().apply { visitorEcho = "" })
+
+        assertEquals("gvs", provider.gvsToken("v1", "vis"))
+        assertEquals("player", provider.playerToken("vis"))
+        assertEquals(
+            "with no page identity the request keeps the one it was handed",
+            "vis",
+            provider.effectiveVisitor("vis")
+        )
+        assertTrue(PoTokenTrace.lines().any { it.contains("bind=unknown") })
+    }
+
+    @Test
+    fun `invalidate drops the binding with the tokens`() = runBlocking {
+        val provider = WebViewPoTokenProvider(FakeMinter().apply { visitorEcho = "page" })
+        provider.gvsToken("v1", "request")
+        assertEquals("page", provider.effectiveVisitor("request"))
+
+        provider.invalidate()
+
+        assertEquals(
+            "a refused identity must not keep steering the next resolve at it",
+            "request",
+            provider.effectiveVisitor("request")
+        )
     }
 
     @Test

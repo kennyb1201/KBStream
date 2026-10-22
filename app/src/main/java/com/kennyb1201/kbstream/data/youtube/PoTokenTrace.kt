@@ -10,9 +10,10 @@ package com.kennyb1201.kbstream.data.youtube
  * behavior - but a silent upstream break must be visible in ONE field capture
  * instead of a user report. So the report says, per context, whether the last
  * mint produced a token, whether it came from the cache, or the class of what
- * went wrong; how long the mint took; whether the page's visitor matched the
- * one the request carries; and whether the last resolve's URLs actually carried
- * `pot`, signed by which client.
+ * went wrong; how long the mint took; how the page's visitor relates to the one
+ * the request was scraped with (`match`, `adopted` - the usual case - or
+ * `unknown`); and whether the last resolve's URLs actually carried `pot`, signed
+ * by which client.
  *
  * The lines OUTLIVE the refusal that drops the tokens. Clearing them there - as
  * this did at first - erased the evidence at the exact moment it mattered: the
@@ -54,9 +55,10 @@ object PoTokenTrace {
      *
      * [state] is [PoTokenState]'s vocabulary (`none | minted | cached |
      * failed:<class>`), [latencyMs] how long the mint took when there was one,
-     * [bind] whether the page's visitor matched the request's visitor, and
-     * [spent] whether the token was handed to the resolve - false is the
-     * mismatch case, where a token WAS minted and deliberately withheld.
+     * [bind] how the page's visitor relates to the request's (`match | adopted |
+     * unknown`), and [spent] whether the token was handed to the resolve. Null
+     * when it is not the question being answered (a pre-warm caches, it does not
+     * spend).
      */
     @Synchronized
     fun record(
@@ -70,9 +72,11 @@ object PoTokenTrace {
         val line = StringBuilder("pot.${context.label}: state=$state")
         if (latencyMs != null && latencyMs >= 0L) line.append(" latency=${latencyMs}ms")
         if (bind != null) line.append(" bind=$bind")
-        // Only a withheld token says so. "state=minted bind=mismatch" alone
-        // leaves the next question - did we spend it anyway? - unanswered.
-        if (spent == false) line.append(" spent=no")
+        // Stated both ways on purpose: "state=minted bind=adopted" alone leaves
+        // the next question - was it actually used for the request? - unanswered,
+        // and a capture must be able to say "spent under an adopted identity"
+        // without inference.
+        if (spent != null) line.append(" spent=${if (spent) "yes" else "no"}")
         // Where the token came from: the pre-warmed page or a mint the resolve
         // ran itself. The next capture has to be able to say "the resolve spent a
         // warm token" without inferring it from a latency.

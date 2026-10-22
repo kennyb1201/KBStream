@@ -177,19 +177,30 @@ class PoTokenWarmTest {
     }
 
     @Test
-    fun `a warm mint for another visitor is withheld like any other`() = runBlocking {
+    fun `a warm mint for another visitor is adopted, and the warm line stays ready`() = runBlocking {
         val minter = FakeWarmMinter().apply { visitorEcho = "someone-else" }
         val provider = WebViewPoTokenProvider(minter)
 
         provider.warmUp("vis", "v1")
 
         assertTrue(
-            "the binding rule is the same on both paths",
-            PoTokenTrace.lines().any { it.contains("bind=mismatch") && it.contains("spent=no") }
+            "the binding rule is the same on both paths, and an adoption is not a refusal",
+            PoTokenTrace.lines().any { it.contains("bind=adopted") }
         )
-        assertNull("and nothing was cached from it", provider.playerToken("vis"))
+        assertEquals(
+            "the page's identity is the one the tokens belong to",
+            "someone-else",
+            provider.effectiveVisitor("vis")
+        )
+        assertEquals("and its player token is spendable", "player", provider.playerToken("vis"))
+        assertEquals("as is the video-scoped one", "gvs", provider.gvsToken("v1", "vis"))
+        assertEquals("the warm mint is still the only mint", 0, minter.mints.size)
+        val lines = PoTokenTrace.lines()
         assertTrue(
-            PoTokenTrace.lines().any { it.startsWith("pot.warm: state=cold") }
+            "and the warm line reports the page's readiness, not the adopt outcome: $lines",
+            lines.any {
+                it.startsWith("pot.warm: state=ready") && it.contains("playerToken=yes")
+            }
         )
     }
 

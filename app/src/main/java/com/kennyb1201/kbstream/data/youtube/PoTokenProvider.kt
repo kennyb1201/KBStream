@@ -24,13 +24,36 @@ enum class PoTokenContext(val label: String) {
  * Implementations cache (so a resolve does not re-mint), bind (the player token
  * belongs to a visitor, the GVS token to a video) and fail soft: a mint that
  * times out, breaks, or cannot run on this device is a normal outcome.
+ *
+ * The visitor a token is bound to is NOT necessarily the visitor the resolve was
+ * handed: the request visitor comes from a header scrape, while the minter's page
+ * is issued its own session by YouTube. When they differ the page's identity wins
+ * (see [effectiveVisitor]), because that is the identity the token was actually
+ * minted under.
  */
 interface PoTokenProvider {
-    /** Token for the player request, bound to the session visitor. Null = unavailable. */
+    /** Token for the player request, bound to the effective session visitor. Null = unavailable. */
     suspend fun playerToken(visitorData: String): String?
 
     /** Token for googlevideo stream requests, bound to one video. Null = unavailable. */
     suspend fun gvsToken(videoId: String, visitorData: String): String?
+
+    /**
+     * The visitor the resolve must present for [visitorData].
+     *
+     * The two identities a resolve starts with are independent: the request
+     * visitor is scraped from a cookie-less page fetch, the page visitor is what
+     * YouTube issued the minter's own page. Seeding the scraped one into the
+     * page's cookie jar does not make the page adopt it, so a mint can (and on
+     * the field capture behind this spec, did) come back bound to a different
+     * visitor - a good token, refused only for failing to match an arbitrary
+     * scrape. The token's identity is the ground truth, so the request moves to
+     * it instead of the token being thrown away.
+     *
+     * Defaults to the argument unchanged, so a provider that mints nothing (and
+     * the kill switch) leaves every request exactly as it was.
+     */
+    fun effectiveVisitor(visitorData: String): String = visitorData
 
     /** Drop all cached tokens (identity refused / visitor changed). */
     fun invalidate()
@@ -137,10 +160,12 @@ object PoTokens {
  * does not always expose both contexts in the same session, and a partial mint
  * is still worth keeping.
  *
- * [visitorData] is the visitor the page itself presented. It is diagnostic: a
- * page loaded in a fresh cookie jar can be a different visitor from the one the
- * watch config was minted with, and that mismatch is exactly the kind of
- * binding problem a field capture has to be able to show.
+ * [visitorData] is the visitor the page itself presented - the identity YouTube
+ * issued the page and minted these tokens under. It is not diagnostic: a page
+ * loaded in a fresh cookie jar is routinely a different visitor from the one the
+ * watch config was scraped with, and the provider adopts the page's identity for
+ * the resolve (see [PoTokenProvider.effectiveVisitor]) rather than discarding a
+ * token for failing to match a header scrape.
  */
 data class MintedPoTokens(
     val playerToken: String? = null,
@@ -202,6 +227,15 @@ internal object PoTokenState {
      */
     const val SOURCE_WARM = "warm"
     const val SOURCE_LIVE = "live"
+
+    /**
+     * How the mint's page identity relates to the request's, as the trace prints
+     * it. `adopted` is the normal cross-session case: the page presented its own
+     * visitor, the resolve now presents that one.
+     */
+    const val BIND_MATCH = "match"
+    const val BIND_ADOPTED = "adopted"
+    const val BIND_UNKNOWN = "unknown"
 
     fun failed(error: Throwable): String = "failed:" + error.javaClass.simpleName
 

@@ -232,6 +232,14 @@ object InnerTubeExtractor {
         // video's embed page and the page's player produces its player token
         // and its googlevideo token together. Either may be null.
         val tokens = mintTokens(videoId, config.visitorData)
+        // The request moves to the token's identity, not the other way round: a
+        // token is bound to the visitor the PAGE was issued, and the scraped
+        // config visitor is a different session that seeding cannot make the
+        // page adopt. Presenting the scrape here while spending a token minted
+        // under the page's visitor is exactly the binding failure that used to
+        // discard every token; presenting the effective visitor is the only
+        // place the visitor enters the player request.
+        val visitor = presentedVisitor(config.visitorData, tokens.visitor)
 
         val progressive = mutableListOf<StreamCandidate>()
         val adaptiveVideo = mutableListOf<StreamCandidate>()
@@ -246,7 +254,7 @@ object InnerTubeExtractor {
                     apiKey = config.apiKey,
                     videoId = videoId,
                     client = client,
-                    visitorData = config.visitorData,
+                    visitorData = visitor,
                     playerToken = tokens.player
                 )
 
@@ -380,8 +388,28 @@ object InnerTubeExtractor {
         return null
     }
 
-    /** What one resolve minted; either half may be null (the tokenless path). */
-    private data class ResolveTokens(val player: String?, val gvs: String?)
+    /**
+     * What one resolve minted; either token may be null (the tokenless path), and
+     * [visitor] is the identity the resolve must present - the page's, when the
+     * mint was adopted, otherwise null (present the scraped config visitor).
+     */
+    private data class ResolveTokens(
+        val player: String?,
+        val gvs: String?,
+        val visitor: String? = null
+    )
+
+    /**
+     * The visitor the player request presents: the token's identity when there is
+     * one, the scraped config's otherwise.
+     *
+     * A pure rule, pinned separately from the resolve because it is the whole
+     * point of the binding work: the request must move to the identity YouTube
+     * actually minted the tokens under, and fall back to the scrape only when
+     * there was no mint to adopt.
+     */
+    internal fun presentedVisitor(configVisitor: String?, tokenVisitor: String?): String? =
+        tokenVisitor?.takeIf { it.isNotBlank() } ?: configVisitor
 
     /**
      * Mints the resolve's tokens, each inside its own budget (see
@@ -405,7 +433,11 @@ object InnerTubeExtractor {
         val player = tokenWithinBudget(TOKEN_BUDGET_MS) {
             provider.playerToken(visitorData)
         }
-        return ResolveTokens(player, gvs)
+        // Asked AFTER the mint: the page's identity is only known once the mint
+        // has observed it. With minting off (or no adoption) this is the request
+        // visitor unchanged, so the request stays byte-identical to pre-spec.
+        val visitor = runCatching { provider.effectiveVisitor(visitorData) }.getOrNull()
+        return ResolveTokens(player, gvs, visitor)
     }
 
     /**
@@ -831,6 +863,10 @@ object InnerTubeExtractor {
             put("x-youtube-client-version", client.version)
             put("user-agent", client.userAgent)
             if (!visitorData.isNullOrBlank()) {
+                // The ONLY place the visitor enters the player request (the
+                // payload's context carries none - pinned by PoTokenWiringTest),
+                // which is what makes "present the token's identity" a
+                // single-point change.
                 put("x-goog-visitor-id", visitorData)
             }
         }

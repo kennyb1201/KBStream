@@ -30,8 +30,14 @@ import org.json.JSONObject
  *    minter, so requests are byte-identical to pre-spec behavior;
  *  - caching: the player token against the visitor it was minted for (a new
  *    visitor orphans it, because a token is bound to the visitor it was minted
- *    with), the GVS tokens against their video (an LRU - trailers resolve one at
- *    a time);
+ *    with), the GVS tokens against their video and the visitor they were minted
+ *    under (an LRU - trailers resolve one at a time);
+ *  - binding: the page's visitor is the identity the tokens were minted under, so
+ *    a mint whose page presents a different visitor than the request was scraped
+ *    with is ADOPTED - the tokens are cached under the page's visitor, the
+ *    resolve is told to present that visitor, and lookups translate the request
+ *    visitor through the binding. A token is still never spent against an
+ *    identity other than the one it was minted under;
  *  - one mint at a time, with a hard timeout, so a stuck page cannot hold the
  *    resolve;
  *  - invalidation: a refused identity refuses its tokens too.
@@ -50,6 +56,16 @@ internal class WebViewPoTokenProvider(
         const val DEFAULT_MINT_TIMEOUT_MS = 10_000L
 
         private const val MAX_GVS_TOKENS = 8
+
+        /**
+         * How many `request visitor -> page visitor` bindings to remember.
+         *
+         * One per resolve is the normal case (a single config visitor, adopted
+         * once); the rest is headroom for a stale-config retry inside the 3 h
+         * config TTL. Small on purpose: a binding is a redirect for a live
+         * session identifier, not a cache.
+         */
+        private const val MAX_BINDINGS = 8
 
         private const val TAG = "PoTokenProvider"
 
@@ -70,14 +86,21 @@ internal class WebViewPoTokenProvider(
     private val lock = Any()
 
     /**
-     * A cached token with the page it was minted on.
+     * A cached token, the page it was minted on, and the effective visitor it was
+     * minted under.
      *
      * The origin travels with the token - not as a separate record - so a cache
      * hit can state `source=warm|live` on the same line as `state=cached`. The
-     * next field capture then says whether the pre-warm paid off instead of
-     * leaving it to be inferred from a latency.
+     * visitor travels with it for a different reason: a GVS token is keyed by
+     * video alone, so without the identity a cache hit could hand a token minted
+     * for one session to a request presenting another. Every spend, hit or miss,
+     * is accounted to the visitor it was minted under.
      */
-    private data class CachedToken(val value: String, val source: String)
+    private data class CachedToken(
+        val value: String,
+        val source: String,
+        val visitor: String
+    )
 
     /** The player token, the visitor it was minted for, and where it came from. */
     private var player: Triple<String, String, String>? = null
@@ -86,6 +109,20 @@ internal class WebViewPoTokenProvider(
     private val gvsTokens = object : LinkedHashMap<String, CachedToken>(maxGvsTokens, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedToken>?): Boolean =
             size > maxGvsTokens
+    }
+
+    /**
+     * Request visitor -> effective (page) visitor, per adoption.
+     *
+     * Bounded and small: a resolve has one request visitor, and only a stale-config
+     * retry brings a second. The cookie jar is process-wide and persistent, so the
+     * adopted identity can drift across sessions - a drift is a fresh adoption
+     * (a new entry), never a stale spend, because every entry is re-read from the
+     * mint that just happened.
+     */
+    private val bindings = object : LinkedHashMap<String, String>(MAX_BINDINGS, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+            size > MAX_BINDINGS
     }
 
     private val mintMutex = Mutex()
@@ -98,9 +135,12 @@ internal class WebViewPoTokenProvider(
             PoTokenTrace.record(PoTokenContext.PLAYER, PoTokenState.NONE)
             return null
         }
+        // Through the binding: the cached token is keyed by the visitor it was
+        // minted for, which for an adopted resolve is the page's, not the scrape's.
+        val effective = effectiveVisitor(visitorData)
         synchronized(lock) {
             player?.let { (visitor, token, source) ->
-                if (visitor == visitorData) {
+                if (visitor == effective) {
                     PoTokenTrace.record(
                         PoTokenContext.PLAYER,
                         PoTokenState.CACHED,
@@ -122,12 +162,30 @@ internal class WebViewPoTokenProvider(
         return null
     }
 
+    override fun effectiveVisitor(visitorData: String): String {
+        if (!enabled()) return visitorData
+        return synchronized(lock) { bindings[visitorData] ?: visitorData }
+    }
+
+    /**
+     * The cached GVS token for [videoId], but only if it was minted under the
+     * effective visitor the request presents. A hit under another identity is a
+     * miss, not a spend.
+     */
+    private fun cachedGvs(videoId: String, visitorData: String): CachedToken? {
+        val effective = effectiveVisitor(visitorData)
+        return synchronized(lock) { gvsTokens[videoId]?.takeIf { it.visitor == effective } }
+    }
+
     override suspend fun gvsToken(videoId: String, visitorData: String): String? {
         if (!enabled()) {
             PoTokenTrace.record(PoTokenContext.GVS, PoTokenState.NONE)
             return null
         }
-        synchronized(lock) { gvsTokens[videoId] }?.let { cached ->
+        // The GVS cache is keyed by video alone, so a hit has to be checked
+        // against the identity it was minted under before it is spent: a token
+        // minted for one session is not a token for a request presenting another.
+        cachedGvs(videoId, visitorData)?.let { cached ->
             PoTokenTrace.record(
                 PoTokenContext.GVS,
                 PoTokenState.CACHED,
@@ -138,7 +196,7 @@ internal class WebViewPoTokenProvider(
 
         return mintMutex.withLock {
             // A concurrent resolve may have minted while this one waited.
-            synchronized(lock) { gvsTokens[videoId] }?.let { cached ->
+            cachedGvs(videoId, visitorData)?.let { cached ->
                 PoTokenTrace.record(
                     PoTokenContext.GVS,
                     PoTokenState.CACHED,
@@ -192,28 +250,53 @@ internal class WebViewPoTokenProvider(
                 return@withLock null
             }
 
-            if (!adopt(minted, videoId, visitorData, elapsedMs)) return@withLock null
+            adopt(minted, videoId, visitorData, elapsedMs, spent = true)
             minted.gvsToken
         }
     }
 
     /**
-     * Applies one mint's result to the caches and the trace.
+     * Applies one mint's result to the caches, the binding and the trace.
      *
      * Shared by the resolve's mint and the pre-warm's, so the binding rule is
-     * stated once: a token minted for another visitor is not a token for this
-     * resolve, and a warm mint is cached with its origin just like a live one.
+     * stated once: the tokens are cached under the visitor the PAGE presented -
+     * the identity YouTube issued and minted them under - the request visitor is
+     * bound to it for this resolve, and a warm mint is cached with its origin just
+     * like a live one.
      *
-     * @return false when the mint was refused for a visitor mismatch (nothing
-     * cached, nothing spent); true otherwise.
+     * A page visitor that differs from the request's is no longer a refusal. It
+     * used to be, and on the 0.9.25 field capture that discarded BOTH tokens of a
+     * successful mint (`bind=mismatch spent=no`) and sent the resolve out
+     * tokenless, because the scraped visitor and the page's are minted
+     * independently and the page does not adopt a seeded cookie. The safety
+     * property is unchanged - a token is never spent against an identity other
+     * than the one it was minted under - it is achieved by moving the request to
+     * the token's identity instead of throwing the token away.
+     *
+     * A mint that yields no page visitor at all keeps the previous `unknown`
+     * behavior: the tokens are cached under the request visitor, nothing is
+     * adopted, and the request is unchanged.
+     *
+     * @param spent whether the tokens are being handed to a resolve (`true`) or
+     * only cached for one that has not happened yet (null, the pre-warm).
      */
     private fun adopt(
         minted: MintedPoTokens,
         videoId: String,
-        visitorData: String,
-        elapsedMs: Long?
-    ): Boolean {
-        val bind = bindState(minted.visitorData, visitorData)
+        requestVisitor: String,
+        elapsedMs: Long?,
+        spent: Boolean?
+    ) {
+        val pageVisitor = minted.visitorData?.takeIf { it.isNotBlank() }
+        val bind = when {
+            pageVisitor == null -> PoTokenState.BIND_UNKNOWN
+            pageVisitor == requestVisitor -> PoTokenState.BIND_MATCH
+            else -> PoTokenState.BIND_ADOPTED
+        }
+        // The identity the tokens belong to, and therefore the one the resolve
+        // has to present. `unknown` has nothing to adopt, so it stays on the
+        // visitor the request was handed - exactly as before.
+        val effective = pageVisitor ?: requestVisitor
         val source =
             if (minted.warm) PoTokenState.SOURCE_WARM else PoTokenState.SOURCE_LIVE
         val gvsState =
@@ -221,46 +304,16 @@ internal class WebViewPoTokenProvider(
         val playerState =
             if (minted.playerToken != null) PoTokenState.MINTED else PoTokenState.NONE
 
-        if (bind == "mismatch") {
-            // A PO token is bound to the visitor it was minted for, so a
-            // token minted for ANOTHER visitor is not a token for this
-            // resolve: spending it is a refusal with extra steps. Neither
-            // token is cached or returned - the resolve then takes exactly
-            // the tokenless path it would have taken with no mint at all -
-            // and both lines say why (`spent=no`).
-            //
-            // Never the visitor string itself: it is a live session
-            // identifier, and the state is what a capture needs.
-            PoTokenTrace.record(
-                PoTokenContext.GVS,
-                gvsState,
-                elapsedMs,
-                bind = bind,
-                // Only a token that exists can be withheld; the other half
-                // of a partial mint has nothing to say beyond `state=none`.
-                spent = if (minted.gvsToken != null) false else null,
-                source = source
-            )
-            PoTokenTrace.record(
-                PoTokenContext.PLAYER,
-                playerState,
-                null,
-                bind = bind,
-                spent = if (minted.playerToken != null) false else null,
-                source = source
-            )
-            Log.w(
-                TAG,
-                "PO token minted for a different visitor than the watch config " +
-                    "holds (gvs=$gvsState player=$playerState bind=$bind " +
-                    "source=$source ${elapsedMs ?: 0}ms); withholding both, resolving without one"
-            )
-            return false
-        }
-
         synchronized(lock) {
-            minted.playerToken?.let { player = Triple(visitorData, it, source) }
-            minted.gvsToken?.let { gvsTokens[videoId] = CachedToken(it, source) }
+            // An adoption is recorded per mint, so a later resolve with the same
+            // request visitor translates to the identity just observed - a drift
+            // in the persistent cookie jar produces a fresh adoption, never a
+            // spend against a session that has moved on.
+            if (bind == PoTokenState.BIND_ADOPTED) bindings[requestVisitor] = effective
+            minted.playerToken?.let { player = Triple(effective, it, source) }
+            minted.gvsToken?.let {
+                gvsTokens[videoId] = CachedToken(it, source, effective)
+            }
         }
 
         PoTokenTrace.record(
@@ -268,6 +321,9 @@ internal class WebViewPoTokenProvider(
             gvsState,
             elapsedMs,
             bind = bind,
+            // Only a token that exists can be spent or withheld; the other half
+            // of a partial mint has nothing to say beyond `state=none`.
+            spent = if (minted.gvsToken != null) spent else null,
             source = source
         )
         PoTokenTrace.record(
@@ -275,6 +331,7 @@ internal class WebViewPoTokenProvider(
             playerState,
             null,
             bind = bind,
+            spent = if (minted.playerToken != null) spent else null,
             source = source
         )
         // A SUCCESS is a warning too, on purpose: it is the line that tells
@@ -286,7 +343,6 @@ internal class WebViewPoTokenProvider(
             "PO token minted gvs=$gvsState player=$playerState bind=$bind " +
                 "source=$source ${elapsedMs ?: 0}ms for $videoId"
         )
-        return true
     }
 
     override fun isEnabled(): Boolean = enabled()
@@ -328,9 +384,18 @@ internal class WebViewPoTokenProvider(
                 Log.w(TAG, "PO token pre-warm failed (${error.javaClass.simpleName})")
                 null
             }
-            val adopted = minted?.let {
-                adopt(it, videoId ?: WebViewPoTokenMinter.WARM_PAGE_VIDEO_ID, visitorData, elapsedMs(startedAt))
-            } ?: false
+            val adopted = minted != null
+            minted?.let {
+                adopt(
+                    it,
+                    videoId ?: WebViewPoTokenMinter.WARM_PAGE_VIDEO_ID,
+                    visitorData,
+                    elapsedMs(startedAt),
+                    // Cached for the resolve that follows, not handed to one: the
+                    // line must not claim a spend that has not happened.
+                    spent = null
+                )
+            }
             PoTokenTrace.recordWarm(
                 if (adopted) PoTokenTrace.WARM_READY else PoTokenTrace.WARM_COLD,
                 hasPlayerToken()
@@ -354,23 +419,16 @@ internal class WebViewPoTokenProvider(
         synchronized(lock) {
             player = null
             gvsTokens.clear()
+            // The bindings go with the tokens: an adoption is what the tokens
+            // belonged to, so a refused identity must not keep steering the next
+            // resolve at the visitor whose session was refused. The next mint
+            // adopts afresh or not at all.
+            bindings.clear()
         }
         PoTokenTrace.recordInvalidated()
         // Warning, not debug: this is the evidence a field capture needs that
         // the refusal path cleared the tokens (Fire OS suppresses debug).
         Log.w(TAG, "PO token cache cleared")
-    }
-
-    /**
-     * `match` / `mismatch` / `unknown`. A page loaded in a fresh cookie jar can
-     * be a different visitor from the watch config's; that is diagnostic, not a
-     * reason to discard the mint (the caller's visitor is what the request
-     * carries, and §4 handles a refused token).
-     */
-    private fun bindState(pageVisitor: String?, requestVisitor: String): String = when {
-        pageVisitor.isNullOrBlank() -> "unknown"
-        pageVisitor == requestVisitor -> "match"
-        else -> "mismatch"
     }
 
     private fun elapsedMs(startedAt: Long): Long =
