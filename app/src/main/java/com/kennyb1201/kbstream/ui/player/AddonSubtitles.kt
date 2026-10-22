@@ -163,13 +163,6 @@ class AddonSubtitleController(
     private var attachedPlayer: Player? = null
 
     /**
-     * Addon ASS offers by "language|label", for the fallback when media3 does
-     * not carry a config id through to the track's Format (see [assSourceFor]).
-     */
-    @Volatile
-    private var assOffersByKey: Map<String, String> = emptyMap()
-
-    /**
      * Optional bulk-status hook: how many offers resolved and how many did not,
      * called on the main thread once per attach attempt.
      *
@@ -358,36 +351,20 @@ class AddonSubtitleController(
                 }.awaitAll().filterNotNull()
             }
 
-            // The ASS bookkeeping below stays SEQUENTIAL and in offer order.
-            // awaitAll preserves that order, so the key map built here is the
-            // one the serial version built and the ambiguity rule still sees
-            // the same first-wins sequence.
-            val assKeys = mutableMapOf<String, String>()
-            val ambiguousAssKeys = mutableSetOf<String>()
+            // The configurations stay SEQUENTIAL and in offer order (awaitAll
+            // preserves it), so the picker lists the same tracks it always did.
             val configs = resolved.map { track ->
                 val builder = MediaItem.SubtitleConfiguration.Builder(track.uri)
                     .setMimeType(track.mime)
                     .setLanguage(track.language)
                     .setLabel(track.label)
                     .setSelectionFlags(0)
-                // Tag ASS offers so the player can route the selected track to
-                // the libass overlay instead of rendering them flattened; a
-                // non-ASS offer is left exactly as before.
-                AddonAssTracks.configIdFor(track.mime, track.url)?.let { id ->
-                    builder.setId(id)
-                    val key = AddonAssTracks.languageKey(track.language, track.label)
-                    val existing = assKeys[key]
-                    if (existing == null) {
-                        assKeys[key] = track.url
-                    } else if (existing != track.url) {
-                        // Two ASS tracks share language+label: the fallback key
-                        // cannot name one of them, and guessing would paint the
-                        // OTHER track's typesetting over the one selected. Drop
-                        // the key - only the config id can route these, and
-                        // flattened rendering is the safe default.
-                        ambiguousAssKeys += key
-                    }
-                }
+                // EVERY addon track is tagged: an ASS/SSA one so the player can
+                // route the selected track to the libass overlay instead of
+                // rendering it flattened, any other one so a track the addons
+                // published is never mistaken for a container track. Nothing is
+                // ever guessed from language + label (see AddonAssTracks).
+                AddonAssTracks.trackConfigIdFor(track.mime, track.url)?.let(builder::setId)
                 builder.build()
             }
 
@@ -399,8 +376,6 @@ class AddonSubtitleController(
                 onBulkResult?.invoke(configs.size, offers.size - configs.size)
             }
             if (configs.isEmpty()) return@launch
-            ambiguousAssKeys.forEach { assKeys.remove(it) }
-            assOffersByKey = assKeys
 
             withContext(Dispatchers.Main) {
                 // Re-check on the main thread: the media item can change
@@ -422,12 +397,13 @@ class AddonSubtitleController(
 
     /**
      * The addon ASS source URL [format] names, or null when it is not an addon
-     * ASS track. Tries the config id media3 should have carried through first
-     * (see [AddonAssTracks]), then falls back to language + label.
+     * ASS track.
+     *
+     * The configuration id is the only basis (see [AddonAssTracks]): a container
+     * track that merely shares a language and label with a published offer is
+     * NOT that offer, and claiming it made the overlay swallow the real track.
      */
-    fun assSourceFor(format: Format): String? =
-        AddonAssTracks.urlFromConfigId(format.id)
-            ?: assOffersByKey[AddonAssTracks.languageKey(format.language, format.label)]
+    fun assSourceFor(format: Format): String? = AddonAssTracks.assSourceFor(format)
 
     /**
      * Downloads [url] into the shared subtitle cache, or returns the copy
@@ -451,8 +427,8 @@ class AddonSubtitleController(
  * download time.
  *
  * This exists so the concurrent half of [AddonSubtitleController.attachTracks]
- * can stay purely about downloading: the ASS key bookkeeping that follows is
- * sequential and in offer order, and needs the label and mime without
+ * can stay purely about downloading: the configurations that follow are built
+ * sequentially and in offer order, and need the label and mime without
  * re-reading the offer or re-probing the file.
  */
 private class ResolvedSubtitle(

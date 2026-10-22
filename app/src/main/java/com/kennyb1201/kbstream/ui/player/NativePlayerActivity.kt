@@ -143,6 +143,11 @@ private const val MAX_SUBTITLE_FILE_BYTES = 8 * 1024 * 1024
 // track: a sidecar is rendered whole-script under the SIDECAR overlay and must
 // never be re-routed to the embedded streaming path.
 private const val SIDECAR_TRACK_ID = "kbstream.sidecar"
+// Tag for every libass overlay decision: what the selection claimed and on what
+// basis, which attach gate stopped it, and whether the cue gate is suppressing
+// the pipeline's flattened copy. None of this was observable before, which is
+// why a selected-but-black subtitle track had to be diagnosed by elimination.
+private const val TAG_ASS = "PLAYER_ASS"
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -1190,6 +1195,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     /** The addon URL the overlay shows, when [assOverlaySource] is ADDON. */
     private var assOverlayAddonUrl: String? = null
+
+    /**
+     * The claim last written to the log, so a repeat onTracksChanged is not a
+     * new line. Cleared when the overlay lets go (see [detachAssSubtitle]).
+     */
+    private var assClaimLogged: String? = null
 
     /**
      * The one libass instance for this activity, shared by the whole-script
@@ -9119,6 +9130,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private val positionTick = Runnable { updateFromPosition() }
 
         /**
+         * The suppression state last logged, so a flip is one line rather than
+         * one per cue. Reset with the handler, which is rebuilt per player.
+         */
+        private var assGateSuppressed = false
+
+        /**
          * True when an external subtitle file is loaded AND the offset is
          * negative: the pipeline only ever emits cues at their authored
          * time, so "show earlier" needs this handler to drive rendering
@@ -9127,8 +9144,35 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private val positionDriven: Boolean
             get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0 && !assOwned()
 
-        /** True while the libass overlay is drawing; text cues must stay out of its way. */
-        private fun assOwned(): Boolean = assRenderer.active
+        /**
+         * True when the overlay is typesetting the CURRENTLY SELECTED text
+         * track; text cues must stay out of its way.
+         *
+         * This used to be "some script is loaded", which is a different thing:
+         * an overlay still holding a script it no longer typesets (a selection
+         * that moved on, an offer that turned out to draw nothing) then ate
+         * every cue of the track the viewer had actually picked, silently, for
+         * the whole episode. The gate is the same decision
+         * [handleAssTrackSelection] makes, read again from the live selection:
+         * the overlay's own claim has to cover the track selected right now.
+         */
+        private fun assOwned(): Boolean {
+            val owned = assRenderer.active && assOverlayClaimsSelection()
+            if (owned != assGateSuppressed) {
+                assGateSuppressed = owned
+                Log.i(
+                    TAG_ASS,
+                    if (owned) {
+                        "cue gate suppressed: overlay typesets the selected track " +
+                            "source=$assOverlaySource"
+                    } else {
+                        "cue gate flowing: the selected track is not the overlay's " +
+                            "(source=$assOverlaySource)"
+                    }
+                )
+            }
+            return owned
+        }
 
         override fun onCues(cueGroup: CueGroup) {
             if (assOwned()) {
@@ -9443,9 +9487,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // leaves an instance with no script behind it, and drawing that one
             // would cover the picture with a subtitle the viewer just removed.
             if (assOverlaySource == AssOverlaySource.NONE) return
+            // Everything below is scoped to the track the overlay TYPESETS, not
+            // to "a script is loaded". A selection the overlay has not claimed
+            // keeps its own flattened cues and must not be painted over by a
+            // script still held for another one - and a claim that comes back
+            // (the same addon track selected again) re-draws from here, which is
+            // why this poll keeps running rather than stopping.
+            if (!assOverlayClaimsSelection()) {
+                if (subtitleAssImage.visibility != View.GONE) {
+                    subtitleAssImage.setImageDrawable(null)
+                    subtitleAssImage.visibility = View.GONE
+                }
+                handler.postDelayed(this, ASS_IDLE_INTERVAL_MS)
+                return
+            }
             // The pipeline still emits flattened cues for the same file, and
-            // they would draw behind the rendered frame: the overlay owns the
-            // subtitle area while it is active.
+            // they would draw behind the rendered frame: while the overlay
+            // typesets the selected track it owns the subtitle area.
             externalSubtitleCues = emptyList()
             if (subtitleText.visibility != View.GONE) subtitleText.visibility = View.GONE
             drawAssFrame()
@@ -9458,15 +9516,40 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * Starts the tick for [content]. The script is loaded by the tick itself,
      * so every caller sees the same load-and-fall-back behaviour without
      * repeating it here.
+     *
+     * Only the whole-script paths reach this (ADDON and SIDECAR); the EMBEDDED
+     * streaming path arms the overlay through [armEmbeddedAssOverlay], because
+     * its events arrive over time and its renderer does own the selected track.
      */
     private fun attachAssSubtitle(
         content: String,
         source: AssOverlaySource,
         addonUrl: String? = null
     ) {
+        // A script with zero Dialogue events draws nothing, ever - but libass
+        // loads it happily and the overlay then counts as live, so the cue gate
+        // used to swallow every cue of the real track for a script that could
+        // never paint a pixel. Refuse it instead and leave the selection to the
+        // flattened cues the pipeline already renders.
+        val events = AssSubtitleSource.dialogueEventCount(content)
+        if (events == 0) {
+            Log.w(
+                TAG_ASS,
+                "ASS script refused: events=0 source=$source" +
+                    (addonUrl?.let { " host=${logHost(it)}" } ?: "")
+            )
+            // Whatever this attach was replacing must not keep painting.
+            if (assOverlaySource == source) detachAssSubtitle()
+            return
+        }
         assSubtitleContent = content
         assOverlaySource = source
         assOverlayAddonUrl = addonUrl
+        Log.i(
+            TAG_ASS,
+            "ASS overlay attached: source=$source events=$events" +
+                (addonUrl?.let { " host=${logHost(it)}" } ?: "")
+        )
         handler.removeCallbacks(assFrameTick)
         handler.post(assFrameTick)
     }
@@ -9567,6 +9650,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         assSubtitleContent = null
         assOverlaySource = AssOverlaySource.NONE
         assOverlayAddonUrl = null
+        assClaimLogged = null
         releaseAssRenderer()
     }
 
@@ -9594,34 +9678,124 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun attachAddonAss(url: String) {
         if (assOverlaySource == AssOverlaySource.ADDON && assOverlayAddonUrl == url) return
         lifecycleScope.launch(Dispatchers.IO) {
-            val uri = AddonSubtitleSource.download(this@NativePlayerActivity, url) ?: return@launch
-            val text = readSubtitleText(uri) ?: return@launch
-            if (!AssSubtitleSource.isAssContent(text)) return@launch
+            val uri = AddonSubtitleSource.download(this@NativePlayerActivity, url)
+            if (uri == null) {
+                Log.w(TAG_ASS, "addon ASS not attached: download failed host=${logHost(url)}")
+                return@launch
+            }
+            val text = readSubtitleText(uri)
+            if (text == null) {
+                Log.w(TAG_ASS, "addon ASS not attached: download unreadable host=${logHost(url)}")
+                return@launch
+            }
+            if (!AssSubtitleSource.isAssContent(text)) {
+                Log.w(
+                    TAG_ASS,
+                    "addon ASS not attached: content is not ASS/SSA host=${logHost(url)}"
+                )
+                return@launch
+            }
             withContext(Dispatchers.Main) {
                 // The download is async: if the viewer switched tracks (or
                 // turned subtitles off) while it was in flight, attaching now
                 // would paint the wrong track's typesetting, or subtitles after
                 // OFF. Only attach while this URL is still the selected track.
-                if (selectedAddonAssUrl() != url) return@withContext
+                if (selectedAddonAssUrl() != url) {
+                    Log.w(
+                        TAG_ASS,
+                        "addon ASS not attached: the selection moved on " +
+                            "host=${logHost(url)}"
+                    )
+                    return@withContext
+                }
                 attachAssSubtitle(text, AssOverlaySource.ADDON, url)
             }
         }
     }
 
-    /** The ASS source URL of the currently SELECTED text track, or null. */
-    private fun selectedAddonAssUrl(): String? {
-        val tracks = exoPlayer?.currentTracks ?: return null
+    /**
+     * The host of [url], for a log line: a route or a query string can carry a
+     * token, and no field log is allowed to be a copy of one.
+     */
+    private fun logHost(url: String): String =
+        runCatching { Uri.parse(url).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: "unknown"
+
+    /**
+     * What the SELECTED text tracks say about the libass overlay: the one
+     * account both the routing ([handleAssTrackSelection]) and the cue gate
+     * ([SubtitleCueHandler]) read, so the two cannot disagree about which track
+     * the overlay owns. [language] and [label] are the first selected text
+     * track's, for the log lines only.
+     */
+    private class AssSelection(
+        val addonUrl: String?,
+        val embedded: Boolean,
+        val sidecar: Boolean,
+        val language: String?,
+        val label: String?
+    )
+
+    private fun assSelection(tracks: Tracks): AssSelection {
+        var addonUrl: String? = null
+        var embedded = false
+        var sidecar = false
+        var language: String? = null
+        var label: String? = null
+        var seenSelection = false
         for (group in tracks.groups) {
             if (group.type != C.TRACK_TYPE_TEXT) continue
             for (i in 0 until group.length) {
                 if (!group.isSelected) continue
-                addonSubtitleController.assSourceFor(group.getTrackFormat(i))?.let {
-                    return it
+                val fmt = group.getTrackFormat(i)
+                if (!seenSelection) {
+                    seenSelection = true
+                    language = fmt.language
+                    label = fmt.label
                 }
+                val url = addonSubtitleController.assSourceFor(fmt)
+                if (url != null) {
+                    if (addonUrl == null) addonUrl = url
+                    continue
+                }
+                // The user's own sidecar is ALSO an SSA track, and it is
+                // rendered whole-script under the SIDECAR overlay. Without this
+                // skip it fell into the embedded branch below, which nulls the
+                // loaded script and flips to the streaming path - a fansub
+                // sidecar lost its typesetting the moment its track was
+                // selected. The config is tagged at its construction site.
+                if (fmt.id == SIDECAR_TRACK_ID) {
+                    sidecar = true
+                    continue
+                }
+                if (fmt.sampleMimeType == MimeTypes.TEXT_SSA) embedded = true
             }
         }
-        return null
+        return AssSelection(addonUrl, embedded, sidecar, language, label)
     }
+
+    /**
+     * Whether the overlay's own claim covers [selection]: ADDON when the
+     * selected track is the offer the overlay holds, EMBEDDED when it is the
+     * streaming track, SIDECAR when it is the user's own file. Deliberately
+     * says nothing about whether the renderer has finished loading.
+     */
+    private fun assClaimCovers(selection: AssSelection): Boolean = when (assOverlaySource) {
+        AssOverlaySource.NONE -> false
+        AssOverlaySource.ADDON ->
+            selection.addonUrl != null && selection.addonUrl == assOverlayAddonUrl
+        AssOverlaySource.SIDECAR -> selection.sidecar
+        AssOverlaySource.EMBEDDED -> selection.embedded
+    }
+
+    /** Whether the overlay is typesetting the track that is selected right now. */
+    private fun assOverlayClaimsSelection(): Boolean {
+        val tracks = exoPlayer?.currentTracks ?: return false
+        return assClaimCovers(assSelection(tracks))
+    }
+
+    /** The ASS source URL of the currently SELECTED text track, or null. */
+    private fun selectedAddonAssUrl(): String? =
+        exoPlayer?.currentTracks?.let { assSelection(it).addonUrl }
 
     /**
      * Routes the selected text track to the libass overlay when it is an ASS
@@ -9630,39 +9804,54 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * The source guard is the point: an ADDON or EMBEDDED overlay is cleared
      * when its track goes away, but a user-picked sidecar (SIDECAR) is never
      * clobbered by a track change elsewhere.
+     *
+     * Every claim is logged here, with the track it is about and the basis it
+     * was made on. The field diagnosis of a selected-but-black track had to be
+     * done by elimination because none of it was ever written down.
      */
     private fun handleAssTrackSelection(tracks: Tracks) {
-        var addonUrl: String? = null
-        var embeddedAss = false
-        for (group in tracks.groups) {
-            if (group.type != C.TRACK_TYPE_TEXT) continue
-            for (i in 0 until group.length) {
-                if (!group.isSelected) continue
-                val fmt = group.getTrackFormat(i)
-                val url = addonSubtitleController.assSourceFor(fmt)
-                if (url != null) {
-                    addonUrl = url
-                    break
-                }
-                // The user's own sidecar is ALSO an SSA track, and it is
-                // rendered whole-script under the SIDECAR overlay. Without this
-                // skip it fell into the embedded branch below, which nulls the
-                // loaded script and flips to the streaming path - a fansub
-                // sidecar lost its typesetting the moment its track was
-                // selected. The config is tagged at its construction site.
-                if (fmt.id == SIDECAR_TRACK_ID) continue
-                if (fmt.sampleMimeType == MimeTypes.TEXT_SSA) embeddedAss = true
-            }
-            if (addonUrl != null) break
-        }
-
-        val selectedAddon = addonUrl
+        val selection = assSelection(tracks)
+        val selectedAddon = selection.addonUrl
         when {
-            selectedAddon != null -> attachAddonAss(selectedAddon)
-            embeddedAss && AssSubtitleRenderer.available -> armEmbeddedAssOverlay()
+            selectedAddon != null -> {
+                logAssClaim(
+                    identity = "ADDON|$selectedAddon",
+                    line = "claim lang=${selection.language} label=${selection.label} " +
+                        "basis=id source=ADDON host=${logHost(selectedAddon)}"
+                )
+                attachAddonAss(selectedAddon)
+            }
+            selection.embedded && AssSubtitleRenderer.available -> {
+                logAssClaim(
+                    identity = "EMBEDDED",
+                    line = "claim lang=${selection.language} label=${selection.label} " +
+                        "basis=mime source=EMBEDDED"
+                )
+                armEmbeddedAssOverlay()
+            }
+            selection.sidecar && assOverlaySource == AssOverlaySource.SIDECAR -> {
+                // The sidecar's own claim: the overlay was armed when the file
+                // was picked, and this is the selection it belongs to.
+                logAssClaim(
+                    identity = "SIDECAR",
+                    line = "claim lang=${selection.language} label=${selection.label} " +
+                        "basis=id source=SIDECAR"
+                )
+            }
             assOverlaySource == AssOverlaySource.ADDON ||
                 assOverlaySource == AssOverlaySource.EMBEDDED -> detachAssSubtitle()
         }
+    }
+
+    /**
+     * One line per distinct claim. onTracksChanged fires for reasons that are
+     * not a selection change (an adaptive audio or video switch), and a claim
+     * repeated for the same track is not news.
+     */
+    private fun logAssClaim(identity: String, line: String) {
+        if (assClaimLogged == identity) return
+        assClaimLogged = identity
+        Log.i(TAG_ASS, line)
     }
 
     /**

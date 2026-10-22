@@ -93,7 +93,7 @@ internal object AssSubtitleSource {
         val info = sectionRange(lines, SCRIPT_INFO)
         val styles = sectionRange(lines, "[V4+ Styles]")
             ?: sectionRange(lines, "[V4 Styles]")
-        val events = sectionRange(lines, "[Events]")
+        val events = sectionRange(lines, EVENTS_SECTION)
 
         // Nothing to repair: every section libass insists on is present, every
         // entry this function would insert is already there, and the line
@@ -125,14 +125,37 @@ internal object AssSubtitleSource {
             lines += DEFAULT_STYLES
         }
 
-        val repairedEvents = sectionRange(lines, "[Events]")
+        val repairedEvents = sectionRange(lines, EVENTS_SECTION)
         when {
-            repairedEvents == null -> lines += listOf("[Events]", EVENTS_FORMAT)
+            repairedEvents == null -> lines += listOf(EVENTS_SECTION, EVENTS_FORMAT)
             !hasEntry(lines, repairedEvents, "Format:") ->
                 lines.add(repairedEvents.first + 1, EVENTS_FORMAT)
         }
 
         return lines.joinToString("\n").trimEnd('\n') + "\n"
+    }
+
+    /**
+     * How many `Dialogue:` events [raw] carries.
+     *
+     * A header-only script - a stylesheet with no events, which an addon's
+     * subtitle offer can turn out to be - loads into libass perfectly happily and
+     * then never draws a pixel. While it is loaded the overlay counts as live, so
+     * the whole episode's real cues used to be swallowed for it. Counting the
+     * events on the same normalised text the renderer parses is what lets the
+     * attach path refuse such a script and leave the track to the flattened cues
+     * the pipeline already renders. `Comment:` lines are not events: libass does
+     * not draw them either.
+     */
+    fun dialogueEventCount(raw: String): Int {
+        if (raw.isBlank()) return 0
+        // Counted wherever they appear, not inside `[Events]`: a stripped file
+        // can carry its Dialogue lines with the section header missing, and the
+        // repair only adds an empty one. Nothing else in a script starts with
+        // the keyword once the line is trimmed - a commented-out event starts
+        // with `;`.
+        return normalize(raw).lineSequence()
+            .count { it.trim().startsWith(DIALOGUE_PREFIX, ignoreCase = true) }
     }
 
     /**
@@ -184,6 +207,8 @@ internal object AssSubtitleSource {
     }
 
     private const val SCRIPT_INFO = "[Script Info]"
+    private const val EVENTS_SECTION = "[Events]"
+    private const val DIALOGUE_PREFIX = "Dialogue:"
     private const val DEFAULT_MAX_WIDTH = 1920
     private const val DEFAULT_MAX_HEIGHT = 1080
 

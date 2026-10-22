@@ -208,6 +208,49 @@ class AssSubtitleSourceTest {
         assertFalse(out.endsWith("Hi\n\n"))
     }
 
+    // --- Event counting ----------------------------------------------------
+
+    @Test
+    fun `a header-only script has no dialogue events`() {
+        // An addon's offer can be exactly this: a stylesheet with an empty
+        // events block. libass loads it and never draws, which is why the
+        // attach path refuses it instead of letting it swallow the track.
+        val headerOnly = "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\n" +
+            "Format: Name, Fontname\nStyle: Default,Arial,20\n\n[Events]\n" +
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+
+        assertEquals(0, AssSubtitleSource.dialogueEventCount(headerOnly))
+    }
+
+    @Test
+    fun `a script with dialogue events counts them`() {
+        assertEquals(
+            2,
+            AssSubtitleSource.dialogueEventCount(
+                "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,One\n" +
+                    "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Two\n"
+            )
+        )
+        assertEquals(1, AssSubtitleSource.dialogueEventCount(completeScript))
+    }
+
+    @Test
+    fun `a comment is not an event libass draws`() {
+        assertEquals(
+            1,
+            AssSubtitleSource.dialogueEventCount(
+                "Comment: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,a note\n" +
+                    "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,Hi\n"
+            )
+        )
+    }
+
+    @Test
+    fun `an empty file has no events`() {
+        assertEquals(0, AssSubtitleSource.dialogueEventCount(""))
+        assertEquals(0, AssSubtitleSource.dialogueEventCount("   \n\n"))
+    }
+
     // --- Fonts -------------------------------------------------------------
 
     @Test
