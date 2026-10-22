@@ -34,7 +34,58 @@ internal fun resumeAuthorityWinner(
     val preferred = candidates.filter { candidate ->
         candidate.resumeSource == source && candidate.hasResumePoint()
     }
-    return (preferred.ifEmpty { candidates }).maxWithOrNull(upNextWinnerOrder)
+    val pool = preferred.ifEmpty { candidates }
+    return (localTargetCandidates(pool) ?: pool).maxWithOrNull(upNextWinnerOrder)
+}
+
+/**
+ * The cards to rank when a cluster's local and tracker copies name DIFFERENT
+ * target episodes: this device's, and only this device's.
+ *
+ * Reported: after finishing an episode, Continue Watching kept offering it,
+ * and a tracker twin could make the node point at the wrong episode of a show
+ * whose local walk knew exactly where the viewer was. Local rows are this
+ * profile's own writes, made on this device from what was actually played; a
+ * tracker feed can lag them, never lead them. So when the two disagree about
+ * which episode comes next, the local target is the answer.
+ *
+ * Narrow on purpose:
+ *
+ *  - A card with no episode pair cannot participate - there is no target to
+ *    compare, and a movie/session card keeps the ordinary order.
+ *  - Agreement changes nothing: the pool is returned untouched, so the
+ *    existing order (a real resume position first) still decides which copy
+ *    of the SAME episode the rail shows.
+ *  - No local card, no override: a tracker-only show keeps its tracker card,
+ *    which is the whole point of merging the feeds.
+ *
+ * Applied AFTER the authority filter, so a viewer who chose a tracker as the
+ * authoritative resume source still gets its position when it has one: a
+ * resume point is not a target disagreement.
+ */
+private fun localTargetCandidates(
+    candidates: List<UpNextItem>
+): List<UpNextItem>? {
+    val withTarget =
+        candidates.filter { candidate ->
+            candidate.season != null && candidate.episode != null
+        }
+    val local =
+        withTarget.filter { candidate ->
+            candidate.resumeSource == ResumeSource.LOCAL
+        }
+    if (local.isEmpty()) return null
+
+    val localTargets =
+        local.mapTo(HashSet()) { candidate -> candidate.season to candidate.episode }
+
+    val trackerDisagrees =
+        withTarget.any { candidate ->
+            candidate.resumeSource != ResumeSource.LOCAL &&
+                (candidate.season to candidate.episode) !in localTargets
+        }
+
+    return if (trackerDisagrees) local else null
 }
 
 internal fun ResumeAuthority.toResumeSource(): ResumeSource =

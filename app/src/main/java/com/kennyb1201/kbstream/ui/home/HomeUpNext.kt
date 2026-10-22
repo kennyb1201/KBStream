@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
@@ -545,12 +546,46 @@ internal fun upNextTitleKey(item: UpNextItem): String =
     "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"
 
 /**
- * True when this card came from a TRACKER account (Simkl, MDBList) rather
- * than from this profile's own watch history.
+ * True when this card came from a TRACKER account (Simkl, MDBList, Trakt)
+ * rather than from this profile's own watch history.
+ *
+ * The three feeds are one class of input for every rule that weighs them
+ * against local evidence: an account-wide library whose copy of a title can lag
+ * what this device has already watched. Trakt was the one that used to slip
+ * past those rules by falling outside this predicate.
  */
 internal fun isTrackerSourcedCard(item: UpNextItem): Boolean =
     item.id.startsWith("simkl:", ignoreCase = true) ||
-        item.id.startsWith("mdblist:", ignoreCase = true)
+        item.id.startsWith("mdblist:", ignoreCase = true) ||
+        item.id.startsWith("trakt:", ignoreCase = true)
+
+/**
+ * The time fields an ADVANCE ("next up") card carries.
+ *
+ * An advance card points at an episode the viewer has not started, so nothing
+ * about it is "left": [remainingMinutes] is null, never the full duration of
+ * the episode a completed row (or a tracker session) recorded, and
+ * [startPositionMs] is 0, never inherited from the row the card was derived
+ * from. [runtimeMinutes] is the TARGET episode's runtime - the same resolution
+ * that supplies its rating and still - or null when it carries none.
+ *
+ * Reported: a NEXT UP card for S1 E6 whose hero read "44m left", the full
+ * duration of the episode just finished, presented as the next one's remaining
+ * time. The fields have to describe the card's own episode or be absent, and
+ * this is the one place that says so.
+ */
+internal data class UpNextAdvanceTimes(
+    val remainingMinutes: Int?,
+    val runtimeMinutes: Int?,
+    val startPositionMs: Long
+)
+
+internal fun upNextAdvanceTimes(targetRuntimeMinutes: Int?): UpNextAdvanceTimes =
+    UpNextAdvanceTimes(
+        remainingMinutes = null,
+        runtimeMinutes = targetRuntimeMinutes?.takeIf { it > 0 },
+        startPositionMs = 0L
+    )
 
 /**
  * The parent identity keys a show is known by, in the same vocabulary as
@@ -665,16 +700,18 @@ internal fun completedTitleMark(
 }
 
 /**
- * True when a TRACKER card must be hidden because this profile just FINISHED
- * what the card still points at.
+ * True when a TRACKER card must be hidden because this profile has already
+ * watched what the card still points at.
  *
  * Reported: after watching something, its Continue Watching card stayed for
- * around forty-five seconds. Nothing local was wrong - the finished row leaves
- * the rail's own query the moment it is written - but the tracker feed that
- * card came from still listed the title, and the rail only re-read that feed
- * on a coarse schedule. The local completion is the one fact that is known
- * immediately, so it is what decides: a tracker card pointing at something
- * this profile has already completed is stale, whatever the feed says.
+ * around forty-five seconds, and later re-merges could put it back for longer.
+ * Nothing local was wrong - the finished row leaves the rail's own query the
+ * moment it is written - but the tracker feed that card came from still listed
+ * the title, and the rail only re-read that feed on a coarse schedule. The
+ * local completion is the one fact that is known immediately, so it is what
+ * decides: a tracker card pointing at something this profile has already
+ * completed is stale, whatever the feed says, however long ago it was watched
+ * (see [dropTrackerCardsForCompletedTargets]).
  *
  * [trackerCardLocallyFinished] is the other half of the same principle and
  * covers the rest: it proves a show caught up from the TMDB walk (every aired
@@ -716,6 +753,53 @@ internal fun trackerCardJustCompletedByProfile(
         if (cardSeason == null || cardEpisode == null) return@any true
 
         mark.season == cardSeason && mark.episode == cardEpisode
+    }
+}
+
+/**
+ * The merge-time invariant behind "Continue Watching never offers an episode
+ * this profile has already watched".
+ *
+ * The completion cleanup used to be an EVENT: a bus fired when the completion
+ * push landed, and the tracker cards for what was just finished were dropped
+ * once, by name. Every later re-merge - a resume refresh, the lag retries, a
+ * TTL expiry - re-read the trackers' copy of the title and could re-admit a
+ * card pointing at the episode the local database already records as watched.
+ * A queued, failed or slow push left the stale card until the next cold start.
+ *
+ * The local database is this device's own viewing: it is never staler than a
+ * tracker feed ABOUT it. So the rule belongs in the merge, where every publish
+ * passes, and it needs no event and no recency window: a tracker card that
+ * points at a completed episode is stale whenever that completion happened.
+ *
+ * Local cards are deliberately untouched - they are built from the same rows
+ * this predicate reads. A tracker card for a DIFFERENT (unwatched) episode of
+ * the same show survives: that is the feed having moved on to what is next.
+ * A show with no local rows has no marks, so its cards are unaffected.
+ */
+internal fun dropTrackerCardsForCompletedTargets(
+    items: List<UpNextItem>,
+    completedRows: List<WatchHistoryEntity>
+): List<UpNextItem> {
+    if (items.isEmpty() || completedRows.isEmpty()) return items
+    if (items.none { item -> isTrackerSourcedCard(item) }) return items
+
+    val marks =
+        completedRows.mapNotNull { row ->
+            completedTitleMark(
+                parentId = row.parentId,
+                parentType = row.type,
+                tmdbId = null,
+                season = row.season,
+                episode = row.episode,
+                title = row.name
+            )
+        }
+
+    if (marks.isEmpty()) return items
+
+    return items.filterNot { item ->
+        trackerCardJustCompletedByProfile(item, marks)
     }
 }
 
@@ -1357,23 +1441,36 @@ internal fun continueWatchingLandsOnHead(
  * cannot tell the chip the viewer never left from one they chose. The viewer was
  * left scrolling up to reach the rail they had come for.
  *
- * [chipRowHasFocus] supplies the missing distinction: focus still on the chip
- * row means the viewer has pressed nothing, so the chip is where the framework
- * put focus rather than a choice, and moving on completes the landing the rail
- * was always meant to make. [isFreshEntry] keeps it out of the Detail return,
- * where the ViewModel seeds a focus-restore target and the existing restore owns
- * the landing (see HomeViewModel.lastFocusedRailItemKey); [initialLandingDone]
- * makes it a one-shot per composition, because the head card being deleted
- * mid-session is the remove signal's own landing and must still be able to run;
- * and [viewerWalkedRail] keeps a rail the viewer entered and left theirs.
+ * Reported again (field, 2026-10-22, Onn 4K Plus, 0.9.25): the landing existed
+ * but did not always win, with no pattern the viewer could see. Continue Watching
+ * composes EMPTY until its data emits, so the framework's default focus settled
+ * on the first focusable that existed - the chip row in the warm half of the
+ * race, but just as often the Upcoming rail's head or a catalog rail's first
+ * card (cold caches, a profile switch, a slow merge). The gate above read focus
+ * LOCATION as a stand-in for viewer intent, so in those sessions the fresh-entry
+ * branch declined its own landing, silently, and focus stayed wherever the race
+ * happened to leave it. Upcoming and the catalog rails have no landing of their
+ * own; nothing was stealing it.
+ *
+ * The gate is the viewer's INTENT now: [viewerMovedFocusSinceEntry] is latched by
+ * the screen on the first deliberate D-pad press after entry (see HomeScreen's
+ * root key handler), and where focus happens to rest is not consulted at all. A
+ * default is not a choice, whichever rail it landed on - so the landing answers
+ * the same whether the framework left focus on the chip row, on Upcoming or on
+ * a catalog poster, and a viewer who has started navigating is never relocated.
+ *
+ * [isFreshEntry] keeps it out of the Detail return, where the ViewModel seeds a
+ * focus-restore target and the existing restore owns the landing (see
+ * HomeViewModel.lastFocusedRailItemKey); [initialLandingDone] makes it a one-shot
+ * per composition, because the head card being deleted mid-session is the remove
+ * signal's own landing and must still be able to run.
  */
 internal fun continueWatchingLandsOnFreshEntry(
     isFreshEntry: Boolean,
     initialLandingDone: Boolean,
-    chipRowHasFocus: Boolean,
-    viewerWalkedRail: Boolean
+    viewerMovedFocusSinceEntry: Boolean
 ): Boolean =
-    isFreshEntry && !initialLandingDone && chipRowHasFocus && !viewerWalkedRail
+    isFreshEntry && !initialLandingDone && !viewerMovedFocusSinceEntry
 
 /**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.home
 
+import androidx.compose.ui.input.key.Key
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,21 +15,25 @@ import org.junit.Test
  * and doesn't go to continue watching like it should." The chip row composes
  * first out of fast local data and takes focus, and the rail's own head-landing
  * is gated on `railHasFocus` - which is only true once focus is already inside
- * the rail - so a load arriving while focus sat on the chip could never move
- * it. The viewer scrolled up to reach the rail they came for.
+ * the rail - so a load arriving while focus sat on the chip could never move it.
  *
- * The fix completes the landing without weakening the old gate: on a FRESH entry
- * (the ViewModel's own return signal - see [HomeViewModel.recordHomeEntry]), with
- * CW data now present and focus still on the chip row, the rail lands on its
- * head. Focus on the chip row is the framework's default rather than a choice,
- * so moving is finishing the landing; focus anywhere else is the viewer having
- * navigated, and is left alone. A return to Home is never a fresh entry, even
- * when the card the viewer left on could not name itself.
+ * Reported again (field, 2026-10-22, Onn 4K Plus, 0.9.25): the landing existed
+ * but lost its race, session to session. Continue Watching composes EMPTY until
+ * its data emits, so the framework's default focus landed on whichever
+ * focusable existed first - the chip row sometimes, the Upcoming rail's head or
+ * a catalog poster the rest of the time - and the gate read that LOCATION as if
+ * the viewer had chosen it, declining its own landing silently.
+ *
+ * The gate is the viewer's INTENT now: `viewerMovedFocusSinceEntry`, latched by
+ * Home's root preview handler on the first deliberate D-pad press after entry.
+ * Where focus rests is not an input at all, which is exactly what these tests
+ * pin - the old proxy's parameters are gone from the rule.
  *
  * The rule is a plain function (asserted directly) and the wiring that applies
- * it - the one-shot, the key list, the shared scroll and retry - is asserted
- * from the source, the way [ContinueWatchingHeadLandingContractTest] does for
- * the landing that was already there.
+ * it - the latch, the one-shot, the key list, the shared scroll and retry, the
+ * HOME_FOCUS report - is asserted from the source, the way
+ * [ContinueWatchingHeadLandingContractTest] does for the landing that was
+ * already there.
  */
 class ContinueWatchingFreshEntryLandingContractTest {
 
@@ -49,48 +54,49 @@ class ContinueWatchingFreshEntryLandingContractTest {
     // ------------------------------------------------------------- the rule --
 
     @Test
-    fun `the landing completes only on a fresh entry with focus still on the chips`() {
+    fun `the landing completes on a fresh entry until the viewer moves focus`() {
         assertTrue(
-            "the reported case: nothing rests on the rail, the data is here and " +
-                "focus is still where entry left it - the landing is owed",
+            "the reported case: fresh, nothing landed yet, the viewer has pressed " +
+                "nothing - the landing is owed, no matter which rail the framework " +
+                "defaulted focus to",
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = true,
                 initialLandingDone = false,
-                chipRowHasFocus = true,
-                viewerWalkedRail = false
+                viewerMovedFocusSinceEntry = false
             )
         )
         assertFalse(
-            "focus anywhere else (another rail, the top bar) is the viewer having " +
-                "navigated, and the old gate's intent holds: leave it alone",
+            "a viewer who has started navigating is never relocated: focus went " +
+                "where they put it",
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = true,
                 initialLandingDone = false,
-                chipRowHasFocus = false,
-                viewerWalkedRail = false
+                viewerMovedFocusSinceEntry = true
             )
         )
-        assertFalse(
-            "the viewer entered the rail and left it: never steal back",
-            continueWatchingLandsOnFreshEntry(
-                isFreshEntry = true,
-                initialLandingDone = false,
-                chipRowHasFocus = true,
-                viewerWalkedRail = true
-            )
+    }
+
+    @Test
+    fun `the rule has no focus-location input left`() {
+        assertTrue(
+            "the location proxy is what lost the race: the gate must not be able " +
+                "to ask where focus is, so neither the chip row nor the rail's " +
+                "own walk latch is a parameter",
+            !home.contains("chipRowHasFocus") &&
+                !home.contains("focusedBrowseChipRowIndex") &&
+                !source(HOME_UP_NEXT).contains("chipRowHasFocus")
         )
     }
 
     @Test
     fun `a Detail return is the existing restore's, not this landing's`() {
         assertFalse(
-            "a restore target means the ViewModel seeded focus and its own " +
-                "restore owns the landing; the fresh branch must never run",
+            "a return has a restore target and the ViewModel's own restore owns " +
+                "the landing; the fresh branch must never run",
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = false,
                 initialLandingDone = false,
-                chipRowHasFocus = true,
-                viewerWalkedRail = false
+                viewerMovedFocusSinceEntry = false
             )
         )
     }
@@ -102,8 +108,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = true,
                 initialLandingDone = false,
-                chipRowHasFocus = true,
-                viewerWalkedRail = false
+                viewerMovedFocusSinceEntry = false
             )
         )
         assertFalse(
@@ -112,8 +117,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = true,
                 initialLandingDone = true,
-                chipRowHasFocus = true,
-                viewerWalkedRail = false
+                viewerMovedFocusSinceEntry = false
             )
         )
     }
@@ -123,12 +127,11 @@ class ContinueWatchingFreshEntryLandingContractTest {
     @Test
     fun `the fresh branch runs before the gate and reuses the landing verbatim`() {
         assertTrue(
-            "the branch is a call to the shared rule with all four inputs",
+            "the branch is a call to the shared rule with the three inputs",
             landing.contains("continueWatchingLandsOnFreshEntry(") &&
                 landing.contains("isFreshEntry = isFreshEntry,") &&
                 landing.contains("initialLandingDone = initialLandingDone,") &&
-                landing.contains("chipRowHasFocus = chipRowHasFocus,") &&
-                landing.contains("viewerWalkedRail = viewerWalkedRail")
+                landing.contains("viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry")
         )
         val fresh = landing.indexOf("continueWatchingLandsOnFreshEntry(")
         val gate = landing.indexOf("continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)")
@@ -152,7 +155,8 @@ class ContinueWatchingFreshEntryLandingContractTest {
             rail.split("headRequester.requestFocus()").size - 1
         )
         assertTrue(
-            "it still returns without touching focus when neither branch applies",
+            "the succeeding correction still returns without touching focus when " +
+                "neither branch applies",
             landing.contains("return@LaunchedEffect")
         )
     }
@@ -176,7 +180,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
     }
 
     @Test
-    fun `the existing landing keys are untouched, and the branch reads the chip flag from the body`() {
+    fun `the existing landing keys are untouched, and the branch reads the latch from the body`() {
         assertTrue(
             "the rail's effect still re-runs on the head, focus being in the rail " +
                 "and the remove signal - the fresh branch lives inside it rather " +
@@ -185,10 +189,12 @@ class ContinueWatchingFreshEntryLandingContractTest {
                 !rail.contains("LaunchedEffect(headId, railHasFocus, landOnHeadSignal,")
         )
         assertTrue(
-            "and the fresh branch passes the flag through from the rail's own " +
+            "and the fresh branch passes the latch through from the rail's own " +
                 "argument, so what it reads is the current composition's value",
-            rail.contains("chipRowHasFocus: Boolean = false") &&
-                landing.contains("chipRowHasFocus = chipRowHasFocus,")
+            rail.contains("viewerMovedFocusSinceEntry: Boolean = false") &&
+                landing.contains(
+                    "viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry"
+                )
         )
         assertTrue(
             "an empty rail still returns before anything else",
@@ -197,14 +203,78 @@ class ContinueWatchingFreshEntryLandingContractTest {
     }
 
     @Test
-    fun `the rail takes the two facts as arguments rather than reaching for them`() {
+    fun `the rail takes both facts as arguments rather than reaching for them`() {
         assertTrue(
             "the fresh-entry fact, defaulting to no landing",
             rail.contains("isFreshEntry: Boolean = false")
         )
         assertTrue(
-            "and the chip row's focus, likewise",
-            rail.contains("chipRowHasFocus: Boolean = false")
+            "and the viewer's intent, likewise",
+            rail.contains("viewerMovedFocusSinceEntry: Boolean = false")
+        )
+    }
+
+    // ------------------------------------------------------------ the latch --
+
+    @Test
+    fun `the first deliberate D-pad press after entry latches the viewer's intent`() {
+        assertTrue(
+            "the latch itself, false on entry because it is a new composition",
+            home.contains("var viewerMovedFocusSinceEntry by remember {") &&
+                home.contains("mutableStateOf(false)")
+        )
+        assertTrue(
+            "observed at the ROOT, on a preview handler: every D-pad press reaches " +
+                "it before the focused node, whether that is a card, a chip or the " +
+                "top bar",
+            home.contains(".onPreviewKeyEvent { event ->") &&
+                home.contains("event.type == KeyEventType.KeyDown &&") &&
+                home.contains("isHomeFocusMoveKey(event.key)")
+        )
+        assertTrue(
+            "and it only observes - the press still has to reach the focus system",
+            home.contains("viewerMovedFocusSinceEntry = true\n                }\n                false")
+        )
+    }
+
+    @Test
+    fun `the latch counts the D-pad and nothing else`() {
+        assertTrue(
+            "all four directions and Select, which chooses what is under focus",
+            isHomeFocusMoveKey(Key.DirectionUp) &&
+                isHomeFocusMoveKey(Key.DirectionDown) &&
+                isHomeFocusMoveKey(Key.DirectionLeft) &&
+                isHomeFocusMoveKey(Key.DirectionRight) &&
+                isHomeFocusMoveKey(Key.DirectionCenter)
+        )
+        assertFalse(
+            "Back is not a navigation step, and dismissing an overlay moves no focus",
+            isHomeFocusMoveKey(Key.Back)
+        )
+    }
+
+    // --------------------------------------------------------- the reporting --
+
+    @Test
+    fun `both decisions are reported on HOME_FOCUS, once each`() {
+        assertTrue(
+            "the landing names the head it chose",
+            landing.contains("\"Fresh-entry landing on Continue Watching head \"")
+        )
+        assertTrue(
+            "and the suppression names the latch that caused it",
+            landing.contains("\"Fresh-entry landing declined: viewer moved focus first; \"") &&
+                landing.contains("loggedFreshEntryDecline = true")
+        )
+        assertEquals(
+            "the decline is said once per composition, not once per load",
+            1,
+            landing.split("loggedFreshEntryDecline = true").size - 1
+        )
+        assertEquals(
+            "and the landing line is emitted from one place, after the landing",
+            1,
+            rail.split("Fresh-entry landing on Continue Watching head").size - 1
         )
     }
 
@@ -241,40 +311,12 @@ class ContinueWatchingFreshEntryLandingContractTest {
     }
 
     @Test
-    fun `home knows the chip row is where focus rests by default`() {
-        assertTrue(
-            "the state Home holds",
-            home.contains("var focusedBrowseChipRowIndex by remember {")
-        )
-        assertTrue(
-            "it names the row rather than being a boolean, so the row losing " +
-                "focus cannot clear the row that just took it",
-            home.contains("focusedBrowseChipRowIndex = when {") &&
-                home.contains("focusedBrowseChipRowIndex == entryIndex ->")
-        )
-        assertTrue(
-            "and the rail is told whether any chip row holds focus",
-            home.contains("chipRowHasFocus = focusedBrowseChipRowIndex != null")
-        )
-    }
-
-    @Test
-    fun `the browse chip row reports its own focus`() {
+    fun `the browse row no longer reports focus, because nothing reads it`() {
         val slots = source(KB_HOME_SLOTS)
-        assertTrue(
-            "the rail takes the row's focus callback",
-            slots.contains("onRowFocusChanged: ((Boolean) -> Unit)? = null")
-        )
-        assertTrue(
-            "and observes focus on the ROW: hasFocus is \"this node or any child " +
-                "of it\", which is what \"the chip row holds focus\" means",
-            slots.contains("onRowFocusChanged?.invoke(it.hasFocus)") &&
-                slots.contains("modifier = Modifier.onFocusChanged {")
-        )
-        assertTrue(
-            "Home wires it to the state above",
-            home.contains("onRowFocusChanged = { hasFocus ->") &&
-                home.contains("focusedBrowseChipRowIndex = when {")
+        assertFalse(
+            "the proxy's plumbing is gone with it",
+            slots.contains("onRowFocusChanged") &&
+                home.contains("onRowFocusChanged")
         )
     }
 
@@ -303,6 +345,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
 
     private companion object {
         const val HOME_SCREEN = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val HOME_UP_NEXT = "com/kennyb1201/kbstream/ui/home/HomeUpNext.kt"
         const val HOME_VIEW_MODEL = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val KB_HOME_SLOTS = "com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt"
     }

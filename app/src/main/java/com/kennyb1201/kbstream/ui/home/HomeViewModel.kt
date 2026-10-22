@@ -1724,8 +1724,9 @@ Log.d(
     }
 
     /**
-     * Drops TRACKER cards for titles this profile completed on this device
-     * within the last [JUST_COMPLETED_CARD_SUPPRESSION_MS].
+     * Drops TRACKER cards whose target this profile has already watched on this
+     * device - the rule the rail used to apply only once, when a completion's
+     * push landed.
      *
      * Continue Watching is a merge of this profile's own history and the
      * tracker feeds. A completion leaves the local side the instant it is
@@ -1736,44 +1737,71 @@ Log.d(
      * the one input already known to be true, so it decides here instead of the
      * rail waiting on a feed.
      *
-     * Read fresh on every call: the row that matters is the one the player just
-     * wrote, and it is small (completed rows updated in the window, with no
-     * in-progress sibling). Any read failure returns the list untouched - a
-     * card too many beats hiding a rail on a database hiccup.
+     * This runs on EVERY publish (see [applyContinueWatchingDismissals]), not
+     * only on the completion bus, because every later re-merge - a resume
+     * refresh, one of the lag retries, a TTL expiry - can re-read the trackers'
+     * copy of the title. The all-time completed-series read is what makes the
+     * rule hold for an episode watched days ago as well as for the one written
+     * a second ago; the recency-windowed read stays for the case it is the only
+     * evidence for, a MOVIE completion (a film has no episode to match, so its
+     * card is dropped by title alone).
+     *
+     * Read fresh on every call. A failed read degrades to the other one rather
+     * than keeping every card: the surviving read is still local evidence, and
+     * the recent read's own failure used to leave the rail untouched.
      */
     private suspend fun dropJustCompletedTrackerCards(
         items: List<UpNextItem>
     ): List<UpNextItem> {
         if (items.isEmpty()) return items
+        // Only tracker cards can be stale here: local cards are built from the
+        // rows this rule reads. Skipping the reads for a local-only rail keeps
+        // the common case free.
+        if (items.none { item -> isTrackerSourcedCard(item) }) return items
 
-        val rows =
+        // Two reads, one rule. The recent one is the completion's own event
+        // window and the only evidence a MOVIE completion leaves (a film has
+        // no episode to match, so its card is dropped by title alone). The
+        // all-time series read is what makes "never offer a locally-watched
+        // episode" an invariant of the merge rather than of the bus: a tracker
+        // card pointing at an episode completed days ago is just as stale as
+        // one pointing at the episode completed a minute ago, and every
+        // re-merge (a resume refresh, a lag retry, a TTL expiry) passes here.
+        //
+        // A failed read degrades to the other one rather than keeping every
+        // card: the surviving read is still local evidence.
+        val recentRows =
             try {
                 historyDao.getRecentlyCompletedWithoutResume(
                     System.currentTimeMillis() - JUST_COMPLETED_CARD_SUPPRESSION_MS
                 )
             } catch (_: Exception) {
-                return items
+                emptyList()
             }
 
-        if (rows.isEmpty()) return items
-
-        val marks =
-            rows.mapNotNull { row ->
-                completedTitleMark(
-                    parentId = row.parentId,
-                    parentType = row.type,
-                    tmdbId = null,
-                    season = row.season,
-                    episode = row.episode,
-                    title = row.name
-                )
+        val completedRows =
+            try {
+                historyDao.getCompletedSeriesRows()
+            } catch (_: Exception) {
+                emptyList()
             }
 
-        if (marks.isEmpty()) return items
+        if (recentRows.isEmpty() && completedRows.isEmpty()) return items
 
-        return items.filterNot { item ->
-            trackerCardJustCompletedByProfile(item, marks)
+        val kept =
+            dropTrackerCardsForCompletedTargets(
+                items,
+                recentRows + completedRows
+            )
+
+        if (kept.size != items.size) {
+            Log.d(
+                "HOME_UPNEXT",
+                "Dropped ${items.size - kept.size} tracker card(s) for locally watched episodes"
+            )
         }
+
+        return kept
     }
 
     /**
@@ -2774,6 +2802,13 @@ Log.d(
                 episode = target.episode
             )
 
+        // An advance card's time fields describe the TARGET episode or are
+        // absent: nothing is "left" of an episode nobody has started, and the
+        // source row's numbers here were the "44m left" beside a NEXT UP card
+        // (see upNextAdvanceTimes).
+        val advanceTimes =
+            upNextAdvanceTimes(target.runtimeMinutes)
+
         return UpNextItem(
             id = "nextup:$parentId",
             title = title,
@@ -2789,7 +2824,8 @@ Log.d(
             backdrop = backdrop,
             clearLogo = row.clearLogo,
             imdbRating = target.episodeRating,
-            runtimeMinutes = target.runtimeMinutes,
+            runtimeMinutes = advanceTimes.runtimeMinutes,
+            remainingMinutes = advanceTimes.remainingMinutes,
             subtitle =
                 "${
                     upNextBadgePrefix(
@@ -2806,7 +2842,7 @@ Log.d(
             season = target.season,
             episode = target.episode,
             episodeStreamId = target.streamId,
-            startPositionMs = 0L,
+            startPositionMs = advanceTimes.startPositionMs,
             recencyTimestamp = row.completedAt ?: row.updatedAt,
             isSeasonFinale = target.isSeasonFinale,
             isSeriesFinale = target.isSeriesFinale,
@@ -5127,10 +5163,18 @@ Log.d(
             episodesRemaining = episodesRemaining,
             tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
             runtimeMinutes = runtimeMinutes,
-            remainingMinutes = calculateRemainingMinutesFromProgress(
-                runtimeMinutes = runtimeMinutes,
-                progress = session.progress.toFloat()
-            ),
+            // Time-left belongs to a card with something to resume. A session
+            // at 0% is not one: its progress would report the episode's whole
+            // runtime as "left" beside a NEXT UP chip (see upNextAdvanceTimes).
+            remainingMinutes =
+                if (isExplicitResume) {
+                    calculateRemainingMinutesFromProgress(
+                        runtimeMinutes = runtimeMinutes,
+                        progress = session.progress.toFloat()
+                    )
+                } else {
+                    null
+                },
             subtitle = subtitle,
             progressPercent = if (isExplicitResume) {
                 progressFraction.toFloat()
@@ -5643,11 +5687,13 @@ episodesTotal =
 episodesTotal =
     episodesTotal,
 
-            // Only meaningful for items with an actual watched position
-                        // Calculate time remaining from the actual Simkl playback
-            // percentage. This is used for Continue Watching items.
+            // Only meaningful for items with an actual watched position.
+            // The badge is a resume exactly when isExplicitResume says so, and
+            // the time-left has to agree with it: a playback entry at 0% used
+            // to be a NEXT UP card reporting the episode's whole runtime as
+            // "left" (see upNextAdvanceTimes).
             remainingMinutes =
-                if (item.source == "playback") {
+                if (isExplicitResume) {
                     calculateRemainingMinutesFromProgress(
                         runtimeMinutes = runtimeMinutes,
                         progress = item.progress

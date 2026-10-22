@@ -973,14 +973,7 @@ fun KBHomeBrowseRail(
     // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
     // old shared row's word so a caller that predates the split still draws
     // something sensible.
-    title: String = "Browse",
-    // The ROW's own focus state, reported on every change: true while focus is
-    // anywhere in this row's chips. Home needs it because entry leaves focus on
-    // the first chip row, and that is the only place from which the Continue
-    // Watching rail may finish its landing on its own head - focus on a chip is
-    // the default the framework chose, not a place the viewer picked (see
-    // HomeScreen's focusedBrowseChipRowIndex).
-    onRowFocusChanged: ((Boolean) -> Unit)? = null
+    title: String = "Browse"
 ) {
     Column(
         modifier = Modifier.padding(
@@ -1006,13 +999,7 @@ fun KBHomeBrowseRail(
                 top = 4.dp,
                 bottom = 12.dp
             ),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            // hasFocus, not isFocused: the LazyRow is not focusable itself - its
-            // chips are - and a parent's hasFocus means "this node or any child
-            // of it", which is what "the row holds focus" means here.
-            modifier = Modifier.onFocusChanged {
-                onRowFocusChanged?.invoke(it.hasFocus)
-            }
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(
                 items = shortcuts,

@@ -171,6 +171,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -209,6 +210,20 @@ private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
  * pages), and is far longer than either surface actually needs.
  */
 private const val HOME_FOCUS_RETRY_FRAMES = 12
+
+/**
+ * The most frames the top bar's focus hand-off keeps asking for focus before it
+ * gives up, loudly.
+ *
+ * This is a runaway guard, not a budget the way [HOME_FOCUS_RETRY_FRAMES] is a
+ * budget for the hand-back DOWN to a card. The hand-off into the bar now runs
+ * for as long as the bar is showing and focus has not landed inside it, so the
+ * only thing bounded here is a bar that can never take focus at all. Three
+ * seconds at 60 fps is an order of magnitude past any fade the ask can race, and
+ * reaching it logs (tag HOME_FOCUS) rather than vanishing: the old twelve-frame
+ * budget expired silently and left the bar shown with the D-pad stranded.
+ */
+private const val HOME_TOP_BAR_DRIVE_MAX_FRAMES = 180
 
 /**
  * The key families Home's own rail cards report their focus under (see
@@ -286,6 +301,27 @@ internal fun formatTimeLeft(remainingMinutes: Int?): String? {
         hours > 0 -> "${hours}h left"
         else -> "${minutes}m left"
     }
+}
+
+/**
+ * The D-pad presses that tell Home the viewer has taken over.
+ *
+ * The first of these after a fresh entry is the viewer's intent (see
+ * `viewerMovedFocusSinceEntry`), which is what the Continue Watching landing is
+ * gated on instead of where focus happened to rest: a default is not a choice,
+ * whichever rail the framework left it on.
+ *
+ * Select counts - pressing it chooses whatever is under focus, the strongest
+ * statement of intent there is. Back deliberately does not: it is not a
+ * navigation step, and a Back that only dismisses an overlay has moved no focus.
+ */
+internal fun isHomeFocusMoveKey(key: Key): Boolean = when (key) {
+    Key.DirectionUp,
+    Key.DirectionDown,
+    Key.DirectionLeft,
+    Key.DirectionRight,
+    Key.DirectionCenter -> true
+    else -> false
 }
 
 /**
@@ -483,6 +519,7 @@ private fun TopActionBar(
     onOpenSettings: () -> Unit,
     onSwitchProfile: () -> Unit,
     firstActionFocusRequester: FocusRequester,
+    onBarFocusChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     // Quick profile switch lives on the top bar: the button IS the active
@@ -505,7 +542,12 @@ private fun TopActionBar(
             .padding(
                 horizontal = 20.dp,
                 vertical = 14.dp
-            ),
+            )
+            // The bar's own report of where focus is: `hasFocus` is true for a
+            // node whose descendant holds it, so this covers every chip and
+            // needs no per-chip wiring. Home's hand-off reads it instead of
+            // trusting requestFocus()'s answer (see the hand-off effect).
+            .onFocusChanged { onBarFocusChanged(it.hasFocus) },
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2588,16 +2630,15 @@ private fun BuiltinContinueWatchingRail(
      */
     isFreshEntry: Boolean = false,
     /**
-     * Whether D-pad focus is still on a Browse chip row - where home entry
-     * leaves it, since that row composes first.
+     * Whether the viewer has moved focus themselves since this entry - the
+     * fresh-entry landing's licence (see [continueWatchingLandsOnFreshEntry]).
      *
-     * This is the fresh-entry landing's licence: focus on the chip row means
-     * the viewer has pressed nothing, so the chip is the framework's default
-     * rather than a choice (see [continueWatchingLandsOnFreshEntry]). Focus
-     * anywhere else is the viewer having navigated, and this rail leaves it
-     * where it is.
+     * False means no D-pad press has happened yet, so whatever holds focus is
+     * the framework's default rather than a choice, whichever rail it landed on,
+     * and completing the landing takes nothing from the viewer. True means they
+     * have started navigating, and this rail leaves focus where they put it.
      */
-    chipRowHasFocus: Boolean = false,
+    viewerMovedFocusSinceEntry: Boolean = false,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2650,19 +2691,25 @@ private fun BuiltinContinueWatchingRail(
     // the viewer is elsewhere is corrected the moment they enter the rail,
     // instead of leaving them on a rail anchored away from its own first card.
     //
-    // The fresh-entry branch reads [chipRowHasFocus] from the body rather than
-    // the key list: on a fresh entry the chip row composes first and takes
-    // focus, and this effect already re-runs on the update that matters - the
-    // head appearing (headId). Adding the flag as a key would also land on data
-    // that arrived before anything had focus, which the report is not about and
-    // which has nothing stable to hand focus to (see
-    // [continueWatchingLandsOnFreshEntry]'s edge cases).
+    // The fresh-entry branch reads the viewer's intent latch from the body
+    // rather than the key list: the effect already re-runs on the update that
+    // matters - the head appearing (headId) - and a key would make a D-pad press
+    // run a landing that then has to decide it is not one. Where focus rests is
+    // not consulted at all (see [continueWatchingLandsOnFreshEntry]).
+    //
+    // Whether the decline has been said on HOME_FOCUS yet. The effect re-runs on
+    // focus and on later loads; one line is the report.
+    var loggedFreshEntryDecline by remember { mutableStateOf(false) }
+
     LaunchedEffect(headId, railHasFocus, landOnHeadSignal) {
         // No cards left at all: there is nothing in this row to land on, and
         // asking a detached requester only burns the budget. The framework's
         // own relocation picks up the row below, which is the same place the
         // viewer would press Down to reach.
         if (headId == null) return@LaunchedEffect
+        // Set when this pass is the fresh-entry landing, so the log at the end
+        // can name the branch that ran and the head it chose.
+        var freshEntryLanding = false
         if (landOnHeadSignal != answeredLandingSignal) {
             answeredLandingSignal = landOnHeadSignal
             // The walk latch is cleared with it: the card the viewer had chosen
@@ -2673,17 +2720,32 @@ private fun BuiltinContinueWatchingRail(
             continueWatchingLandsOnFreshEntry(
                 isFreshEntry = isFreshEntry,
                 initialLandingDone = initialLandingDone,
-                chipRowHasFocus = chipRowHasFocus,
-                viewerWalkedRail = viewerWalkedRail
+                viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry
             )
         ) {
-            // Fresh entry, data has arrived, and focus is still on the chip row
-            // the framework put it on: the chip is a default, not a choice, so
+            // Fresh entry, data has arrived, and the viewer has pressed nothing:
+            // whatever holds focus is the framework's default, not a choice, so
             // moving is finishing the landing rather than stealing focus from
             // the viewer. One shot - every later load takes the gate below.
             initialLandingDone = true
-        } else if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
-            return@LaunchedEffect
+            freshEntryLanding = true
+        } else {
+            if (
+                isFreshEntry &&
+                !initialLandingDone &&
+                viewerMovedFocusSinceEntry &&
+                !loggedFreshEntryDecline
+            ) {
+                loggedFreshEntryDecline = true
+                Log.i(
+                    "HOME_FOCUS",
+                    "Fresh-entry landing declined: viewer moved focus first; " +
+                        "Continue Watching head " + headId + " left where it is"
+                )
+            }
+            if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
+                return@LaunchedEffect
+            }
         }
         // Put the head card on screen first: until it is laid out there is no
         // focus node to ask for. This is also the scroll the viewer was making
@@ -2702,6 +2764,18 @@ private fun BuiltinContinueWatchingRail(
             awaitFrame()
             landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)
             attempts++
+        }
+        if (freshEntryLanding) {
+            // The field capture's question - which branch ran, and on what - in
+            // one line. Info rather than debug, because Fire TV suppresses
+            // debug output.
+            val decided =
+                "Fresh-entry landing on Continue Watching head " + headId
+            if (landed) {
+                Log.i("HOME_FOCUS", decided + " after " + attempts + " frames")
+            } else {
+                Log.w("HOME_FOCUS", decided + " gave up after " + attempts + " frames")
+            }
         }
     }
 
@@ -3523,6 +3597,34 @@ fun HomeScreen(
         mutableStateOf(false)
     }
 
+    // Bumped by EVERY summon of the top bar - a short-press Up on the top rail
+    // ([openTopBar]) and the hold-Up shortcut ([openTopBarFromHold]) alike.
+    //
+    // The hand-off effect below keys on this as well as on [showTopBar], so an
+    // Up press while the bar is already showing but did not take focus re-drives
+    // the hand-off. Keyed on the Boolean alone, that press set it to the value
+    // it already had, the effect never re-ran, and there was no path from the
+    // remote into the bar for the rest of that showing.
+    var topBarSummons by remember {
+        mutableStateOf(0)
+    }
+
+    // True while D-pad focus actually rests inside the top bar, reported by the
+    // bar itself (see `onBarFocusChanged` on [TopActionBar]). This - not
+    // requestFocus()'s return value - is what the hand-off treats as success: a
+    // request can answer true for a node that is attached and still lose focus a
+    // frame later to the rail that asked for it, which is how the bar ended up
+    // shown and unfocused.
+    //
+    // Written from the bar's focus callback and read inside the hand-off
+    // coroutine, never in composition, so a D-pad step inside the bar does not
+    // recompose this screen. Cleared when the bar is dismissed (in the hand-off
+    // effect's `!showTopBar` branch, because a disposed focus node does not have
+    // to report its own exit).
+    var topBarHasFocus by remember {
+        mutableStateOf(false)
+    }
+
     val topBarFocusRequester = remember {
         FocusRequester()
     }
@@ -3566,19 +3668,6 @@ fun HomeScreen(
     // BuiltinContinueWatchingRail).
     var continueWatchingLandOnHeadSignal by remember {
         mutableStateOf(0)
-    }
-
-    // Which Browse chip row currently holds D-pad focus, by its index in the
-    // merged arrangement, or null for none. Home entry leaves focus on the first
-    // chip of the first browse row (that row composes first, out of local data),
-    // and that is the one place the Continue Watching rail may finish its own
-    // landing from: focus still there means the viewer pressed nothing, so the
-    // chip is the framework's default rather than their choice (see
-    // continueWatchingLandsOnFreshEntry). Held by ROW rather than as a plain
-    // boolean so the row that is losing focus cannot clear the one that is just
-    // taking it, whichever order their callbacks arrive in.
-    var focusedBrowseChipRowIndex by remember {
-        mutableStateOf<Int?>(null)
     }
 
     // Seed hero = first focusable card: the first Continue Watching item
@@ -3695,6 +3784,26 @@ fun HomeScreen(
     // the answer mid-visit.
     val isFreshEntry = remember { viewModel.recordHomeEntry() }
 
+    // Whether the viewer has taken focus into their own hands since this entry,
+    // set by the first deliberate D-pad press. This - not where focus happens to
+    // rest - is what the Continue Watching landing is gated on (see
+    // [continueWatchingLandsOnFreshEntry]).
+    //
+    // The distinction is the whole fix. Entry is a race between Continue
+    // Watching's data and the framework's default focus placement; when the rail
+    // composes empty (cold caches, a profile switch, a slow merge) that default
+    // lands on the Upcoming rail's head or a catalog poster, and reading the
+    // location as "the viewer chose this" made the landing decline itself for
+    // the rest of the session, silently (field, 2026-10-22).
+    //
+    // A new composition is a new entry - Home is a route, so leaving it disposes
+    // this - which is the reset the latch needs. Written from the root preview
+    // handler below and read inside the rail's landing coroutine, never composed
+    // on, so a D-pad step does not recompose the screen.
+    var viewerMovedFocusSinceEntry by remember {
+        mutableStateOf(false)
+    }
+
     // The restore window: 20 frames at the shared hand-back cadence, the same
     // ~1s the rails get to compose the card the viewer left Home on.
     val HOME_RETURN_FOCUS_STEPS = 20
@@ -3749,6 +3858,10 @@ fun HomeScreen(
     ) {
         lastPosterFocusRequester = requester
         showTopBar = true
+        // Re-arm the hand-off even when the bar is already up (see
+        // [topBarSummons]): this is the press that recovers a stranded bar
+        // without Back.
+        topBarSummons++
     }
 
     /**
@@ -3769,6 +3882,8 @@ fun HomeScreen(
             lastPosterFocusRequester = restoreTarget
         }
         showTopBar = true
+        // The same re-arm as [openTopBar]: the hold-Up shortcut is a summon too.
+        topBarSummons++
     }
 
     // The scope the focus hand-backs below run in: they have to survive the
@@ -3788,9 +3903,17 @@ fun HomeScreen(
      * report. Retried across frames here, with the request's own answer as the
      * success test (see KBStatusMessage, which documents the trap).
      */
+    // The landing in flight, cancelled by the next hand-back (see [restoreFocus]).
+    var focusRestoreJob by remember { mutableStateOf<Job?>(null) }
+
     fun restoreFocus(requester: FocusRequester?) {
         if (requester == null) return
-        focusScope.launch {
+        // A newer hand-back cancels the one still waiting on a frame. The loop
+        // below is a retry, so without this a dismiss the viewer has already
+        // superseded keeps asking for its own card and can land it a moment
+        // after the next one moved - the focus jumping back to where they were.
+        focusRestoreJob?.cancel()
+        focusRestoreJob = focusScope.launch {
             var landed = false
             var attempts = 0
             while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {
@@ -4000,20 +4123,50 @@ fun HomeScreen(
         kbViewModel.load()
     }
 
-    // The bar comes up inside an AnimatedVisibility, so the ask can race the
-    // frame that attaches its first chip: retried across frames and read from
-    // the request's own answer, the same way every other landing in this app is
-    // (see [restoreFocus]).
-    LaunchedEffect(showTopBar) {
-        if (showTopBar) {
-            var landed = false
-            var attempts = 0
-            while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {
-                awaitFrame()
-                landed = runCatching { topBarFocusRequester.requestFocus() }
-                    .getOrDefault(false)
-                attempts++
-            }
+    // The bar comes up inside an AnimatedVisibility, so the ask races the frame
+    // that attaches its first chip - and on a loaded Onn it can also race the
+    // rail beneath it still decoding art and asking for focus back. Two things
+    // follow from that, and both are load-bearing:
+    //
+    // 1. Success is focus OBSERVED inside the bar, not requestFocus()'s answer.
+    //    A request that answers true for an attached node can still lose focus a
+    //    frame later, so an answer-based exit ended the drive exactly when the
+    //    bar was about to be stranded. While focus is not in the bar the request
+    //    keeps being issued, at one frame per attempt; the safety cap is only a
+    //    runaway guard (see [HOME_TOP_BAR_DRIVE_MAX_FRAMES]).
+    // 2. The drive is re-armed by every summon (see [topBarSummons]), so the Up
+    //    press the viewer makes on a stranded bar arrives here instead of being
+    //    swallowed by an unchanged Boolean.
+    LaunchedEffect(showTopBar, topBarSummons) {
+        if (!showTopBar) {
+            // The bar is gone, so whatever it last reported is stale. Reset here
+            // rather than in dismissTopBar: a focus node being disposed by the
+            // AnimatedVisibility is not guaranteed to report its own exit, and
+            // the next summon must start from "not landed".
+            topBarHasFocus = false
+            return@LaunchedEffect
+        }
+        var frames = 0
+        while (!topBarHasFocus && frames < HOME_TOP_BAR_DRIVE_MAX_FRAMES) {
+            awaitFrame()
+            if (!showTopBar) return@LaunchedEffect
+            if (topBarHasFocus) break
+            runCatching { topBarFocusRequester.requestFocus() }
+            frames++
+        }
+        if (topBarHasFocus) {
+            // Info rather than debug: Fire TV suppresses debug logs, and this
+            // line is the field report the next symptom should cite.
+            Log.i(
+                "HOME_FOCUS",
+                "Top bar hand-off landed after " + frames + " frames"
+            )
+        } else {
+            Log.w(
+                "HOME_FOCUS",
+                "Top bar hand-off gave up after " + frames + " frames with the " +
+                    "bar still unfocused; Up re-drives it"
+            )
         }
     }
 
@@ -4263,7 +4416,7 @@ fun HomeScreen(
                     // the effect above); only a fresh entry may complete the
                     // landing on this rail's head.
                     isFreshEntry = isFreshEntry,
-                    chipRowHasFocus = focusedBrowseChipRowIndex != null,
+                    viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry,
                     onUpPressed = upHook
                 )
             } else if (
@@ -4337,6 +4490,20 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // The viewer-intent latch the Continue Watching landing is gated on
+            // (see [viewerMovedFocusSinceEntry]). A preview handler at the root
+            // sees every D-pad press before the focused node does, whatever is
+            // focused - a rail card, a chip, the top bar - and it never consumes
+            // one: the press still has to reach the focus system.
+            .onPreviewKeyEvent { event ->
+                if (
+                    event.type == KeyEventType.KeyDown &&
+                    isHomeFocusMoveKey(event.key)
+                ) {
+                    viewerMovedFocusSinceEntry = true
+                }
+                false
+            }
             .padding(
                 vertical = TvSafeAreaVertical
             )
@@ -4632,18 +4799,6 @@ fun HomeScreen(
                                                 focusedCardRequester = requester
                                                 viewModel.lastFocusedRailItemKey =
                                                     cardKey
-                                            },
-                                            // Reported by ROW index, so the row
-                                            // that loses focus cannot clear one
-                                            // that has just taken it, whichever
-                                            // callback arrives first.
-                                            onRowFocusChanged = { hasFocus ->
-                                                focusedBrowseChipRowIndex = when {
-                                                    hasFocus -> entryIndex
-                                                    focusedBrowseChipRowIndex == entryIndex ->
-                                                        null
-                                                    else -> focusedBrowseChipRowIndex
-                                                }
                                             },
                                             onUpPressed = topRailUpHook(entryIndex)
                                         )
@@ -5013,6 +5168,7 @@ fun HomeScreen(
                     onSwitchProfile = onSwitchProfile,
                     firstActionFocusRequester =
                         topBarFocusRequester,
+                    onBarFocusChanged = { topBarHasFocus = it },
                     onDismiss = {
                         dismissTopBar()
                     }
@@ -5285,7 +5441,7 @@ fun HomeScreen(
                         } else {
                             viewModel.markAsWatched(target.meta)
                         }
-                        lastPosterFocusRequester?.requestFocus()
+                        restoreFocus(lastPosterFocusRequester)
                     }
                 ),
                 onDismiss = {

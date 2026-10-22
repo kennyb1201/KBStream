@@ -120,6 +120,27 @@ class JustCompletedRemovalContractTest {
     }
 
     @Test
+    fun `the drop reads every completed series row, not just a recent window`() {
+        val src = source(HOME_VIEW_MODEL)
+        val start = src.indexOf("private suspend fun $DROP(")
+        assertTrue("the drop must still exist", start >= 0)
+        val end = src.indexOf("\n    /**", start)
+        assertTrue("the drop's body is not bounded by the next member", end > start)
+        val body = src.substring(start, end)
+
+        assertTrue(
+            "a tracker card pointing at an episode watched days ago is exactly as stale " +
+                "as one pointing at the episode finished a minute ago: the merge must read " +
+                "the whole completed series set, not only the completion window",
+            body.contains("getCompletedSeriesRows")
+        )
+        assertTrue(
+            "and both reads must feed the one rule, so there is no second, parallel filter",
+            body.contains("dropTrackerCardsForCompletedTargets")
+        )
+    }
+
+    @Test
     fun `the suppression window is bounded`() {
         val src = source("com/kennyb1201/kbstream/ui/home/HomeUpNext.kt")
         val start = src.indexOf("internal const val JUST_COMPLETED_CARD_SUPPRESSION_MS")

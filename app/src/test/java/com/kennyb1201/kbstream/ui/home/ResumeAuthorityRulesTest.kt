@@ -133,6 +133,63 @@ class ResumeAuthorityRulesTest {
     }
 
     @Test
+    fun `a local target beats a tracker target when the two disagree`() {
+        // Both are advance cards - nothing is in progress - and the feeds
+        // disagree about which episode comes next. Local rows are this
+        // device's own writes; a tracker feed can lag them, never lead them.
+        val local = card("local", ResumeSource.LOCAL, positionMs = 0L, resume = false).copy(
+            parentId = "tt3",
+            parentType = "series",
+            season = 1,
+            episode = 6
+        )
+        val simkl = card("simkl", ResumeSource.SIMKL, positionMs = 0L, resume = false).copy(
+            parentId = "tt3",
+            parentType = "series",
+            season = 1,
+            episode = 5
+        )
+
+        listOf(
+            ResumeAuthority.LOCAL,
+            ResumeAuthority.SIMKL,
+            ResumeAuthority.MDBLIST
+        ).forEach { authority ->
+            val merged = dedupeAndSortUpNext(listOf(simkl, local), authority)
+            assertEquals(
+                "the local walk's target is the answer, whatever the toggle says",
+                6,
+                merged.first().episode
+            )
+        }
+    }
+
+    @Test
+    fun `agreeing targets keep the ordinary order`() {
+        // Same episode: nothing to arbitrate, so the copy with the better data
+        // (here the one carrying the episode's stream id) still wins.
+        val local = card("local", ResumeSource.LOCAL, positionMs = 0L, resume = false).copy(
+            parentId = "tt4",
+            parentType = "series",
+            season = 1,
+            episode = 6
+        )
+        val simkl = card("simkl", ResumeSource.SIMKL, positionMs = 0L, resume = false).copy(
+            parentId = "tt4",
+            parentType = "series",
+            season = 1,
+            episode = 6,
+            episodeStreamId = "tt4:1:6"
+        )
+
+        assertEquals(
+            "a target disagreement is the only thing the local card decides",
+            "simkl",
+            dedupeAndSortUpNext(listOf(local, simkl), ResumeAuthority.DEFAULT).first().id
+        )
+    }
+
+    @Test
     fun `unknown stored values fall back to this device`() {
         assertEquals(
             ResumeAuthority.LOCAL,
