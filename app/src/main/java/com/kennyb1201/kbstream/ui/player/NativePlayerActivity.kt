@@ -5960,16 +5960,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 playWhenReady = !fromActorReturn
             }
 
+            // Every player this activity builds has media3's own surface vote
+            // silenced, rebuilt players included (2026-10-22). This used to sit
+            // inside the matcher-creation block below, so every REBUILT player
+            // (sidecar subtitle, engine or audio-mode change, DV retry) skipped
+            // it and kept Media3's default seamless strategy - a second,
+            // un-silenced voter on the surface, on top of the rate the matcher
+            // puts there. It does not depend on the matcher: only the mode count
+            // does.
+            player.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+
             // One instance per activity (see FrameRateMatcher): the mode it
             // restores on the way out has to be the one from before any
             // switch, so a rebuilt player must not hand it a second one.
             if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@NativePlayerActivity)) {
-                // media3 asks the surface for the content's rate itself, but only
-                // ever for a switch that does not blank the screen - and a write
-                // from it later would overwrite the blank-screen opt-in
-                // FrameRateMatcher makes. One owner of the surface's rate, and it
-                // is the one that can reach 24 Hz for film.
-                player.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
                 frameRateMatcher = FrameRateMatcher(
                     this@NativePlayerActivity,
                     videoSurface = { videoOutputSurface() },

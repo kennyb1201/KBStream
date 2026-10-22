@@ -443,6 +443,23 @@ internal object FrameRateMatch {
     }
 
     /**
+     * A mode was asked for twice and the panel had still not moved at the second
+     * look: the panel refused it, and that is what has to be read off the row —
+     * not "the request was not taken" (which implies the ladder had something
+     * else to try) and not anything about presentation. Once a panel has a mode
+     * answer there is no surface request to fall back to.
+     */
+    fun describeModeRefused(
+        contentFps: Double,
+        chosen: DisplayModeInfo,
+        wasModeId: Int
+    ): String {
+        val content = normalise(contentFps) ?: contentFps
+        return "the panel refused mode ${chosen.id} at ${rate(chosen.refreshRate)} Hz for " +
+            "${rate(content)} fps (still mode $wasModeId); re-asked once, no surface request made"
+    }
+
+    /**
      * Nothing was asked, because the panel is already in the best mode for this
      * content. Deliberately not [describeOutcome], which says "the request was
      * not taken" — there was no request, and a field capture must not read a
@@ -523,17 +540,18 @@ private fun rate(value: Double): String = String.format(Locale.US, "%.3f", value
  *     (2026-10-17), where `Surface.setFrameRate` was logged and ignored. It
  *     needs no permission check of its own, but it cannot ask for a mode the
  *     panel does not have.
- *  2. A second look 1.5 seconds later. A TV whose own display settings forbid
- *     the switch will have refused by then, and the panel is where the answer
- *     is read from - not from the window attribute, which a box that ignores
- *     the request leaves sitting there looking honoured.
- *  3. Only then, when the panel has not moved or offered no better mode at all,
- *     `Surface.setFrameRate` on the player's own surface: the API Android
- *     documents for this, and in practice a hint that some firmware - including
- *     the box above - ignores. From API 31 it carries the non-seamless opt-in,
- *     so it is the one request that can ask for a blank-screen switch. On a
- *     single-60 Hz panel [FrameRateMatch.chooseMode] finds nothing, and this is
- *     the whole request, exactly as before.
+ *  2. A second look 1.5 seconds later, and a third at ~3.5 s, both at the MODE.
+ *     HDMI renegotiation is slower than a surface write, and the field captures
+ *     of 2026-10-22 show a 60 -> 24 switch still landing after the first look
+ *     had fired. The panel is where the answer is read from - not the window
+ *     attribute, which a box that ignores the request leaves sitting there
+ *     looking honoured - and a mode still not there at the second look is
+ *     re-asked and recorded as a refused mode.
+ *  3. `Surface.setFrameRate` on the player's own surface, made only when the
+ *     panel offers no mode answer at all (single-60 Hz panels), where it is the
+ *     whole request. It is never made on top of a mode answer: a FIXED_SOURCE
+ *     rate on a live surface under a panel force-switched to the same rate is
+ *     the stutter the 2026-10-22 bisect convicted.
  *
  * The order is behind [ENGAGE_MODE_FIRST] so a field capture can bisect it:
  * off, the surface hint goes first and the mode request is its backstop, which
@@ -722,22 +740,30 @@ internal class FrameRateMatcher(
             //  - the panel has no better mode at all (a single-rate panel,
             //    typically). The surface hint is its whole request, as it always
             //    was.
-            //  - the panel is ALREADY in the best mode, and this session is what
-            //    put it there. A mode request would be a no-op, but falling
-            //    through to the surface hint is not: re-applying a rate to the
-            //    live surface breaks presentation on the Onn 4K Plus — choppy
-            //    playback plus "no present fence" from the resume re-arm
-            //    (field, 2026-10-18). Ask for nothing, and say so on the
-            //    diagnostics row.
-            //
-            // A panel already in the best mode that this session did NOT put
-            // there keeps the surface hint: nothing has been asked yet, and on a
-            // single-rate panel that hint is the only request there is.
+            //  - the panel is ALREADY in the best mode, whether or not this
+            //    session is what put it there. A mode request would be a no-op,
+            //    but falling through to the surface hint is not: re-applying a
+            //    rate to the live surface breaks presentation on the Onn 4K Plus
+            //    — choppy playback plus "no present fence" from the resume
+            //    re-arm (field, 2026-10-18), and the same write under a panel
+            //    the platform had already switched is the 2026-10-22 stutter.
+            //    Ask for nothing, say so on the diagnostics row, and keep the
+            //    restore debt.
             val best = FrameRateMatch.bestMode(contentFps, modes)
             when {
                 best == null -> askSurfaceIfPossible(contentFps, modeId)
                 best.id != modeId -> requestMode(best, contentFps, modeId)
-                hasEngaged -> {
+                else -> {
+                    // Already in the best mode, whether or not this session is
+                    // what put the panel there (2026-10-22, Door 1). A mode
+                    // request would be a no-op, and the surface hint is not one:
+                    // re-applying a rate to the live surface under a panel
+                    // already forced to that rate is the combination the
+                    // 2026-10-18 and 2026-10-22 captures convict. Ask for
+                    // nothing, and take the panel's state over so it is still
+                    // put back on the way out (an engine switch leaves this
+                    // session as the only one holding it).
+                    restoreOnRelease = true
                     FrameRateDiagnostics.setOutcome(
                         FrameRateMatch.describeAlreadyInBestMode(contentFps, best)
                     )
@@ -745,14 +771,6 @@ internal class FrameRateMatcher(
                         TAG,
                         "already in the best mode for ${rate(contentFps)} fps; no request made"
                     )
-                }
-                else -> {
-                    // Already in the best mode, and not because of this session:
-                    // the surface hint is the only request left (a single-rate
-                    // panel has no mode to switch to), and the panel's current
-                    // state is now this session's to put back on the way out.
-                    restoreOnRelease = true
-                    askSurfaceIfPossible(contentFps, modeId)
                 }
             }
             return
@@ -769,6 +787,10 @@ internal class FrameRateMatcher(
      * frame-rate API, or the player has no valid surface yet (the native
      * player's layout may not have built one). The caller decides what the
      * absence leaves it with.
+     *
+     * Reachable only from the `best == null` arm of [apply]'s mode-first block
+     * and from the pre-fix (bisect) ladder: a panel that has a mode answer is
+     * never handed a rate on its live surface.
      */
     private fun askSurfaceIfPossible(contentFps: Double, modeId: Int): Boolean {
         val request = FrameRateMatch.surfaceRateRequest(contentFps, Build.VERSION.SDK_INT)
@@ -829,9 +851,7 @@ internal class FrameRateMatcher(
      * refuse, and the confirm is what says whether it did.
      */
     private fun requestMode(chosen: DisplayModeInfo, contentFps: Double, currentModeId: Int) {
-        val attributes = activity.window.attributes
-        attributes.preferredDisplayModeId = chosen.id
-        activity.window.attributes = attributes
+        setPreferredModeId(chosen.id)
         appliedModeId = chosen.id
         restoreOnRelease = true
         FrameRateDiagnostics.addRequest(
@@ -844,9 +864,16 @@ internal class FrameRateMatcher(
         )
         val serial = ++askSerial
         handler.postDelayed(
-            { confirm(serial, currentModeId, contentFps, EngageStep.MODE) },
+            { confirm(serial, currentModeId, contentFps, EngageStep.MODE, chosen) },
             CONFIRM_DELAY_MS
         )
+    }
+
+    /** Writes the one attribute a mode request is: the window's preferred mode id. */
+    private fun setPreferredModeId(modeId: Int) {
+        val attributes = activity.window.attributes
+        attributes.preferredDisplayModeId = modeId
+        activity.window.attributes = attributes
     }
 
     /**
@@ -865,20 +892,26 @@ internal class FrameRateMatcher(
     }
 
     /**
-     * Looks at the panel a moment after a request. A TV whose own display
-     * settings forbid a blank-screen switch will simply not have moved, and the
-     * difference between that and a switch is what the diagnostics row reports.
+     * Looks at the panel a moment after a request, and — for a mode — again
+     * later. A TV whose own display settings forbid a blank-screen switch will
+     * simply not have moved, and the difference between that and a switch is
+     * what the diagnostics row reports.
      *
-     * A panel that has not moved gets the ladder's next step, when there is one:
-     * in the new order a mode request falls back to the surface hint and the
-     * surface request is the end of the ladder; in the pre-fix order it is the
-     * other way round, so the bisect reproduces the old ladder exactly.
+     * The first look at 1.5 s suits the surface hint, whose answer is immediate.
+     * A mode request needs longer: HDMI renegotiation is slower than that, and
+     * the 2026-10-22 capture caught the mode landing only after the first look
+     * had fallen through. So a mode that has not moved gets a SECOND look at
+     * ~3.5 s — and it is still a look at the mode. Once the panel has a mode
+     * answer the surface is never asked (2026-10-22, Door 2): that write on a
+     * live surface under a panel being force-switched to the same rate is the
+     * combination the field captures convict.
      */
     private fun confirm(
         serial: Int,
         beforeModeId: Int,
         contentFps: Double,
-        step: EngageStep
+        step: EngageStep,
+        requestedMode: DisplayModeInfo? = null
     ) {
         if (released || serial != askSerial) return
         // Nothing to repair while the picture is stopped, and a backstop that
@@ -891,21 +924,59 @@ internal class FrameRateMatcher(
         FrameRateDiagnostics.setOutcome(
             FrameRateMatch.describeOutcome(beforeModeId, afterModeId, afterRate)
         )
-        if (afterModeId != beforeModeId) return
-        when (backstopAfter(step)) {
-            EngageStep.SURFACE -> askSurfaceIfPossible(contentFps, afterModeId)
-            // Only reachable with ENGAGE_MODE_FIRST off: the mode search needs
-            // the panel's own list, and a TV that reports one mode ends here.
-            EngageStep.MODE -> forceMode(contentFps, supportedModes(display), afterModeId)
-            null -> Unit
+        when (step) {
+            // Both looks are spent. Still not moved means the panel refused a
+            // mode, and that is what the row has to say.
+            EngageStep.MODE_SECOND_LOOK -> settleMode(contentFps, requestedMode, afterModeId)
+            EngageStep.MODE -> {
+                if (afterModeId != beforeModeId) return
+                val mode = requestedMode ?: return
+                // Mode-first: the next step is the SAME mode, later. Never the
+                // surface hint — a mode answer already exists.
+                if (ENGAGE_MODE_FIRST) {
+                    scheduleSecondLook(serial, beforeModeId, contentFps, mode)
+                }
+                // Pre-fix order: the mode request was itself the backstop for
+                // the surface hint, so it is the end of that ladder.
+            }
+            EngageStep.SURFACE -> {
+                if (afterModeId != beforeModeId) return
+                // Only the pre-fix order has a step after the surface hint: the
+                // mode search needs the panel's own list, and a TV that reports
+                // one mode ends here.
+                if (!ENGAGE_MODE_FIRST) {
+                    forceMode(contentFps, supportedModes(display), afterModeId)
+                }
+            }
         }
     }
 
-    /** The ladder step that follows [step], or null when [step] is the last one. */
-    private fun backstopAfter(step: EngageStep): EngageStep? = when {
-        ENGAGE_MODE_FIRST && step == EngageStep.MODE -> EngageStep.SURFACE
-        !ENGAGE_MODE_FIRST && step == EngageStep.SURFACE -> EngageStep.MODE
-        else -> null
+    /**
+     * The decision at the second look: a mode that still has not landed was
+     * refused. It is re-asked by attribute one last time — never a surface vote
+     * on top of it — and the row says "refused" rather than leaving the first
+     * look's "not taken" line to imply the ladder had something else to try.
+     */
+    private fun settleMode(contentFps: Double, requested: DisplayModeInfo?, afterModeId: Int) {
+        if (requested == null || afterModeId == requested.id) return
+        setPreferredModeId(requested.id)
+        FrameRateDiagnostics.setOutcome(
+            FrameRateMatch.describeModeRefused(contentFps, requested, afterModeId)
+        )
+        Log.i(TAG, "mode ${requested.id} still not taken; re-asked the mode, no surface request")
+    }
+
+    /** The later look at a mode that has not moved yet — the same mode, checked again. */
+    private fun scheduleSecondLook(
+        serial: Int,
+        beforeModeId: Int,
+        contentFps: Double,
+        mode: DisplayModeInfo
+    ) {
+        handler.postDelayed(
+            { confirm(serial, beforeModeId, contentFps, EngageStep.MODE_SECOND_LOOK, mode) },
+            SECOND_CONFIRM_DELAY_MS
+        )
     }
 
     /**
@@ -933,7 +1004,7 @@ internal class FrameRateMatcher(
     private fun displayOf(): Display? = displayFor(activity)
 
     /** Which ladder step a confirm is looking at the panel for. */
-    private enum class EngageStep { MODE, SURFACE }
+    private enum class EngageStep { MODE, MODE_SECOND_LOOK, SURFACE }
 
     private companion object {
         const val TAG = "PLAYER_AFR"
@@ -954,6 +1025,14 @@ internal class FrameRateMatcher(
          * the title.
          */
         const val CONFIRM_DELAY_MS = 1500L
+
+        /**
+         * How long after the first look the second one lands: 2 s on top of the
+         * 1.5 s above, so ~3.5 s from the mode request. Long enough for a slow
+         * HDMI renegotiation to finish, and still inside the opening minute of
+         * the title.
+         */
+        const val SECOND_CONFIRM_DELAY_MS = 2000L
     }
 }
 

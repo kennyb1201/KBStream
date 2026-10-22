@@ -57,15 +57,21 @@ class FrameRateEngageResumeContractTest {
             branch.contains("best.id != modeId -> requestMode(best, contentFps, modeId)")
         )
         assertTrue(
-            "and already-engaged is its own branch",
+            "and a panel already in the best mode is its own branch, whether or not this " +
+                "session is what put it there (2026-10-22, Door 1)",
+            branch.contains("else -> {")
+        )
+        assertFalse(
+            "the fresh-matcher case must not be split out again: it is the exact branch that " +
+                "fell through to the surface hint under a forced mode",
             branch.contains("hasEngaged -> {")
         )
     }
 
     @Test
-    fun `an engaged panel is asked for nothing at all`() {
+    fun `a panel already in the best mode is asked for nothing at all`() {
         val branch = modeFirstBranch()
-        val noOp = branch.substringAfter("hasEngaged -> {").substringBefore("else -> {")
+        val noOp = branch.substringAfter("else -> {")
 
         assertTrue(
             "the no-op has to be SAID, on the diagnostics row: the row is how a field capture " +
@@ -77,8 +83,10 @@ class FrameRateEngageResumeContractTest {
             noOp.contains("already in the best mode for \${rate(contentFps)} fps; no request made")
         )
         assertFalse(
-            "this is the defect itself: no surface hint on the already-engaged path. " +
-                "Re-applying a rate to the live surface is what broke presentation.",
+            "this is the defect itself: no surface hint on the already-in-best-mode path, " +
+                "fresh matcher included. Re-applying a rate to the live surface under a panel " +
+                "already forced to that rate is what broke presentation (2026-10-18, " +
+                "2026-10-22 Door 1).",
             noOp.contains("askSurfaceIfPossible(")
         )
         assertFalse(
@@ -88,14 +96,19 @@ class FrameRateEngageResumeContractTest {
     }
 
     @Test
-    fun `a panel that is not ours still gets the surface hint, and hands it back on exit`() {
+    fun `a panel that is not ours is taken over without a surface hint`() {
         val branch = modeFirstBranch()
-        val adopted = branch.substringAfter("else -> {").substringBefore(" } return")
+        val adopted = branch.substringAfter("else -> {")
 
         assertTrue(
-            "single-rate panels keep the surface hint as their whole request - that is what " +
-                "the fall-through exists for, and it must not be lost with the defect",
-            adopted.contains("askSurfaceIfPossible(contentFps, modeId)")
+            "single-rate panels keep the surface hint as their whole request - that is the " +
+                "one case it survives for, and it must not be lost with the defect",
+            branch.contains("best == null -> askSurfaceIfPossible(contentFps, modeId)")
+        )
+        assertFalse(
+            "while a panel that already offers the best mode gets no rate on its live surface, " +
+                "even when this session did not put it there",
+            adopted.contains("askSurfaceIfPossible(")
         )
         assertTrue(
             "and the state this session found is now its own to put back: after an engine " +

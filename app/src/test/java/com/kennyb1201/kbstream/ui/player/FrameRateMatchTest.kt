@@ -333,6 +333,29 @@ class FrameRateMatchTest {
     }
 
     @Test
+    fun `a mode that is still not there at the second look reads as refused`() {
+        // 2026-10-22: the surface hint used to be the backstop for an unconfirmed
+        // mode, which is the write the field captures convict. A mode the panel
+        // will not take is a refused MODE, and the row has to say so rather than
+        // leaving "the request was not taken" to imply another rung existed.
+        val line = FrameRateMatch.describeModeRefused(
+            contentFps = 23.976,
+            chosen = mode(161, 23.976),
+            wasModeId = 1
+        )
+
+        assertEquals(
+            "the panel refused mode 161 at 23.976 Hz for 23.976 fps (still mode 1); " +
+                "re-asked once, no surface request made",
+            line
+        )
+        assertTrue(
+            "a refusal must not be described as a switch",
+            !line.contains("moved to")
+        )
+    }
+
+    @Test
     fun `the path line matches what this Android version will actually do`() {
         assertTrue(FrameRateMatch.describePath(33).contains("Android 12+"))
         assertTrue(FrameRateMatch.describePath(31).contains("blank-screen switch allowed"))

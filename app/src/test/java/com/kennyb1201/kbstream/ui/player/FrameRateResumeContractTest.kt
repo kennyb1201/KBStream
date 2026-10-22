@@ -38,7 +38,7 @@ class FrameRateResumeContractTest {
     private val match = squash(source(MATCH))
     private val apply = match.window("private fun apply(", "private fun askSurfaceIfPossible(")
     private val askSurface = match.window("private fun askSurface(", "private fun requestMode(")
-    private val confirm = match.window("private fun confirm(", "private fun backstopAfter(")
+    private val confirm = match.window("private fun confirm(", "private fun settleMode(")
 
     @Test
     fun `both engines remember the rate they were told`() {

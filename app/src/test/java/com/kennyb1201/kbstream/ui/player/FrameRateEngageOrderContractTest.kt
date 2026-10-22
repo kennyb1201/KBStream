@@ -26,8 +26,7 @@ class FrameRateEngageOrderContractTest {
     private val apply = window(match, "private fun apply(", "private fun askSurfaceIfPossible(")
     private val modeFirst = window(apply, "if (ENGAGE_MODE_FIRST) {", "// Pre-fix ladder")
     private val requestMode = window(match, "private fun requestMode(", "private fun forceMode(")
-    private val confirm = window(match, "private fun confirm(", "private fun backstopAfter(")
-    private val backstop = window(match, "private fun backstopAfter(", "private fun clearSurfaceRate(")
+    private val confirm = window(match, "private fun confirm(", "private fun settleMode(")
 
     @Test
     fun `the new order is the default`() {
@@ -47,6 +46,10 @@ class FrameRateEngageOrderContractTest {
         assertTrue(
             "the mode request is what starts the engage on a panel with a better mode",
             request > best
+        )
+        assertTrue(
+            "and the surface hint is reached from one arm only: the panel with no mode answer",
+            count(modeFirst, "askSurfaceIfPossible(") == 1
         )
         assertTrue(
             "and the surface hint is only for a panel with nothing better to switch to, or for " +
@@ -69,7 +72,8 @@ class FrameRateEngageOrderContractTest {
     fun `the mode request is the one the field can verify`() {
         assertTrue(
             "a mode request is a preferredDisplayModeId write, not a surface rate",
-            requestMode.contains("attributes.preferredDisplayModeId = chosen.id")
+            requestMode.contains("setPreferredModeId(chosen.id)") &&
+                match.contains("attributes.preferredDisplayModeId = modeId")
         )
         assertTrue(
             "the restore on teardown depends on knowing which mode this session asked for",
@@ -81,34 +85,46 @@ class FrameRateEngageOrderContractTest {
             requestMode.contains("forced mode \${chosen.id} at \${chosen.refreshRate} Hz for ")
         )
         assertTrue(
-            "and it is confirmed like every other request, so a refused mode falls through",
-            requestMode.contains("confirm(serial, currentModeId, contentFps, EngageStep.MODE)")
+            "and it is confirmed like every other request, so a refused mode is seen",
+            requestMode.contains("confirm(serial, currentModeId, contentFps, EngageStep.MODE, chosen)")
         )
     }
 
     @Test
-    fun `a confirm falls through to the other step, and the last step stops`() {
+    fun `a mode confirm falls to a later mode look, never to the surface`() {
         assertTrue(
-            "a mode request that did not move the panel gets the surface hint as its backstop",
-            backstop.contains("ENGAGE_MODE_FIRST && step == EngageStep.MODE -> EngageStep.SURFACE")
+            "a mode that has not moved gets a second look at the MODE, ~3.5 s out " +
+                "(2026-10-22, Door 2)",
+            confirm.contains("scheduleSecondLook(serial, beforeModeId, contentFps, mode)") &&
+                window(match, "private fun scheduleSecondLook(", "private fun clearSurfaceRate(")
+                    .contains("EngageStep.MODE_SECOND_LOOK")
+        )
+        assertFalse(
+            "and never the surface hint: once the panel has a mode answer, a rate on the live " +
+                "surface under the forced mode is the stutter the field captures convict",
+            confirm.contains("askSurfaceIfPossible(")
         )
         assertTrue(
-            "and in the pre-fix order the ladder is the other way round, for the bisect",
-            backstop.contains(
-                "!ENGAGE_MODE_FIRST && step == EngageStep.SURFACE -> EngageStep.MODE"
+            "the second look is what records a refusal - re-asked by attribute, no surface vote",
+            match.contains(
+                "FrameRateMatch.describeModeRefused(contentFps, requested, afterModeId)"
             )
         )
         assertTrue(
-            "the backstop is resolved from the step that was just confirmed",
-            confirm.contains("when (backstopAfter(step)) {")
+            "the pre-fix order keeps its own ladder for the bisect: surface first, mode as its " +
+                "backstop",
+            confirm.contains(
+                "if (!ENGAGE_MODE_FIRST) { forceMode(contentFps, supportedModes(display), " +
+                    "afterModeId) }"
+            )
         )
         assertTrue(
-            "a refused surface hint in the new order ends the engage: there is nothing left to try",
-            confirm.contains("EngageStep.SURFACE -> askSurfaceIfPossible(contentFps, afterModeId)")
+            "and a panel that DID move ends the engage right there",
+            confirm.contains("if (afterModeId != beforeModeId) return")
         )
         assertTrue(
-            "and a step with no successor must do nothing rather than fall through to a mode",
-            confirm.contains("null -> Unit")
+            "a paused picture drops every look, the second one included",
+            confirm.contains("if (!isPlaybackActive()) return")
         )
     }
 
@@ -117,16 +133,17 @@ class FrameRateEngageOrderContractTest {
         assertTrue(
             "a single-60 Hz TV is the regression case: bestMode finds nothing better to switch " +
                 "to, and the surface hint must still be made",
-            modeFirst.contains("best == null -> askSurfaceIfPossible(contentFps, modeId)") &&
-                modeFirst.contains("else -> {") &&
-                modeFirst.substringAfter("else -> {")
-                    .contains("askSurfaceIfPossible(contentFps, modeId)")
+            modeFirst.contains("best == null -> askSurfaceIfPossible(contentFps, modeId)")
         )
         assertTrue(
             "the mode search stays a pure rule the JVM tests drive",
             match.contains("fun chooseMode(")
         )
     }
+
+    /** How many times [needle] occurs in [text]. */
+    private fun count(text: String, needle: String): Int =
+        Regex(Regex.escape(needle)).findAll(text).count()
 
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
