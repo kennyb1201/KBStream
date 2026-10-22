@@ -272,6 +272,18 @@ private const val MEDIA_STRIP_KEY = "mediastrip"
 private const val MEDIA_ROW_KEY = "mediarow"
 private const val RECS_ROW_KEY = "recsrow"
 
+/**
+ * The play press's own log tag.
+ *
+ * The field report this comes from - a poster menu's "Play Manually" leaving
+ * the viewer on this page, and the same row on the Play button then doing
+ * nothing at all - was invisible in a capture because the delivery and every
+ * cancelled attempt were silent. One line per delivered press names the intent
+ * and the target it opened, so the next capture says which press produced
+ * which picker instead of leaving it to elimination.
+ */
+internal const val DETAIL_PLAY_TAG = "DETAIL_PLAY"
+
 /** How many times the rail reveal and the focus request are retried. */
 private const val RETURN_FOCUS_STEPS = 15
 
@@ -3178,13 +3190,32 @@ fun DetailScreen(
             var manualPick by remember(type, id) {
                 mutableStateOf(false)
             }
+
+            // Every press that has to end in the picker is RECORDED here, and
+            // the effect below delivers it.
+            //
+            // The counter is what makes a press a press. The flags a press
+            // sets (`manualPick`, `startOver`) are also what that effect keys
+            // on, so a press whose flag is ALREADY in the state it wants - the
+            // field report: arrive here from a poster menu's "Play Manually",
+            // long-press Play, choose "Play Manually" again - changed no key
+            // at all and did nothing, twice over: `manualPick` was already
+            // true, and `autoPlayed = false` is not a key, so the effect never
+            // ran. A recorded press always re-runs it.
+            var playPress by remember(type, id) { mutableIntStateOf(0) }
+
             LaunchedEffect(type, id) {
                 manualPick = ManualSourceSelection.consume()
+                // A poster menu's marker is a press like any other: recorded,
+                // so the delivery below is the one thing that acts on it and
+                // the log names which press opened the picker.
+                if (manualPick) playPress++
             }
 
             var autoPlayed by remember { mutableStateOf(false) }
             LaunchedEffect(
                 initialTarget,
+                playPress,
                 manualPick,
                 startOver,
                 isLoading,
@@ -3204,9 +3235,25 @@ fun DetailScreen(
                     !startOver &&
                     initialTarget == null
                 ) return@LaunchedEffect
+                // The episode list: a press waits for it while it is LOADING -
+                // the target is the season's next episode, and the list is what
+                // names it - but never on an empty one. `playTargetFor` builds
+                // exactly the target the Play button builds, which falls back to
+                // the season's first file, so parking on "empty" is the second
+                // way "Play Manually" did nothing while the button beside it
+                // played: on a show whose listing had failed, no key was ever
+                // going to change again. The deep link keeps waiting for the
+                // list itself: it has to know the season's episode count before
+                // it names a target.
+                val waitingForEpisodes =
+                    if (manualPick || startOver) {
+                        episodesLoading
+                    } else {
+                        episodesLoading || episodes.isEmpty()
+                    }
                 if (
                     normalizedType == "series" &&
-                    (episodesLoading || episodes.isEmpty())
+                    waitingForEpisodes
                 ) return@LaunchedEffect
                 // A manual pick and a "play from the beginning" are both
                 // fresh starts: unlike the Continue Watching deep link they
@@ -3219,7 +3266,6 @@ fun DetailScreen(
                     resumeInfo == null
                 ) return@LaunchedEffect
 
-                autoPlayed = true
                 // Wait for the resolved root id before the request is named.
                 // This effect fires as soon as the target is ready, and for a
                 // Continue Watching deep link that can be before the TMDB
@@ -3227,8 +3273,27 @@ fun DetailScreen(
                 // names the catalog id, which is another title's for a show
                 // whose catalog mapping is wrong (see
                 // DetailViewModel.awaitStreamRootId).
+                //
+                // The wait comes BEFORE the delivered flag is latched, and
+                // that order is the whole point: this is a suspension point,
+                // and every one of this effect's other keys - resumeInfo, the
+                // episode list, the meta - publishes during a load, which
+                // CANCELS the run here and restarts it. Latching first meant
+                // the restarted run answered "already auto-played" and the
+                // press was gone for good: the picker never opened (a poster
+                // menu's "Play Manually" left the viewer on this screen), and
+                // no later press could revive it. Latched after the wait, a
+                // cancelled run delivers nothing and the restart delivers the
+                // press.
                 val autoPlayTarget =
                     playTargetFor(viewModel.awaitStreamRootId(id))
+                autoPlayed = true
+                Log.d(
+                    DETAIL_PLAY_TAG,
+                    "play delivered: manual=$manualPick startOver=$startOver " +
+                        "deepLink=${initialTarget != null} press=$playPress " +
+                        "target=${autoPlayTarget.contentType}:${autoPlayTarget.streamId}"
+                )
                 if (manualPick) {
                     // Handed on rather than consumed here: MainActivity is what
                     // reads this, to open the picker for the target instead of
@@ -6037,6 +6102,7 @@ fun DetailScreen(
                                 dismissPlayButtonMenu()
                                 startOver = true
                                 autoPlayed = false
+                                playPress++
                             },
                             PosterContextAction(
                                 label = "Play Manually",
@@ -6045,6 +6111,7 @@ fun DetailScreen(
                                 dismissPlayButtonMenu()
                                 manualPick = true
                                 autoPlayed = false
+                                playPress++
                             }
                         ),
                         onDismiss = { dismissPlayButtonMenu() }
