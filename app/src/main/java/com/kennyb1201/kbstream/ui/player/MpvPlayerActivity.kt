@@ -6296,13 +6296,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
         /**
          * Set when playback changed engines because the FILE's subtitles are a
-         * bitmap format (PGS/VobSub/DVB) that this app's ExoPlayer engine has no
-         * renderer for. Nothing about the video failed: the handoff is for the
-         * subtitles, and libmpv renders them with libass and its own demuxers.
+         * bitmap format this app's ExoPlayer engine does not draw (VobSub and
+         * DVBSubs; PGS draws there now - see SubtitleTrackRules.bitmapRenderable).
+         * Nothing about the video failed: the handoff is for the subtitles, and
+         * libmpv renders them with libass and its own demuxers.
          *
-         * Without this the failure was silent - media3 claims no PGS decoder,
-         * so the track armed, matched the preferred language, and drew nothing,
-         * raising no exception for the decoder ladder to react to.
+         * Without this the failure was silent - the track armed, matched the
+         * preferred language, and drew nothing, raising no exception for the
+         * decoder ladder to react to.
          */
         const val FALLBACK_REASON_SUBTITLE = "subtitle"
 

@@ -17,8 +17,8 @@ import org.junit.Test
 /**
  * The failure this pins: the panel's subtitle-language picker (and the
  * ready-time reapply pass) armed the FIRST track whose language matched — with
- * no format check at all. On a release whose English track is PGS, that armed a
- * bitmap track this engine has no renderer for: it drew nothing, raised
+ * no format check at all. On a release whose English track is a bitmap format
+ * this build does not draw, that armed a track that drew nothing, raised
  * nothing, and logged nothing, exactly like the "options listed, none display"
  * report.
  *
@@ -29,38 +29,75 @@ import org.junit.Test
  * charge — the activity's NeedsMpv handoff and the OpenSubtitles fetch decide
  * what happens, rather than a dead override.
  *
- * The rule is pinned here by building fake track groups, the way this repo pins
- * player logic it cannot launch (see [PlayerTrackBridgeSignatureTest]).
+ * The rule is per bitmap FORMAT now (see
+ * [SubtitleTrackRules.bitmapRenderable]): PGS is drawn by this engine, so it is
+ * armed like any text track, while VobSub and DVBSubs keep the skip. Both halves
+ * are pinned here, by building fake track groups the way this repo pins player
+ * logic it cannot launch (see [PlayerTrackBridgeSignatureTest]).
  */
 class PlayerTrackBridgeSubtitleFormatTest {
 
     // ── the reported failure ───────────────────────────────────────────────
 
     /**
-     * English PGS first, English SRT second: the SRT is armed, not the PGS.
+     * The change itself: an English PGS track is armable now, so a file whose
+     * only English SDH track is PGS gets subtitles instead of the MPV handoff.
      */
     @Test
-    fun `an English PGS track is skipped for the English SRT behind it`() {
+    fun `an English PGS track is armed like any text track`() {
+        val group = group(format("eng", MimeTypes.APPLICATION_PGS))
+
+        assertEquals(
+            "its format is drawn by this engine, so the ready-time pass arms it",
+            TrackSelectionOverride(group.mediaTrackGroup, 0),
+            PlayerTrackBridge.matchingOverride(tracks(group), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
+    /**
+     * The flag is not a promise about the device: a PGS track the chain reports
+     * unsupported is skipped by the ordinary supported check, exactly as a text
+     * track would be.
+     */
+    @Test
+    fun `a PGS track this build cannot draw still matches nothing`() {
         val group = group(
             format("eng", MimeTypes.APPLICATION_PGS),
+            support = C.FORMAT_UNSUPPORTED_SUBTYPE
+        )
+
+        assertNull(
+            "the caller's NeedsMpv handoff / fetch path owns a track that draws nothing",
+            PlayerTrackBridge.matchingOverride(tracks(group), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
+    /**
+     * The formats still flagged off keep the old skip: English VobSub first,
+     * English SRT second means the SRT is armed.
+     */
+    @Test
+    fun `an English VobSub track is skipped for the English SRT behind it`() {
+        val group = group(
+            format("eng", MimeTypes.APPLICATION_VOBSUB),
             format("eng", MimeTypes.APPLICATION_SUBRIP)
         )
 
         assertEquals(
-            "the first track in the language is a bitmap this engine cannot draw; the SRT behind it is the one to arm",
+            "the first track in the language is a bitmap this engine does not draw; the SRT behind it is the one to arm",
             TrackSelectionOverride(group.mediaTrackGroup, 1),
             PlayerTrackBridge.matchingOverride(tracks(group), C.TRACK_TYPE_TEXT, "en")
         )
     }
 
     /**
-     * English PGS only: nothing matches, so the caller keeps its "no subtitle
-     * track for this language" behavior (false, text disabled). Falling back to
-     * the bitmap track would be the bug.
+     * A language that exists only as an undrawable bitmap: nothing matches, so
+     * the caller keeps its "no subtitle track for this language" behavior
+     * (false, text disabled). Falling back to the bitmap track would be the bug.
      */
     @Test
-    fun `a language that exists only as a PGS track matches nothing`() {
-        val group = group(format("eng", MimeTypes.APPLICATION_PGS))
+    fun `a language that exists only as a VobSub track matches nothing`() {
+        val group = group(format("eng", MimeTypes.APPLICATION_VOBSUB))
 
         assertNull(
             "arming the bitmap track draws nothing and reports nothing, so the NeedsMpv path must decide instead",
@@ -69,34 +106,42 @@ class PlayerTrackBridgeSubtitleFormatTest {
     }
 
     @Test
-    fun `a bitmap match in an earlier group does not hide a later group's SRT`() {
-        val pgsGroup = group(format("eng", MimeTypes.APPLICATION_PGS))
+    fun `an undrawable bitmap in an earlier group does not hide a later group's SRT`() {
+        val vobsubGroup = group(format("eng", MimeTypes.APPLICATION_VOBSUB))
         val srtGroup = group(format("eng", MimeTypes.APPLICATION_SUBRIP))
 
         assertEquals(
             TrackSelectionOverride(srtGroup.mediaTrackGroup, 0),
-            PlayerTrackBridge.matchingOverride(tracks(pgsGroup, srtGroup), C.TRACK_TYPE_TEXT, "en")
+            PlayerTrackBridge.matchingOverride(
+                tracks(vobsubGroup, srtGroup),
+                C.TRACK_TYPE_TEXT,
+                "en"
+            )
         )
     }
 
     /**
-     * A language present only as a bitmap must not drag the pass onto a track
-     * tagged for a language the viewer did not ask for.
+     * A language present only as an undrawable bitmap must not drag the pass
+     * onto a track tagged for a language the viewer did not ask for.
      */
     @Test
     fun `a later group in another language is never armed`() {
-        val pgsGroup = group(format("eng", MimeTypes.APPLICATION_PGS))
+        val vobsubGroup = group(format("eng", MimeTypes.APPLICATION_VOBSUB))
         val russianGroup = group(format("rus", MimeTypes.APPLICATION_SUBRIP))
 
         assertNull(
-            PlayerTrackBridge.matchingOverride(tracks(pgsGroup, russianGroup), C.TRACK_TYPE_TEXT, "en")
+            PlayerTrackBridge.matchingOverride(
+                tracks(vobsubGroup, russianGroup),
+                C.TRACK_TYPE_TEXT,
+                "en"
+            )
         )
     }
 
     /**
      * The same skip on this build's own answer: an SRT no renderer claims is as
-     * dead on screen as a PGS track ([SubtitleTrackRules.cannotDrawNote] says
-     * "not supported here").
+     * dead on screen as an undrawable bitmap ([SubtitleTrackRules.cannotDrawNote]
+     * says "not supported here").
      */
     @Test
     fun `a text track this build cannot draw is skipped too`() {
@@ -205,14 +250,22 @@ class PlayerTrackBridgeSubtitleFormatTest {
     }
 
     /**
-     * The bitmap verdict holds even if a future media3 claims the track: the
-     * skip is on the format's own evidence as well as on `supported`.
+     * The skip for an undrawable format is on the format's own evidence as well
+     * as on `supported`: even a chain that claims the track cannot make this
+     * build draw its images.
      */
     @Test
-    fun `a bitmap format is named even when a renderer claims it`() {
-        assertNotNull(SubtitleTrackRules.cannotDrawNote(MimeTypes.APPLICATION_PGS, supported = true))
+    fun `a bitmap format flagged off is named even when a renderer claims it`() {
         assertNotNull(SubtitleTrackRules.cannotDrawNote(MimeTypes.APPLICATION_VOBSUB, supported = true))
         assertNotNull(SubtitleTrackRules.cannotDrawNote(MimeTypes.APPLICATION_DVBSUBS, supported = true))
+    }
+
+    @Test
+    fun `the bitmap format this engine draws carries no note`() {
+        assertNull(
+            "PGS is drawn here, so its row must not say otherwise",
+            SubtitleTrackRules.cannotDrawNote(MimeTypes.APPLICATION_PGS, supported = true)
+        )
     }
 
     /**

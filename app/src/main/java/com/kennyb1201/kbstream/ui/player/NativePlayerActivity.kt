@@ -148,6 +148,10 @@ private const val SIDECAR_TRACK_ID = "kbstream.sidecar"
 // the pipeline's flattened copy. None of this was observable before, which is
 // why a selected-but-black subtitle track had to be diagnosed by elimination.
 private const val TAG_ASS = "PLAYER_ASS"
+// Tag for the bitmap subtitle path (PGS today): the one line that says a cue
+// group arrived as images and where it was drawn. A bitmap track that shows
+// nothing is otherwise indistinguishable from one that was never selected.
+private const val TAG_SUB = "PLAYER_SUB"
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -6036,8 +6040,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // playback. Built per player, like the analytics listener above.
             player.addAnalyticsListener(createPlaybackStatsListener())
             // Subtitles render through SubtitleCueHandler (below) so the
-            // size / background / offset controls actually work; empty and
-            // hide Media3's built-in SubtitleView, which cannot be styled.
+            // size / background / offset controls actually work; Media3's
+            // built-in SubtitleView cannot be styled. It starts empty and
+            // hidden for that reason - and it is also the ONLY view that can
+            // draw a bitmap cue (Cue.bitmap), so the handler makes it visible
+            // again for a bitmap cue group and hides it for text (see
+            // SubtitleCueHandler.onCues).
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
             subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
@@ -8379,9 +8387,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // Flatten to the shape SubtitleTrackRules works on, keeping the way
             // back to the media3 objects: the rules decide, this applies. They
             // exist because both failures they prevent are silent - an armed
-            // track that draws nothing (a bitmap format this engine has no
-            // renderer for), and a fallback onto the one track no renderer
-            // claims. Neither raises, so neither reaches the retry ladder.
+            // track that draws nothing (a bitmap format this engine does not
+            // draw), and a fallback onto the one track no renderer claims.
+            // Neither raises, so neither reaches the retry ladder.
             val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
             val locations = mutableListOf<Pair<Tracks.Group, Int>>()
             textGroups.forEach { group ->
@@ -8440,13 +8448,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     val label = SubtitleTrackRules.formatLabel(format.sampleMimeType)
                         ?: "bitmap"
                     // The preferred language IS on the file, but only as a
-                    // bitmap subtitle track. media3 ships no renderer for those,
-                    // so the track can be armed and then draws nothing - and an
-                    // armed track that renders nothing is not a
-                    // PlaybackException, so the decoder ladder never fires and
-                    // nothing is logged anywhere. MPV demuxes and draws them
-                    // itself, so the backup engine is the only place these
-                    // subtitles exist.
+                    // bitmap subtitle track in a format this engine does not
+                    // draw (see SubtitleTrackRules.bitmapRenderable - PGS draws
+                    // here now, VobSub and DVB still do not). Such a track can
+                    // be armed and then draws nothing - and an armed track that
+                    // renders nothing is not a PlaybackException, so the
+                    // decoder ladder never fires and nothing is logged
+                    // anywhere. MPV demuxes and draws these formats itself, so
+                    // the backup engine is the only place they exist.
                     if (!subtitleEngineFallbackTried) {
                         subtitleEngineFallbackTried = true
                         Log.w(
@@ -9123,9 +9132,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * background come from the player/global settings, and a positive offset
      * delays each cue block's appearance. A negative offset shows cues
      * immediately (text cannot appear in the past).
+     *
+     * Bitmap cue groups are the exception, and they do not go through this
+     * view at all: a PGS cue carries an authored IMAGE (Cue.bitmap), which only
+     * Media3's SubtitleView can draw, so those groups are handed to it and it
+     * is made visible for exactly as long as they are on screen. Text groups
+     * hide it again, so the two paths never draw at once and no bitmap frame
+     * can outlive its track.
      */
     private inner class SubtitleCueHandler : Player.Listener {
         private var currentCues: List<Cue> = emptyList()
+
+        /**
+         * Whether the stock SubtitleView is currently showing a bitmap frame
+         * for THIS handler, so hiding it is one transition instead of a write
+         * on every text cue group (PlayerView forwards every group to it).
+         */
+        private var bitmapCuesDrawn = false
         private val delayedShow = Runnable { renderText(currentCueText()) }
         private val positionTick = Runnable { updateFromPosition() }
 
@@ -9182,8 +9205,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 handler.removeCallbacks(delayedShow)
                 currentCues = emptyList()
                 renderText("")
+                clearBitmapCues()
                 return
             }
+            if (cueGroup.cues.any { it.bitmap != null }) {
+                // A bitmap subtitle track (PGS today - see
+                // SubtitleTrackRules.bitmapRenderable) arrives as authored
+                // images, not text. Routed by what the group CARRIES rather
+                // than by the track's declared format: the cue is the thing
+                // that has to be drawn, and only one text track is ever
+                // selected, so groups are homogeneous in practice and the two
+                // paths never draw at once. The overlay's gate above stays
+                // first: a bitmap group is not the flattened duplicate of an
+                // ASS script, but if the overlay owns the selection there is
+                // no bitmap group to forward either.
+                handler.removeCallbacks(delayedShow)
+                currentCues = emptyList()
+                renderText("")
+                // No offset and no size/background: an authored image has no
+                // "appear earlier", and Media3 has no bitmap-delay API. These
+                // settings are text-only, and these tracks drew nothing at all
+                // before this path existed, so this is a gain, not a
+                // regression.
+                showBitmapCues(cueGroup)
+                return
+            }
+            clearBitmapCues()
             if (positionDriven) {
                 // Position-driven mode: suppress pipeline rendering entirely.
                 handler.removeCallbacks(delayedShow)
@@ -9223,6 +9270,45 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             handler.removeCallbacks(positionTick)
             currentCues = emptyList()
             renderText("")
+            // A rebuilt player, a live zap, or a teardown must not leave the
+            // last bitmap frame on screen: the view belongs to the surface, not
+            // to this handler.
+            clearBitmapCues()
+        }
+
+        /**
+         * Draws an authored bitmap cue group on Media3's own SubtitleView, which
+         * is the one view in this app that can render a [Cue.bitmap].
+         *
+         * Setting the cues here as well as showing the view is deliberate:
+         * PlayerView already forwards every cue group to this view, but that
+         * forwarding carries no visibility, and stating the frame this handler
+         * was handed keeps the drawn image right whatever order the two
+         * listeners run in.
+         */
+        private fun showBitmapCues(cueGroup: CueGroup) {
+            val view = playerView.subtitleView ?: return
+            view.setCues(cueGroup.cues)
+            view.visibility = View.VISIBLE
+            if (!bitmapCuesDrawn) {
+                bitmapCuesDrawn = true
+                Log.i(
+                    TAG_SUB,
+                    "bitmap cue group (${cueGroup.cues.size} cues) drawing on SubtitleView"
+                )
+            }
+        }
+
+        /**
+         * Gives the SubtitleView back to the text path: hidden and emptied, so
+         * a text track (whose cues PlayerView still forwards to it) cannot draw
+         * twice and no stale bitmap frame survives a track switch.
+         */
+        private fun clearBitmapCues() {
+            if (!bitmapCuesDrawn) return
+            bitmapCuesDrawn = false
+            playerView.subtitleView?.setCues(null)
+            playerView.subtitleView?.visibility = View.GONE
         }
 
         /**
@@ -10060,11 +10146,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         )
                         PickerItem(
                             // Language plus the kind and the format, so a PGS row
-                            // says "PGS" (this engine cannot draw it at all) and
-                            // an SDH row says "SDH" before the press rather than
-                            // after. An ASS track is typeset by libass when the
-                            // build carries it, and flattened to plain cues
-                            // otherwise.
+                            // says "PGS" and an SDH row says "SDH" before the
+                            // press rather than after. The format badge is pure
+                            // information now that PGS draws here: whether THIS
+                            // engine can draw the track is cannotDraw below, and
+                            // a VobSub or DVB row still says "needs MPV" there.
+                            // An ASS track is typeset by libass when the build
+                            // carries it, and flattened to plain cues otherwise.
                             label = listOfNotNull(
                                 SubtitleTrackRules.pickerLabel(
                                     language = format.language,

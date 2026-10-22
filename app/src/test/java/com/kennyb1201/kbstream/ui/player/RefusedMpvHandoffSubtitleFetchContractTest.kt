@@ -8,7 +8,9 @@ import org.junit.Test
 
 /**
  * The failure this pins: a file whose preferred-language subtitle is a bitmap
- * (PGS/VobSub/DVB) takes the `NeedsMpv` branch of the ready-time pass. When the
+ * format this engine does not draw (VobSub/DVB - PGS draws here now, see
+ * [SubtitleTrackRules.bitmapRenderable]) takes the `NeedsMpv` branch of the
+ * ready-time pass. When the
  * handoff to MPV is REFUSED — live TV, a DRM session, no libmpv, or the
  * automatic fallback switched off — the branch only logged and left text off.
  * OpenSubtitles could have supplied a renderable text track, and the one path
@@ -236,17 +238,19 @@ class RefusedMpvHandoffSubtitleFetchContractTest {
             language = language,
             mimeType = mimeType,
             forced = forced,
-            supported = false
+            // The chain claims the track; what keeps it out of the drawable set
+            // here is its FORMAT (VobSub is still flagged off).
+            supported = true
         )
 
     /**
-     * A PGS-only file in the preferred language really does take the NeedsMpv
+     * A VobSub-only file in the preferred language really does take the NeedsMpv
      * branch (not Off, not Show) — that is the precondition the fix depends on.
      */
     @Test
-    fun `a PGS-only file in the preferred language chooses NeedsMpv`() {
+    fun `a VobSub-only file in the preferred language chooses NeedsMpv`() {
         val choice = SubtitleTrackRules.choose(
-            listOf(candidate("eng", "application/pgs")),
+            listOf(candidate("eng", "application/vobsub")),
             preferredLanguage = "en",
             mode = SubtitleModeRules.ON
         )
@@ -264,7 +268,7 @@ class RefusedMpvHandoffSubtitleFetchContractTest {
     @Test
     fun `forced mode reaches NeedsMpv and is stopped by the mode gate`() {
         val choice = SubtitleTrackRules.choose(
-            listOf(candidate("eng", "application/pgs", forced = true)),
+            listOf(candidate("eng", "application/vobsub", forced = true)),
             preferredLanguage = "en",
             mode = SubtitleModeRules.FORCED
         )

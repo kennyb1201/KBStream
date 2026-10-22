@@ -26,8 +26,13 @@ class SubtitleTrackRulesTest {
         title: String? = null
     ) = Candidate(language, MimeTypes.APPLICATION_SUBRIP, forced, supported, title)
 
+    /** PGS: a bitmap format this engine draws, so the selector reports it supported. */
     private fun pgs(language: String? = null, forced: Boolean = false) =
-        Candidate(language, MimeTypes.APPLICATION_PGS, forced, supported = false)
+        Candidate(language, MimeTypes.APPLICATION_PGS, forced, supported = true)
+
+    /** VobSub: still a bitmap whose format this engine hands to the other engine. */
+    private fun vobsub(language: String? = null, forced: Boolean = false) =
+        Candidate(language, MimeTypes.APPLICATION_VOBSUB, forced, supported = true)
 
     // ── A commentary is not the film's own translation ─────────────────────
 
@@ -73,31 +78,63 @@ class SubtitleTrackRulesTest {
     }
 
     // ── The silent failure: a bitmap track that draws nothing ──────────────
+    //
+    // Whether one can be chosen is a fact about its FORMAT now, not about
+    // bitmaps in general (see SubtitleTrackRules.bitmapRenderable): PGS is
+    // drawn by this engine, VobSub and DVBSubs still take the MPV handoff.
 
     @Test
-    fun `a lone PGS track asks for the MPV engine instead of arming a dead track`() {
-        val choice = SubtitleTrackRules.choose(listOf(pgs("en")), "en")
+    fun `a lone PGS track is chosen like any other track`() {
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(listOf(pgs("en")), "en"))
+    }
+
+    @Test
+    fun `PGS ranks by kind in its language instead of behind the text tracks`() {
+        assertEquals(
+            "an SDH track still outranks a regular one, whichever container format it is in",
+            Choice.Show(1),
+            SubtitleTrackRules.choose(listOf(pgs("en"), srt("en", title = "English SDH")), "en")
+        )
+        assertEquals(
+            "and the preferred language still beats another language, as it always did",
+            Choice.Show(0),
+            SubtitleTrackRules.choose(listOf(pgs("en"), srt("fr")), "en")
+        )
+    }
+
+    @Test
+    fun `a PGS track this build reports unsupported is skipped, not armed`() {
+        // The flag says "this engine can draw PGS", not "trust every verdict":
+        // a chain that reports the track unsupported is the ordinary supported
+        // check, exactly as for a text track.
+        val dead = Candidate("en", MimeTypes.APPLICATION_PGS, forced = false, supported = false)
+        assertEquals(Choice.Off, SubtitleTrackRules.choose(listOf(dead), "en"))
+    }
+
+    @Test
+    fun `a lone VobSub track asks for the MPV engine instead of arming a dead track`() {
+        val choice = SubtitleTrackRules.choose(listOf(vobsub("en")), "en")
         assertEquals(Choice.NeedsMpv(0), choice)
     }
 
     @Test
-    fun `a bitmap track is never chosen even if it is reported supported`() {
-        // media3 reports PGS unsupported today. If that ever changes, choosing
-        // it would silently render nothing, so the format is refused outright.
-        val lying = Candidate("en", MimeTypes.APPLICATION_PGS, forced = false, supported = true)
+    fun `a bitmap format flagged off is never chosen even if it is reported supported`() {
+        // There is no path for its images in this build, so `supported` is not
+        // evidence enough: choosing it would silently draw nothing.
+        val lying = Candidate("en", MimeTypes.APPLICATION_VOBSUB, forced = false, supported = true)
         assertEquals(Choice.NeedsMpv(0), SubtitleTrackRules.choose(listOf(lying), "en"))
     }
 
     @Test
-    fun `a renderable track wins over a bitmap one in the same language`() {
-        val choice = SubtitleTrackRules.choose(listOf(pgs("en"), srt("en")), "en")
+    fun `a drawable track wins over a bitmap format this engine cannot draw`() {
+        val choice = SubtitleTrackRules.choose(listOf(vobsub("en"), srt("en")), "en")
         assertEquals(Choice.Show(1), choice)
     }
 
     @Test
-    fun `a bitmap track is only a fallback once nothing renderable matches`() {
-        val choice = SubtitleTrackRules.choose(listOf(srt("zz"), pgs("en")), "en")
-        // "zz" is renderable but the wrong language; the language match is the
+    fun `an undrawable bitmap is only a fallback once nothing drawable matches`() {
+        val choice = SubtitleTrackRules.choose(listOf(srt("zz"), vobsub("en")), "en")
+        // "zz" is drawable but the wrong language; the language match is the
         // bitmap track, which this engine cannot draw — so the answer is the
         // other engine, not the wrong-language track.
         assertEquals(Choice.NeedsMpv(1), choice)
@@ -247,10 +284,10 @@ class SubtitleTrackRulesTest {
     }
 
     @Test
-    fun `a bitmap match in the preferred language still goes to the other engine`() {
+    fun `an undrawable bitmap in the preferred language still goes to the other engine`() {
         // Unchanged: which bitmap of several is a question for the engine that
         // can actually draw one.
-        val tracks = listOf(srt(null, title = "SDH"), pgs("en"))
+        val tracks = listOf(srt(null, title = "SDH"), vobsub("en"))
         assertEquals(Choice.NeedsMpv(1), SubtitleTrackRules.choose(tracks, "en"))
     }
 
@@ -345,6 +382,28 @@ class SubtitleTrackRulesTest {
     }
 
     @Test
+    fun `the bitmap renderability flags are per format`() {
+        assertTrue(
+            "PGS is the format that matters and the one whose chain is present",
+            SubtitleTrackRules.bitmapRenderable(MimeTypes.APPLICATION_PGS)
+        )
+        assertFalse(SubtitleTrackRules.bitmapRenderable(MimeTypes.APPLICATION_VOBSUB))
+        assertFalse(SubtitleTrackRules.bitmapRenderable(MimeTypes.APPLICATION_DVBSUBS))
+        assertFalse(
+            "a text format is not a bitmap question at all",
+            SubtitleTrackRules.bitmapRenderable(MimeTypes.APPLICATION_SUBRIP)
+        )
+        assertFalse(SubtitleTrackRules.bitmapRenderable(null))
+        assertFalse(
+            "a flag-on format is not in the handoff bucket",
+            SubtitleTrackRules.isUndrawableBitmap(MimeTypes.APPLICATION_PGS)
+        )
+        assertTrue(SubtitleTrackRules.isUndrawableBitmap(MimeTypes.APPLICATION_VOBSUB))
+        assertTrue(SubtitleTrackRules.isUndrawableBitmap(MimeTypes.APPLICATION_DVBSUBS))
+        assertFalse(SubtitleTrackRules.isUndrawableBitmap(MimeTypes.APPLICATION_SUBRIP))
+    }
+
+    @Test
     fun `format labels name the engine-relevant formats`() {
         assertEquals("PGS", SubtitleTrackRules.formatLabel(MimeTypes.APPLICATION_PGS))
         assertEquals("ASS", SubtitleTrackRules.formatLabel(MimeTypes.TEXT_SSA))
@@ -404,10 +463,19 @@ class SubtitleTrackRulesTest {
     }
 
     @Test
-    fun `forced mode can hand a bitmap forced track to the other engine`() {
+    fun `forced mode shows a forced PGS track itself`() {
+        assertEquals(
+            "a forced bitmap track in the viewer's language is now a real match",
+            Choice.Show(0),
+            SubtitleTrackRules.chooseForced(listOf(pgs("en", forced = true)), "en")
+        )
+    }
+
+    @Test
+    fun `forced mode can hand an undrawable bitmap forced track to the other engine`() {
         assertEquals(
             Choice.NeedsMpv(0),
-            SubtitleTrackRules.chooseForced(listOf(pgs("en", forced = true)), "en")
+            SubtitleTrackRules.chooseForced(listOf(vobsub("en", forced = true)), "en")
         )
     }
 

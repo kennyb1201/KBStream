@@ -12,11 +12,23 @@ import com.kennyb1201.kbstream.data.player.LanguageMatch
  * fallback that lands on the only track no renderer claims. Neither shows up as
  * an exception, so neither shows up in a crash report either.
  *
- * Two engine facts this encodes:
- *  - ExoPlayer has no bitmap-subtitle renderer. media3 ships no PGS (or VobSub /
- *    DVB) decoder, so a track in one of those formats is selectable, matches by
- *    language, and then draws nothing at all. Only the MPV engine (libmpv,
- *    which bundles libass and its own demuxers) can show them.
+ * The engine facts this encodes:
+ *  - A bitmap subtitle track (PGS, VobSub, DVB) is an authored IMAGE, not text.
+ *    media3 1.11.1 ships a parser for all three (`PgsParser`, `VobsubParser`,
+ *    `DvbParser`), so one of these can be selected and decoded - but a text
+ *    renderer has nowhere to put the image, and nothing on the text path reads
+ *    `Cue.bitmap`. The player draws a bitmap cue group through Media3's own
+ *    SubtitleView instead (see SubtitleCueHandler). Decoding happens in one of
+ *    two places: this build's extractors factory parses subtitle tracks during
+ *    extraction (media3's default), which surfaces them as
+ *    `application/x-media3-cues` carrying the bitmap, while a track that still
+ *    states the bitmap MIME is claimed by the text renderer through the same
+ *    parser factory. Either way the image reaches the cue listener, so the only
+ *    thing left to answer per format is whether its image can be drawn end to
+ *    end ([bitmapRenderable]). A format whose flag is off is a track this
+ *    engine still cannot draw - selectable, matches by language, and then draws
+ *    nothing at all - and only the MPV engine (libmpv, which bundles libass and
+ *    its own demuxers) can show it.
  *  - media3's ASS handling is minimal by design: styling was removed upstream
  *    (ExoPlayer #8435), so an ASS track plays as plain text. That is a
  *    degradation, not a failure, and the picker badges the format so the viewer
@@ -60,8 +72,10 @@ internal object SubtitleTrackRules {
 
         /**
          * Nothing this engine can draw matched, but a bitmap subtitle track is
-         * present. That is not "no subtitles" — it is "no subtitles in this
-         * engine", and only the MPV engine can fix it (see the caller).
+         * present in a format this engine cannot draw (see
+         * [isUndrawableBitmap]). That is not "no subtitles" — it is "no
+         * subtitles in this engine", and only the MPV engine can fix it (see
+         * the caller).
          */
         data class NeedsMpv(val index: Int) : Choice
 
@@ -85,7 +99,7 @@ internal object SubtitleTrackRules {
      */
     private fun normalize(language: String?): String? = LanguageMatch.canonical(language)
 
-    /** Formats no text renderer can draw: these are bitmaps, not text. */
+    /** The bitmap subtitle formats: authored images, not text. */
     fun isBitmapFormat(mimeType: String?): Boolean = when (mimeType) {
         MimeTypes.APPLICATION_PGS,
         MimeTypes.APPLICATION_VOBSUB,
@@ -95,11 +109,61 @@ internal object SubtitleTrackRules {
     }
 
     /**
+     * Which bitmap formats THIS engine draws, per format.
+     *
+     * The one switch [cannotDrawNote], [choose] and [chooseForced] read, and it
+     * is per format on purpose: the three formats are three separate parsers
+     * with three separate claims on the presentation path, so proving one says
+     * nothing about the others.
+     *
+     * PGS is on, because it is the case that matters - it is the format English
+     * SDH arrives in on a BluRay rip - and its chain is present in this build:
+     * `DefaultSubtitleParserFactory` claims `application/pgs`, `PgsParser`
+     * decodes the compressed bitmaps to `Cue.bitmap`, and
+     * [SubtitleCueHandler] draws a bitmap cue group on the stock SubtitleView.
+     *
+     * VobSub and DVBSubs keep the old behavior (the MPV handoff) until the same
+     * end-to-end chain is proven for them. Flipping one is this map and nothing
+     * else: every consumer - the picker note, the auto-select rules, the
+     * ready-time language pass - reads this one answer, and a format flagged
+     * here falls through to the ordinary `supported` verdict exactly like a text
+     * format does.
+     */
+    private val renderableBitmapFormats: Map<String, Boolean> = mapOf(
+        MimeTypes.APPLICATION_PGS to true,
+        MimeTypes.APPLICATION_VOBSUB to false,
+        MimeTypes.APPLICATION_DVBSUBS to false
+    )
+
+    /**
+     * Whether a track in this bitmap format is drawn by this engine.
+     *
+     * Deliberately only answers the bitmap question: false for a text format and
+     * for null, because those are not tracks this switch decides.
+     */
+    fun bitmapRenderable(mimeType: String?): Boolean =
+        mimeType != null && renderableBitmapFormats[mimeType] == true
+
+    /**
+     * A bitmap format this engine hands to the other engine: an image no text
+     * renderer can draw, and not (yet) flagged in [renderableBitmapFormats].
+     *
+     * The distinction from [isBitmapFormat] is the whole change: "bitmap" is a
+     * fact about the track, "undrawable here" is a fact about this build, and
+     * only the second may keep a track out of the selection rules. It is what
+     * leaves VobSub and DVBSubs on the MPV handoff while PGS renders here.
+     */
+    fun isUndrawableBitmap(mimeType: String?): Boolean =
+        isBitmapFormat(mimeType) && !bitmapRenderable(mimeType)
+
+    /**
      * Short format badge for a picker row, or null when the format is unknown.
      *
-     * The point is engine expectation: "PGS" cannot draw here at all, and "ASS"
-     * draws without its typesetting, so the viewer learns which tracks want the
-     * other engine before pressing them rather than after.
+     * The point is engine expectation: the badge names the format ("PGS",
+     * "VOBSUB", "DVB") and "ASS" warns that it draws without its typesetting,
+     * so the viewer learns what a track is before pressing it rather than after.
+     * Whether THIS engine can draw it is a separate answer, carried by
+     * [cannotDrawNote].
      */
     fun formatLabel(mimeType: String?): String? = when (mimeType) {
         MimeTypes.APPLICATION_PGS -> "PGS"
@@ -124,12 +188,15 @@ internal object SubtitleTrackRules {
      * note is also the condition the picker uses to hand the track to the
      * engine that CAN draw it (MPV demuxes PGS/VobSub/DVB itself).
      *
-     * A bitmap format is called out as needing MPV even if a future media3
-     * reports it as supported, for the same reason [choose] excludes them on
-     * their own evidence - see [isBitmapFormat].
+     * A bitmap format whose flag is off is called out as needing MPV even if a
+     * future media3 reports it as supported, for the same reason [choose]
+     * excludes it on its own evidence - see [isUndrawableBitmap]. A bitmap
+     * format whose flag is ON gets no special case at all: it reads the build's
+     * ordinary `supported` verdict, exactly like a text track, so the row and
+     * the selection rules cannot disagree about it.
      */
     fun cannotDrawNote(mimeType: String?, supported: Boolean): String? = when {
-        isBitmapFormat(mimeType) -> "needs MPV"
+        isUndrawableBitmap(mimeType) -> "needs MPV"
         !supported -> "not supported here"
         else -> null
     }
@@ -189,9 +256,10 @@ internal object SubtitleTrackRules {
      *
      * The whole order, most complete first, is:
      *
-     *  1. the preferred language: SDH, then regular;
-     *  2. a bitmap track in the preferred language — this engine cannot draw
-     *     it, so the next engine is asked (see [Choice.NeedsMpv]);
+     *  1. the preferred language: SDH, then regular; a bitmap track whose
+     *     format this engine draws ranks here like any other track;
+     *  2. a bitmap track in the preferred language whose format this engine does
+     *     NOT draw — the next engine is asked (see [Choice.NeedsMpv]);
      *  3. an untagged track: SDH, then regular;
      *  4. a forced track: preferred-tagged, then untagged;
      *  5. another language: SDH, then regular, then forced.
@@ -199,14 +267,16 @@ internal object SubtitleTrackRules {
     fun choose(candidates: List<Candidate>, preferredLanguage: String): Choice {
         val preferred = normalize(preferredLanguage) ?: return Choice.Off
 
-        // Bitmap formats are excluded from the drawable set on their own
-        // evidence as well as on `supported`: if a future media3 ever reports
-        // one as supported, these rules must still not choose a track nothing
-        // can draw.
+        // Two filters, one answer each: a track is drawable when the build
+        // claims it AND it is not a bitmap format whose flag is off (see
+        // [isUndrawableBitmap]); the bitmap bucket is only the formats this
+        // engine still cannot draw. A bitmap format with its flag on is in the
+        // first set, so it is chosen by the ordinary language/kind rules and
+        // never reaches the NeedsMpv step below.
         val renderable = candidates.withIndex().filter {
-            it.value.supported && !isBitmapFormat(it.value.mimeType)
+            it.value.supported && !isUndrawableBitmap(it.value.mimeType)
         }
-        val bitmap = candidates.withIndex().filter { isBitmapFormat(it.value.mimeType) }
+        val bitmap = candidates.withIndex().filter { isUndrawableBitmap(it.value.mimeType) }
         val isUntagged: (Candidate) -> Boolean = { normalize(it.language) == null }
         val isPreferred: (Candidate) -> Boolean = { normalize(it.language) == preferred }
         val isSdh: (Candidate) -> Boolean = {
@@ -235,11 +305,12 @@ internal object SubtitleTrackRules {
         renderable.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
             ?.let { return Choice.Show(it.index) }
 
-        // 2. The preferred language IS present, but only as a bitmap track. This
-        //    is the silent failure this object exists for, and the answer is the
-        //    other engine - not a dead selection, and not a track tagged for a
-        //    language the viewer did not ask for. Left as it was: which bitmap
-        //    is a question only the engine that can draw it should answer.
+        // 2. The preferred language IS present, but only as a bitmap track this
+        //    engine cannot draw. This is the silent failure this object exists
+        //    for, and the answer is the other engine - not a dead selection, and
+        //    not a track tagged for a language the viewer did not ask for. Left
+        //    as it was: which bitmap is a question only the engine that can draw
+        //    it should answer.
         bitmap.firstOrNull { isPreferred(it.value) }
             ?.let { return Choice.NeedsMpv(it.index) }
 
@@ -273,7 +344,8 @@ internal object SubtitleTrackRules {
         renderable.firstOrNull()?.let { return Choice.Show(it.index) }
 
         // 6. Nothing drawable at all, but the file does carry subtitle tracks:
-        //    they are bitmaps, which only the MPV engine can render.
+        //    they are bitmaps whose format this engine cannot draw, which only
+        //    the MPV engine can render.
         bitmap.firstOrNull()?.let { return Choice.NeedsMpv(it.index) }
 
         return Choice.Off
@@ -286,7 +358,8 @@ internal object SubtitleTrackRules {
      * ([PlayerTrackBridge.matchingOverride]) which runs on every READY and
      * rebuffer and used to take the first match in file order - re-arming the
      * forced track moments after the kind-ranked initial selection had picked
-     * SDH. All [candidates] are assumed drawable (supported, not bitmap).
+     * SDH. All [candidates] are assumed drawable (supported, and not a bitmap
+     * format whose flag is off).
      */
     fun bestLanguageMatchIndex(candidates: List<Candidate>): Int? {
         val isSdh: (Candidate) -> Boolean = {
@@ -340,10 +413,13 @@ internal object SubtitleTrackRules {
      */
     fun chooseForced(candidates: List<Candidate>, preferredLanguage: String): Choice {
         val preferred = normalize(preferredLanguage)
+        // The same two filters as [choose]: a bitmap format with its flag on is
+        // an ordinary candidate here too, so a forced PGS track in the viewer's
+        // language is shown instead of handed to the other engine.
         val renderable = candidates.withIndex().filter {
-            it.value.supported && !isBitmapFormat(it.value.mimeType)
+            it.value.supported && !isUndrawableBitmap(it.value.mimeType)
         }
-        val bitmap = candidates.withIndex().filter { isBitmapFormat(it.value.mimeType) }
+        val bitmap = candidates.withIndex().filter { isUndrawableBitmap(it.value.mimeType) }
         val untagged: (Candidate) -> Boolean = { normalize(it.language) == null }
 
         // 1. A forced track in the preferred language: when the viewer also
@@ -365,8 +441,8 @@ internal object SubtitleTrackRules {
         //    still beats showing nothing.
         renderable.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
 
-        // 4. Forced, but only as a bitmap this engine cannot draw: the other
-        //    engine is the only place it exists.
+        // 4. Forced, but only as a bitmap whose format this engine cannot draw:
+        //    the other engine is the only place it exists.
         bitmap.firstOrNull { it.value.forced }?.let { return Choice.NeedsMpv(it.index) }
 
         // 5. No forced track at all: forced-only has nothing to show.

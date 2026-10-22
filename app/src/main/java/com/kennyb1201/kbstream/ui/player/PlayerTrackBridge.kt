@@ -827,15 +827,18 @@ internal object PlayerTrackBridge {
      * carries nothing [language] matches.
      *
      * For text tracks a track this engine cannot draw is skipped rather than
-     * armed. ExoPlayer has no PGS/VobSub/DVB renderer, so a bitmap track armed
-     * here draws nothing and raises nothing: there is no exception to trip the
-     * decoder ladder and nothing is logged either, which is the "options
-     * listed, none display" failure. The answer is the same one the picker
-     * rows already give ([SubtitleTrackRules.cannotDrawNote]), so the language
-     * pass and the rows cannot disagree about which tracks are dead. Skipping
-     * leaves the caller's "no track in this language" path to decide what
-     * happens next (the activity's NeedsMpv handoff, the OpenSubtitles fetch)
-     * instead of leaving a dead override behind.
+     * armed. A bitmap track in a format this engine does not draw (see
+     * [SubtitleTrackRules.bitmapRenderable] - PGS draws here, VobSub and DVB
+     * still do not) draws nothing when armed and raises nothing: there is no
+     * exception to trip the decoder ladder and nothing is logged either, which
+     * is the "options listed, none display" failure. The answer is the same one
+     * the picker rows already give ([SubtitleTrackRules.cannotDrawNote]), so the
+     * language pass and the rows cannot disagree about which tracks are dead -
+     * which is also why a format whose flag is ON is armed by this pass exactly
+     * like any text track, with no special case here. Skipping leaves the
+     * caller's "no track in this language" path to decide what happens next
+     * (the activity's NeedsMpv handoff, the OpenSubtitles fetch) instead of
+     * leaving a dead override behind.
      *
      * An UNTAGGED text track is considered, behind the language-tagged ones
      * (see the text branch): a rip whose tracks state no language at all is the
