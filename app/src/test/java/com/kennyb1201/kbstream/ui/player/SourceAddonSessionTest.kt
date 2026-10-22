@@ -313,7 +313,11 @@ class SourceAddonSessionTest {
     @Test
     fun `the probe spends the larger ceiling on the pinned head only`() {
         val candidates = listOf(stream("pinned"), stream("ranked1"), stream("ranked2"))
-        val seen = mutableListOf<Pair<String, Long>>()
+        // Probes run on their own threads, so this recorder has to be one that
+        // can take concurrent appends - the same reason the cap and timeout
+        // cases above use a synchronized list. A plain ArrayList lost entries
+        // under the release gate and read as a candidate that was never probed.
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Pair<String, Long>>())
         val probe = SourcePlaybackProbe(mutableSetOf()) { url, _, timeoutMs ->
             seen += url to timeoutMs
             false
