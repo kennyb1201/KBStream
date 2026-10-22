@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.profiles
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,6 +64,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.flow.first
 
 /**
  * Full-screen profile picker shown at launch when profiles exist. D-pad
@@ -110,8 +114,117 @@ fun ProfilePickerScreen(
     var exitGateConfirm by remember { mutableStateOf("") }
     var exitGateCreateError by remember { mutableStateOf<String?>(null) }
 
+    // ── The landing, driven to observation ────────────────────────────────
+    //
+    // This screen is the app's entry gate, and it is the one place where a
+    // one-shot focus ask is a total lockout. The field report: a Fire TV
+    // force-closed during playback, relaunched into this picker, and nothing on
+    // it could be reached - no focus ring anywhere, all four directions dead,
+    // OK dead - until a paired mouse or a reinstall. The ask was fired once at
+    // first composition, lost that race, and was never repeated; and from
+    // "nothing holds focus" no directional press can bootstrap one, so the
+    // gate the whole app sits behind was unusable. Deterministic on that device
+    // across force-stops, cache clears and a full reboot.
+    //
+    // So the landing is DRIVEN, the same rule the Home top bar and the Detail
+    // hand-backs follow (a focus ask is retried until focus is OBSERVED on its
+    // target, never fired once and assumed):
+    //
+    //  - keyed on the tile it is aimed at (the first profile, or the trailing
+    //    MANAGE tile when there are no profiles), so the arrival of the very
+    //    data the ask is for re-runs it;
+    //  - asked again every frame until the tile's OWN focus state answers, and
+    //    bounded - an exhausted drive says so in the log instead of vanishing;
+    //  - watched afterwards, because a landing that DID work can be lost later:
+    //    the startup sync pull re-emits the profile list, which rebuilds the
+    //    tiles under the focus, and a spent ask cannot repair that.
     val firstRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { firstRequester.requestFocus() }
+
+    // Which tile holds focus, by its position in the grid; null when none does.
+    // Every tile reports its own focus state: this is what the LANDING is
+    // observed on, because "the target holds focus" is exactly what a tile can
+    // answer and its parent cannot.
+    var focusedTile by remember { mutableStateOf<Int?>(null) }
+
+    // Whether the grid - the tiles' parent - holds focus anywhere in its
+    // subtree. The watchdog reads this as well as the tile above, and demands
+    // both: a tile index can go stale when the list is rebuilt under it (the
+    // stale index then looks focused), and the parent can miss a state a tile
+    // reports. Repairing only when BOTH say nobody holds focus can therefore
+    // never fight a viewer whose focus merely moved.
+    var pickerHasFocus by remember { mutableStateOf(false) }
+
+    val firstProfile = profiles.firstOrNull()
+    val landingKey = firstProfile?.let { "profile:${it.id}" } ?: MANAGE_TILE_KEY
+    val landingName = firstProfile?.name ?: "MANAGE"
+
+    // A dialog that is up owns focus (see the gates below): the watchdog must
+    // never land behind it, and never compete with it.
+    fun gateOpen(): Boolean = pinTarget != null || exitGateAction != null
+
+    // The reported tile, dropped when the grid no longer has that many tiles
+    // (a profile removed by a sync pull leaves its index behind, and a stale
+    // index would read as "someone is focused" forever).
+    fun focusedTileNow(): Int? =
+        focusedTile?.takeIf { it in 0 until profiles.size + 1 }
+
+    /** True only when the screen really has nowhere for the D-pad to go. */
+    fun nothingFocused(): Boolean =
+        !pickerHasFocus && focusedTileNow() == null && !gateOpen()
+
+    // The ask, as the driver takes it: the requester itself is not part of the
+    // loop (see driveProfileLanding), only "ask" and "was it observed".
+    val askFirstTile: () -> Unit = { firstRequester.requestFocus() }
+
+    LaunchedEffect(landingKey) {
+        fun landed(): Boolean = focusedTileNow() == FIRST_TILE
+
+        val frames = driveProfileLanding(ask = askFirstTile, observed = ::landed)
+        if (frames > 0) {
+            Log.d(PROFILE_FOCUS_TAG, "landed: $landingName after $frames frame(s)")
+        } else {
+            Log.w(
+                PROFILE_FOCUS_TAG,
+                "landing exhausted $PROFILE_LANDING_FRAMES frames: $landingName"
+            )
+        }
+
+        // The watchdog. It sleeps on the nobody-holds-focus state rather than
+        // polling, and it never moves focus that exists - it only repairs the
+        // state in which the D-pad has nowhere to go, which is the lockout.
+        var exhaustedLogged = false
+        while (true) {
+            snapshotFlow { nothingFocused() }.first { it }
+            // Held for a few frames first: a single rebuilt frame during a
+            // recomposition is not a lost viewer, and re-landing on it would
+            // yank the D-pad back to the first tile for no reason.
+            var emptyFrames = 0
+            while (emptyFrames < PROFILE_NO_FOCUS_FRAMES && nothingFocused()) {
+                withFrameNanos { }
+                emptyFrames++
+            }
+            if (!nothingFocused()) continue
+
+            Log.d(PROFILE_FOCUS_TAG, "nobody holds focus: re-driving the landing")
+            val redriven = driveProfileLanding(ask = askFirstTile, observed = ::landed)
+            if (redriven > 0) {
+                exhaustedLogged = false
+                Log.d(
+                    PROFILE_FOCUS_TAG,
+                    "re-driven landing: $landingName after $redriven frame(s)"
+                )
+            } else if (!exhaustedLogged) {
+                // Once per streak: a device that can never land must not turn
+                // the log into a flood, but its first failure has to be named.
+                exhaustedLogged = true
+                Log.w(
+                    PROFILE_FOCUS_TAG,
+                    "re-driven landing exhausted $PROFILE_LANDING_FRAMES frames: " +
+                        landingName
+                )
+            }
+        }
+    }
 
     // Exit gate (audit C4/M2/M7), computed here rather than inside the tiles:
     // the dialog below needs the same answer, and leaving the CURRENT kids
@@ -147,6 +260,10 @@ fun ProfilePickerScreen(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
                 .focusGroup()
+                // The watchdog's screen-wide "does anything here hold focus"
+                // (see the landing above): the tiles' parent, so it sees any
+                // tile that takes focus, however it got there.
+                .onFocusChanged { pickerHasFocus = it.hasFocus }
                 // Spacing lives INSIDE the scroll viewport: the focused
                 // tile scales 1.06x, and padding placed before
                 // verticalScroll() puts the clip edge right at the first
@@ -220,12 +337,24 @@ fun ProfilePickerScreen(
                     modifier = Modifier.padding(bottom = 24.dp)
                 ) {
                     rowTiles.forEachIndexed { colIndex, tile ->
+                        val tileIndex = rowIndex * PROFILES_PER_ROW + colIndex
                         ProfileAvatarTile(
                             name = tile.name,
                             avatarIndex = tile.avatarIndex,
                             customAvatarUrl = tile.customAvatarUrl,
                             selected = tile.selected,
                             focusRequester = if (rowIndex == 0 && colIndex == 0) firstRequester else null,
+                            // The landing above observes the (0,0) tile through
+                            // this, and the watchdog reads every tile: a
+                            // screen-wide "does anything hold focus" that is
+                            // made of the tiles' own answers.
+                            onFocused = { held ->
+                                if (held) {
+                                    focusedTile = tileIndex
+                                } else if (focusedTile == tileIndex) {
+                                    focusedTile = null
+                                }
+                            },
                             onClick = tile.onClick
                         )
                     }
@@ -454,6 +583,17 @@ private sealed class ExitGateAction {
 
 private const val PROFILES_PER_ROW = 5
 
+/**
+ * The grid position the landing is aimed at: the first tile.
+ *
+ * It is the first profile, or the trailing MANAGE tile when there are none -
+ * the same tile the old one-shot was attached to.
+ */
+private const val FIRST_TILE = 0
+
+/** The landing key of the no-profiles case (see the landing effect). */
+private const val MANAGE_TILE_KEY = "manage"
+
 /** Render spec for one picker tile — plain data, invoked inline per row. */
 private data class PickerTile(
     val name: String,
@@ -470,6 +610,8 @@ private fun ProfileAvatarTile(
     customAvatarUrl: String?,
     selected: Boolean,
     focusRequester: FocusRequester?,
+    /** Reports this tile's own focus state, for the landing and its watchdog. */
+    onFocused: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -514,7 +656,10 @@ private fun ProfileAvatarTile(
             ),
             modifier = Modifier
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-                .onFocusChanged { focused = it.isFocused }
+                .onFocusChanged {
+                    focused = it.isFocused
+                    onFocused(it.isFocused)
+                }
         ) {
             Box(
                 modifier = Modifier
