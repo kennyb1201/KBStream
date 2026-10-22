@@ -131,9 +131,12 @@ class UiUniformityBatchAContractTest {
         val detail = source("ui/detail/DetailScreen.kt")
         assertTrue(
             "closing the hero Play button's menu must return focus to the " +
-                "button; without it the D-pad restarts at the top of the page",
+                "button; without it the D-pad restarts at the top of the page - " +
+                "and the ask goes through the page's verified hand-back rather " +
+                "than a single request, because the menu's scrim is leaving the " +
+                "tree in the same frame and a missed request is silent",
             detail.contains("fun dismissPlayButtonMenu() { playButtonMenu = false") &&
-                detail.contains("playButtonFocusRequester.requestFocus()")
+                detail.contains("handFocusBack(playButtonFocusRequester)")
         )
         assertTrue(
             "both the action rows and the Back/dismiss path share that hand-back",
@@ -156,9 +159,11 @@ class UiUniformityBatchAContractTest {
                 .findAll(detail).count() == 2
         )
         assertTrue(
-            "and closing them must hand focus back through one helper",
+            "and closing them must hand focus back through one helper, whose " +
+                "landing is read from the request's own answer instead of assumed",
             detail.contains("fun dismissStudioChipMenu() { studioChipMenu = null") &&
-                detail.contains("lastStudioChipFocusRequester?.requestFocus()")
+                detail.contains("handFocusBack(lastStudioChipFocusRequester)") &&
+                detail.contains("val handFocusBack = rememberFocusHandBack()")
         )
         assertEquals(
             "the menu state is only ever cleared by that helper",

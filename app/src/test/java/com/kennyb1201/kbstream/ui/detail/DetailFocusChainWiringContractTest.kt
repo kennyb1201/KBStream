@@ -150,8 +150,15 @@ class DetailFocusChainWiringContractTest {
             "the decision and the move both read the chain",
             detail.contains("DetailFocusChain.nextRow(row, direction, presence) == null") &&
                 detail.contains(
-                    "scope.launch { moveFocusVertical(row, direction, column, presence) } true"
+                    "startFocusMove { moveFocusVertical(row, direction, column, presence) } true"
                 )
+        )
+        assertTrue(
+            "and the move is started as the page's ONE in-flight move, so a " +
+                "press that arrives while a rail is still being retried cancels " +
+                "the older move instead of two of them racing for the focus",
+            detail.contains("fun startFocusMove(move: suspend () -> Unit)") &&
+                detail.contains("focusMoveInFlight?.cancel()")
         )
         assertTrue(
             "a press this row's own set does not cover is not consumed: the " +
@@ -201,20 +208,25 @@ class DetailFocusChainWiringContractTest {
         val revealArm = detail.indexOf(
             "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
         )
-        val fallback = detail.indexOf(
-            "anchorKey != null && revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
-        )
         val nextRow = detail.indexOf(
             "val nextTarget = DetailFocusChain.nextRow(target, direction, presence)"
         )
         assertTrue("the direct ask comes first", columnArm >= 0)
         assertTrue("a rail that exists but is disposed is put back", revealArm >= 0)
         assertTrue(
+            "and the reveal is not gated on knowing the pressed row's own rail: " +
+                "the episode section and the header are not single list items and " +
+                "have no key to give (see detailRowKey), so the gate made DOWN off " +
+                "an episode card skip the people rail below it whenever that rail " +
+                "was still under the fold - the one case the reveal exists for",
+            !detail.contains("anchorKey != null && revealAndFocusChipColumn(")
+        )
+        assertTrue(
             "and a rail that cannot answer at all walks ON rather than giving " +
                 "up: the next row that way gets the press, so a rail that is " +
                 "there and will not take the focus can never teleport the " +
                 "viewer back to the top of the page",
-            fallback >= 0 && nextRow > fallback
+            revealArm >= 0 && nextRow > revealArm
         )
         assertTrue(
             "the walk's own end is where the press STAYS: with no row left that " +
@@ -308,8 +320,8 @@ class DetailFocusChainWiringContractTest {
                 "always-true focusChipColumn is exactly what leaves them unreachable",
             detail.contains(
                 "focusChipColumn(targetKey, fromColumn) -> true present && " +
-                    "retryChipColumn(targetKey, fromColumn) -> true anchorKey != null " +
-                    "&& revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true"
+                    "retryChipColumn(targetKey, fromColumn) -> true " +
+                    "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true"
             )
         )
     }

@@ -224,12 +224,13 @@ class BrowseChipMenuFocusContractTest {
         )
         assertEquals(
             "both the action and Back hand the focus over - two ways out of " +
-                "the menu, one contract",
+                "the menu, one contract - and both go through the app's verified " +
+                "hand-back rather than asking once and reading nothing",
             2,
-            Regex("lastChipFocusRequester" + Regex.escape("?.requestFocus()"))
+            Regex("handFocusBack" + Regex.escape("(lastChipFocusRequester)"))
                 .findAll(chipMenu).count()
         )
-        val handBack = chipMenu.indexOf("lastChipFocusRequester")
+        val handBack = chipMenu.indexOf("handFocusBack(lastChipFocusRequester)")
         val closed = chipMenu.indexOf("hiddenChipMenu = null")
         assertTrue(
             "and the hand-back comes FIRST, while the menu is still in the " +

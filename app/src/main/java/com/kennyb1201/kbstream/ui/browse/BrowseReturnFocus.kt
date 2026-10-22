@@ -1,8 +1,14 @@
 package com.kennyb1201.kbstream.ui.browse
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.FocusRequester
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The title a browse screen's Detail page was opened from.
@@ -221,6 +227,45 @@ internal const val BROWSE_RETURN_FOCUS_DELAY_MS = 40L
  * menu dismiss paths) can ignore the answer; one that is choosing between two
  * targets can read it and fall back.
  */
+/**
+ * The app's one hand-back for a menu or a poster overlay, held per screen.
+ *
+ * Two rules, and they belong together because a dismiss is where both are
+ * needed:
+ *
+ *  - the ask is [landFocusOn]'s, not a bare `requestFocus()`, because the menu's
+ *    scrim and the card underneath it are recomposed in the same frame, and a
+ *    request against a node that cannot take focus yet answers false rather
+ *    than throwing. A miss there is silent, and the viewer reads it as
+ *    "closing the menu dropped me at the top of the page".
+ *  - a newer hand-back CANCELS the one still waiting on a frame. Each landing
+ *    is a retry loop, so without this a dismiss the viewer has already
+ *    superseded keeps asking for its own card and can land it a moment after
+ *    the next one moved - the focus jumping back to where they were.
+ *
+ * A row inside a menu that hands the focus to a tile BEFORE that tile's
+ * neighbour leaves the tree (see `PosterContextMenu`'s `onBeforeHide`) is not
+ * this: there the node is known to be attached and the ask has to be made in
+ * that same frame, so it stays a direct request.
+ */
+@Composable
+internal fun rememberFocusHandBack(): FocusHandBack {
+    val scope = rememberCoroutineScope()
+    return remember(scope) { FocusHandBack(scope) }
+}
+
+/** See [rememberFocusHandBack]: `handBack(requester)` hands the focus back. */
+internal class FocusHandBack(private val scope: CoroutineScope) {
+
+    /** The landing in flight, cancelled by the next hand-back. */
+    private var inFlight: Job? = null
+
+    operator fun invoke(requester: FocusRequester?) {
+        inFlight?.cancel()
+        inFlight = scope.launch { landFocusOn(requester) }
+    }
+}
+
 internal suspend fun landFocusOn(requester: FocusRequester?): Boolean {
     if (requester == null) return false
     var landed = false

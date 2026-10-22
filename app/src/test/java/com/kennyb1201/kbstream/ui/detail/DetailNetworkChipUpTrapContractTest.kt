@@ -115,7 +115,7 @@ class DetailNetworkChipUpTrapContractTest {
                 "default search, or the network rail's restorer would move the " +
                 "focus a second time",
             source.contains(
-                "scope.launch { moveFocusVertical(row, direction, column, presence) } true"
+                "startFocusMove { moveFocusVertical(row, direction, column, presence) } true"
             )
         )
         assertTrue(

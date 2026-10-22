@@ -128,6 +128,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
@@ -179,6 +180,7 @@ import com.kennyb1201.kbstream.ui.theme.kbAccentIndexState
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -620,6 +622,41 @@ fun DetailScreen(
     }
 
     val scope = rememberCoroutineScope()
+
+    // The vertical move in flight, if any (see [startFocusMove]).
+    var focusMoveInFlight by remember { mutableStateOf<Job?>(null) }
+
+    /**
+     * Starts [move] as the page's one in-flight D-pad move, cancelling any move
+     * still waiting on a frame.
+     *
+     * The chain's moves are asynchronous by necessity - a rail the scroll has
+     * disposed has to be scrolled back in and then asked again a frame at a
+     * time, up to [RETURN_FOCUS_STEPS] of them - so a press is free to arrive in
+     * the middle of one. Two moves in flight then race each other: a DOWN that
+     * is still retrying a rail it could not land on would finish AFTER the
+     * viewer had already pressed UP, and snap them back down to where they came
+     * from. A move only ever answers the press that started it, so the newest
+     * press cancels the older one and the focus ends up where the last press
+     * asked for it.
+     */
+    fun startFocusMove(move: suspend () -> Unit) {
+        focusMoveInFlight?.cancel()
+        focusMoveInFlight = scope.launch { move() }
+    }
+
+    /**
+     * Hands the focus back to the chip, card or control that a menu or an
+     * overlay was raised from - the app's one hand-back (see
+     * [rememberFocusHandBack]): retried across frames and read from the
+     * request's own answer, because the ask is made in the same frame the menu's
+     * scrim is leaving the tree and a node that cannot take focus yet answers
+     * FALSE rather than throwing. A one-shot request that misses would leave the
+     * D-pad at the top of the page, which is the exact complaint every one of
+     * these hand-backs exists for.
+     */
+    val handFocusBack = rememberFocusHandBack()
+
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
 
     // A NETWORK / PRODUCTION chip opens its screen on a press, so its
@@ -642,7 +679,7 @@ fun DetailScreen(
 
     fun dismissStudioChipMenu() {
         studioChipMenu = null
-        lastStudioChipFocusRequester?.requestFocus()
+        handFocusBack(lastStudioChipFocusRequester)
     }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
 
@@ -659,7 +696,7 @@ fun DetailScreen(
 
     fun dismissReviewOverlay() {
         selectedReview = null
-        lastReviewTileFocusRequester?.requestFocus()
+        handFocusBack(lastReviewTileFocusRequester)
     }
 
     // Long-press context menu for More Like This / collection rail posters.
@@ -677,7 +714,7 @@ fun DetailScreen(
 
     fun dismissPosterMenu() {
         posterMenu = null
-        lastPosterFocusRequester?.requestFocus()
+        handFocusBack(lastPosterFocusRequester)
     }
 
     // Long-press context menu for the season chips (mark a whole season
@@ -696,7 +733,7 @@ fun DetailScreen(
 
     fun dismissSeasonMenu() {
         seasonMenu = null
-        lastSeasonFocusRequester?.requestFocus()
+        handFocusBack(lastSeasonFocusRequester)
     }
 
     // Spoiler-free mode: the episode cards already hide an episode the viewer
@@ -731,7 +768,7 @@ fun DetailScreen(
 
     fun dismissEpisodeMenu() {
         episodeMenu = null
-        lastEpisodeFocusRequester?.requestFocus()
+        handFocusBack(lastEpisodeFocusRequester)
     }
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
@@ -903,13 +940,21 @@ fun DetailScreen(
      * hint there is - and the focus request is then held back until the row is
      * composed again and retried while its cards register.
      *
+     * [fromRowKey] is NULL for the two chain rows that are not a list item - the
+     * header row above the list, and the episode section, which is a season chip
+     * row and an episode row at once (see [detailRowKey]). The hint is then the
+     * top of the list: a worse anchor than a neighbour's index, but a press
+     * coming out of those rows has nothing better to offer, and refusing to
+     * reveal at all is what made DOWN off the episode rail jump over a row that
+     * was only one screen below it.
+     *
      * Answers whether the focus landed, but the caller consumes the press
      * either way (see [focusTopOfPage]): a key handed to an async scroll must
      * never also be handed to the default search.
      */
     suspend fun revealAndFocusChipColumn(
         rowKey: String,
-        fromRowKey: String,
+        fromRowKey: String?,
         fromColumn: Int
     ): Boolean {
         val hint = detailListState.layoutInfo.visibleItemsInfo
@@ -1354,7 +1399,7 @@ fun DetailScreen(
 
     fun dismissBackdropOverlay() {
         selectedBackdrop = null
-        lastBackdropCardFocusRequester?.requestFocus()
+        handFocusBack(lastBackdropCardFocusRequester)
     }
 
 
@@ -1390,7 +1435,7 @@ fun DetailScreen(
 
     fun dismissMediaImageMenu() {
         mediaImageMenu = null
-        mediaImageMenuCardFocusRequester?.requestFocus()
+        handFocusBack(mediaImageMenuCardFocusRequester)
     }
 
     val premiereDateFormatter = remember {
@@ -1876,11 +1921,16 @@ fun DetailScreen(
      * focus search, which picked whichever chip happened to sit above the
      * rail (season 2) and - since focusing a chip also SELECTS it (see
      * onSeasonFocused) - threw the viewer out of the season they were in.
+     *
+     * Answers whether the focus landed. The episode card's UP is consumed on
+     * the answer: a press eaten by a chip that never took the focus is an UP
+     * that visibly did nothing, so the card falls back to the chain's own UP
+     * when this says no.
      */
-    suspend fun focusSeasonChip(season: Int) {
+    suspend fun focusSeasonChip(season: Int): Boolean {
         val index = seasonChipIndex(season)
         if (index < 0) {
-            return
+            return false
         }
 
         bringSeasonChipIntoView(index)
@@ -1898,10 +1948,12 @@ fun DetailScreen(
                     requester.requestFocus()
                 }.getOrDefault(false)
             ) {
-                return
+                return true
             }
             delay(40L)
         }
+
+        return false
     }
 
     /**
@@ -2007,11 +2059,18 @@ fun DetailScreen(
         episodesRowState.scrollToItem(targetIndex)
         delay(90)
 
-        runCatching {
+        // The landing is verified rather than assumed: the card was just
+        // disposed by the season swap and is being recomposed as this runs, so
+        // the one request this used to make could land on nothing - and the
+        // sink was then disarmed anyway, which left the focus with nowhere to
+        // be. [landFocusOn] retries across frames and reads the request's own
+        // answer (see [focusChipColumn] for why that answer is the only one
+        // worth trusting).
+        landFocusOn(
             episodeFocusRequesters[
                 season to targetEpisode.episodeNumber
-            ]?.requestFocus()
-        }
+            ]
+        )
 
         // Focus is off the sink now — disarm it so it never captures
         // focus during ordinary spatial navigation.
@@ -2110,8 +2169,17 @@ fun DetailScreen(
                 // more ask a frame later, then the reveal, then the walk - a
                 // row that is there is never mistaken for one that is not.
                 present && retryChipColumn(targetKey, fromColumn) -> true
-                anchorKey != null &&
-                    revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true
+                // The reveal needs no anchor to be worth trying. [from] is the
+                // hint it would rather have, but the episode section and the
+                // header row are not single list items and have no key to give
+                // (see [detailRowKey]) - and gating the arm on one is what made
+                // DOWN off an episode card skip the people rail below it
+                // whenever that rail was still under the fold, which is exactly
+                // the disposal the reveal exists to undo (see
+                // [revealAndFocusChipColumn]). With no anchor the reveal starts
+                // its search at the top of the list, as the Media row's own
+                // strip already did.
+                revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true
                 else -> {
                     // The row is not there, or it is and still would not take
                     // the focus even after the retry. Field report: GENRE ->
@@ -2309,7 +2377,7 @@ fun DetailScreen(
             // the page is the disorientation this arm used to cause.
             true
         } else {
-            scope.launch { moveFocusVertical(row, direction, column, presence) }
+            startFocusMove { moveFocusVertical(row, direction, column, presence) }
             true
         }
     }
@@ -2691,7 +2759,7 @@ fun DetailScreen(
             // do (dismissPosterMenu and friends).
             fun dismissPlayButtonMenu() {
                 playButtonMenu = false
-                playButtonFocusRequester.requestFocus()
+                handFocusBack(playButtonFocusRequester)
             }
 
             val wantsBeginning =
@@ -4453,18 +4521,38 @@ fun DetailScreen(
                                                                                 null ||
                                                                             seasonChipIndex(
                                                                                 chipSeason
-                                                                            ) < 0
-                                                                        ) {
-                                                                            false
-                                                                        } else {
-                                                                            scope.launch {
-                                                                                focusSeasonChip(
-                                                                                    chipSeason
-                                                                                )
-                                                                            }
-                                                                            true
-                                                                        }
-                                                                    }
+                                                                            ) < 0                                        ) {
+                                            false
+                                        } else {
+                                            startFocusMove {
+                                                // The chip is the press's real
+                                                // target - but it is a lazy
+                                                // row's card, and the ask can
+                                                // miss every one of its
+                                                // retries when the row was
+                                                // never laid out (see
+                                                // focusSeasonChip). The press
+                                                // is consumed either way, so a
+                                                // miss used to be an UP that
+                                                // did nothing at all; the
+                                                // chain's own UP is where it
+                                                // goes instead.
+                                                if (
+                                                    !focusSeasonChip(
+                                                        chipSeason
+                                                    )
+                                                ) {
+                                                    moveFocusVertical(
+                                                        DetailRow.EPISODES,
+                                                        DetailFocusDirection.UP,
+                                                        0,
+                                                        detailRowPresence
+                                                    )
+                                                }
+                                            }
+                                            true
+                                        }
+                                    }
 
                                                                     isFirstEpisode &&
                                                                         keyEvent.key ==
@@ -5370,7 +5458,7 @@ fun DetailScreen(
                                             // cards, in the column the section
                                             // remembers (see
                                             // focusFirstMediaCard).
-                                            scope.launch { focusFirstMediaCard() }
+                                            startFocusMove { focusFirstMediaCard() }
                                         },
                                         presence = detailRowPresence
                                     ),
@@ -5485,7 +5573,7 @@ fun DetailScreen(
                                                     mediaCardFocus(
                                                         cardIndex,
                                                         onFocusStrip = {
-                                                            scope.launch {
+                                                            startFocusMove {
                                                                 focusMediaStrip(
                                                                     DetailRow.MEDIA
                                                                 )
@@ -5775,7 +5863,7 @@ fun DetailScreen(
                                         selected.mediaType
                                     )
                                 }
-                                lastPosterFocusRequester?.requestFocus()
+                                handFocusBack(lastPosterFocusRequester)
                             }
                         ),
                         onDismiss = {
@@ -5828,7 +5916,7 @@ fun DetailScreen(
                                         selected.episodeNumbers
                                     )
                                 }
-                                lastSeasonFocusRequester?.requestFocus()
+                                handFocusBack(lastSeasonFocusRequester)
                             },
                             PosterContextAction(
                                 label = if (wholeSeriesWatched) {
@@ -5850,7 +5938,7 @@ fun DetailScreen(
                                         wholeSeriesEpisodeNumbers
                                     )
                                 }
-                                lastSeasonFocusRequester?.requestFocus()
+                                handFocusBack(lastSeasonFocusRequester)
                             }
                         ) + listOfNotNull(
                             // Simkl's attribution rule, at the one place on this
@@ -5962,7 +6050,7 @@ fun DetailScreen(
                                             selected.streamId
                                         )
                                     }
-                                    lastEpisodeFocusRequester?.requestFocus()
+                                    handFocusBack(lastEpisodeFocusRequester)
                                 }
                             )
 
@@ -5988,7 +6076,7 @@ fun DetailScreen(
                                                 selected.episode
                                             )
                                         }
-                                        lastEpisodeFocusRequester?.requestFocus()
+                                        handFocusBack(lastEpisodeFocusRequester)
                                     }
                                 )
                             }
@@ -6014,7 +6102,7 @@ fun DetailScreen(
                                             selected.seasonEpisodeNumbers
                                         )
                                     }
-                                    lastEpisodeFocusRequester?.requestFocus()
+                                    handFocusBack(lastEpisodeFocusRequester)
                                 }
                             )
 
@@ -6039,7 +6127,7 @@ fun DetailScreen(
                                             wholeSeriesEpisodeNumbers
                                         )
                                     }
-                                    lastEpisodeFocusRequester?.requestFocus()
+                                    handFocusBack(lastEpisodeFocusRequester)
                                 }
                             )
 

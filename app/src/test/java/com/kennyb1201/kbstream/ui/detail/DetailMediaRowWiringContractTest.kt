@@ -351,9 +351,9 @@ class DetailMediaRowWiringContractTest {
         assertTrue(
             "the card's UP hands over to that, so the press is never consumed " +
                 "with the focus left on the card",
-            screen.contains("onFocusStrip = { scope.launch { focusMediaStrip(") &&
+            screen.contains("onFocusStrip = { startFocusMove { focusMediaStrip(") &&
                 screen.contains("DetailRow.MEDIA") &&
-                screen.contains("scope.launch { focusFirstMediaCard() }")
+                screen.contains("startFocusMove { focusFirstMediaCard() }")
         )
     }
 

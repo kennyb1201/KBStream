@@ -35,6 +35,7 @@ import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
@@ -248,9 +249,15 @@ fun SearchScreen(
     // row. Without it the Hide handed focus to the tile that was leaving.
     val titleTileFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
 
+    // Closing a menu owes the D-pad a landing on the tile or chip that raised
+    // it, and the landing is verified rather than assumed: the scrim and the
+    // card are recomposed in the same frame, so a single request can miss
+    // silently (see [rememberFocusHandBack]).
+    val handFocusBack = rememberFocusHandBack()
+
     fun dismissTitleMenu() {
         menuResult = null
-        lastPosterFocusRequester?.requestFocus()
+        handFocusBack(lastPosterFocusRequester)
     }
 
     LaunchedEffect(Unit) {
@@ -859,7 +866,7 @@ fun SearchScreen(
                         } else {
                             viewModel.markAsWatched(selected)
                         }
-                        lastPosterFocusRequester?.requestFocus()
+                        handFocusBack(lastPosterFocusRequester)
                     }
                 ),
                 onDismiss = {
@@ -908,7 +915,7 @@ fun SearchScreen(
                         // either, and an emptied focus owner is what the
                         // framework fills with the category strip - taking the
                         // view with it (see lastChipFocusRequester).
-                        lastChipFocusRequester?.requestFocus()
+                        handFocusBack(lastChipFocusRequester)
                         if (onHome) {
                             viewModel.removeBrowseChipFromHome(categoryKey, entry)
                         } else {
@@ -962,7 +969,7 @@ fun SearchScreen(
                     // Back out of the menu: the chip is still where it was, so
                     // focus belongs on it exactly as after an action - handed
                     // over the same way, for the same reason.
-                    lastChipFocusRequester?.requestFocus()
+                    handFocusBack(lastChipFocusRequester)
                     browseChipMenuReturn = categoryKey to entry.name
                     hiddenChipMenu = null
                 }

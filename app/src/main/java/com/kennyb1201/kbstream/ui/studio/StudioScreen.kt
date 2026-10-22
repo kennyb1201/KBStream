@@ -64,6 +64,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.browseReturnDecision
+import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.browse.studioBrowseScreenKey
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -206,10 +207,16 @@ fun StudioScreen(
         )
     }
 
+    // Closing the menu owes the D-pad a landing on the card that raised it, and
+    // the landing is verified rather than assumed: the scrim and the card are
+    // recomposed in the same frame, so a single request can miss silently (see
+    // [rememberFocusHandBack]).
+    val handFocusBack = rememberFocusHandBack()
+
     fun dismissRailMenu() {
         menuItem = null
         menuReturnTarget = null
-        lastRailFocusRequester?.requestFocus()
+        handFocusBack(lastRailFocusRequester)
     }
 
     /**
@@ -627,7 +634,7 @@ fun StudioScreen(
                                 mediaType = studioItem.mediaType
                             )
                         }
-                        lastRailFocusRequester?.requestFocus()
+                        handFocusBack(lastRailFocusRequester)
                     }
                 ),
                 onDismiss = {

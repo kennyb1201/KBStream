@@ -60,6 +60,7 @@ import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
+import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -142,9 +143,15 @@ fun CollectionScreen(
         )
     }
 
+    // Closing the menu owes the D-pad a landing on the poster that raised it,
+    // and the landing is verified rather than assumed: the scrim and the card
+    // are recomposed in the same frame, so a single request can miss silently
+    // (see [rememberFocusHandBack]).
+    val handFocusBack = rememberFocusHandBack()
+
     fun dismissPartMenu() {
         menuPart = null
-        lastPartFocusRequester?.requestFocus()
+        handFocusBack(lastPartFocusRequester)
     }
 
     LaunchedEffect(collectionId) {
@@ -548,7 +555,7 @@ fun CollectionScreen(
                         } else {
                             viewModel.markAsWatched(selected.id)
                         }
-                        lastPartFocusRequester?.requestFocus()
+                        handFocusBack(lastPartFocusRequester)
                     }
                 ),
                 onDismiss = {
