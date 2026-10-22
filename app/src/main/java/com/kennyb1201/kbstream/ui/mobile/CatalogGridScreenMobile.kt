@@ -35,7 +35,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.paging.compose.itemKey
 import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -281,7 +280,19 @@ fun CatalogGridScreenMobile(
 
                     else -> items(
                         count = lazyItems.itemCount,
-                        key = lazyItems.itemKey { "${it.type}:${it.id}" }
+                        // PagingData may legitimately repeat a title (an
+                        // add-on catalog whose pages overlap), and a duplicate
+                        // key throws at composition. The index keeps the key
+                        // unique while leaving every non-repeated item's
+                        // identity stable.
+                        key = { index ->
+                            val meta = lazyItems.peek(index)
+                            if (meta != null) {
+                                "${meta.type}:${meta.id}#$index"
+                            } else {
+                                "placeholder#$index"
+                            }
+                        }
                     ) { index ->
                         // Null while a placeholder stands in for a not-yet-loaded
                         // item; placeholders are off, so this is only the

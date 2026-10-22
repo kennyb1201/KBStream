@@ -18,8 +18,14 @@ object SubtitleFileParser {
     // Matches both SRT (comma millis) and WebVTT (dot millis) timing lines:
     // 00:01:15,300 --> 00:01:18,100
     // 00:01:15.300 --> 00:01:18.100
+    //
+    // The hours group is OPTIONAL: WebVTT allows the short form
+    // 01:15.300 --> 01:18.100 (MM:SS.mmm) and real sidecars use it. Requiring
+    // hours parsed such a file to zero cues, so the subs silently never
+    // rendered and SubtitleSearchHelper.isUsableSubtitleBody judged a perfectly
+    // good download unusable.
     private val timingRegex = Regex(
-        """(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})"""
+        """(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})"""
     )
 
     fun parse(content: String): List<TimedCue> {
@@ -56,6 +62,7 @@ object SubtitleFileParser {
 
     private fun toMs(h: String, m: String, s: String, fraction: String): Long {
         val millis = fraction.padEnd(3, '0').take(3).toLong()
-        return h.toLong() * 3_600_000L + m.toLong() * 60_000L + s.toLong() * 1_000L + millis
+        val hours = h.takeIf { it.isNotEmpty() }?.toLong() ?: 0L
+        return hours * 3_600_000L + m.toLong() * 60_000L + s.toLong() * 1_000L + millis
     }
 }

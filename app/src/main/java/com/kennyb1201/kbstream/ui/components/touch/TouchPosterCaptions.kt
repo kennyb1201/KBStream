@@ -11,9 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+import com.kennyb1201.kbstream.ui.components.posterTileRevision
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -50,7 +49,7 @@ fun TouchPosterCaptions(
     // already on screen, and a bare pref read could not do that (see
     // [PrefsPayloadApplier.revision]).
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     val showTitle = remember(syncedRevision) { AppPreferences.getPosterCaptionTitle(context) }
     val showYear = remember(syncedRevision) { AppPreferences.getPosterCaptionYear(context) }
     val showRating = remember(syncedRevision) { AppPreferences.getPosterCaptionRating(context) }

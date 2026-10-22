@@ -46,6 +46,14 @@ class ReminderRulesTest {
     }
 
     @Test
+    fun `a reminder first seen long after the start is not due`() {
+        // The worker was deferred (or the box was off): "is starting now" hours
+        // after the program began is worse than no alert at all.
+        assertFalse(ReminderRules.isDue(now - ReminderRules.DUE_LATENESS_MS - 1, now, false))
+        assertTrue(ReminderRules.isDue(now - ReminderRules.DUE_LATENESS_MS, now, false))
+    }
+
+    @Test
     fun `a program that has not started is not due`() {
         assertFalse(ReminderRules.isDue(now + 1, now, alreadyNotified = false))
     }
@@ -86,6 +94,20 @@ class ReminderRulesTest {
     @Test
     fun `a reminder with no end time is never stale`() {
         assertFalse(ReminderRules.isStale(0L, now))
+    }
+
+    @Test
+    fun `a reminder with no end is eventually stale from its start`() {
+        // The start-aware overload is what the notifier prunes with: an entry
+        // the guide gave no end for used to live forever.
+        assertFalse(ReminderRules.isStale(now, 0L, now))
+        assertTrue(
+            ReminderRules.isStale(
+                now - ReminderRules.DEFAULT_PROGRAM_MS - ReminderRules.STALE_GRACE_MS,
+                0L,
+                now
+            )
+        )
     }
 
     // ── arming ──────────────────────────────────────────────────────

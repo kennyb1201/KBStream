@@ -55,6 +55,15 @@ class OwningProfileApplyTest {
             .putString(KEY_PROFILES, json)
             .putString(KEY_ACTIVE, active)
             .commit()
+        // ...and pin the in-memory active profile too. The resolver prefers the
+        // in-memory value (see resolveActiveId), and ProfileManager is a process
+        // singleton shared by every test class in this JVM - another profile
+        // test that ran first would otherwise decide which profile this one is
+        // "showing", and the store seeded above would be ignored.
+        ProfileManager.setActive(
+            context,
+            ProfileManager.Profile(id = active, name = active)
+        )
     }
 
     @After

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -69,7 +70,11 @@ internal object SubtitleSearchHelper {
             if (lang.isNotBlank()) q.append("&languages=").append(URLEncoder.encode(lang, "UTF-8"))
             val reply = request("GET", q.toString(), key)
             parseSearchResults(reply.body)
-        } catch (t: Throwable) {
+        } catch (cancellation: CancellationException) {
+            // Leaving the picker must cancel this, not turn into "no results".
+            throw cancellation
+        } catch (t: Exception) {
+            // Exception, not Throwable: an Error is not "no subtitles".
             Log.w(TAG, "OpenSubtitles search failed", t)
             emptyList()
         }
@@ -255,7 +260,9 @@ internal object SubtitleSearchHelper {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             HttpReply(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
-        } catch (t: Throwable) {
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (t: Exception) {
             Log.w(TAG, "OpenSubtitles request failed: $method $url", t)
             HttpReply(0, "")
         } finally {

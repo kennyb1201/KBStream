@@ -310,7 +310,9 @@ class BrowseScreensMobileContractTest {
             "a tap records the film the Detail page returns to",
             mobile.contains("collectionBrowseScreenKey(collectionId)") &&
                 mobile.contains("itemId = \"collection_part:\${part.id}\"") &&
-                mobile.contains("gridState.scrollToItem(index)")
+                // scrollToItem counts ITEMS; the header sits in front of the
+                // parts, so the offset is part of restoring the right cell.
+                mobile.contains("gridState.scrollToItem(posterOffset + index)")
         )
         assertTrue(
             "a collection that fails to load can be retried",

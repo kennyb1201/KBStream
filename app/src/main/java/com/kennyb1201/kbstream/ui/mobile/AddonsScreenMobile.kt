@@ -1049,8 +1049,13 @@ private fun CopyAddonsDialogMobile(
     onDismiss: () -> Unit
 ) {
     var sourceId by remember { mutableStateOf(profiles.firstOrNull()?.id) }
+    // distinctAddonRows, like the main list: a profile CAN hold the same
+    // manifestUrl twice (a hand-edited prefs blob, a profile merge), and this
+    // list is keyed by manifestUrl - a duplicate key is a hard crash, and this
+    // is the one surface that reads ANOTHER profile's installs, where the blob
+    // was not written by this screen's own flow.
     val sourceAddons = remember(sourceId) {
-        sourceId?.let(loadAddons).orEmpty()
+        sourceId?.let(loadAddons).orEmpty().let(::distinctAddonRows)
     }
     var selected by remember(sourceId) {
         mutableStateOf(sourceAddons.map { it.manifestUrl }.toSet())

@@ -150,7 +150,12 @@ class GuideImportCancelContractTest {
         assertTrue(
             "a wedged source has to be noticed inside the pass, not by the " +
                 "twenty-minute call timeout",
-            pass.contains("runWithStallRetry {")
+            pass.contains("runWithStallRetry(url) {")
+        )
+        assertTrue(
+            "the watchdog must know which source it is watching, or a queued " +
+                "import reads the reader's counters as a stall",
+            pass.contains("runWithStallRetry(url)")
         )
         assertTrue(
             "the retry must open its own connection: joining the attempt the " +

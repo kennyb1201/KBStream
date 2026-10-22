@@ -457,7 +457,11 @@ class LibraryViewModel(
 
             val mdbListWatchlist = if (mdbListConfigured) {
                 runCatchingCancellable {
-                    MdbListClient.getWatchlist(appContext).map { entry ->
+                    // orEmpty(): a null is an INCOMPLETE walk (see
+                    // MdbListClient.getWatchlist), which this row treats like a
+                    // failed fetch rather than rendering a truncated list as the
+                    // whole watchlist.
+                    MdbListClient.getWatchlist(appContext).orEmpty().map { entry ->
                         LibraryItem(
                             source = LibrarySource.MDBLIST_WATCHLIST,
                             mediaType = entry.mediaType,
@@ -656,7 +660,7 @@ class LibraryViewModel(
             MdbListClient.getListItems(appContext, list.id)
         }.onFailure {
             Log.w(TAG, "MDBList list items fetch failed: ${it.message}")
-        }.getOrDefault(emptyList())
+        }.getOrNull().orEmpty()
         return entries.map { entry ->
             LibraryItem(
                 source = LibrarySource.MDBLIST_LIST,

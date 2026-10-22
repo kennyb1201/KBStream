@@ -210,7 +210,15 @@ object HiddenTitles {
         _entries.value = read(app).entries.sortedByDescending { it.at }
     }
 
-    /** Hides one title; returns true when it was stored. */
+    /**
+     * Hides one title; returns true when it was stored.
+     *
+     * @Synchronized on the mutators (hide/unhide/unhideAll/clear): each is
+     * read-blob -> transform -> write-blob over one JSON store, so two
+     * interleaved calls lose one of the two updates. LocalLibraryStore, the
+     * same shape over the same kind of blob, is synchronized for this reason.
+     */
+    @Synchronized
     fun hide(
         context: Context,
         title: String,
@@ -252,6 +260,7 @@ object HiddenTitles {
     }
 
     /** Brings one hidden title back; returns true when something changed. */
+    @Synchronized
     fun unhide(context: Context, keys: Collection<String>): Boolean {
         val app = context.applicationContext
         val current = read(app).entries
@@ -262,6 +271,7 @@ object HiddenTitles {
         return true
     }
 
+    @Synchronized
     fun unhideAll(context: Context) {
         val app = context.applicationContext
         if (read(app).entries.isEmpty()) return

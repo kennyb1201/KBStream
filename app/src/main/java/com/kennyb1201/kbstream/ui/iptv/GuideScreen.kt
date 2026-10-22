@@ -84,6 +84,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
+import com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
@@ -92,6 +93,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
 import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
+import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.work.ReminderWorker
@@ -367,13 +369,27 @@ fun GuideScreen(
     // "RECENT" group at the front of the groups strip.
     var recentChannelKeys by remember(activeProfileId) {
         mutableStateOf(
-            guidePreferences.getStringSet("recent_channels", emptySet())
-                ?.toSet().orEmpty().toList().take(8)
+            // Persisted as an ORDERED string. It used to be a StringSet, which
+            // Android documents as unordered, so "newest first" was whatever
+            // hash order the set happened to restore in - after every restart
+            // the Recent group, and the zap lineup built from it, were in a
+            // different (arbitrary) order. The set is still read once for an
+            // install upgraded from the old key.
+            guidePreferences.getString("recent_channels_ordered", null)
+                ?.split('\n')
+                ?.filter { it.isNotBlank() }
+                .orEmpty()
+                .distinct()
+                .ifEmpty {
+                    guidePreferences.getStringSet("recent_channels", emptySet())
+                        ?.toList().orEmpty()
+                }
+                .take(8)
         )
     }
     LaunchedEffect(recentChannelKeys) {
         guidePreferences.edit()
-            .putStringSet("recent_channels", recentChannelKeys.toSet())
+            .putString("recent_channels_ordered", recentChannelKeys.joinToString("\n"))
             .apply()
     }
 
@@ -578,7 +594,13 @@ fun GuideScreen(
 
     fun resolveChannelNumber(entry: String) {
         if (entry.isBlank()) return
-        val target = unhiddenChannels.firstOrNull { it.channel.tvgChno?.trim() == entry } ?: return
+        // Through the player's own rule: it strips leading zeros, so typing
+        // "07" for channel 7 works here exactly as it does in the player, and
+        // the fallback (number with no tvg-chno anywhere) is the same one.
+        val target = ChannelNumberEntry
+            .target(unhiddenChannels.map { item -> item.channel.tvgChno }, entry)
+            .let { index -> unhiddenChannels.getOrNull(index) }
+            ?: return
         pendingChannelKey = channelKey(target)
         pendingFocusChannel = true
         val targetGroup = target.channel.groupTitle?.trim().orEmpty().ifBlank { "All" }
@@ -747,8 +769,16 @@ fun GuideScreen(
             emptyList()
         } else {
             withContext(Dispatchers.Default) {
+                // Keyed by the STORED program key, not the raw guide id. The
+                // importer writes programmes under epgProgramChannelKey(id)
+                // (trimmed, lowercased) while the channel row keeps the raw
+                // spelling, so a mixed-case guide id ('ESPN.us') never matched
+                // its own programs: the overlay said "no channels or programs
+                // match" while those programmes sat in the database.
                 val byEpgId = unhiddenChannels
-                    .mapNotNull { item -> item.epgChannel?.id?.let { id -> id to item } }
+                    .mapNotNull { item ->
+                        item.epgChannel?.id?.let { id -> epgProgramChannelKey(id) to item }
+                    }
                     .toMap()
                 programSearchRows
                     .mapNotNull { row -> byEpgId[row.channelId]?.let { item -> GuideProgramHit(item, row) } }
@@ -1616,6 +1646,11 @@ Spacer(modifier = Modifier.height(14.dp))
                     ChannelActionsDialog(
                         item = item,
                         hasCatchup = item.channel.catchupSource != null || item.channel.catchup != null,
+                        // Passed through: without it the dialog's own default
+                        // (false) was used while the toggle logic read the real
+                        // value, so the row always said "REMIND ME:" and pressing
+                        // it cancelled an alert the label never mentioned.
+                        reminderActive = itemReminderActive,
                         onDismiss = { menuItem = null },
                         onToggleReminder = item.next?.let { nxt ->
                             {
@@ -1791,9 +1826,11 @@ Spacer(modifier = Modifier.height(14.dp))
                 }
 
                 if (digitEntry.isNotEmpty()) {
-                    val digitMatch = unhiddenChannels.firstOrNull {
-                        it.channel.tvgChno?.trim() == digitEntry
-                    }
+                    // Same rule as resolveChannelNumber (and the player): the
+                    // typed number is normalized, so "07" finds channel 7.
+                    val digitMatch = ChannelNumberEntry
+                        .target(unhiddenChannels.map { item -> item.channel.tvgChno }, digitEntry)
+                        .let { index -> unhiddenChannels.getOrNull(index) }
                     Surface(
                         shape = KBShapeCard,
                         colors = SurfaceDefaults.colors(

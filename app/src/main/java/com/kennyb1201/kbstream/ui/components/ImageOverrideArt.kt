@@ -24,6 +24,10 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
  */
 @Composable
 internal fun rememberImageOverridePaths(): Map<String, String> {
+    // Hoisted by [PosterTileHost] for the whole shell: a rail used to create one
+    // collector (and one ensureLoaded LaunchedEffect) PER TILE for the same
+    // map. The fallback keeps a card composed on its own working.
+    LocalPosterTileImagePaths.current?.let { return it }
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         ImageOverrides.ensureLoaded(context)

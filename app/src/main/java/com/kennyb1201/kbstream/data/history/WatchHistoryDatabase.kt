@@ -290,6 +290,39 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 .build()
 
         /**
+         * Runs [block] against the image-override table of the file
+         * [pinnedName] names - the profile that was active when a choice was
+         * MADE, not whichever one is active now.
+         *
+         * The override writes publish to the mirror first and persist behind
+         * it (see ImageOverrides), by which time the viewer may have switched
+         * profiles. Resolving the DAO at persist time filed the choice in the
+         * NEW profile's table (and queued it under that profile's scope), so
+         * a backdrop chosen in one profile silently became the next one's.
+         * While the pin still names the active file this goes through the one
+         * live instance like any other scoped read; after a switch it takes a
+         * one-shot handle on the pinned file, the same shape
+         * [openForProfile] uses, so two connections are never made to the
+         * active file.
+         */
+        internal suspend fun <T> withImageOverrideDao(
+            context: Context,
+            pinnedName: String,
+            block: suspend (ImageOverrideDao) -> T
+        ): T {
+            val active = synchronized(this) {
+                if (profileInstanceName == pinnedName) getInstanceScoped(context) else null
+            }
+            if (active != null) return block(active.imageOverrideDao())
+            val oneShot = buildScoped(context, pinnedName)
+            return try {
+                block(oneShot.imageOverrideDao())
+            } finally {
+                runCatching { oneShot.close() }
+            }
+        }
+
+        /**
          * The database FILE the ACTIVE profile's history lives in.
          *
          * A caller that holds a DAO across a long operation uses this to
@@ -384,6 +417,35 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 profileInstance = null
                 // Keep profileInstanceName as the tombstone; do not clear it.
             }
+        }
+
+        /**
+         * Closes the CURRENT scoped DB synchronously, for a caller that is
+         * about to DELETE its file.
+         *
+         * [closeScopedInstanceForSwitch] only RETIRES the instance: the close
+         * itself runs on the retire executor after [RETIRE_GRACE_MS]. That
+         * grace is right for a switch - an in-flight Continue Watching cursor
+         * must be allowed to finish - and wrong for a delete, because
+         * deleteDatabase() on a still-open file silently fails. Profile delete
+         * therefore left the deleted profile's history (the privacy-sensitive
+         * case: a kids profile) on disk, and its retired instance usable for
+         * the rest of the grace window. Nothing may legitimately query a
+         * profile the caller has just deleted, so this closes now, outside the
+         * monitor, and cancels any pending retirement of the same instance so
+         * the executor cannot close it a second time.
+         */
+        fun closeScopedInstanceForDeletion() {
+            val db: WatchHistoryDatabase?
+            synchronized(this) {
+                db = profileInstance
+                profileInstance = null
+                // No tombstone: the file is going away, so a later lookup must
+                // not be answered from the old name either.
+                profileInstanceName = null
+                if (db != null) pendingClose.values.removeAll { it.db === db }
+            }
+            if (db != null) runCatching { db.close() }
         }
 
         private val MIGRATION_8_9 = object : Migration(8, 9) {

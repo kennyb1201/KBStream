@@ -59,6 +59,17 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
 
     private var pollJob: Job? = null
 
+    /**
+     * The code REQUEST, before there is a poll to own.
+     *
+     * It used to be an unnamed launch: backing out, switching profile or
+     * disconnecting while requestDeviceCode() was in flight could not cancel
+     * it, so the orphan went on to publish a code and start a poll loop for a
+     * screen the viewer had left (and two attempts left the first loop
+     * uncancellable, because the second overwrote pollJob).
+     */
+    private var codeJob: Job? = null
+
     /** The counts read for the connected state; replaced, never stacked. */
     private var countsJob: Job? = null
 
@@ -198,7 +209,7 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
         // This attempt owns the Diagnostics tail: an old run's polls must not be
         // read as evidence for the new one.
         TraktPollTrace.clear()
-        viewModelScope.launch {
+        codeJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 isPolling = false,
@@ -406,6 +417,8 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPolling() {
+        codeJob?.cancel()
+        codeJob = null
         pollJob?.cancel()
         pollJob = null
         if (_uiState.value.isPolling) {

@@ -37,7 +37,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.paging.compose.itemKey
 import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
@@ -337,7 +336,18 @@ fun CatalogGridScreen(
                 ) {
                     items(
                         count = lazyItems.itemCount,
-                        key = lazyItems.itemKey { "${it.type}:${it.id}" }
+                        // Same guard as the mobile grid: a catalog whose pages
+                        // repeat a title would produce duplicate keys, and a
+                        // keyed LazyGrid throws on those. The index makes the
+                        // key unique; non-repeated items keep stable identity.
+                        key = { index ->
+                            val meta = lazyItems.peek(index)
+                            if (meta != null) {
+                                "${meta.type}:${meta.id}#$index"
+                            } else {
+                                "placeholder#$index"
+                            }
+                        }
                     ) { index ->
                         // Null while a placeholder stands in for a not-yet-
                         // loaded item; placeholders are off, so this is only

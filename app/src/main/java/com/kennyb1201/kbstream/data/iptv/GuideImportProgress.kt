@@ -60,6 +60,36 @@ object GuideImportProgress {
     /** Null when no import is running; the status line then shows nothing. */
     val state: StateFlow<GuideImportState?> = _state.asStateFlow()
 
+    private val _waiting = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The sources currently BLOCKED on the import mutex, by source URL.
+     *
+     * Imports serialize on one process-wide mutex, but this object's counters
+     * belong to whichever import is READING. A queued source therefore
+     * publishes nothing while it waits, which its own stall watchdog read as a
+     * wedge - it aborted at three minutes, retried onto the same mutex, and
+     * surfaced EpgStalledException for a healthy provider.
+     *
+     * Per SOURCE, not a count: a watchdog may only pause for its OWN queueing.
+     * A count pauses the reader's watchdog too whenever a second source is
+     * queued, which would hide a genuinely wedged download behind the import
+     * that is waiting for it. See [com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog].
+     */
+    val waiting: StateFlow<Set<String>> = _waiting.asStateFlow()
+
+    fun beginWaiting(sourceUrl: String) {
+        val key = sourceUrl.trim()
+        if (key.isEmpty()) return
+        _waiting.value = _waiting.value + key
+    }
+
+    fun endWaiting(sourceUrl: String) {
+        val key = sourceUrl.trim()
+        if (key.isEmpty()) return
+        _waiting.value = _waiting.value - key
+    }
+
     /** Opens a pass over [sourceCount] guide sources. */
     fun begin(
         sourceCount: Int,

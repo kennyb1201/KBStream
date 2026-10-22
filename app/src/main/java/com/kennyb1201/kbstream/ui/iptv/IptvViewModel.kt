@@ -1130,7 +1130,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // re-opened once on a fresh connection, and a second stall
                     // is thrown as EpgStalledException - a banner the viewer
                     // can act on instead of a silent twenty minutes at zero.
-                    epgImportWatchdog.runWithStallRetry { attempt ->
+                    // The URL is handed over so the watchdog can tell "queued
+                    // behind someone else's import" from "reading": a queued
+                    // source publishes nothing, and its clock must not run
+                    // while it waits.
+                    epgImportWatchdog.runWithStallRetry(url) { attempt ->
                         importGuideSource(url, freshConnection = attempt > 0)
                     }
                     imported++
@@ -1158,6 +1162,23 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     prefix = "Some EPG sources failed: "
                 )
             }
+            // The freshness marker is stamped only when EVERY source imported.
+            // It was unconditional ("at least one made it"), so one source
+            // timing out left the failed source marked fresh for the whole
+            // 12 h refresh window - its channels carried no programs until the
+            // next scheduled pass, and `refreshIfNeeded` would not retry. A
+            // partial run therefore leaves the marker alone: the next pass
+            // re-imports the set, which costs a re-download but is the only way
+            // the missing source gets another answer.
+            if (lastError == null) {
+                markUpdated(KEY_EPG_UPDATED_AT)
+                markGuideFile()
+            } else {
+                Log.w(
+                    TAG,
+                    "GUIDE IMPORT PARTIAL: freshness marker left alone so the failed source retries"
+                )
+            }
             val playlist = _playlist.value
             clearGuideMemory(
                 buildGuideSourceKey(
@@ -1173,8 +1194,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             )
             _guideRefreshTick.value += 1
             requestInitialGuideWindow()
-            markUpdated(KEY_EPG_UPDATED_AT)
-            markGuideFile()
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             reportFailure(_guideError, t)
@@ -1205,10 +1224,22 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             // resetting the guide for it re-ran the entire lineup query (snapshot
             // rebuild + every program batch) for rows that could not have differed.
             // Compare the slice the query actually reads before deciding.
+            // The SAME fixed slice requestInitialGuideWindow() asks for - not
+            // _guideChannelIds, which only ever GROWS as the viewer scrolls
+            // (updateGuideChannels adds ids). A fingerprint stored at load time
+            // (the initial 80 ids) could therefore never match one computed
+            // later with a few hundred, so after any scrolling the "playlist
+            // unchanged" fast path below was dead: every 6 h background refresh
+            // paid the full guide reset and lineup re-query it exists to avoid.
+            val fingerprintIds = merged.channels.asSequence()
+                .filterNot { it.id in _hiddenChannelIds.value }
+                .take(INITIAL_GUIDE_WINDOW_SIZE)
+                .map { it.id }
+                .toSet()
             val fingerprint = guideWindowFingerprint(
                 sourceUrl = merged.sourceUrl,
                 guideUrls = guideUrls,
-                channelIds = _guideChannelIds.value,
+                channelIds = fingerprintIds,
                 channels = merged.channels
             )
             val guideStillValid = fingerprint != null && fingerprint == loadedGuideFingerprint
@@ -1242,7 +1273,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             loadedGuideFingerprint = guideWindowFingerprint(
                 sourceUrl = merged.sourceUrl,
                 guideUrls = guideUrls,
-                channelIds = _guideChannelIds.value,
+                // Same fixed slice as above, or the two reads can never agree.
+                channelIds = fingerprintIds,
                 channels = merged.channels
             )
         }

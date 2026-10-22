@@ -108,6 +108,7 @@ internal class P5PlaneDecoder(
      * that waits for a frame that is already over (see [dequeueOutputBuffer]).
      */
     private var endOfStreamPending = false
+    private val bufferInfo = MediaCodec.BufferInfo()
     private var colorRangeLimited = true
     private var released = false
     private var oversizedSamples = 0
@@ -196,7 +197,11 @@ internal class P5PlaneDecoder(
         }
         var drained = 0
         while (!released && drained < MAX_OUTPUT_DRAIN_PER_CALL) {
-            val info = MediaCodec.BufferInfo()
+            // Reused, not allocated per dequeue: this runs for every rendered
+            // frame, and the decoder is single-threaded by the media3 contract,
+            // so one BufferInfo is all this path can ever need. Its contents are
+            // read before the next call, so there is nothing to clear.
+            val info = bufferInfo
             val index = try {
                 codec.dequeueOutputBuffer(info, /* timeoutUs = */ 0)
             } catch (e: Exception) {
@@ -286,6 +291,12 @@ internal class P5PlaneDecoder(
         }
         endOfStreamQueued = false
         endOfStreamDequeued = false
+        // ...and the PENDING marker too. It is a promise to hand the renderer an
+        // EOS buffer on the next dequeue, and after a flush that buffer would
+        // arrive at the NEW position - which the renderer reads as "this stream
+        // ended here", jumping to the next episode after a seek near the end of
+        // a P5/DV title.
+        endOfStreamPending = false
         // A flush starts a new stream: the oversize run that counts toward
         // failing the decoder belongs to the one being left behind, so a seek or
         // a source switch does not inherit its count (the frames around it are

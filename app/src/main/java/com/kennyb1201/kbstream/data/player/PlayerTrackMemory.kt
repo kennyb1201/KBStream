@@ -67,6 +67,7 @@ internal object PlayerTrackMemory {
         return mediaId?.takeIf { it.isNotBlank() }
     }
 
+    @Synchronized
     fun rememberSubtitle(context: Context, key: String?, uri: String, label: String = "") {
         if (key.isNullOrBlank() || uri.isBlank()) return
         runCatching {
@@ -95,6 +96,7 @@ internal object PlayerTrackMemory {
         return Remembered(entry.uri, entry.label)
     }
 
+    @Synchronized
     fun forget(context: Context, key: String?) {
         if (key.isNullOrBlank()) return
         runCatching {
@@ -103,6 +105,7 @@ internal object PlayerTrackMemory {
         }
     }
 
+    @Synchronized
     fun clear(context: Context) {
         runCatching { prefs(context).edit().remove(KEY_ENTRIES).apply() }
     }

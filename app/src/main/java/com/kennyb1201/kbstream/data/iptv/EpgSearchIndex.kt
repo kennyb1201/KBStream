@@ -95,8 +95,24 @@ object EpgSearchIndex {
                     "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`, `description`)"
                 )
             }
+            // The mirror image, and the one the orphan check does not catch: an
+            // index that EXISTS but was never BACKFILLED (the open died between
+            // CREATE VIRTUAL TABLE and the INSERT below). Until now nothing
+            // healed it - the branch above requires the FTS to hold rows - so
+            // title-term search (which has no LIKE fallback, by design) returned
+            // nothing for every pre-existing program until the next full import.
+            // Two EXISTS-with-LIMIT checks, so the normal open costs nothing.
+            val emptyOverContent = !created && !widened && !rebuilt &&
+                !hasRows(db, TABLE) && hasRows(db, CONTENT_TABLE)
+            if (emptyOverContent) {
+                Log.w(TAG, "INDEX EMPTY over a populated guide — backfilling")
+                db.execSQL("DROP TABLE IF EXISTS `$TABLE`")
+                db.execSQL(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`, `description`)"
+                )
+            }
             createTriggers(db)
-            if (created || widened || rebuilt) {
+            if (created || widened || rebuilt || emptyOverContent) {
                 // Programs imported before this index existed are not covered
                 // by the triggers, so index the existing rows now.
                 db.execSQL(

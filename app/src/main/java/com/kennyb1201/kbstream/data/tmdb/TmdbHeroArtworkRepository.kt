@@ -204,23 +204,29 @@ class TmdbHeroArtworkRepository(
                 }
             }
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
-            mutex.withLock { inFlight.remove(key) }
-            // Unblock anyone sharing this fetch with a miss rather than a
-            // cancellation they did not ask for.
-            deferred.complete(null)
+            abandonFetch(key, deferred)
             throw cancellation
         }
 
         val fetchedAt = System.currentTimeMillis()
-        mutex.withLock {
-            if (artwork != null) {
-                memoryCache[key] = fetchedAt to artwork
-                pruneMemoryCache(fetchedAt)
+        try {
+            mutex.withLock {
+                if (artwork != null) {
+                    memoryCache[key] = fetchedAt to artwork
+                    pruneMemoryCache(fetchedAt)
+                }
+                // Complete before dropping the in-flight marker, so a resolve that
+                // arrives between the two sees the cache and never double-fetches.
+                deferred.complete(artwork)
+                inFlight.remove(key)
             }
-            // Complete before dropping the in-flight marker, so a resolve that
-            // arrives between the two sees the cache and never double-fetches.
-            deferred.complete(artwork)
-            inFlight.remove(key)
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            // Cancelled while WAITING for the lock (the fetch is already done):
+            // without this the registered deferred was never completed and its
+            // inFlight entry never removed, so every later resolve for this key
+            // awaited it forever.
+            abandonFetch(key, deferred)
+            throw cancellation
         }
 
         if (artwork != null) {
@@ -236,6 +242,25 @@ class TmdbHeroArtworkRepository(
         }
 
         return artwork
+    }
+
+    /**
+     * Releases an abandoned fetch's slot, un-cancellably.
+     *
+     * The cleanup itself suspends on the same mutex, and this runs from a
+     * CANCELLATION handler - where a plain withLock would throw at once and
+     * leave the map entry and the deferred exactly as they were.
+     */
+    private suspend fun abandonFetch(
+        key: String,
+        deferred: CompletableDeferred<HeroArtwork?>
+    ) {
+        withContext(kotlinx.coroutines.NonCancellable) {
+            mutex.withLock { inFlight.remove(key) }
+            // Unblock anyone sharing this fetch with a miss rather than a
+            // cancellation they did not ask for.
+            deferred.complete(null)
+        }
     }
 
     private fun fetchFromNetwork(

@@ -157,9 +157,19 @@ interface WatchHistoryDao {
      * Batch variant of [getById] for sync merges: one query for the whole
      * remote batch instead of one per row (N+1 made a large history pull
      * issue thousands of individual lookups on every sync).
+     *
+     * Chunked: the caller's list is a page of the CLOUD table, so its length is
+     * whatever the account holds, and SQLite caps a statement's bound
+     * parameters. Past that cap this query threw, the pull's catch reported the
+     * table as unsynced, and history from an account with a few thousand rows
+     * never landed at all - on every attempt, forever.
      */
+    suspend fun getByIds(ids: List<String>): List<WatchHistoryEntity> =
+        ids.chunked(com.kennyb1201.kbstream.data.db.SQLITE_MAX_QUERY_VARIABLES)
+            .flatMap { getByIdsPage(it) }
+
     @Query("SELECT * FROM watch_history WHERE id IN (:ids)")
-    suspend fun getByIds(ids: List<String>): List<WatchHistoryEntity>
+    suspend fun getByIdsPage(ids: List<String>): List<WatchHistoryEntity>
 
     /**
      * Flavor-tolerant form of [getResumeForParent].
@@ -412,12 +422,18 @@ interface WatchHistoryDao {
     SELECT * FROM watch_history
     WHERE positionMs > 0
       AND isCompleted = 0
-      AND updatedAt IN (
-          SELECT MAX(updatedAt)
+      AND id IN (
+          -- One row per parent, by the latest stamp. The old form matched on
+          -- updatedAt itself, so two resume rows for one show written in the
+          -- same MILLISECOND (a bulk apply does exactly that) both matched and
+          -- the rail showed the show twice. Selecting the id instead picks
+          -- exactly one row per group (SQLite's bare column on MAX).
+          SELECT id
           FROM watch_history
           WHERE positionMs > 0
             AND isCompleted = 0
           GROUP BY parentId
+          HAVING updatedAt = MAX(updatedAt)
       )
     ORDER BY updatedAt DESC
     """
@@ -435,12 +451,18 @@ fun observeContinueWatchingParents(): Flow<List<WatchHistoryEntity>>
     SELECT * FROM watch_history
     WHERE positionMs > 0
       AND isCompleted = 0
-      AND updatedAt IN (
-          SELECT MAX(updatedAt)
+      AND id IN (
+          -- One row per parent, by the latest stamp. The old form matched on
+          -- updatedAt itself, so two resume rows for one show written in the
+          -- same MILLISECOND (a bulk apply does exactly that) both matched and
+          -- the rail showed the show twice. Selecting the id instead picks
+          -- exactly one row per group (SQLite's bare column on MAX).
+          SELECT id
           FROM watch_history
           WHERE positionMs > 0
             AND isCompleted = 0
           GROUP BY parentId
+          HAVING updatedAt = MAX(updatedAt)
       )
     ORDER BY updatedAt DESC
     """
@@ -645,9 +667,15 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     suspend fun deleteById(id: String)
 
     /** Bulk form of [deleteById], so a pull applies all its tombstones in one
-     *  transaction instead of one per removed row. */
+     *  transaction instead of one per removed row. Chunked for the same reason
+     *  [getByIds] is: the list comes from the cloud and has no bound. */
+    suspend fun deleteByIds(ids: List<String>) {
+        ids.chunked(com.kennyb1201.kbstream.data.db.SQLITE_MAX_QUERY_VARIABLES)
+            .forEach { deleteByIdsPage(it) }
+    }
+
     @Query("DELETE FROM watch_history WHERE id IN (:ids)")
-    suspend fun deleteByIds(ids: List<String>)
+    suspend fun deleteByIdsPage(ids: List<String>)
 
     /** Unmarking a season must clear rows written under either id flavor. */
     @Query(

@@ -112,6 +112,12 @@ object NewPipeManager {
 
         var newPipeError: Throwable? = null
 
+        // ONE extraction, reused by both branches. The adaptive branch used to
+        // call getStreamInfo(videoId) again - a complete extractor run (network,
+        // player JS, signature deciphering) thrown away and immediately repeated
+        // on every trailer with no progressive stream, which is most of them.
+        var extracted: org.schabi.newpipe.extractor.stream.StreamInfo? = null
+
         /*
          * ---------------------------------------------------------
          * PRIMARY: NewPipe
@@ -121,6 +127,7 @@ object NewPipeManager {
             val info =
                 getStreamInfo(videoId)
                     .getOrThrow()
+                    .also { extracted = it }
 
             val progressive =
                 info.videoStreams
@@ -185,7 +192,7 @@ object NewPipeManager {
  * ---------------------------------------------------------
  */
 try {
-    val info = getStreamInfo(videoId).getOrThrow()
+    val info = extracted ?: getStreamInfo(videoId).getOrThrow()
 
     // TV ceiling + codec preference, mirroring InnerTubeExtractor: prefer
     // H.264 (mp4) at or below 1080p for hardware decode; VP9 4K stutters

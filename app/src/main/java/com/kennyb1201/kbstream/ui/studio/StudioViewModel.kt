@@ -423,6 +423,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun loadMoreSection(title: String) {
         val screenId = currentId ?: return
+        // Captured at CALL time, and checked before any write below: every
+        // studio/network/company page builds its rails from the same
+        // STANDARD_BROWSE_TITLES, so a page that lands after the viewer opened
+        // another page merges into an identically titled rail there and
+        // overwrites its paging state (the same defect Tag's view model had).
+        val generation = loadGeneration
         var pageToLoad: Int? = null
 
         _pagingStates.value = _pagingStates.value.toMutableMap().apply {
@@ -470,6 +476,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         tmdbRepository.getCompanyRailPage(screenId, title, pageNumber)
                 }
 
+                if (generation != loadGeneration) return@launch
                 val existingSection = _sections.value.firstOrNull { it.title == title }
                 if (existingSection != null) {
                     val mergedItems = (existingSection.items + page.items)
@@ -501,6 +508,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: Exception) {
                 Log.e("STUDIO_VM", "loadMoreSection failed for $title", e)
+                if (generation != loadGeneration) return@launch
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
                     val current = this[title] ?: return@apply
                     this[title] = current.copy(isLoadingMore = false)

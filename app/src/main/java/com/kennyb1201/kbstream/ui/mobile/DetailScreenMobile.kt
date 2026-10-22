@@ -350,7 +350,14 @@ fun DetailScreenMobile(
         // The season on screen. Seeded from what the ViewModel loaded (which is
         // the resume season when there is one), then owned by the chip row - the
         // same `loadEpisodesForSeason` the TV chips call.
-        var season by remember { mutableStateOf<Int?>(null) }
+        //
+        // KEYED by the title: this shell renders Detail from one unkeyed slot, so
+        // navigating Detail -> Detail (More Like This, a collection part, a
+        // recommendation) recomposes the same slot with a new ViewModel and
+        // would otherwise keep the PREVIOUS show's season - the wrong chip, and
+        // episode taps that played/marked show B's episode numbers under show
+        // A's season.
+        var season by remember(type, id) { mutableStateOf<Int?>(null) }
         LaunchedEffect(loadedSeason) {
             if (season == null) season = loadedSeason
         }
@@ -473,6 +480,16 @@ fun DetailScreenMobile(
             val resumeRow = resumeInfo?.takeIf {
                 it.episodeStreamId == episode.streamId
             }
+            // The show-level resume row is a real position source too: the
+            // deep-link autoplay path in this file already uses
+            // resumeInfo.positionMs, so an episode whose progress exists only
+            // there started from 0 on a row tap while its card still showed it
+            // as started.
+            val resumePositionMs = if (fromStart) {
+                0L
+            } else {
+                progress?.positionMs ?: resumeRow?.positionMs ?: 0L
+            }
             openStreams(
                 StreamsTarget(
                     contentType = "series",
@@ -485,7 +502,7 @@ fun DetailScreenMobile(
                     displayName = displayName,
                     season = episodeSeason,
                     episode = episode.episodeNumber,
-                    resumePositionMs = if (fromStart) 0L else progress?.positionMs ?: 0L,
+                    resumePositionMs = resumePositionMs,
                     startFromBeginning = fromStart,
                     // The season total only means something for the season it
                     // was counted from; a row from another season (a deep link)
@@ -769,7 +786,9 @@ fun DetailScreenMobile(
         var mediaImageMenu by remember { mutableStateOf<MediaCardItem?>(null) }
         var selectedBackdrop by remember { mutableStateOf<String?>(null) }
         var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
-        var mediaTab by remember { mutableStateOf<MediaTab?>(null) }
+        // Same keying rule as `season`: the media row's selected tab belongs to
+        // a title, and an unkeyed remember carried title A's tab onto title B.
+        var mediaTab by remember(type, id) { mutableStateOf<MediaTab?>(null) }
 
         // The TV's page-1 reviews plus every extra page the ViewModel fetched
         // in the background, in the same order.

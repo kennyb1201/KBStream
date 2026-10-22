@@ -129,13 +129,22 @@ class GuideFetchBudgetContractTest {
         // the loop: two slow sources outlast the ~10-minute job window, and a
         // kill mid-pass used to lose the marker for a guide that WAS stored -
         // so the next run re-downloaded it.
-        val markerAt = worker.indexOf("putLong(KEY_EPG_UPDATED_AT")
+        // The write itself lives in stampImportedSource (it also re-derives the
+        // global marker from the per-source stamps), so what proves it is
+        // per-source is that the LOOP calls that helper, between the loop's own
+        // opening and the tail that runs once the loop is over.
+        val loopAt = worker.indexOf("epgUrls.forEach { url ->")
+        val stampAt = worker.indexOf("stampImportedSource(prefs, url, epgUrls)")
         val afterLoopAt = worker.indexOf("// One dead source must not fail")
-        assertTrue("the freshness marker write must exist", markerAt >= 0)
-        assertTrue("the loop's tail must still be findable", afterLoopAt > 0)
+        assertTrue("the per-source loop must still be findable", loopAt >= 0)
+        assertTrue("the loop's tail must still be findable", afterLoopAt > loopAt)
         assertTrue(
-            "the freshness marker must be written inside the per-source loop",
-            markerAt < afterLoopAt
+            "a source that imported must be stamped inside the per-source loop",
+            stampAt > loopAt && stampAt < afterLoopAt
+        )
+        assertTrue(
+            "and the marker write must still be what the stamp performs",
+            worker.contains("putLong(KEY_EPG_UPDATED_AT, oldest)")
         )
     }
 

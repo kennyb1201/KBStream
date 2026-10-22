@@ -58,7 +58,11 @@ object BackupManager {
 
     private suspend fun exportBlocking(context: Context, uri: Uri): String {
         val db = WatchHistoryDatabase.getInstanceScoped(context)
-        val history = db.watchHistoryDao().getAll()
+        // getAllRows(): completions are stored with positionMs = 0, so the
+        // launcher-shaped getAll() left every finished title out of the
+        // archive - and a restore (clear-all + import) therefore deleted the
+        // history it was supposed to carry over.
+        val history = db.watchHistoryDao().getAllRows()
         val watched = db.watchedStatusDao().getAll()
 
         val json = JSONObject().apply {

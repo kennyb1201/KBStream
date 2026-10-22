@@ -354,12 +354,18 @@ fun HomeScreenMobile(
                 contentPadding = PaddingValues(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
-                item(key = "topBar") {
+                // Every item declares its content type: without one Compose
+                // cannot reuse a slot between items of different kinds (a
+                // rail, a status card, the hero), so a reorder after a home
+                // manager change threw every composed slot away and rebuilt
+                // it. The TV Home and Detail, and the phone's browse screens,
+                // already carry them.
+                item(key = "topBar", contentType = "topbar") {
                     MobileTopBar()
                 }
 
                 heroMeta?.let { hero ->
-                    item(key = "hero") {
+                    item(key = "hero", contentType = "hero") {
                         MobileHero(
                             meta = hero,
                             backdropUrl = heroBackdropUrl,
@@ -377,7 +383,7 @@ fun HomeScreenMobile(
                         is HomeEntry.BuiltinRail -> when (entry.key) {
                             KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING -> {
                                 if (upNext.isNotEmpty()) {
-                                    item(key = "continueWatching") {
+                                    item(key = "continueWatching", contentType = "section") {
                                         MobileSection(title = continueWatchingTitle) {
                                             LazyRow(
                                                 contentPadding =
@@ -385,7 +391,11 @@ fun HomeScreenMobile(
                                                 horizontalArrangement =
                                                     Arrangement.spacedBy(12.dp)
                                             ) {
-                                                items(upNext, key = { "cw:" + it.id }) { item ->
+                                                items(
+                                                    upNext,
+                                                    key = { "cw:" + it.id },
+                                                    contentType = { "continue-card" }
+                                                ) { item ->
                                                     ContinueWatchingCard(
                                                         item = item,
                                                         onClick = {
@@ -413,7 +423,7 @@ fun HomeScreenMobile(
 
                             KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE -> {
                                 if (upcomingVisible) {
-                                    item(key = "upcoming") {
+                                    item(key = "upcoming", contentType = "section") {
                                         MobileSection(title = upcomingTitle) {
                                             LazyRow(
                                                 contentPadding =
@@ -423,7 +433,8 @@ fun HomeScreenMobile(
                                             ) {
                                                 items(
                                                     upcoming,
-                                                    key = { "up:" + it.id }
+                                                    key = { "up:" + it.id },
+                                                    contentType = { "upcoming-card" }
                                                 ) { episode ->
                                                     UpcomingCard(
                                                         episode = episode,
@@ -449,7 +460,8 @@ fun HomeScreenMobile(
                             // an import repeats one - LazyColumn throws on a
                             // duplicate key. The title is always present, so
                             // this is unique where `id ?: title` was not.
-                            key = "kb:${entry.collection.id}:${entry.collection.title}"
+                            key = "kb:${entry.collection.id}:${entry.collection.title}",
+                            contentType = "section"
                         ) {
                             MobileCollectionSection(
                                 collection = entry.collection,
@@ -457,7 +469,10 @@ fun HomeScreenMobile(
                             )
                         }
 
-                        is HomeEntry.BrowseRail -> item(key = "browse:" + entry.key) {
+                        is HomeEntry.BrowseRail -> item(
+                            key = "browse:" + entry.key,
+                            contentType = "section"
+                        ) {
                             MobileBrowseShortcutSection(
                                 rail = entry.rail,
                                 // The same resolved art the TV row draws: a
@@ -473,7 +488,8 @@ fun HomeScreenMobile(
                             val rail = entry.rail
                             item(
                                 key = "rail:" + rail.addonName + ":" + rail.catalogId +
-                                    ":" + rail.type + ":" + entry.sourceIndex
+                                    ":" + rail.type + ":" + entry.sourceIndex,
+                                contentType = "section"
                             ) {
                                 MobileSection(
                                     title = mobileRailTitle(
@@ -500,7 +516,8 @@ fun HomeScreenMobile(
                                             items = rail.items,
                                             key = { _, meta ->
                                                 "${meta.type}:${meta.id}:${rail.catalogId}"
-                                            }
+                                            },
+                                            contentType = { _, _ -> "rail-card" }
                                         ) { index, meta ->
                                             val watched = viewModel.watchedKey(
                                                 meta.id,
@@ -600,7 +617,7 @@ fun HomeScreenMobile(
                 val allRailsHidden = !isLoading && homeEntries.isEmpty() &&
                     (rails.isNotEmpty() || upNext.isNotEmpty() || upcomingVisible)
                 if (allRailsHidden) {
-                    item(key = "all-hidden") {
+                    item(key = "all-hidden", contentType = "status") {
                         Column(
                             modifier = Modifier
                                 .padding(horizontal = 16.dp)
@@ -627,7 +644,7 @@ fun HomeScreenMobile(
                 }
 
                 if (isLoading && rails.isEmpty() && upNext.isEmpty() && !upcomingVisible) {
-                    item(key = "loading") {
+                    item(key = "loading", contentType = "skeleton") {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -640,7 +657,7 @@ fun HomeScreenMobile(
                 }
 
                 error?.let { message ->
-                    item(key = "error") {
+                    item(key = "error", contentType = "status") {
                         Column(
                             modifier = Modifier
                                 .padding(horizontal = 16.dp)
@@ -852,7 +869,8 @@ private fun MobileCollectionSection(
         ) {
             itemsIndexed(
                 items = tiles,
-                key = { index, tile -> collectionRailKey(index, tile) }
+                key = { index, tile -> collectionRailKey(index, tile) },
+                contentType = { _, _ -> "collection-tile" }
             ) { _, tile ->
                 CollectionFolderCard(
                     folder = tile.second,
@@ -957,7 +975,11 @@ private fun MobileBrowseShortcutSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(rail.shortcuts, key = { it.categoryKey + ":" + it.id }) { shortcut ->
+            items(
+                rail.shortcuts,
+                key = { it.categoryKey + ":" + it.id },
+                contentType = { "shortcut" }
+            ) { shortcut ->
                 BrowseShortcutCard(
                     shortcut = shortcut,
                     art = artByKey[shortcut.chipKey()],

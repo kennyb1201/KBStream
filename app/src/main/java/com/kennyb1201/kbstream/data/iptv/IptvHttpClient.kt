@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.iptv
 
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.io.BufferedInputStream
+import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
@@ -123,7 +124,24 @@ object IptvHttpClient {
     retryWithBackoff(maxAttempts, initialDelayMs, maxDelayMs) {
         val request = Request.Builder().url(url).get().build()
         client.newCall(request).execute().use { response ->
-            val bodyText = response.body?.string().orEmpty()
+            // A playlist served as a raw .m3u.gz (no Content-Encoding - OkHttp
+            // only decodes what IT negotiated, and a file body is not that)
+            // used to fail loadPlaylist's #EXTM3U check as mojibake. The magic
+            // bytes are the only reliable signal, exactly as the guide fetch
+            // uses them.
+            // `ByteArray?.orEmpty()` does not exist in the stdlib (the
+            // primitive arrays have no such overload), so the empty fallback
+            // is explicit.
+            val raw = response.body?.bytes() ?: ByteArray(0)
+            val decoded = if (raw.size >= 2 && raw[0] == 0x1f.toByte() && raw[1] == 0x8b.toByte()) {
+                runCatching {
+                    GZIPInputStream(ByteArrayInputStream(raw), 64 * 1024)
+                        .use { it.readBytes() }
+                }.getOrDefault(raw)
+            } else {
+                raw
+            }
+            val bodyText = decoded.toString(Charsets.UTF_8)
             if (!response.isSuccessful) {
                 error("HTTP ${response.code} ${response.message}: ${bodyText.take(300)}")
             }
@@ -163,20 +181,21 @@ object IptvHttpClient {
                     error("HTTP ${response.code} ${response.message}: $preview")
                 }
 
-                val contentType = response.header("Content-Type").orEmpty()
-                val contentEncoding = response.header("Content-Encoding").orEmpty()
-                val isGzipByUrl = url.substringAfterLast('/', missingDelimiterValue = "")
-                    .contains(".gz", ignoreCase = true)
-                val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
-                    contentEncoding.contains("gzip", ignoreCase = true)
-
                 val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
                 buffered.mark(2)
                 val magic1 = buffered.read()
                 val magic2 = buffered.read()
                 buffered.reset()
                 val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
-                val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
+                // MAGIC BYTES DECIDE, not the URL or the headers. ORing the
+                // three together let a plain-XML body at a "*.gz" URL (or one
+                // whose Content-Type merely says gzip) be wrapped in
+                // GZIPInputStream, throw, be retried four times and fail an
+                // import the importer's own magic-only sniff would have parsed
+                // happily. OkHttp has already decoded anything it negotiated
+                // (that is why a decompressed body has no magic), so a magic
+                // hit here is the remaining case: a raw gzip file.
+                val isGzip = isGzipByMagic
 
                 val stream: InputStream =
                     if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered

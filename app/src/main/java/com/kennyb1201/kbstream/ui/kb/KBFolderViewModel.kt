@@ -654,6 +654,13 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                 (railId to paging.copy(isLoadingMore = true))
         )
 
+        // Captured, and checked before every write: load()/loadById() bump
+        // loadGeneration and guard their own writes, but this launch did not -
+        // so a page from the folder the viewer just left could merge into the
+        // new folder's rail (matched by sourceId) and overwrite its paging
+        // state. Even without a same-source collision, the failure branch below
+        // reset the paging state of whatever folder was current.
+        val generation = loadGeneration
         viewModelScope.launch {
             val page = source.nextPage
             // A page that did not land - a throw, or the null a failed fetch
@@ -689,12 +696,16 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
 
             if (newItems == null) {
                 Log.w("KB_FOLDER_VM", "loadMoreRail page $page did not land for $railId")
-                _state.value = _state.value.copy(
-                    pagingStates = _state.value.pagingStates +
-                        (railId to KBRailPagingState(hasMore = true))
-                )
+                if (generation == loadGeneration) {
+                    _state.value = _state.value.copy(
+                        pagingStates = _state.value.pagingStates +
+                            (railId to KBRailPagingState(hasMore = true))
+                    )
+                }
                 return@launch
             }
+
+            if (generation != loadGeneration) return@launch
 
             source.nextPage = page + 1
             val hasMore = newItems.size >= PAGE_SIZE

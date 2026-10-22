@@ -542,6 +542,20 @@ class TmdbRepository private constructor(context: Context) :
 
     private val imdbResolutionTtlMs = 30L * 24L * 60L * 60L * 1000L
 
+    /**
+     * How long a "TMDB has no mapping for this id" answer is trusted.
+     *
+     * Only HITS were cached, so an unresolvable id re-issued a `/find` or
+     * `/external_ids` call on EVERY lookup - and the fail-open callers (TorBox
+     * rounds, watched-twin expansion, stream-root verification) make that pure
+     * quota and latency burn, worst on browse-heavy sessions with add-on-only
+     * titles. Short, because a mapping that does not exist today may exist
+     * later; in memory only, because the resolution table's rows are pairs.
+     */
+    private val resolutionMissTtlMs = 10L * 60L * 1000L
+
+    private val resolutionMisses = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     private var movieGenresCache: List<TmdbGenre>? = null
     private var tvGenresCache: List<TmdbGenre>? = null
 
@@ -950,6 +964,9 @@ class TmdbRepository private constructor(context: Context) :
                 return imdbId
             }
         }
+        resolutionMisses["i:$key"]?.let { missAt ->
+            if (now - missAt < resolutionMissTtlMs) return null
+        }
 
         val diskCached = runCatchingCancellable { imdbResolutionDao.getByKey(key) }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < imdbResolutionTtlMs) {
@@ -957,16 +974,23 @@ class TmdbRepository private constructor(context: Context) :
             return diskCached.imdbId
         }
 
-        val imdbId = runCatchingCancellable {
+        val lookup = runCatchingCancellable {
             val ext = if (normalizedType == "series") {
                 api.getTvExternalIds(tmdbId, apiKey)
             } else {
                 api.getMovieExternalIds(tmdbId, apiKey)
             }
             ext.imdbId
-        }.getOrNull()
+        }
+        val imdbId = lookup.getOrNull()
+
+        if (lookup.isSuccess && imdbId.isNullOrBlank()) {
+            // A real "no mapping", not a failure: remember it briefly.
+            resolutionMisses["i:$key"] = now
+        }
 
         if (!imdbId.isNullOrBlank()) {
+            resolutionMisses.remove("i:$key")
             imdbResolutionMemoryCache[key] = now to imdbId
 
             runCatchingCancellable {
@@ -1071,6 +1095,9 @@ class TmdbRepository private constructor(context: Context) :
                 return tmdbId
             }
         }
+        resolutionMisses["t:$cacheKey"]?.let { missAt ->
+            if (now - missAt < resolutionMissTtlMs) return null
+        }
 
         val diskCached = runCatchingCancellable { imdbResolutionDao.getByImdbId(trimmedId, normalizedType) }
             .getOrNull()
@@ -1082,15 +1109,23 @@ class TmdbRepository private constructor(context: Context) :
             return diskCached.tmdbId
         }
 
-        val tmdbId = runCatchingCancellable {
+        val found = runCatchingCancellable {
             val found = api.find(trimmedId, apiKey, "imdb_id")
             if (normalizedType == "series") {
                 found.tvResults.firstOrNull()?.id
             } else {
                 found.movieResults.firstOrNull()?.id
             }
-        }.getOrNull()?.takeIf { it > 0 } ?: return null
+        }
+        val tmdbId = found.getOrNull()?.takeIf { it > 0 }
+        if (tmdbId == null) {
+            // Only a definitive answer is remembered - a failure above must not
+            // hide the title for the miss TTL.
+            if (found.isSuccess) resolutionMisses["t:$cacheKey"] = now
+            return null
+        }
 
+        resolutionMisses.remove("t:$cacheKey")
         tmdbResolutionMemoryCache[cacheKey] = now to tmdbId
         imdbResolutionMemoryCache[
             imdbResolutionKey(tmdbId, normalizedType)

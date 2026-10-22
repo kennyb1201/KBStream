@@ -35,9 +35,18 @@ class EspnSportsRepository(
 
     private data class Cached<T>(val atMs: Long, val value: T)
 
-    private val scoreboards = HashMap<String, Cached<List<SportsGame>>>()
-    private val tournaments = HashMap<String, Cached<List<TournamentEvent>>>()
-    private val tableCache = HashMap<String, Cached<List<StandingGroup>>>()
+    // Concurrent, because "one repository per process" is used from parallel
+    // coroutines: SportsNotificationWorker fires one async scoreboard() per
+    // enabled league (~16 at once) into EspnSportsRepository.shared(), while
+    // the hub reads the same instance. Plain HashMaps put concurrently can lose
+    // entries, corrupt a bucket, or spin in a resize - in a half-hourly
+    // background worker, where nobody is watching a crash log.
+    private val scoreboards =
+        java.util.concurrent.ConcurrentHashMap<String, Cached<List<SportsGame>>>()
+    private val tournaments =
+        java.util.concurrent.ConcurrentHashMap<String, Cached<List<TournamentEvent>>>()
+    private val tableCache =
+        java.util.concurrent.ConcurrentHashMap<String, Cached<List<StandingGroup>>>()
 
     /**
      * One game's summary, keyed by ESPN event id (ids are ESPN's own, and are
@@ -46,10 +55,11 @@ class EspnSportsRepository(
      * sheet free while the hub's 30s tick remains the only thing that re-reads
      * it.
      */
-    private val summaries = HashMap<String, Cached<EspnGameSummary>>()
-    private val failed = HashSet<String>()
-    private val tableFailed = HashSet<String>()
-    private val summaryFailed = HashSet<String>()
+    private val summaries =
+        java.util.concurrent.ConcurrentHashMap<String, Cached<EspnGameSummary>>()
+    private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val tableFailed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val summaryFailed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * The games in [leaguePath], live/upcoming/final, newest event order as

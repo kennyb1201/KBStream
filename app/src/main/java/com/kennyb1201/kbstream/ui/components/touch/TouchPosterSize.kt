@@ -1,15 +1,14 @@
 package com.kennyb1201.kbstream.ui.components.touch
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
+import com.kennyb1201.kbstream.ui.components.posterTileRevision
 
 /**
  * Settings → Display's "Poster Size", on a phone.
@@ -53,7 +52,7 @@ enum class TouchPosterSize(val width: Dp, val height: Dp) {
 @Composable
 fun rememberTouchPosterSize(): TouchPosterSize {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) {
         TouchPosterSize.fromPref(AppPreferences.getPosterSize(context))
     }
@@ -68,7 +67,7 @@ fun rememberTouchPosterSize(): TouchPosterSize {
 @Composable
 fun rememberTouchLandscape(): Boolean {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) {
         AppPreferences.landscapePostersActive(context)
     }

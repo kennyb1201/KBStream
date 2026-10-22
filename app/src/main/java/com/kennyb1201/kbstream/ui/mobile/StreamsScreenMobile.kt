@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,9 +64,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
-
-/** The "All" tab's index; every real tab is an index into the add-on groups. */
-private const val ALL_ADDONS_TAB = -1
 
 /**
  * The source picker, for a finger.
@@ -186,10 +182,17 @@ fun StreamsScreenMobile(
 
         // Per-add-on tabs, only when more than one stream add-on answered: with
         // one, the merged list IS that add-on's list.
-        var selectedAddonTab by remember(loadedKey) { mutableIntStateOf(ALL_ADDONS_TAB) }
+        // Remembered by add-on NAME, not by index. REFRESH keeps loadedKey, so an
+        // index survived while addonGroups could reorder or shrink - and the same
+        // index then pointed at a DIFFERENT add-on's streams, or fell out of
+        // range (all streams shown with no chip selected).
+        var selectedAddonName by remember(loadedKey) { mutableStateOf<String?>(null) }
+        val selectedAddonIndex = selectedAddonName
+            ?.let { name -> addonGroups.indexOfFirst { it.addonName == name } }
+            ?: -1
         val visibleStreams =
-            if (addonGroups.size > 1 && selectedAddonTab in addonGroups.indices) {
-                addonGroups[selectedAddonTab].streams
+            if (addonGroups.size > 1 && selectedAddonIndex >= 0) {
+                addonGroups[selectedAddonIndex].streams
             } else {
                 streams
             }
@@ -278,8 +281,8 @@ fun StreamsScreenMobile(
                             item(key = "all") {
                                 MobileAddonChip(
                                     label = "All",
-                                    selected = selectedAddonTab == ALL_ADDONS_TAB,
-                                    onClick = { selectedAddonTab = ALL_ADDONS_TAB }
+                                    selected = selectedAddonIndex < 0,
+                                    onClick = { selectedAddonName = null }
                                 )
                             }
                             itemsIndexed(
@@ -288,8 +291,8 @@ fun StreamsScreenMobile(
                             ) { index, group ->
                                 MobileAddonChip(
                                     label = group.addonName,
-                                    selected = selectedAddonTab == index,
-                                    onClick = { selectedAddonTab = index }
+                                    selected = selectedAddonIndex == index,
+                                    onClick = { selectedAddonName = group.addonName }
                                 )
                             }
                         }

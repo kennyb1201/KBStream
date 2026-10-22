@@ -116,12 +116,21 @@ class PhoneUrlServer(
                     break
                 }
 
-                try {
-                    handleClient(client)
-                } catch (_: Exception) {
-                    // A single malformed request must not kill the server.
-                } finally {
-                    runCatching { client.close() }
+                // Each client is handled on its own coroutine. Handling it
+                // inline let ONE connection hold the accept loop for the whole
+                // 5 s read timeout - and browsers routinely open speculative /
+                // preconnect sockets that send nothing at all, so a real form
+                // submission queued behind one (backlog is only 4) sat
+                // unanswered. That read as "the pairing page loads but Send
+                // does nothing".
+                scope.launch {
+                    try {
+                        handleClient(client)
+                    } catch (_: Exception) {
+                        // A single malformed request must not kill the server.
+                    } finally {
+                        runCatching { client.close() }
+                    }
                 }
             }
         } catch (_: Exception) {

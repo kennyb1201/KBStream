@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.simkl
 
 import android.util.Log
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /*
@@ -457,6 +458,11 @@ suspend fun SimklRepository.scrobbleImpl(
         // replaces any existing session, so a late duplicate is harmless.
         val response =
             uncancellable {
+                // Inside the uncancellable block, so a queued scrobble is not
+                // dropped by the player cancelling the coroutine while it
+                // waits its turn: play-then-exit is exactly the case where the
+                // waiting request is the one that must still be sent.
+                scrobbleSendMutex.withLock {
                 when (action) {
                     "pause" ->
                         api.scrobblePause(
@@ -484,6 +490,7 @@ suspend fun SimklRepository.scrobbleImpl(
                             body =
                                 body
                         )
+                }
                 }
             }
 

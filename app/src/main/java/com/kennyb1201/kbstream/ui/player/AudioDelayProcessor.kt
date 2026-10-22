@@ -155,21 +155,29 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
         // window is over, so the next flush is a real one again.
         inPlaceReconfigure = false
 
-        var pending: Int
-        synchronized(this) { pending = pendingBytes }
-
-        // Negative offset: swallow the start of the audio.
-        if (pending < 0) {
-            val drop = minOf(-pending, inputBuffer.remaining())
-            if (drop > 0) {
-                inputBuffer.position(inputBuffer.position() + drop)
-                synchronized(this) { pendingBytes = pending + drop }
-                pending += drop
+        // The whole accounting happens in ONE lock: the old code snapshotted
+        // pendingBytes, computed from that snapshot outside the lock, then wrote
+        // the result back - so a setDelayMs() delta landing in between was
+        // overwritten and the delay stayed off by that delta until the next
+        // flush/configure. Only the buffer write stays outside the lock, since
+        // it cannot touch the shared counters.
+        var silenceBytes = 0
+        synchronized(this) {
+            var pending = pendingBytes
+            // Negative offset: swallow the start of the audio.
+            if (pending < 0) {
+                val drop = minOf(-pending, inputBuffer.remaining())
+                if (drop > 0) {
+                    inputBuffer.position(inputBuffer.position() + drop)
+                    pending += drop
+                }
             }
+            silenceBytes = if (pending > 0) pending else 0
+            // The silence written below consumes exactly this many bytes of it.
+            pendingBytes = (pending - silenceBytes).coerceAtLeast(0)
         }
 
         val inputBytes = inputBuffer.remaining()
-        val silenceBytes = if (pending > 0) pending else 0
 
         if (inputBytes == 0 && silenceBytes == 0) {
             replaceOutputBuffer(0).flip()
@@ -185,10 +193,6 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
         }
         out.put(inputBuffer)
         out.flip()
-
-        if (silenceBytes > 0) {
-            synchronized(this) { pendingBytes = (pendingBytes - silenceBytes).coerceAtLeast(0) }
-        }
     }
 
     /** Frame-aligned byte count for [ms]; negative for a negative offset. */

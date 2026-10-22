@@ -99,11 +99,22 @@ class EpgImportWatchdog(
      * has to open a connection of its own: joining the attempt that was just
      * aborted would wait for the corpse.
      */
-    suspend fun <T> runWithStallRetry(importSource: suspend (attempt: Int) -> T): T {
+    suspend fun <T> runWithStallRetry(
+        /**
+         * The EPG source URL this run imports, or null when unknown.
+         *
+         * Used ONLY to tell "this source is queued behind another import"
+         * (publish nothing, so pause the clock) from "this source is the one
+         * reading" (the clock runs). A global "something is queued" flag would
+         * pause the reader's watchdog too, hiding a real wedge.
+         */
+        waitingFor: String? = null,
+        importSource: suspend (attempt: Int) -> T
+    ): T {
         var lastStall: EpgStallAbort? = null
         for (attempt in 0 until ATTEMPTS) {
             try {
-                return supervise { importSource(attempt) }
+                return supervise(waitingFor) { importSource(attempt) }
             } catch (stall: EpgStallAbort) {
                 lastStall = stall
             }
@@ -127,7 +138,10 @@ class EpgImportWatchdog(
      * viewer would get the silence this whole fix is about. The caller's own
      * cancellation is still rethrown as itself, via `ensureActive()`.
      */
-    private suspend fun <T> supervise(workBlock: suspend () -> T): T = coroutineScope {
+    private suspend fun <T> supervise(
+        waitingFor: String?,
+        workBlock: suspend () -> T
+    ): T = coroutineScope {
         val aborted = AtomicBoolean(false)
         val work = async { workBlock() }
 
@@ -140,6 +154,17 @@ class EpgImportWatchdog(
             while (isActive) {
                 delay(pollMs)
                 elapsedMs += pollMs
+                // A queued import (blocked on the process-wide import mutex)
+                // reads the OTHER import's counters, which are legitimately
+                // static while it waits. Don't start this attempt's stall clock
+                // until it has read something of its own.
+                if (lastBytes == null &&
+                    waitingFor != null &&
+                    waitingFor.trim() in GuideImportProgress.waiting.value
+                ) {
+                    lastAdvanceAtMs = elapsedMs
+                    continue
+                }
                 val state = progress.value
                 if (state == null || state.phase == GuideImportPhase.SAVING) {
                     // No pass open (a joined worker import publishes nothing),

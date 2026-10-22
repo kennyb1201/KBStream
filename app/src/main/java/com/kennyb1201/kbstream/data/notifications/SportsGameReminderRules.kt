@@ -78,9 +78,15 @@ internal object SportsGameReminderRules {
     /**
      * A stable per-game notification id, namespaced so it cannot collide with
      * the new-episode and live-reminder alerts sharing the notification tray.
+     *
+     * The prefix only shifts the hash; it does not make the id spaces disjoint
+     * (two hashes of different strings can still land on the same int). This is
+     * masked into its own band (0x40000000..0x5FFFFFFF) instead, like the other
+     * two kinds - see [NewEpisodeRules.notificationId] and
+     * [ReminderRules.notificationId].
      */
     fun notificationId(gameId: String): Int =
-        ("kbstream_sports_game:$gameId").hashCode()
+        0x40000000 or (("kbstream_sports_game:$gameId").hashCode() and 0x1FFFFFFF)
 
     /**
      * True when [gameId] has not been announced within its TTL. [notifiedAtMs]

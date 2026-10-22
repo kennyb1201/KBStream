@@ -56,7 +56,8 @@ internal class ReminderNotifier(private val context: Context) {
                     posted++
                 }
             }
-            if (ReminderRules.isStale(reminder.endUtcMillis, now)) {
+            // Start-aware: an entry with no end used to be unprunable.
+            if (ReminderRules.isStale(reminder.startUtcMillis, reminder.endUtcMillis, now)) {
                 IptvReminderStore.remove(prefs, reminder.channelId, reminder.startUtcMillis)
             }
         }

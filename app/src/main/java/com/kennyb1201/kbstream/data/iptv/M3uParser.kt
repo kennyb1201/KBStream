@@ -45,6 +45,16 @@ class M3uParser {
                 }
 
                 line.startsWith("#EXTINF", ignoreCase = true) -> {
+                    // A new entry starts here. If an EXTINF already began one
+                    // and no URL line ever followed, the #EXTVLCOPT lines that
+                    // accumulated for it belong to a channel that does not
+                    // exist - and they used to ride on into the NEXT channel,
+                    // sending one provider's User-Agent/Referer to another
+                    // channel's host (which surfaces as random 403s on a feed
+                    // that works everywhere else). Options written BEFORE this
+                    // entry's own #EXTINF are kept, which is the other legal
+                    // place for them.
+                    if (pendingAttrs != null) pendingVlcOpts.clear()
                     val extinfBody = line.substringAfter(":", "")
                     val commaIndex = findExtinfNameDelimiter(extinfBody)
                     val attrsPart = if (commaIndex >= 0) {

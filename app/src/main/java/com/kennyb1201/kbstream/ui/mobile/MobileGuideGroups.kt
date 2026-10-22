@@ -37,6 +37,10 @@ internal fun guideChannelKey(item: IptvChannelWithEpg): String =
  *
  * A label is never repeated: a playlist group called "All" is already covered
  * by the reserved chip, and two groups that trim to the same title are one.
+ * A group named like one of the reserved labels is never emitted at all - the
+ * three reserved chips own those labels, and a group named "Recent" would
+ * otherwise become a second chip with the same label (a hard crash in the
+ * guide's LazyRow) or a chip whose membership disagrees with the reserved one.
  */
 internal fun guideGroupLabels(
     channels: List<IptvChannelWithEpg>,
@@ -46,11 +50,20 @@ internal fun guideGroupLabels(
     add(GUIDE_GROUP_ALL)
     if (recentKeys.isNotEmpty()) add(GUIDE_GROUP_RECENT)
     if (channels.any { guideChannelKey(it) in favorites }) add(GUIDE_GROUP_FAVORITES)
-    val seen = LinkedHashSet<String>()
+    // Seeded with the labels ALREADY emitted above, not empty: a playlist group
+    // literally named "All" (or "Recent"/"Favorites") otherwise produced a
+    // second chip with the same label, and the guide renders them with
+    // `key = "group:" + label` - so the duplicate was a hard crash
+    // (`IllegalArgumentException: Key "group:All" was already used`) on a
+    // playlist the provider had simply grouped that way.
+    val reserved = setOf(GUIDE_GROUP_ALL, GUIDE_GROUP_RECENT, GUIDE_GROUP_FAVORITES)
+    val seen = LinkedHashSet(this)
     channels.forEach { item ->
-        item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let(seen::add)
+        item.channel.groupTitle?.trim()
+            ?.takeIf { it.isNotBlank() && it !in reserved }
+            ?.let(seen::add)
     }
-    addAll(seen)
+    addAll(seen - this.toSet())
 }
 
 /**

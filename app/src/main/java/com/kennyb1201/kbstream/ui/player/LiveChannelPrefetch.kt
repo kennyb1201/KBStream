@@ -282,8 +282,27 @@ internal class LiveChannelPrefetch(
         // up front marked a failed warm as done, so the row was skipped for the
         // whole TTL and the connection it was meant to pay for never happened.
         warm(channel.streamUrl, headers, deriveMediaPlaylist = true) {
-            lastFiredAt[channel.channelId] = now
+            recordWarm(channel.channelId, now)
         }
+    }
+
+    /**
+     * Remembers that [channelId] is warm, keeping the map bounded.
+     *
+     * The TTL is only consulted on READ, so without this the map gained one
+     * entry per channel ever focused and held it for the process's lifetime.
+     * Expired entries go first; if a long guide still exceeds the cap, the
+     * oldest go too (they are the closest to expiring anyway).
+     */
+    private fun recordWarm(channelId: String, now: Long) {
+        lastFiredAt[channelId] = now
+        if (lastFiredAt.size <= MAX_TRACKED_CHANNELS) return
+        lastFiredAt.entries.removeAll { !LiveChannelPrefetchRules.isWarm(it.value, now) }
+        if (lastFiredAt.size <= MAX_TRACKED_CHANNELS) return
+        lastFiredAt.entries
+            .sortedBy { it.value }
+            .take(lastFiredAt.size - MAX_TRACKED_CHANNELS)
+            .forEach { lastFiredAt.remove(it.key) }
     }
 
     /**
@@ -309,6 +328,9 @@ internal class LiveChannelPrefetch(
     }
 
     private companion object {
+        /** Far more channels than any guide row set warms in one TTL window. */
+        const val MAX_TRACKED_CHANNELS = 256
+
         val mainHandler = Handler(Looper.getMainLooper())
     }
 }

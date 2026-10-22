@@ -40,6 +40,16 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     private var pollJob: Job? = null
 
+    /**
+     * The PIN request, so a re-entry cancels the previous one.
+     *
+     * It used to be an unnamed launch: a double-tap left two createPinCode()
+     * calls in flight, both wrote state, and the second startPolling() cancelled
+     * the first poll - leaving a code on screen from the request that had been
+     * discarded.
+     */
+    private var codeJob: Job? = null
+
     init {
         if (repository.hasToken()) {
             loadAccountInfo()
@@ -70,6 +80,8 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     pollJob?.cancel()
                     pollJob = null
+                    codeJob?.cancel()
+                    codeJob = null
                     val connected = repository.hasToken()
                     _uiState.value = SimklUiState(
                         isConnected = connected,
@@ -111,8 +123,9 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     fun generateCode() {
         pollJob?.cancel()
+        codeJob?.cancel()
 
-        viewModelScope.launch {
+        codeJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 errorMessage = null,
@@ -276,6 +289,8 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() {
         pollJob?.cancel()
+        codeJob?.cancel()
+        codeJob = null
 
         viewModelScope.launch {
             try {

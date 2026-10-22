@@ -653,9 +653,23 @@ object SupabaseSync {
      * process death. Off the main thread (its own scope), and a persistence
      * failure only costs durability, never the write itself.
      */
+    /**
+     * One thread for the mirror's write-behind ops.
+     *
+     * They used to be independent `scope.launch`es on Dispatchers.IO, i.e. no
+     * order at all: a `delete` for a row that had just flushed could land before
+     * the `save` that queued it (the flushed row resurrects and re-uploads after
+     * a restart - idempotent, but a phantom), and a `save` could be overtaken by
+     * a later `clear` (a queued write dropped without ever being attempted).
+     * A single-parallelism dispatcher gives those three the order they were
+     * written in, which is the only order that matches the queue they mirror.
+     */
+    private val outboxStoreScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
     private val outboxStore = object : OutboxStore {
         override fun save(item: OutboxItem) {
-            scope.launch {
+            outboxStoreScope.launch {
                 runCatchingCancellable { outboxDao()?.upsert(item.toEntity()) }
                     .onFailure { Log.w(TAG, "outbox persist failed: ${Redaction.text(it.message)}") }
             }
@@ -664,14 +678,14 @@ object SupabaseSync {
         override fun delete(ids: Collection<String>) {
             if (ids.isEmpty()) return
             val list = ids.toList()
-            scope.launch {
+            outboxStoreScope.launch {
                 runCatchingCancellable { outboxDao()?.deleteByIds(list) }
                     .onFailure { Log.w(TAG, "outbox delete failed: ${Redaction.text(it.message)}") }
             }
         }
 
         override fun clear() {
-            scope.launch {
+            outboxStoreScope.launch {
                 runCatchingCancellable { outboxDao()?.deleteAll() }
                     .onFailure { Log.w(TAG, "outbox clear failed: ${Redaction.text(it.message)}") }
             }
@@ -1620,11 +1634,22 @@ object SupabaseSync {
     }
 
     private suspend fun pushAllNow(context: Context) {
-        pushHistory(context)
-        pushWatched(context)
-        pushOverrides(context)
-        pushPrefsBlobs(context)
+        // The pushes answer whether they RAN, exactly like the four pulls above.
+        // Stamping unconditionally made "Sync now" (and a full resync) report a
+        // fresh sync after a run in which the client was gone and every push
+        // returned immediately - the panel's "last sync" is what a viewer reads
+        // to decide whether the screen can be trusted, so it may only move when
+        // something was actually attempted. A run with nothing to publish still
+        // stamps: the tables really were consulted.
+        val ran =
+            listOf(
+                pushHistory(context),
+                pushWatched(context),
+                pushOverrides(context),
+                pushPrefsBlobs(context)
+            )
         flushOutbox()
+        if (ran.none { it }) return
         val pushedAt = System.currentTimeMillis()
         _lastSyncAtMs.value = pushedAt
         _lastPushAtMs.value = pushedAt
@@ -1990,13 +2015,13 @@ object SupabaseSync {
      * are exactly what a device that chose artwork while signed out has to
      * contribute.
      */
-    private suspend fun pushOverrides(context: Context) {
-        val c = client ?: return
+    private suspend fun pushOverrides(context: Context): Boolean {
+        val c = client ?: return false
         val pid = currentProfileId()
         val all = WatchHistoryDatabase.getInstanceScoped(context)
             .imageOverrideDao()
             .getAll()
-        if (all.isEmpty()) return
+        if (all.isEmpty()) return true
         val cloudKeys = runCatching {
             pullRows(TABLE_OVERRIDES, KEY_OVERRIDES)
                 .mapNotNull { row -> row.overrideKey }
@@ -2005,14 +2030,15 @@ object SupabaseSync {
                 .toSet()
         }.getOrElse { e ->
             Log.w(TAG, "pushOverrides could not read the cloud rows: ${Redaction.text(e.message)}")
-            return
+            return false
         }
-        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return false
         val missing = all.filter { entity -> entity.key !in cloudKeys }
-        if (missing.isEmpty()) return
+        if (missing.isEmpty()) return true
         val now = System.currentTimeMillis()
         missing.forEach { entity -> enqueueImageOverride(entity, pid, now) }
         flushOutbox()
+        return true
     }
 
     private suspend fun pullPrefs(context: Context): Boolean {
@@ -2061,7 +2087,8 @@ object SupabaseSync {
 
     // ── Push (initial seed / manual sync-now) ───────────────────────
 
-    private suspend fun pushHistory(context: Context) {
+    private suspend fun pushHistory(context: Context): Boolean {
+        if (client == null) return false
         // Capture the scope FIRST: the DAO read below resolves the ACTIVE
         // profile, so a profile switch between the read and this capture used
         // to stamp the OLD profile's rows with the NEW profile's cloud scope
@@ -2070,7 +2097,15 @@ object SupabaseSync {
         // publishing (see [PushScopeRules]).
         val pid = currentProfileId()
         val db = WatchHistoryDatabase.getInstanceScoped(context)
-        val all = db.watchHistoryDao().getAll()
+        // getAllRows(), not getAll(): the latter is the launcher/stats read and
+        // filters on positionMs > 0, but a COMPLETED row is stored with
+        // positionMs = 0 (PlaybackHistoryWriter's own completion shape) - so
+        // every completion was invisible here. A title finished on this device
+        // was never seeded on sign-in, never re-published by "Sync now", and
+        // never restored by the outbox replay after a sign-out, and the next
+        // pull deleted it again. Rows are what push carries; position is not
+        // the filter.
+        val all = db.watchHistoryDao().getAllRows()
         // A row this account already TOMBSTONED must never be re-uploaded. The
         // tombstone loses its race the moment a sibling that still holds the
         // row re-pushes it, which is how a deleted title came back; publishing
@@ -2088,9 +2123,10 @@ object SupabaseSync {
                         cloudDeletedAt = deletedAt
                     )
             }
-        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return false
         toPublish.forEach { enqueueHistory(it, pid) }
         flushOutbox()
+        return true
     }
 
     /**
@@ -2116,7 +2152,8 @@ object SupabaseSync {
         }.getOrDefault(emptyMap())
     }
 
-    private suspend fun pushWatched(context: Context) {
+    private suspend fun pushWatched(context: Context): Boolean {
+        if (client == null) return false
         // Same captured-scope rule as pushHistory: pin the profile before the
         // DAO read and the (suspending) cloud-timestamp read, so a switch
         // during either cannot file these markers under the wrong profile.
@@ -2140,9 +2177,10 @@ object SupabaseSync {
                         cloudUpdatedAt = cloudTimestamps[scopedKey(entity.key, pid)]
                     )
                 }
-        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return false
         toPublish.forEach { enqueueWatched(it, pid) }
         flushOutbox()
+        return true
     }
 
     /**
@@ -2167,7 +2205,8 @@ object SupabaseSync {
         }.getOrDefault(emptyMap())
     }
 
-    private suspend fun pushPrefsBlobs(context: Context) {
+    private suspend fun pushPrefsBlobs(context: Context): Boolean {
+        if (client == null) return false
         // Captured once so every blob in this pass carries the SAME scope,
         // and verified after the build: the builders read the ACTIVE profile's
         // scoped stores, so a switch between the capture and the build used to
@@ -2177,7 +2216,7 @@ object SupabaseSync {
         // captured profile is still active (see [PushScopeRules]).
         val pid = currentProfileId()
         val blobs = PrefsPayloadBuilder.buildAll(context)
-        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return false
         blobs.forEach { (key, payload) ->
             // Belt-and-braces guard: an empty local profiles list must never
             // reach the cloud. A fresh device pushing before its first pull
@@ -2375,6 +2414,7 @@ object SupabaseSync {
             enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()
+        return true
     }
 
     /** Manual "Sync now" from Settings. */
@@ -2825,6 +2865,11 @@ object SupabaseSync {
             block(db, true)
             return
         }
+        // A row scoped to a profile this device does not have (deleted here,
+        // or never pulled) must NOT be applied. openForProfile() would have Room
+        // CREATE that profile's history database on the spot, so every such row
+        // resurrected an orphan file that nothing enumerates or cleans up.
+        if (owner !in ProfileManager.profileIds(context)) return
         // Another profile's row: its own file, opened and closed by us, so the
         // active instance's bookkeeping is left untouched (see
         // [WatchHistoryDatabase.openForProfile]).
@@ -3237,7 +3282,11 @@ object SupabaseSync {
         val now = System.currentTimeMillis()
         val db = WatchHistoryDatabase.getInstanceScoped(context)
 
-        val history = runCatchingCancellable { db.watchHistoryDao().getAll() }
+        // getAllRows(): a completed row has positionMs = 0, so getAll() would
+        // stage tombstones for resume rows only and leave every completed
+        // cloud row to come back on the next sign-in - the clear would not be
+        // a clear.
+        val history = runCatchingCancellable { db.watchHistoryDao().getAllRows() }
             .getOrNull().orEmpty()
         history.forEach { row ->
             SyncDeferredDeletes.stage(

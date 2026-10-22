@@ -91,6 +91,7 @@ internal object SubtitlePrefetch {
      * Records a downloaded subtitle as this episode's prefetch. A blank key, a
      * blank URI or a blank name is a no-op: there would be nothing to attach.
      */
+    @Synchronized
     fun remember(
         context: Context,
         title: String,
@@ -150,6 +151,7 @@ internal object SubtitlePrefetch {
         return Hit(uri, entry.fileName)
     }
 
+    @Synchronized
     fun forget(
         context: Context,
         title: String,

@@ -139,13 +139,18 @@ fun CollectionScreenMobile(
         returnTarget = BrowseReturnFocus.consume(screenKey)
     }
 
+    // The grid prepends one full-span header before the parts, and
+    // scrollToItem counts ITEMS - so an items index without the offset
+    // restored the grid one cell early.
+    val posterOffset = 1
+
     LaunchedEffect(returnTarget, parts) {
         val target = returnTarget ?: return@LaunchedEffect
         val index = parts.indexOfFirst { "collection_part:${it.id}" == target.itemId }
             .takeIf { it >= 0 }
             ?: target.position.takeIf { it in parts.indices }
             ?: return@LaunchedEffect
-        runCatching { gridState.scrollToItem(index) }
+        runCatching { gridState.scrollToItem(posterOffset + index) }
         returnTarget = null
     }
 

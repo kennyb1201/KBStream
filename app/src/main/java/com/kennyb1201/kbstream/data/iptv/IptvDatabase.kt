@@ -184,6 +184,28 @@ abstract class IptvDatabase : RoomDatabase() {
         }
 
         /**
+         * Closes the CURRENT scoped guide DB synchronously, for a caller that
+         * is about to delete the file (a profile delete).
+         *
+         * The switch variant defers the close by [RETIRE_GRACE_MS] so a running
+         * import keeps its connection, and that grace is exactly what made
+         * deleteDatabase() fail silently on a deleted profile's guide: the file
+         * stayed on disk, and the retired instance stayed open for the rest of
+         * the window. A profile the caller has just deleted has nothing left to
+         * import into.
+         */
+        fun closeScopedInstanceForDeletion() {
+            val db: IptvDatabase?
+            synchronized(this) {
+                db = scopedInstance
+                scopedInstance = null
+                scopedName = null
+                if (db != null) pendingClose.values.removeAll { it.db === db }
+            }
+            if (db != null) runCatching { db.close() }
+        }
+
+        /**
          * The database file the ACTIVE profile's guide lives in.
          *
          * A caller that holds a DAO across a long operation (the XMLTV import)

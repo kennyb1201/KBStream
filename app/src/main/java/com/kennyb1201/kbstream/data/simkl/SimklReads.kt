@@ -152,10 +152,14 @@ suspend fun SimklRepository.getWatchedCountsImpl(): SimklWatchedCounts? {
             ).body()?.movies?.size
         }.getOrNull()
 
-    if (shows == null && movies == null) return null
+    // BOTH legs, or nothing. A single failed call used to be substituted with 0,
+    // so the connect screen could read "0 series watched" over an account with
+    // hundreds - the half-answer shape TraktRepository.traktWatchedCounts was
+    // written to forbid. Null means "could not ask", which the UI omits.
+    if (shows == null || movies == null) return null
     return SimklWatchedCounts(
-        series = shows ?: 0,
-        movies = movies ?: 0
+        series = shows,
+        movies = movies
     )
 }
 

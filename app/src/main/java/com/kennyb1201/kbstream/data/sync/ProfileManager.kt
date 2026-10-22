@@ -547,13 +547,18 @@ object ProfileManager {
         // open, and deleteDatabase on an open DB silently fails - leaving
         // the deleted profile's history on disk (a privacy leak). Next
         // access simply rebuilds the surviving profile's instance.
+        //
+        // FOR DELETION, not for a switch: the switch variant only RETIRES the
+        // instance and closes it five seconds later, which is long after the
+        // deleteDatabase below has already failed silently. A profile that is
+        // being deleted has nothing left to let finish.
         runCatching {
             com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
-                .closeScopedInstanceForSwitch()
+                .closeScopedInstanceForDeletion()
         }
         runCatching {
             com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
-                .closeScopedInstanceForSwitch()
+                .closeScopedInstanceForDeletion()
         }
 
         // The guide this profile is reading, resolved BEFORE the profile and its
@@ -893,8 +898,24 @@ object ProfileManager {
         recordDeletions(context, remoteDeleted)
 
         val local = loadProfiles(context)
+        val localById = local.associateBy { it.id }
         val byId = (local + list).associateBy { it.id }
         val merged = byId.values
+            // The sync blob deliberately carries NO pinHash - it is a device
+            // secret, not account state (see profilesSyncBlob) - so a remote
+            // entry for a profile this device holds arrives with the default
+            // null, and the merge below (remote wins per id) replaced the
+            // local hash with it. Every pull therefore erased every PIN on the
+            // very device that set one, and the kids profile silently became
+            // unlocked. Carry the local hash across by id instead.
+            .map { remote ->
+                val localPin = localById[remote.id]?.pinHash
+                if (remote.pinHash == null && !localPin.isNullOrBlank()) {
+                    remote.copy(pinHash = localPin)
+                } else {
+                    remote
+                }
+            }
             .filterNot { it.id in deleted }
             .sortedBy { it.createdAt }
         val removed = local.map { it.id }.filterNot { id -> merged.any { it.id == id } }
@@ -908,24 +929,30 @@ object ProfileManager {
             // Rebind BEFORE the wipe below: the scoped Room handles are open on
             // the active profile's files, and deleteDatabase on an open database
             // silently fails - which is how a deleted profile's history used to
-            // survive. Same sequence the on-device delete runs.
+            // survive. Same sequence the on-device delete runs, including its
+            // SYNCHRONOUS close: the switch variant only retires the instance
+            // for five seconds, so the wipe below would still meet an open
+            // file.
             runCatching {
                 com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
-                    .closeScopedInstanceForSwitch()
+                    .closeScopedInstanceForDeletion()
             }
             runCatching {
                 com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
-                    .closeScopedInstanceForSwitch()
+                    .closeScopedInstanceForDeletion()
             }
-            val next = merged.firstOrNull()
-            _activeProfile.value = next
-            if (next != null) {
-                setActive(context, next)
-            } else {
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().remove(KEY_ACTIVE).apply()
-                onActiveProfileChanged()
-            }
+            // ...and it does not hand the device to ANOTHER profile either.
+            // This path used to run setActive(merged.firstOrNull()), i.e. the
+            // profile that sorted first - in the ordinary household, the adult
+            // one, with no PIN gate: the same unauthenticated switch the
+            // on-device delete was fixed to stop making (audit C3), arriving
+            // through sync instead. Nothing is activated here: the id is
+            // cleared, the cache-reset sequence runs, and choosing a profile is
+            // its own authenticated act again (see KidsGate).
+            _activeProfile.value = null
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().remove(KEY_ACTIVE).apply()
+            onActiveProfileChanged()
         } else if (_activeProfile.value == null) {
             _activeProfile.value = merged.firstOrNull()
         }

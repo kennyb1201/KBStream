@@ -220,6 +220,16 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadMoreSection(title: String) {
         val screenId = currentId ?: return
+        // Captured at CALL time, like the paging state below: the coroutine
+        // otherwise reads whichever screen is current when it runs.
+        val isKeyword = currentIsKeyword
+        // ...and the generation, because a page in flight when the viewer opens
+        // another genre/keyword must not merge into it. Every one of these
+        // screens builds its rails from the same STANDARD_BROWSE_TITLES, so
+        // merging "by title" cannot tell the two screens' "Trending" rails
+        // apart: the old page landed in the new screen's rail and overwrote its
+        // nextPage/hasMore.
+        val generation = loadGeneration
         var pageToLoad: Int? = null
 
         _pagingStates.value = _pagingStates.value.toMutableMap().apply {
@@ -234,12 +244,13 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val page: TagRailPage =
-                    if (currentIsKeyword) {
+                    if (isKeyword) {
                         tmdbRepository.getKeywordRailPage(screenId, title, pageNumber)
                     } else {
                         tmdbRepository.getGenreRailPage(screenId, title, pageNumber)
                     }
 
+                if (generation != loadGeneration) return@launch
                 val existingSection = _sections.value.firstOrNull { it.title == title }
                 if (existingSection != null && page.items.isNotEmpty()) {
                     val mergedItems = (existingSection.items + page.items)
@@ -268,6 +279,7 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Exception) {
                 Log.e("TAG_VM", "loadMoreSection failed for $title", e)
+                if (generation != loadGeneration) return@launch
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
                     val current = this[title] ?: return@apply
                     this[title] = current.copy(isLoadingMore = false)

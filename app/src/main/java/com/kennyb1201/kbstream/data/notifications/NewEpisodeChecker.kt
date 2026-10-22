@@ -63,7 +63,15 @@ internal class NewEpisodeChecker(private val context: Context) {
         var checked = 0
         var notified = 0
 
-        for (showId in followed.take(MAX_SHOWS_PER_RUN)) {
+        // A rotating WINDOW, not the first thirty: the followed list is built in
+        // a deterministic order, so `take(MAX_SHOWS_PER_RUN)` checked the same
+        // thirty shows every run and silently never looked at the rest - no
+        // alert ever, on any profile following more than thirty titles. The
+        // cursor persists across runs and wraps, so every followed show gets a
+        // turn.
+        val window = roundWindow(followed, store.startOffset())
+
+        for (showId in window) {
             // A preload takes seconds and a profile switch can land mid-round:
             // keep checking that we are still writing to the profile we
             // started with (same guard the watched/sync preloads use).
@@ -113,7 +121,32 @@ internal class NewEpisodeChecker(private val context: Context) {
             }
         }
 
-        Log.i(TAG, "new episode check: followed=${followed.size} checked=$checked notified=$notified")
+        // Only advanced on a COMPLETED round: an aborted one (profile switch)
+        // did not check its window, so the next run must start there again.
+        store.setStartOffset(
+            if (followed.size <= MAX_SHOWS_PER_RUN) 0
+            else (store.startOffset() + MAX_SHOWS_PER_RUN) % followed.size
+        )
+
+        Log.i(
+            TAG,
+            "new episode check: followed=${followed.size} checked=$checked " +
+                "notified=$notified start=${store.startOffset()}"
+        )
+    }
+
+    /**
+     * The [MAX_SHOWS_PER_RUN] shows this round checks, starting at [start] in
+     * [followed] and wrapping at the end.
+     *
+     * Pure, so the rotation is pinned by a test without a device: `start` past
+     * the end (a list that shrank since the cursor was written) wraps instead of
+     * producing an empty round, and a list short enough to fit is returned whole.
+     */
+    internal fun roundWindow(followed: List<String>, start: Int): List<String> {
+        if (followed.size <= MAX_SHOWS_PER_RUN) return followed
+        val offset = ((start % followed.size) + followed.size) % followed.size
+        return (0 until MAX_SHOWS_PER_RUN).map { i -> followed[(offset + i) % followed.size] }
     }
 
     /**
@@ -163,8 +196,9 @@ internal class NewEpisodeChecker(private val context: Context) {
         /**
          * One TMDB request per show, so the round is capped: a profile with a
          * hundred tracked shows would otherwise spend minutes of radio time
-         * every run. The rest are checked on the following run.
+         * every run. The rest are checked on the following run - which is what
+         * [roundWindow] and the store's cursor make true.
          */
-        const val MAX_SHOWS_PER_RUN = 30
+        internal const val MAX_SHOWS_PER_RUN = 30
     }
 }

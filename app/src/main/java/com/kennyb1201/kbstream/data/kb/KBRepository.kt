@@ -77,9 +77,24 @@ class KBRepository private constructor(context: Context) {
         private const val LOCAL_DIR = "kb_collections_local"
         private const val CACHE_TTL_MS = 12L * 60L * 60L * 1000L
 
+        /**
+         * Stable, filesystem-safe key for the profile URL.
+         *
+         * SHA-1, not `url.hashCode()`: that is 32 bits, so two different profile
+         * URLs can collide and then SHARE one cache file - each serving the
+         * other's collections for the 12 h TTL. This is the same collision
+         * [com.kennyb1201.kbstream.data.cache.DiskSweep.cacheKeyFor] avoids for
+         * the subtitle cache. The first launch after this change misses the old
+         * file and re-fetches each profile once, which is what the migration
+         * below would have done anyway.
+         */
         private fun cacheFileFor(url: String): String =
-            // Stable, filesystem-safe key for the profile URL.
-            Integer.toHexString(url.hashCode()) + ".json"
+            runCatching {
+                java.security.MessageDigest.getInstance("SHA-1")
+                    .digest(url.toByteArray())
+                    .joinToString("") { byte -> "%02x".format(byte) }
+                    .take(16)
+            }.getOrElse { Integer.toHexString(url.hashCode()) } + ".json"
 
         /** True when the string looks like an http(s) profile URL. */
         fun isPlausibleUrl(raw: String): Boolean {
@@ -196,7 +211,12 @@ class KBRepository private constructor(context: Context) {
             // fragments so the retired product name never appears verbatim.
             val legacyName = "nu" + "vio" + "_collections"
             val legacyCache = File(context.filesDir, legacyName)
-            val cache = File(context.filesDir, CACHE_DIR)
+            // mkdirs() first. The check used to require the NEW directory to
+            // already exist, and nothing creates it before this singleton's
+            // init runs - so on upgrade the legacy cache was skipped and left
+            // orphaned on disk forever (its profiles re-fetched, the old files
+            // never cleaned up).
+            val cache = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
             if (legacyCache.isDirectory && cache.isDirectory) {
                 legacyCache.listFiles()?.forEach { f ->
                     val target = File(cache, f.name)
@@ -205,7 +225,7 @@ class KBRepository private constructor(context: Context) {
                 legacyCache.delete()
             }
             val legacyLocal = File(context.filesDir, "${legacyName}_local")
-            val local = File(context.filesDir, LOCAL_DIR)
+            val local = File(context.filesDir, LOCAL_DIR).apply { mkdirs() }
             if (legacyLocal.isDirectory && local.isDirectory) {
                 legacyLocal.listFiles()?.forEach { f ->
                     val target = File(local, f.name)

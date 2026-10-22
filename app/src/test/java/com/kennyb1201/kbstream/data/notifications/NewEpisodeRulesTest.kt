@@ -116,6 +116,19 @@ class NewEpisodeRulesTest {
         assertEquals(id, NewEpisodeRules.notificationId("tt1234567"))
     }
 
+    @Test
+    fun `the three alert kinds use disjoint id bands`() {
+        // One NotificationManager namespace: an episode, a live reminder and a
+        // game alert that collide make one replace the other, and its tap opens
+        // the wrong target. Each kind owns a band, so no pair can collide.
+        val episode = NewEpisodeRules.notificationId("tt1234567")
+        val reminder = ReminderRules.notificationId("bbc1|1700000000000")
+        val game = SportsGameReminderRules.notificationId("401")
+        assertTrue(episode in 0 until 0x20000000)
+        assertTrue(reminder in 0x20000000 until 0x40000000)
+        assertTrue(game in 0x40000000 until 0x60000000)
+    }
+
     // ── series detection ────────────────────────────────────────────
 
     @Test

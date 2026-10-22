@@ -364,6 +364,10 @@ class IptvRepository(
 
                     IptvHttpClient.XmltvFetch.NotModified -> {
                         if (dao.hasChannelsForSource(normalizedUrl)) {
+                            // The guide is current: count it as used, or the idle
+                            // sweep deletes it for not having been WRITTEN in a
+                            // fortnight (a 304 writes nothing).
+                            GuideStorage.touchActive(appContext)
                             Log.d(
                                 TAG,
                                 "GUIDE NOT MODIFIED source=${Redaction.url(normalizedUrl)}"
@@ -474,6 +478,18 @@ class IptvRepository(
             playlistUrl = normalizedPlaylistUrl,
             guideUrls = normalizedGuideUrls,
             channelIds = playlist.channels.map { it.id },
+            // The matcher reads these fields, and the key did not: a playlist
+            // refresh that changed only a channel's tvgName/displayName (id
+            // stable) was served the previous match - programs and all - for up
+            // to the 60 s TTL. Bounded and self-healing, but wrong for that
+            // minute on every rename, so the identity is part of the key.
+            channelIdentities = playlist.channels.joinToString("\u0001") { channel ->
+                channel.id + "\u0002" + channel.tvgId.orEmpty() +
+                    "\u0002" + channel.tvgName.orEmpty() +
+                    "\u0002" + channel.name +
+                    "\u0002" + channel.displayName +
+                    "\u0002" + channel.providerChannelId.orEmpty()
+            },
             windowStartBucket = guideWindowBucket(windowStart),
             windowEndBucket = guideWindowBucket(windowEnd),
             limit = limit
@@ -1227,7 +1243,27 @@ class IptvRepository(
         if (guideUrl.isBlank()) return@withContext emptyList()
 
         val now = System.currentTimeMillis()
-        val epgChannelId = channel.tvgId?.trim().orEmpty()
+        // Resolve the guide channel the way the guide screen and the player
+        // already do instead of insisting on tvg-id. A provider that identifies
+        // its channels by name or provider id only (or whose tvg-id is not the
+        // guide's `<channel id>`) had EVERY catch-up lookup answered empty -
+        // while the channel menu still offered CATCH-UP because the M3U carried
+        // a `catchup` attribute - so the section said "no aired history - try
+        // again after EPG imports" forever over imported programs.
+        val matchedGuideId = resolveGuideChannelIds(
+            listOf(
+                GuideMatchQuery(
+                    key = channel.id,
+                    epgUrl = guideUrl,
+                    idCandidates = listOf(channel.tvgId, channel.providerChannelId),
+                    nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name)
+                )
+            )
+        )[channel.id]
+        // The matcher's answer first; tvg-id stays as the fallback because it is
+        // what the stored programs are most likely keyed under when matching
+        // could not run at all (guide not imported yet).
+        val epgChannelId = matchedGuideId ?: channel.tvgId?.trim().orEmpty()
         if (epgChannelId.isBlank()) return@withContext emptyList()
 
         val rows = dao.getRecentProgramsForChannels(
@@ -1292,6 +1328,8 @@ class IptvRepository(
         val playlistUrl: String,
         val guideUrls: List<String>,
         val channelIds: List<String>,
+        /** The channel fields the EPG matcher reads, so a rename misses the memo. */
+        val channelIdentities: String,
         val windowStartBucket: Long,
         val windowEndBucket: Long,
         val limit: Int

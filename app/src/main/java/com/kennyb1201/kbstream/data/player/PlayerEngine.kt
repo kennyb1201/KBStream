@@ -152,8 +152,11 @@ object PlayerEngine {
      * This is the launch site's entry point, and it takes a Context alone:
      * the anime verdict comes from [publishLaunchAnime], consumed here.
      */
-    fun prefersMpv(context: Context): Boolean =
-        prefersMpv(context, isAnime = consumeLaunchAnime())
+    fun prefersMpv(
+        context: Context,
+        parentId: String? = null
+    ): Boolean =
+        prefersMpv(context, isAnime = consumeLaunchAnime(parentId))
 
     /** [prefersMpv] with the anime verdict supplied by the caller. */
     fun prefersMpv(context: Context, isAnime: Boolean): Boolean =
@@ -179,8 +182,17 @@ object PlayerEngine {
      */
     private const val LAUNCH_ANIME_TTL_MS = 60_000L
 
+    /**
+     * One published verdict, tied to the title it was computed for.
+     *
+     * The title id is the whole point: the slot used to carry only the boolean,
+     * so two launches resolving at once could hand title A's verdict to title B
+     * - a non-anime title opening in MPV, or an anime title silently missing it,
+     * with nothing in the log tying a verdict to a title.
+     */
     private data class LaunchAnime(
         val isAnime: Boolean,
+        val titleId: String,
         val at: Long
     )
 
@@ -216,14 +228,16 @@ object PlayerEngine {
             return
         }
 
+        val titleId = AnimeDetect.titleIdOf(streamId)
         launchAnimeRef.set(
             LaunchAnime(
                 isAnime =
                     AnimeDetect.isAnimeForLaunch(
                         repository = TmdbRepository.getInstance(context),
-                        parentId = AnimeDetect.titleIdOf(streamId),
+                        parentId = titleId,
                         parentType = contentType
                     ),
+                titleId = titleId,
                 at = SystemClock.elapsedRealtime()
             )
         )
@@ -249,8 +263,16 @@ object PlayerEngine {
      * published for the NEXT launch. getAndSet leaves whichever value the
      * winner published intact.
      */
-    private fun consumeLaunchAnime(): Boolean {
+    private fun consumeLaunchAnime(parentId: String?): Boolean {
         val published = launchAnimeRef.getAndSet(null) ?: return false
+        // A verdict for ANOTHER title is not this launch's verdict. Without an
+        // id to compare, the answer is "no": applying an unidentified verdict is
+        // the failure this guard exists to prevent, and every launch site that
+        // publishes one also has the parent id to read it back with.
+        val launchTitleId = parentId?.trim()?.takeIf { it.isNotEmpty() }
+        if (launchTitleId == null || launchTitleId != published.titleId) {
+            return false
+        }
         return published.isAnime &&
             SystemClock.elapsedRealtime() - published.at <= LAUNCH_ANIME_TTL_MS
     }

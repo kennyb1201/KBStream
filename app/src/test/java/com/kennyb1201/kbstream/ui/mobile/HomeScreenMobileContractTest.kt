@@ -192,7 +192,8 @@ class HomeScreenMobileContractTest {
         )
         assertTrue(
             "and the screen must not draw the item it just dropped",
-            mobile.contains("if (upcomingVisible) { item(key = \"upcoming\")")
+            mobile.contains("if (upcomingVisible) {") &&
+                mobile.contains("item(key = \"upcoming\", contentType = \"section\")")
         )
     }
 

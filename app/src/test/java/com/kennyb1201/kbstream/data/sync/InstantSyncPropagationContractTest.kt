@@ -220,7 +220,10 @@ class InstantSyncPropagationContractTest {
         assertTrue(
             "the global switch is a synced pref: a bare remember keeps the " +
                 "first read forever: $body",
-            body.contains("PrefsPayloadApplier.revision")
+            // Collected directly, or read from the shell's single collect
+            // (PosterTileHost -> LocalPosterTileRevision).
+            body.contains("PrefsPayloadApplier.revision") ||
+                body.contains("posterTileRevision()")
         )
         assertTrue(
             "and it must be keyed on it",
@@ -235,7 +238,10 @@ class InstantSyncPropagationContractTest {
         assertTrue(
             "the card falls back to the global switch, so it needs the same " +
                 "revision key: $body",
-            body.contains("PrefsPayloadApplier.revision")
+            // Collected directly, or read from the shell's single collect
+            // (PosterTileHost -> LocalPosterTileRevision).
+            body.contains("PrefsPayloadApplier.revision") ||
+                body.contains("posterTileRevision()")
         )
         assertTrue(
             "the fallback read must be keyed on the revision",
@@ -253,7 +259,8 @@ class InstantSyncPropagationContractTest {
             val body = slice(sizes, header, "\n}")
             assertTrue(
                 "$why, so $header must collect the revision: $body",
-                body.contains("PrefsPayloadApplier.revision")
+                body.contains("PrefsPayloadApplier.revision") ||
+                    body.contains("posterTileRevision()")
             )
             assertTrue(
                 "and key its remembered read on it",

@@ -8,9 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 
 /**
  * One poster surface's tile, in whichever shape the viewer chose.
@@ -83,7 +81,7 @@ fun GlobalPosterCard(
     // A bare read cannot: the pref file changed, nothing in the composition
     // knows. The revision is bumped on every applied blob, and keying on it
     // re-reads exactly once per real change (see PrefsPayloadApplier.revision).
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     val useLandscape = landscape ?: remember(syncedRevision) {
         AppPreferences.landscapePostersActive(context)
     }
@@ -162,7 +160,7 @@ fun rememberGlobalLandscape(): Boolean {
     // pref, and a wrapper that sized itself from a stale answer would clip the
     // landscape tile the card is drawing. A Settings edit one screen away ticks
     // PrefsPayloadApplier.revision, so collect it — never a bare remember.
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) { AppPreferences.landscapePostersActive(context) }
 }
 

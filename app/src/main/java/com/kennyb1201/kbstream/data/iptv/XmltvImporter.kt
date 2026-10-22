@@ -12,7 +12,6 @@ import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
@@ -81,8 +80,25 @@ class XmltvImporter(
         windowStartMs: Long,
         windowEndMs: Long
     ) = withContext(Dispatchers.Default) {
-        IMPORT_MUTEX.withLock {
+        // Every import serializes on one process-wide mutex, but the stall
+        // watchdog measures only the SHARED progress counters - so a manual
+        // import queued behind a worker's import of another source published
+        // no progress while merely WAITING, was aborted at three minutes,
+        // retried onto the same mutex, and surfaced EpgStalledException for a
+        // perfectly healthy provider. Publishing "waiting" lets the watchdog
+        // suspend its clock until this import has actually begun reading.
+        GuideImportProgress.beginWaiting(sourceUrl)
+        try {
+            IMPORT_MUTEX.lock()
+        } finally {
+            // Ends as soon as the lock is HELD: from here this import is the
+            // one reading, and its own watchdog must run.
+            GuideImportProgress.endWaiting(sourceUrl)
+        }
+        try {
             importInternal(sourceUrl, input, windowStartMs, windowEndMs)
+        } finally {
+            IMPORT_MUTEX.unlock()
         }
     }
 
@@ -392,8 +408,16 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         val displayNames = ArrayList<String>(2)
         var iconUrl: String? = null
 
-        while (!(parser.eventType == XmlPullParser.END_TAG && parser.name == "channel")) {
+        while (true) {
             val nextType = parser.next()
+            // A guide truncated mid-<channel> must end this read, not spin:
+            // readProgram/skip both handle END_DOCUMENT, and without the same
+            // exit here an unclosed channel would leave the loop calling
+            // next() forever - never suspending, so neither cancellation nor
+            // the stall watchdog could stop it, holding IMPORT_MUTEX for the
+            // rest of the process.
+            if (nextType == XmlPullParser.END_DOCUMENT) return null
+            if (nextType == XmlPullParser.END_TAG && parser.name == "channel") break
             if (nextType != XmlPullParser.START_TAG) continue
 
             when (parser.name) {

@@ -17,16 +17,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.WatchedEyeBadge
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.posterTileRevision
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -70,7 +69,7 @@ fun PosterCard(
     // Settings toggle: the eye badge can be switched off app-wide; the
     // completed checkmark is always unaffected. Keyed on the sync revision
     // because the toggle is a SYNCED pref - the same read as the TV tile.
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     val eyeBadgeEnabled = remember(syncedRevision) {
         AppPreferences.getPosterPartialWatchBadge(context)
     }

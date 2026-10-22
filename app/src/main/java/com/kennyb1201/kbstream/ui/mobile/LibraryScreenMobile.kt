@@ -184,14 +184,22 @@ fun LibraryScreenMobile(
         // Puts the grid back on the poster the viewer pressed. The rows can
         // land after this grid composes (the refresh is in flight), so the
         // record is held until the item is in the list.
-        LaunchedEffect(returnTarget, items) {
+        // Where the POSTERS start in the grid. scrollToItem takes an item
+        // index, and this grid puts full-span items in front of them (header,
+        // filter row, sort row, and the lists row under FILTER=LISTS), so the
+        // old items-index target landed that many cells BEFORE the tapped
+        // poster - typically a row early. ActorScreenMobile does the same
+        // accounting explicitly.
+        val posterOffset = 3 + if (state.filter == LibraryFilter.LISTS) 1 else 0
+
+        LaunchedEffect(returnTarget, items, posterOffset) {
             val target = returnTarget ?: return@LaunchedEffect
             val index = items.indexOfFirst {
                 LocalLibraryStore.dedupeKey(it) == target.itemId
             }.takeIf { it >= 0 }
                 ?: target.position.takeIf { it in items.indices }
                 ?: return@LaunchedEffect
-            runCatching { gridState.scrollToItem(index) }
+            runCatching { gridState.scrollToItem(posterOffset + index) }
             returnTarget = null
         }
 

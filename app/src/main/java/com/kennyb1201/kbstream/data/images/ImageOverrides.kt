@@ -141,6 +141,19 @@ object ImageOverrides {
     private var loadedFor: String? = null
 
     /**
+     * Bumped by every local choice, so a table read that began BEFORE one is
+     * recognised as stale.
+     *
+     * [refresh] assigns the whole map, and [ensureLoaded] runs it from a
+     * composable the first time any surface draws art. A read launched there
+     * can still be in flight when the viewer picks a still (choose publishes
+     * first by design), and the pre-choice table it read then REPLACED the
+     * choice on every surface - the pick appeared to be ignored until the next
+     * refresh. A generation stamp is what tells the read it lost that race.
+     */
+    private val choiceGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /**
      * Starts the mirror's read if it is not already loaded for the active
      * profile, and does nothing at all when it is.
      *
@@ -159,7 +172,7 @@ object ImageOverrides {
             // same frame must not both start the whole-table read.
             loadedFor = name
         }
-        loadScope.launch { refresh(app) }
+        loadScope.launch { refreshFor(app, name) }
     }
     /**
      * Re-reads the whole table into the mirror.
@@ -170,13 +183,51 @@ object ImageOverrides {
      * across profile switches it cannot see.
      */
     suspend fun refresh(context: Context) {
-        val result = runCatchingCancellable { dao(context).getAll() }
+        val app = context.applicationContext
+        refreshFor(app, WatchHistoryDatabase.activeFileName(app))
+    }
+
+    /**
+     * [refresh] for ONE profile's file, which is the file the caller actually
+     * meant.
+     *
+     * Two guards, both from this read being slow enough for the world to move:
+     * a profile switch while it ran must not publish the other profile's art
+     * (and must release the [loadedFor] claim so the next read happens), and a
+     * choice made while it ran must not be overwritten by the pre-choice table
+     * it read.
+     */
+    private suspend fun refreshFor(app: Context, name: String) {
+        val generation = choiceGeneration.get()
+        val result = runCatchingCancellable {
+            WatchHistoryDatabase.withImageOverrideDao(app, name) { dao -> dao.getAll() }
+        }
         val rows = result.getOrElse { error ->
             Log.w(TAG, "image overrides could not be read", error)
+            releaseClaimIfSwitched(app, name)
             return
         }
+        if (WatchHistoryDatabase.activeFileName(app) != name) {
+            // These rows belong to a profile the viewer has left. Publishing
+            // them would paint one profile's art on another; dropping the claim
+            // lets the next surface re-read the profile that is actually on
+            // screen.
+            releaseClaimIfSwitched(app, name)
+            return
+        }
+        if (choiceGeneration.get() != generation) return
         _paths.value = rows.associate { row -> row.key to row.imagePath }
         _version.value++
+    }
+
+    /**
+     * Drops the [loadedFor] claim when the profile moved while its read ran, so
+     * the next [ensureLoaded] reads the new profile instead of trusting a
+     * claim that was satisfied by the old one.
+     */
+    private fun releaseClaimIfSwitched(app: Context, name: String) {
+        if (WatchHistoryDatabase.activeFileName(app) == name) return
+        synchronized(this) { if (loadedFor == name) loadedFor = null }
     }
 
     /**
@@ -203,10 +254,18 @@ object ImageOverrides {
             screen = screen,
             imagePath = imagePath
         )
+        choiceGeneration.incrementAndGet()
         _paths.value = _paths.value + (row.key to imagePath)
         _version.value++
         val app = context.applicationContext
-        loadScope.launch { persistSet(app, row) }
+        // Pin BOTH the file and the profile the choice belongs to: persisting
+        // is asynchronous, and resolving either at that point filed the choice
+        // in whichever profile the viewer had switched to (see
+        // [WatchHistoryDatabase.withImageOverrideDao]).
+        val pinnedName = WatchHistoryDatabase.activeFileName(app)
+        val pinnedProfile = com.kennyb1201.kbstream.data.sync.ProfileStorage
+            .activeProfileId(app)
+        loadScope.launch { persistSet(app, pinnedName, pinnedProfile, row) }
     }
 
     /**
@@ -219,41 +278,67 @@ object ImageOverrides {
      */
     fun reset(context: Context, tmdbId: Int, type: String) {
         val screens = screensFor(type)
+        choiceGeneration.incrementAndGet()
         _paths.value = _paths.value - screens.map { screen -> key(tmdbId, type, screen) }.toSet()
         _version.value++
         val app = context.applicationContext
+        val pinnedName = WatchHistoryDatabase.activeFileName(app)
+        val pinnedProfile = com.kennyb1201.kbstream.data.sync.ProfileStorage
+            .activeProfileId(app)
         loadScope.launch {
-            screens.forEach { screen -> persistClear(app, tmdbId, type, screen) }
+            screens.forEach { screen ->
+                persistClear(app, pinnedName, pinnedProfile, tmdbId, type, screen)
+            }
         }
     }
 
-    private suspend fun persistSet(context: Context, row: ImageOverrideEntity) {
-        runCatchingCancellable { dao(context).set(row) }.onFailure { error ->
+    private suspend fun persistSet(
+        context: Context,
+        pinnedName: String,
+        pinnedProfile: String?,
+        row: ImageOverrideEntity
+    ) {
+        runCatchingCancellable {
+            WatchHistoryDatabase.withImageOverrideDao(context, pinnedName) { dao ->
+                dao.set(row)
+            }
+        }.onFailure { error ->
             Log.w(TAG, "image override could not be saved", error)
         }
         // The same choice on every device: the row is published to the account
         // through SupabaseSync's outbox (see [SupabaseSync.enqueueImageOverride]).
         // Signed out this is a no-op, and the choice stays local exactly as the
         // other per-profile writes do.
-        runCatching { SupabaseSync.enqueueImageOverride(row) }.onFailure { error ->
+        runCatching {
+            SupabaseSync.enqueueImageOverride(row, profileId = pinnedProfile)
+        }.onFailure { error ->
             Log.w(TAG, "image override could not be queued for sync", error)
         }
     }
 
     private suspend fun persistClear(
         context: Context,
+        pinnedName: String,
+        pinnedProfile: String?,
         tmdbId: Int,
         type: String,
         screen: String
     ) {
-        runCatchingCancellable { dao(context).clear(tmdbId, type, screen) }.onFailure { error ->
+        runCatchingCancellable {
+            WatchHistoryDatabase.withImageOverrideDao(context, pinnedName) { dao ->
+                dao.clear(tmdbId, type, screen)
+            }
+        }.onFailure { error ->
             Log.w(TAG, "image override could not be cleared", error)
         }
         // Published as a tombstone rather than a cloud delete, so the sibling
         // device stops drawing the still too (see
         // [SupabaseSync.clearImageOverrides]).
         runCatching {
-            SupabaseSync.clearImageOverrides(listOf(key(tmdbId, type, screen)))
+            SupabaseSync.clearImageOverrides(
+                listOf(key(tmdbId, type, screen)),
+                profileId = pinnedProfile
+            )
         }.onFailure { error ->
             Log.w(TAG, "image override reset could not be queued for sync", error)
         }
@@ -355,6 +440,4 @@ object ImageOverrides {
         fallback: String?
     ): String? = pathFor(paths, tmdbId, type, screen) ?: fallback
 
-    private fun dao(context: Context): ImageOverrideDao =
-        WatchHistoryDatabase.getInstanceScoped(context).imageOverrideDao()
 }

@@ -704,9 +704,17 @@ internal object DolbyVisionCompat {
                 // compaction point: the NALs after it are shifted by the new
                 // size, never spliced back into the original offsets.
                 if (keep && rewriteParamSets) {
+                    // The rewrite is only safe while it is not LONGER than the NAL
+                    // it replaces: it is written at the compaction point, in
+                    // place, so a growing rewrite would arraycopy over NAL bytes
+                    // that have not been read yet and corrupt the sample
+                    // silently. Today's rewrites shrink, and this asserts it
+                    // rather than trusting it - an over-long one keeps the
+                    // original NAL.
+                    val origRbspSize = nalEnd - header - 2
                     when (nalType) {
                         NAL_VPS -> when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
-                            is VpsRewriteOutcome.Rewritten -> {
+                            is VpsRewriteOutcome.Rewritten -> if (res.rbsp.size <= origRbspSize) {
                                 changed = true
                                 // start code + 2-byte NAL header + rewritten RBSP
                                 System.arraycopy(buf, code, buf, write, codeLen)
@@ -714,6 +722,12 @@ internal object DolbyVisionCompat {
                                 System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
                                 write += codeLen + 2 + res.rbsp.size
                                 keep = false
+                            } else {
+                                accounting?.record(
+                                    nalType, nalEnd - header,
+                                    SeiStripAccounting.Action.KEPT,
+                                    reason = "rewriteTooLong"
+                                )
                             }
                             // A failed rewrite keeps the original NAL: the
                             // sample must never carry a half-rewritten set.
@@ -721,13 +735,22 @@ internal object DolbyVisionCompat {
                             VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                         NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
-                            is SpsRewriteOutcome.Rewritten -> {
+                            is SpsRewriteOutcome.Rewritten -> if (res.rbsp.size <= origRbspSize) {
                                 changed = true
                                 System.arraycopy(buf, code, buf, write, codeLen)
                                 System.arraycopy(buf, header, buf, write + codeLen, 2)
                                 System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
                                 write += codeLen + 2 + res.rbsp.size
                                 keep = false
+                            } else {
+                                // Too long to place in situ: drop the rewrite and
+                                // keep the original NAL below, never splice over
+                                // bytes that have not been read yet.
+                                accounting?.record(
+                                    nalType, nalEnd - header,
+                                    SeiStripAccounting.Action.KEPT,
+                                    reason = "rewriteTooLong"
+                                )
                             }
                             is SpsRewriteOutcome.Failed -> Unit
                             SpsRewriteOutcome.NoDvExtension -> Unit

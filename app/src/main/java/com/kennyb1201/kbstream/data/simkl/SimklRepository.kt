@@ -402,6 +402,20 @@ class SimklRepository(
     private val completedMovieKeysMutex =
         Mutex()
 
+    /**
+     * Serializes the live-scrobble POSTs, exactly as MdbListClient's
+     * `scrobbleSendMutex` does and for the same reason.
+     *
+     * Each action runs out of cancellation's reach ([uncancellable]), so a
+     * play followed by an immediate exit leaves "start" and "stop" in flight as
+     * two independent requests whose wire order is whatever the scheduler
+     * chooses. A start landing after its own stop resurrects a now-playing
+     * session for a finished title - the ghost Continue Watching card. A lock
+     * makes the order the order the player asked for it.
+     */
+    internal val scrobbleSendMutex =
+        Mutex()
+
     @Volatile
     internal var cachedCompletedMovieKeys:
         Set<String>? =
@@ -1213,6 +1227,20 @@ class SimklRepository(
             val cached =
                 cachedAllShowItems
 
+            /*
+             * The snapshot this call may serve from a FAILURE exit.
+             *
+             * The fresh-hit path below is token-checked, but every failure
+             * return used to hand back the raw blob: if the session's token
+             * changed without the caches being cleared (a synced session
+             * adopted for a different Simkl account on this profile), a failed
+             * fetch served the PREVIOUS account's show library to the new
+             * one's badge and Continue Watching resolution. On failure, serve
+             * that memory snapshot only when it was minted for this token.
+             */
+            fun cachedForThisAccount(): SimklAllShowsResponse? =
+                cached?.takeIf { cachedAllShowItemsToken == accessToken }
+
             if (
                 !forceRefresh &&
                 cached != null &&
@@ -1292,7 +1320,7 @@ class SimklRepository(
                         e
                     )
 
-                    return@withLock cached
+                    return@withLock cachedForThisAccount()
                 }
 
             if (
@@ -1315,7 +1343,7 @@ class SimklRepository(
                         "body=$errorText"
                 )
 
-                return@withLock cached
+                return@withLock cachedForThisAccount()
             }
 
             val body =
@@ -1781,6 +1809,23 @@ class SimklRepository(
                 extended =
                     "full"
             )
+
+        // A failed leg is not an empty account. Both calls return a Retrofit
+        // Response, and a non-2xx leg used to contribute emptySet() with no
+        // failure branch at all - so ONE transient 5xx/401 published "you have
+        // completed no movies", fresh-stamped in memory AND on disk (12 h TTL),
+        // erasing every completed-movie checkmark for the rest of the day and
+        // surviving restarts. Serve the previous snapshot instead and publish
+        // nothing: the same rule the Trakt paged-watched walk and the MDBList
+        // snapshot path already enforce.
+        if (!completedResponse.isSuccessful || !allItemsResponse.isSuccessful) {
+            Log.w(
+                "SIMKL_REPO",
+                "completed-movies refresh failed (completed=${completedResponse.code()}, " +
+                    "all=${allItemsResponse.code()}); serving the previous snapshot"
+            )
+            return@withLock cached ?: emptySet()
+        }
 
         fun extractKeys(
             body: SimklCompletedMoviesResponse?

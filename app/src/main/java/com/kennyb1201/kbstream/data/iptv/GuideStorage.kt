@@ -215,6 +215,23 @@ internal object GuideStorage {
      * nothing is lost by skipping: a failure (including `SQLITE_BUSY` because
      * the guide is open) is logged and retried on the next pass.
      */
+    /**
+     * Marks the active guide file as used.
+     *
+     * [guideFilesToDelete] keys idleness off the DB file's mtime, but a 304
+     * import writes nothing - so a profile whose provider keeps answering "not
+     * modified" never refreshed that mtime, and 14 days after the last WRITING
+     * import its perfectly current guide was deleted on the next pass. A
+     * validated read is exactly the liveness signal the sweep should count.
+     */
+    fun touchActive(context: Context) {
+        val dir = context.applicationContext
+            .getDatabasePath(LEGACY_DB_NAME).parentFile ?: return
+        val file = java.io.File(dir, IptvDatabase.activeFileName(context))
+        if (!file.exists()) return
+        runCatching { file.setLastModified(System.currentTimeMillis()) }
+    }
+
     suspend fun sweep(context: Context): GuideSweep = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val dir = appContext.getDatabasePath(LEGACY_DB_NAME).parentFile

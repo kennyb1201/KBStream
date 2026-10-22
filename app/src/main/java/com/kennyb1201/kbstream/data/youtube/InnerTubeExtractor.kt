@@ -46,14 +46,36 @@ object InnerTubeExtractor {
     private const val CONFIG_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
 
     /**
-     * How long a resolve may wait for a PO token before proceeding without one.
+     * How long a resolve may wait for the PLAYER token before proceeding without
+     * one.
      *
-     * Trailers are background content: attestation must never become the long
-     * pole in a resolve that caps at [EXTRACTOR_TIMEOUT_MS]. A cold BotGuard
-     * mint is normally 1-3 s; past this budget the resolve takes the tokenless
-     * path, which is exactly what it did before tokens existed.
+     * This one is a cache read: the player token is a byproduct of the
+     * video-scoped mint below (see [mintTokens]), so by the time it is asked for
+     * it either is in the provider's cache or will not exist at all. Long
+     * budgets here would only buy waiting.
      */
     private const val TOKEN_BUDGET_MS = 4_000L
+
+    /**
+     * How long the resolve waits for the GVS token - the one that runs a WebView.
+     *
+     * Trailers are background content, so attestation must not become the long
+     * pole in a resolve that caps at [EXTRACTOR_TIMEOUT_MS] - but a mint that is
+     * cancelled just before it lands is worse than no mint: the resolve goes
+     * tokenless AND the capture cannot tell that the mint nearly worked. This
+     * budget therefore sits ABOVE the minter's own script window
+     * ([WebViewPoTokenMinter.MINT_SCRIPT_FALLBACK_MS], 5 s) and BELOW its
+     * provider timeout ([WebViewPoTokenProvider.DEFAULT_MINT_TIMEOUT_MS], 10 s),
+     * so the innermost window is always the one that decides:
+     *
+     *   5 s script  <  6 s GVS budget  <  10 s provider timeout.
+     *
+     * The first version of this ladder was 7 s inside 4 s inside 10 s: on a slow
+     * box (a 1.9 GB Onn) WebView creation and the embed page's own player start
+     * routinely exceeded 4 s, so every mint was abandoned before it could report
+     * anything.
+     */
+    internal const val GVS_TOKEN_BUDGET_MS = 6_000L
 
     private const val DEFAULT_USER_AGENT = YouTubeClients.DEFAULT_USER_AGENT
 
@@ -269,7 +291,7 @@ object InnerTubeExtractor {
             return PlayableSource.Muxed(
                 bestHls.third,
                 userAgent = userAgentFor(bestHls.first)
-            ).withResolveTokens(videoId, tokens)
+            ).withResolveTokens(videoId, tokens, bestHls.first)
         }
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
@@ -321,7 +343,7 @@ object InnerTubeExtractor {
             // is attestation, not the client table.
             Log.d(TAG, "Using adaptive video+audio (client=${bestVideo?.client})")
             return PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
-                .withResolveTokens(videoId, tokens)
+                .withResolveTokens(videoId, tokens, bestVideo?.client)
         }
 
         // No verified adaptive audio (or no video at all): fall through to
@@ -352,7 +374,7 @@ object InnerTubeExtractor {
             return PlayableSource.Muxed(
                 resolvedProgressive,
                 userAgent = userAgentFor(bestProgressive.client)
-            ).withResolveTokens(videoId, tokens)
+            ).withResolveTokens(videoId, tokens, bestProgressive.client)
         }
 
         return null
@@ -362,7 +384,8 @@ object InnerTubeExtractor {
     private data class ResolveTokens(val player: String?, val gvs: String?)
 
     /**
-     * Mints the resolve's tokens, waiting at most [TOKEN_BUDGET_MS] for each.
+     * Mints the resolve's tokens, each inside its own budget (see
+     * [GVS_TOKEN_BUDGET_MS] and [TOKEN_BUDGET_MS]).
      *
      * The GVS mint comes first because it is the one that runs the WebView: it
      * loads this video's embed page, and the same session yields the player
@@ -376,15 +399,22 @@ object InnerTubeExtractor {
     private suspend fun mintTokens(videoId: String, visitorData: String?): ResolveTokens {
         if (visitorData.isNullOrBlank()) return ResolveTokens(null, null)
         val provider = PoTokens.provider()
-        val gvs = tokenWithinBudget { provider.gvsToken(videoId, visitorData) }
-        val player = tokenWithinBudget { provider.playerToken(visitorData) }
+        val gvs = tokenWithinBudget(GVS_TOKEN_BUDGET_MS) {
+            provider.gvsToken(videoId, visitorData)
+        }
+        val player = tokenWithinBudget(TOKEN_BUDGET_MS) {
+            provider.playerToken(visitorData)
+        }
         return ResolveTokens(player, gvs)
     }
 
     /** A bounded wait for one token; any failure or timeout means "no token". */
-    private suspend fun tokenWithinBudget(mint: suspend () -> String?): String? =
+    private suspend fun tokenWithinBudget(
+        budgetMs: Long,
+        mint: suspend () -> String?
+    ): String? =
         try {
-            withTimeoutOrNull(TOKEN_BUDGET_MS) { mint() }
+            withTimeoutOrNull(budgetMs) { mint() }
         } catch (e: CancellationException) {
             throw e
         } catch (error: Throwable) {
@@ -400,13 +430,15 @@ object InnerTubeExtractor {
      */
     private fun PlayableSource.withResolveTokens(
         videoId: String,
-        tokens: ResolveTokens
+        tokens: ResolveTokens,
+        client: String?
     ): PlayableSource {
         val decorated = withPotToken(tokens.gvs)
         PoTokenTrace.recordResolve(
             videoId = videoId,
             playerToken = !tokens.player.isNullOrBlank(),
-            pot = decorated.carriesPot()
+            pot = decorated.carriesPot(),
+            client = client
         )
         return decorated
     }
@@ -541,17 +573,22 @@ object InnerTubeExtractor {
             try {
                 // Signed for `entry.first`'s client: fetch its manifest with
                 // that client's UA (see parseHlsManifest comment).
-                val variant = parseHlsManifest(manifestUrl, userAgentFor(entry.first)) ?: continue
-                if (lowest == null || variant.height < lowest.first.height) {
-                    lowest = variant to entry
-                }
-                if (variant.height > MAX_TRAILER_HEIGHT) continue
-                if (
-                    best == null ||
-                    variant.height > best.first.height ||
-                    (variant.height == best.first.height && variant.bandwidth > best.first.bandwidth)
-                ) {
-                    best = variant to entry
+                val variants = parseHlsManifest(manifestUrl, userAgentFor(entry.first))
+                for (variant in variants) {
+                    // The lowest variant across every manifest is the last-
+                    // resort pick when nothing fits under the ceiling.
+                    if (lowest == null || variant.height < lowest.first.height) {
+                        lowest = variant to entry
+                    }
+                    if (variant.height > MAX_TRAILER_HEIGHT) continue
+                    if (
+                        best == null ||
+                        variant.height > best.first.height ||
+                        (variant.height == best.first.height &&
+                            variant.bandwidth > best.first.bandwidth)
+                    ) {
+                        best = variant to entry
+                    }
                 }
             } catch (error: Exception) {
                 Log.w(TAG, "HLS manifest parse failed: ${error.message}")
@@ -775,10 +812,20 @@ object InnerTubeExtractor {
 
     // ── HLS parsing ───────────────────────────────────────────────────
 
+    /**
+     * Every variant a manifest lists, not just its best one.
+     *
+     * Returning the single highest variant and then applying the ceiling in
+     * [pickBestHls] made the ceiling unreachable: the picker was written as
+     * "highest at or below MAX_TRAILER_HEIGHT, else lowest", but its input was
+     * already each manifest's maximum. A 4K manifest therefore handed back a
+     * 2160p trailer even though it also listed a 1080p one - negating an
+     * explicit cap on exactly the low-end TV SoCs this path exists for.
+     */
     private suspend fun parseHlsManifest(
         manifestUrl: String,
         userAgent: String? = null
-    ): ManifestVariant? {
+    ): List<ManifestVariant> {
         // The manifest must be fetched with the SAME User-Agent of the client
         // it was signed for — googlevideo binds signed HLS manifests to the
         // requesting client's UA, and fetching with the generic Chrome UA
@@ -805,7 +852,7 @@ object InnerTubeExtractor {
             .filter { it.isNotBlank() }
             .toList()
 
-        var best: ManifestVariant? = null
+        val variants = mutableListOf<ManifestVariant>()
         for (i in lines.indices) {
             val line = lines[i]
             if (!line.startsWith("#EXT-X-STREAM-INF:")) continue
@@ -819,20 +866,13 @@ object InnerTubeExtractor {
                 ?.toIntOrNull()
                 ?: 0
             val bandwidth = attrs["BANDWIDTH"]?.toLongOrNull() ?: 0L
-            val candidate = ManifestVariant(
+            variants += ManifestVariant(
                 url = absolutizeUrl(manifestUrl, next),
                 height = height,
                 bandwidth = bandwidth
             )
-            if (
-                best == null ||
-                candidate.height > best.height ||
-                (candidate.height == best.height && candidate.bandwidth > best.bandwidth)
-            ) {
-                best = candidate
-            }
         }
-        return best
+        return variants
     }
 
     private fun parseHlsAttrs(line: String): Map<String, String> {

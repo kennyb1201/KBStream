@@ -103,9 +103,12 @@ class HomeTilesMobileContractTest {
             size.contains("0 -> SMALL") && size.contains("2 -> LARGE") &&
                 size.contains("else -> MEDIUM")
         )
+        // Through the shell's one hoist (PosterTileHost -> posterTileRevision),
+        // which is the same revision this used to collect per tile.
         assertTrue(
             "the read must key on the sync revision, like every other synced pref",
-            size.contains("PrefsPayloadApplier.revision")
+            size.contains("posterTileRevision()") &&
+                size.contains("remember(syncedRevision)")
         )
 
         // Every phone poster surface asks for the size instead of pinning a

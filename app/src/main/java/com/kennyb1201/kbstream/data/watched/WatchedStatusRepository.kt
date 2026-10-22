@@ -2537,10 +2537,16 @@ class WatchedStatusRepository(
 
         // 3. Delete the persisted Room cache row so a cold start / disk read
         // cannot re-seed the watched state from before the unmark.
+        //
+        // EVERY form key, not just the pressed one: unmarking from the IMDb-
+        // flavored surface used to leave the TMDB-flavored row behind, and
+        // preload reads those disk rows before resolution - so a cold start
+        // inside CACHE_TTL_MS repainted the checkmark on the other rail. The
+        // sibling markPartiallyWatchedLocal already writes all of them.
         try {
-            watchedStatusDao.deleteByKey(
-                key
-            )
+            formKeys.forEach { formKey ->
+                watchedStatusDao.deleteByKey(formKey)
+            }
         } catch (e: Exception) {
             Log.e(
                 "WATCHED_REPO",

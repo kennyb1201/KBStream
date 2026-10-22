@@ -155,7 +155,9 @@ class ImageOverrideSyncWiringContractTest {
         // InstantSyncPropagationContractTest) made it longer than the 500
         // characters this assertion used to be satisfied inside.
         assertTrue(body(sync, "private suspend fun pullAllNow(", 1_500).contains("pullOverrides(context)"))
-        assertTrue(body(sync, "private suspend fun pushAllNow(", 500).contains("pushOverrides(context)"))
+        // Same widening as the pull above: the push's stamp guard sits between
+        // the call and its four siblings.
+        assertTrue(body(sync, "private suspend fun pushAllNow(", 1_500).contains("pushOverrides(context)"))
     }
 
     @Test
@@ -213,9 +215,10 @@ class ImageOverrideSyncWiringContractTest {
     fun `the long-press write is what publishes the choice`() {
         val images = read(IMAGE_OVERRIDES)
         assertTrue(
-            "the set path must enqueue after the local row lands",
+            "the set path must enqueue after the local row lands, under the " +
+                "profile the choice was made in (persisting is async)",
             body(images, "private suspend fun persistSet(", 1_200)
-                .contains("SupabaseSync.enqueueImageOverride(row)")
+                .contains("SupabaseSync.enqueueImageOverride(row, profileId = pinnedProfile)")
         )
         assertTrue(
             "and the reset path must tombstone the surfaces it just cleared",

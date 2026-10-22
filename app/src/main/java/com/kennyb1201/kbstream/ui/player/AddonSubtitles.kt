@@ -123,7 +123,25 @@ class AddonSubtitleController(
     }
 
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var scope = newScope()
+
+    private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * The controller's scope, recreated after [release] cancelled it.
+     *
+     * [release] is wired to the view's detach, but [bind] runs once per
+     * activity - so a single mid-session detach used to kill addon-subtitle
+     * discovery and track attachment for the rest of the session, silently:
+     * [fetchIfNeeded] had already recorded the video id, so nothing retried.
+     * Cancelling now only cancels the work in flight; the next use gets a fresh
+     * scope.
+     */
+    private fun activeScope(): CoroutineScope {
+        val job = scope.coroutineContext[Job]
+        if (job == null || !job.isActive) scope = newScope()
+        return scope
+    }
 
     /**
      * Downloaded subtitle files: offer url -> cached file URI.
@@ -192,7 +210,7 @@ class AddonSubtitleController(
         // that resolve suspends, so it runs on this controller's own scope. A
         // session carrying its own id, and a film, answer with no lookup at all.
         if (parentType == "series" && episodeStreamId?.trim().isNullOrEmpty()) {
-            scope.launch {
+            activeScope().launch {
                 val root = addonSubtitleRootId(appContext, parentId, parentType)
                 addonSubtitleVideoId(
                     context = appContext,
@@ -224,6 +242,10 @@ class AddonSubtitleController(
         fetchJob?.cancel()
         fetchJob = null
         pendingAttachTo = null
+        // Drop the per-video memo too: with the scope cancelled nothing could
+        // have completed, and leaving it set is what made the next bind skip
+        // discovery entirely. The next bind/fetch re-runs it once.
+        fetchedForVideoId = null
         scope.cancel()
     }
 
@@ -246,7 +268,7 @@ class AddonSubtitleController(
         if (parentType == "channel") return
 
         val contentType = if (parentType == "series") "series" else "movie"
-        fetchJob = scope.launch(Dispatchers.IO) {
+        fetchJob = activeScope().launch(Dispatchers.IO) {
             val merged = AddonSubtitleSource.discover(appContext, videoId, contentType)
             withContext(Dispatchers.Main) {
                 offers = merged
@@ -294,7 +316,7 @@ class AddonSubtitleController(
             return
         }
 
-        scope.launch(Dispatchers.IO) {
+        activeScope().launch(Dispatchers.IO) {
             // The batch downloads CONCURRENTLY, under a bounded cap. Serially,
             // one dead host held every working track hostage: in the field log
             // six good tracks could not attach until all fourteen refused

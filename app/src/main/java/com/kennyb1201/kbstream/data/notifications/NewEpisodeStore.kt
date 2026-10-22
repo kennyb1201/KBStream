@@ -57,12 +57,30 @@ internal class NewEpisodeStore(context: Context) {
         }
     }
 
+    /**
+     * Where the next check round starts in the followed-shows list.
+     *
+     * The round is capped at [NewEpisodeChecker.MAX_SHOWS_PER_RUN] shows, and
+     * the cursor used to be the literal 0: with a followed list built in a
+     * deterministic order, every show ranked past the cap was NEVER checked -
+     * no new-episode alert, ever, on a profile with more than thirty followed
+     * titles - despite the cap's comment promising the rest were "on the
+     * following run". The cursor is what makes that true: each round takes the
+     * next window and parks the start after it, wrapping at the end.
+     */
+    fun startOffset(): Int = prefs.getInt(KEY_ROUND_START, 0).coerceAtLeast(0)
+
+    fun setStartOffset(offset: Int) {
+        prefs.edit().putInt(KEY_ROUND_START, offset.coerceAtLeast(0)).apply()
+    }
+
     private fun entries(): Set<String> =
         prefs.getStringSet(KEY_SEEN, emptySet()).orEmpty().toSet()
 
     private companion object {
         const val PREFS_NAME = "kbstream_notifications"
         const val KEY_SEEN = "seen_episodes"
+        const val KEY_ROUND_START = "check_round_start"
         const val SEPARATOR = "|"
     }
 }

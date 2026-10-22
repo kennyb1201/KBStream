@@ -6,9 +6,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBShapeSoftPill
 
@@ -67,7 +65,7 @@ enum class PosterEdge(val label: String) {
 @Composable
 fun posterEdgeShape(): Shape {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) {
         PosterEdge.fromStored(AppPreferences.getPosterEdge(context)).shape()
     }

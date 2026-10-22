@@ -860,13 +860,21 @@ object StreamRanker {
             ?.takeIf { it > 0 }
             ?.let { bytes -> return bytes / 1024.0 / 1024.0 / 1024.0 }
 
-        val match = SIZE_IN_TEXT.find(text) ?: return null
-        val value = match.groupValues[1].toDoubleOrNull() ?: return null
-        return when (match.groupValues[2]) {
-            "mb" -> value / 1024.0
-            "tb" -> value * 1024.0
-            else -> value
-        }
+        // Every size in the text, then the LARGEST - which is what this
+        // function's contract above says, and what "first match" was not: a
+        // release whose name carries two sizes ("S02 1080p 24.5 GB | 800 MB per
+        // episode") was scored, density-penalised and season-pack-tested against
+        // whichever number happened to come first.
+        return SIZE_IN_TEXT.findAll(text)
+            .mapNotNull { match ->
+                val value = match.groupValues[1].toDoubleOrNull() ?: return@mapNotNull null
+                when (match.groupValues[2]) {
+                    "mb" -> value / 1024.0
+                    "tb" -> value * 1024.0
+                    else -> value
+                }
+            }
+            .maxOrNull()
     }
 
     /**

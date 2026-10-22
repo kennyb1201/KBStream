@@ -206,7 +206,7 @@ fun LibraryAddToListDialog(
         if (mdbConnected) {
             remoteRows = withContext(Dispatchers.IO) {
                 val watchlistCount = runCatchingCancellable {
-                    MdbListClient.getWatchlist(context).size
+                    MdbListClient.getWatchlist(context).orEmpty().size
                 }.getOrDefault(0)
                 val lists = runCatchingCancellable {
                     MdbListClient.getUserLists(context)
@@ -302,7 +302,7 @@ fun LibraryAddToListDialog(
         if (mdbConnected) {
             withContext(Dispatchers.IO) {
                 runCatchingCancellable {
-                    MdbListClient.getWatchlist(context).any { entry ->
+                    MdbListClient.getWatchlist(context).orEmpty().any { entry ->
                         matchesEntry(entry, normalizedType, imdb, tmdb)
                     }
                 }.getOrDefault(false).let { if (it) member += "MDB_WATCHLIST" }
@@ -311,7 +311,7 @@ fun LibraryAddToListDialog(
                     .getOrDefault(emptyList())
                     .forEach { user ->
                         val has = runCatchingCancellable {
-                            MdbListClient.getListItems(context, user.id).any { entry ->
+                            MdbListClient.getListItems(context, user.id).orEmpty().any { entry ->
                                 matchesEntry(entry, normalizedType, imdb, tmdb)
                             }
                         }.getOrDefault(false)

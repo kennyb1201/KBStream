@@ -2,14 +2,11 @@ package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
 /**
@@ -62,7 +59,7 @@ enum class PosterBorder(val label: String, val alpha: Float) {
 @Composable
 fun posterBorderModifier(): Modifier {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     val border = remember(syncedRevision) {
         PosterBorder.fromStored(AppPreferences.getPosterBorderStrength(context))
     }

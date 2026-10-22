@@ -80,6 +80,27 @@ class MobileGuideGroupsTest {
     }
 
     @Test
+    fun `a playlist group named like a reserved chip is not emitted twice`() {
+        // A provider is free to group its channels "All" (or "Recent" /
+        // "Favorites"). The reserved chips are already emitted, so the group
+        // must add nothing - a duplicate label is a duplicate key in the
+        // guide's LazyRow, which throws.
+        val channels = listOf(
+            channel("1", "A", "All"),
+            channel("2", "B", "Favorites"),
+            channel("3", "C", "Recent")
+        )
+        assertEquals(
+            listOf("All"),
+            guideGroupLabels(channels, favorites = emptySet(), recentKeys = emptyList())
+        )
+        assertEquals(
+            listOf("All", "Recent", "Favorites"),
+            guideGroupLabels(channels, favorites = setOf("1"), recentKeys = listOf("2"))
+        )
+    }
+
+    @Test
     fun `each chip resolves its own members`() {
         val favorites = setOf("2")
         val recent = listOf("3", "1")

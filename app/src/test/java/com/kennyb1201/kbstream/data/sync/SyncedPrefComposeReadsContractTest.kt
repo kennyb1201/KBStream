@@ -149,7 +149,11 @@ class SyncedPrefComposeReadsContractTest {
             assertTrue(
                 "$header draws a tile that reads a synced pref (the eye badge, " +
                     "the captions, the edge), so it must collect the revision: $body",
-                body.contains("PrefsPayloadApplier.revision")
+                // Collected directly, or read from the shell's single collect
+                // (PosterTileHost -> LocalPosterTileRevision): both keep the
+                // tile keyed on the revision, which is what the rule is about.
+                body.contains("PrefsPayloadApplier.revision") ||
+                    body.contains("posterTileRevision()")
             )
             assertTrue(
                 "and cache its read on it, so the tile repaints on a real " +

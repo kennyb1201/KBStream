@@ -94,6 +94,7 @@ import com.kennyb1201.kbstream.ui.components.KBFeedbackHost
 import com.kennyb1201.kbstream.ui.components.KBHeroTransition
 import com.kennyb1201.kbstream.ui.components.LocalKBHeroTransition
 import com.kennyb1201.kbstream.ui.components.LocalKBFeedback
+import com.kennyb1201.kbstream.ui.components.PosterTileHost
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedbackState
 import com.kennyb1201.kbstream.ui.components.KBCard
 // The touch twin, for the one dialog a phone draws with buttons: the TV card's
@@ -951,11 +952,18 @@ private suspend fun recoveredEpisodeAlreadyWatched(
                         // would otherwise skip a host placed inside AppRoot.
                         val kbFeedback = rememberKBFeedbackState()
                         CompositionLocalProvider(LocalKBFeedback provides kbFeedback) {
-                            AppRoot(
-                                incomingIntent = incomingIntent,
-                                onIncomingIntentConsumed = { consumeIncomingIntent() },
-                                coldLaunch = coldLaunch
-                            )
+                            // The shell's ONE read of the synced-pref revision and
+                            // of the image-override mirror. Both used to be
+                            // collected by every poster tile - a 24-card rail
+                            // opened 24 subscriptions on the same StateFlows and
+                            // opened the mirror's load per tile.
+                            PosterTileHost {
+                                AppRoot(
+                                    incomingIntent = incomingIntent,
+                                    onIncomingIntentConsumed = { consumeIncomingIntent() },
+                                    coldLaunch = coldLaunch
+                                )
+                            }
                         }
                         KBFeedbackHost(state = kbFeedback)
                     }
@@ -3338,7 +3346,10 @@ fun AppRoot(
                     PlayerEngine.prefersExternal(context) && current.drmLicenseUrl == null ->
                         ExternalPlayerActivity::class.java
 
-                    PlayerEngine.prefersMpv(context) ->
+                    // The parent id is handed over so the anime verdict
+                    // published for THIS title is the only one this launch may
+                    // consume (see PlayerEngine.LaunchAnime).
+                    PlayerEngine.prefersMpv(context, parentId = current.parentId) ->
                         MpvPlayerActivity::class.java
 
                     else -> NativePlayerActivity::class.java

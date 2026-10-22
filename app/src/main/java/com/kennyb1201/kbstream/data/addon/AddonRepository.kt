@@ -809,16 +809,24 @@ class AddonRepository private constructor() {
                 )
 
             streamsMutex.withLock {
-                streamsCache[cacheKey] =
-                    CachedStreams(
-                        streams = streams,
-                        cachedAtMs =
-                            System.currentTimeMillis()
-                    )
+                // Only while THIS request still owns the slot. A forced refresh
+                // replaces the entry with its own deferred; an older performer
+                // used to remove it by key (deleting the NEWER entry, so a
+                // third caller started a duplicate fetch) and to write its
+                // result unconditionally - so a slow pre-refresh fetch finishing
+                // last overwrote the fresh answer for the whole cache TTL.
+                if (pendingStreamsRequests[cacheKey] === request) {
+                    streamsCache[cacheKey] =
+                        CachedStreams(
+                            streams = streams,
+                            cachedAtMs =
+                                System.currentTimeMillis()
+                        )
 
-                pendingStreamsRequests.remove(
-                    cacheKey
-                )
+                    pendingStreamsRequests.remove(
+                        cacheKey
+                    )
+                }
 
                 cleanupExpiredStreamsCacheLocked(
                     System.currentTimeMillis()
@@ -832,9 +840,13 @@ class AddonRepository private constructor() {
             return streams
         } catch (throwable: Throwable) {
             streamsMutex.withLock {
-                pendingStreamsRequests.remove(
-                    cacheKey
-                )
+                // Same ownership rule: a superseded request must not clear the
+                // newer one's slot.
+                if (pendingStreamsRequests[cacheKey] === request) {
+                    pendingStreamsRequests.remove(
+                        cacheKey
+                    )
+                }
             }
 
             request.completeExceptionally(

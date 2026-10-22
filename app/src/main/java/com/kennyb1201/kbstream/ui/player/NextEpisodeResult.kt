@@ -84,9 +84,15 @@ object NextEpisodeResult {
 
     fun persist(context: Context, pending: PendingNext) {
         pendingNextEpisode = pending
+        // commit(), not apply(): the player finishes immediately after
+        // persisting, so this write has to be on disk before the process may
+        // die - an unflushed apply() loses the handoff across process death, and
+        // the in-memory copy only covers same-process recreation. clearPrefs in
+        // this same file and ActorHandoff.persist both use commit() for exactly
+        // this reason.
         prefs(context).edit()
             .putString(KEY_PENDING, encode(pending))
-            .apply()
+            .commit()
     }
 
     /**

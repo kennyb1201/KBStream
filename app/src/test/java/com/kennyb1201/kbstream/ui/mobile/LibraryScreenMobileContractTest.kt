@@ -193,7 +193,9 @@ class LibraryScreenMobileContractTest {
         assertTrue(
             "and it is consumed on entry and scrolled to",
             mobile.contains("BrowseReturnFocus.consume(LIBRARY_BROWSE_SCREEN_KEY)") &&
-                mobile.contains("gridState.scrollToItem(index)")
+                // scrollToItem counts ITEMS and this grid puts its full-span
+                // rows first, so the poster offset is part of the restore.
+                mobile.contains("gridState.scrollToItem(posterOffset + index)")
         )
         assertTrue(
             "the record is the dedupe key, not a position that re-sorting moves",

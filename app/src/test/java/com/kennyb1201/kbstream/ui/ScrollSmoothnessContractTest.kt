@@ -153,8 +153,26 @@ class ScrollSmoothnessContractTest {
         )
     }
 
+    @Test
+    fun `the phone's home list declares content types too`() {
+        val home = read(HOME_MOBILE)
+        assertTrue(
+            "the phone's hero and top bar must carry their own types",
+            home.contains("item(key = \"hero\", contentType = \"hero\")") &&
+                home.contains("item(key = \"topBar\", contentType = \"topbar\")")
+        )
+        assertTrue(
+            "its rails, status cards and skeletons must be typed, or a home " +
+                "manager reorder rebuilds every slot",
+            home.contains("contentType = { _, _ -> \"rail-card\" }") &&
+                home.contains("item(key = \"loading\", contentType = \"skeleton\")") &&
+                home.contains("item(key = \"all-hidden\", contentType = \"status\")")
+        )
+    }
+
     private companion object {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val HOME_MOBILE = "com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt"
         const val DETAIL = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         const val SKELETON = "com/kennyb1201/kbstream/ui/components/KBSkeleton.kt"
         const val POSTER = "com/kennyb1201/kbstream/ui/components/PosterCard.kt"

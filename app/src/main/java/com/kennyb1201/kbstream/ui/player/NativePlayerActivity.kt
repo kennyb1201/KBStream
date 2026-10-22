@@ -9238,7 +9238,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 return
             }
             val sizes = listOf(11f, 14f, 18f)
-            subtitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizes[subtitleSize])
+            // getOrElse, not []: subtitleSize is a SYNCED preference, so a blob
+            // written by another build (a fourth size that exists there and not
+            // here), a downgrade/sideload, or a corrupt value can carry an index
+            // outside this list - and the throw happens on the first cue of
+            // every launch, with no way out but clearing prefs. The MPV engine's
+            // twin already reads its size through when/else.
+            subtitleText.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                sizes.getOrElse(subtitleSize) { 14f }
+            )
             // Embedded styling (ASS BackColour, styled WebVTT) can carry its
             // own background spans on the cue text (position-driven external
             // subs pass Cue.text through raw). Strip them so the box never
@@ -9676,7 +9685,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // restart the episode from the top. Replay is an explicit seek or a
             // fresh session, not a toggle.
             if (playbackEndedHandled) return
-            val wasPlaying = it.isPlaying
+            // playWhenReady, not isPlaying: they disagree while the player is
+            // BUFFERING (playWhenReady=true, isPlaying=false). Reading isPlaying
+            // there flipped playWhenReady from true to TRUE - a no-op - and took
+            // the "resuming" branch, so a viewer could not pause during a stall
+            // and the pause-point saveProgress never ran. The scrub code already
+            // captures playWhenReady for exactly this reason.
+            val wasPlaying = it.playWhenReady
             it.playWhenReady = !wasPlaying
             if (wasPlaying) {
                 // Pausing — keep overlay visible

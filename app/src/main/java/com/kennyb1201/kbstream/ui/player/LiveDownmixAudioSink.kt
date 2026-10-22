@@ -215,6 +215,26 @@ internal class LiveDownmixAudioSink(
             )
             processors.downmix.rePinOutputChannels(carrying)
             rejectedTarget = target
+            // ...and put the SINK back where it was. A DefaultAudioSink that
+            // threw out of configure() may be left unconfigured, and every
+            // later handleBuffer would then throw or drop audio for the rest of
+            // the live session - a half-applied layout change taking the sound
+            // with it. reset() clears whatever the failure left behind, and the
+            // repeat configure() re-establishes the layout the sink was
+            // actually carrying. If even that fails there is no usable output
+            // left, so the failure is rethrown and the renderer rebuilds, which
+            // is what a real format change would have done anyway.
+            try {
+                inner.reset()
+                inner.configure(format, specifiedBufferSize, channelMap)
+            } catch (restoreFailure: Exception) {
+                Log.e(
+                    TAG,
+                    "live downmix: could not restore the carried layout",
+                    restoreFailure
+                )
+                throw rejected
+            }
         }
     }
 }

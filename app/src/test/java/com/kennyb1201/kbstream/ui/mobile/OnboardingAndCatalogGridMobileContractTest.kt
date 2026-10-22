@@ -282,8 +282,8 @@ class OnboardingAndCatalogGridMobileContractTest {
         assertTrue(text.contains("viewModel.catalogGridHeader"))
         assertTrue(text.contains("viewModel.catalogGridPaging"))
         assertTrue(
-            "the grid must be keyed the way the pager keys it",
-            text.contains("lazyItems.itemKey { \"\${it.type}:\${it.id}\" }")
+            "a title repeated across pages must not produce a duplicate key",
+            text.contains("key = { index ->") && text.contains("lazyItems.peek(index)")
         )
 
         // The behaviours that must not be lost in the port.

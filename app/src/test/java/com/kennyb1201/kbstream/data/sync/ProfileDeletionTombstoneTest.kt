@@ -16,6 +16,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -143,7 +144,7 @@ class ProfileDeletionTombstoneTest {
     }
 
     @Test
-    fun `the active profile deleted on a sibling is rebound, not left active`() {
+    fun `the active profile deleted on a sibling is cleared, not left active`() {
         seed(PROFILE_A, PROFILE_A, PROFILE_B)
 
         ProfileManager.applyProfilesPayload(
@@ -152,9 +153,11 @@ class ProfileDeletionTombstoneTest {
         )
 
         assertEquals(listOf(PROFILE_B), storedIds())
-        assertEquals(
+        // Not rebound to B: activating another profile here would be the
+        // unauthenticated switch audit C3 removed from the on-device delete.
+        // Choosing a profile is its own (PIN-gated) act again.
+        assertNull(
             "the deleted profile must not stay the active one",
-            PROFILE_B,
             prefs().getString(KEY_ACTIVE, null)
         )
     }

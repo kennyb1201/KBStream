@@ -549,6 +549,16 @@ object MdbListClient {
     // app context simply gets no disk cache.
     private const val SNAPSHOT_DISK_TTL_MS = 6 * 60 * 60 * 1000L
     private const val PLAYBACK_DISK_TTL_MS = 30 * 60 * 1000L
+
+    /**
+     * How long an EMPTY paused-session answer is trusted, in memory and on
+     * disk.
+     *
+     * Short on purpose: it exists to stop the common "nothing paused" case
+     * costing a request on every Detail open, not to hide a pause that was
+     * just made on another device.
+     */
+    private const val PLAYBACK_EMPTY_TTL_MS = 5 * 60 * 1000L
     private const val RATINGS_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 
     private val diskMoshi by lazy {
@@ -810,8 +820,19 @@ object MdbListClient {
      */
     private val scrobbleSendMutex = Mutex()
 
-    @Volatile
-    private var startRetryJob: Job? = null
+    /**
+     * The pending start-retry job.
+     *
+     * Atomic rather than a @Volatile field, because the two writers do not
+     * share a lock: [scheduleStartRetry] installs under [sessionMutex], while
+     * [cancelStartRetry] is called from non-suspending playback paths and cannot
+     * take it. As a plain field, a cancel could read job B, a scheduler then
+     * replaced B with C, and the cancel resumed to write `null` over C - a live
+     * retry with no reference left to cancel it, free to post "start" after the
+     * session has stopped or been replaced. getAndSet makes each swap atomic, so
+     * a job is either referenced or cancelled, never orphaned.
+     */
+    private val startRetryJob = java.util.concurrent.atomic.AtomicReference<Job?>(null)
 
     /** What a scrobble session points at (movie, or one show episode). */
     private data class ScrobbleTarget(
@@ -840,8 +861,7 @@ object MdbListClient {
         // to recover a lost start was itself skipped whenever it was needed.
         withContext(NonCancellable) {
             sessionMutex.withLock {
-                startRetryJob?.cancel()
-                startRetryJob = sessionScope.launch {
+                val job = sessionScope.launch {
                     for (delayMs in START_RETRY_DELAYS_MS) {
                         delay(delayMs)
                         val apiKey = apiKey(appContext)
@@ -857,14 +877,16 @@ object MdbListClient {
                     }
                     Log.w(TAG, "scrobble/start gave up after retries")
                 }
+                // Install first, then cancel whatever it replaced: the other
+                // order leaves a window in which no job is referenced at all.
+                startRetryJob.getAndSet(job)?.cancel()
             }
         }
     }
 
     /** The playback moved on (pause / stop / clear): drop any pending retry. */
     private fun cancelStartRetry() {
-        startRetryJob?.cancel()
-        startRetryJob = null
+        startRetryJob.getAndSet(null)?.cancel()
     }
 
     //
@@ -1388,9 +1410,17 @@ object MdbListClient {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
         cachedPlayback?.let { fresh ->
+            // An EMPTY cached list is worth honouring too, for a shorter
+            // window. "This account has no paused sessions" is the common
+            // answer, and it used to cost a request on every Detail open and
+            // every Continue Watching build - spending the 1,000/day key on
+            // nothing. The short TTL keeps a pause made on another device
+            // visible within minutes instead of a quarter of an hour.
+            val ttl =
+                if (fresh.isEmpty()) PLAYBACK_EMPTY_TTL_MS else PLAYBACK_TTL_MS
             if (
                 cachedPlaybackKey == apiKey &&
-                System.currentTimeMillis() - cachedPlaybackAt < PLAYBACK_TTL_MS
+                System.currentTimeMillis() - cachedPlaybackAt < ttl
             ) {
                 return fresh
             }
@@ -1398,24 +1428,30 @@ object MdbListClient {
         return withContext(Dispatchers.IO) {
             val diskKey = playbackDiskKey(apiKey)
             jsonCacheDao?.getByKey(diskKey)?.let { row ->
-                if (System.currentTimeMillis() - row.updatedAt < PLAYBACK_DISK_TTL_MS) {
-                    runCatching { playbackJsonAdapter.fromJson(row.json) }.getOrNull()
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let { cached ->
-                            cachedPlayback = cached
-                            cachedPlaybackAt = System.currentTimeMillis()
-                            cachedPlaybackKey = apiKey
-                            return@withContext cached
-                        }
+                // The stored row may legitimately be empty (no paused
+                // sessions); it is served on the same short negative TTL that
+                // the memory answer gets, so a cold start does not re-download
+                // "nothing" on every launch either.
+                val parsed = runCatching { playbackJsonAdapter.fromJson(row.json) }.getOrNull()
+                val ttl =
+                    if (parsed.isNullOrEmpty()) PLAYBACK_EMPTY_TTL_MS else PLAYBACK_DISK_TTL_MS
+                if (parsed != null && System.currentTimeMillis() - row.updatedAt < ttl) {
+                    cachedPlayback = parsed
+                    cachedPlaybackAt = System.currentTimeMillis()
+                    cachedPlaybackKey = apiKey
+                    return@withContext parsed
                 }
             }
-            runCatching {
+            val fetched = runCatching {
                 val request = Request.Builder()
                     .url("$BASE/sync/playback?apikey=$apiKey")
                     .get()
                     .build()
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use emptyList()
+                    // null, not emptyList(): a non-2xx is a failure to
+                    // know, and the caller below must not cache it as
+                    // "no paused sessions".
+                    if (!response.isSuccessful) return@use null
                     val root = JSONArray(response.body?.string().orEmpty())
                     val out = mutableListOf<MdbListPlaybackItem>()
                     for (i in 0 until root.length()) {
@@ -1469,24 +1505,27 @@ object MdbListClient {
                     }
                     out
                 }
-            }.getOrDefault(emptyList()).also { result ->
-                if (result.isNotEmpty()) {
-                    cachedPlayback = result
-                    cachedPlaybackAt = System.currentTimeMillis()
-                    cachedPlaybackKey = apiKey
-                    val key = playbackDiskKey(apiKey)
-                    val at = cachedPlaybackAt
-                    runCatchingCancellable {
-                        jsonCacheDao?.upsert(
-                            TmdbJsonCacheEntity(
-                                key = key,
-                                json = playbackJsonAdapter.toJson(result),
-                                updatedAt = at
-                            )
-                        )
-                    }
-                }
+            }.getOrNull()
+            // A failed read serves an empty list but caches NOTHING: caching it
+            // would report "no paused sessions" for the whole TTL after one
+            // transient error, which is the stale side of this same defect.
+            // Only a successful answer - empty or not - is published.
+            if (fetched == null) return@withContext emptyList()
+            cachedPlayback = fetched
+            cachedPlaybackAt = System.currentTimeMillis()
+            cachedPlaybackKey = apiKey
+            val key = playbackDiskKey(apiKey)
+            val at = cachedPlaybackAt
+            runCatchingCancellable {
+                jsonCacheDao?.upsert(
+                    TmdbJsonCacheEntity(
+                        key = key,
+                        json = playbackJsonAdapter.toJson(fetched),
+                        updatedAt = at
+                    )
+                )
             }
+            fetched
         }
     }
 
@@ -1942,11 +1981,17 @@ object MdbListClient {
     /**
      * GET /lists/{id}/items — titles in one personal list. Cursor
      * pagination is followed so large lists aren't truncated.
+     *
+     * NULL means the walk did not finish (a page failed, a body did not parse,
+     * or the page guard was hit with more cursor left) - deliberately not "the
+     * pages gathered so far". A partial list used to be returned as the
+     * complete one and rendered as such; the watched-snapshot walk in this same
+     * file already serves stale-or-nothing for the same reason.
      */
     suspend fun getListItems(
         context: Context,
         listId: Int
-    ): List<MdbListEntry> {
+    ): List<MdbListEntry>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
 
@@ -1961,7 +2006,7 @@ object MdbListClient {
                     append(java.net.URLEncoder.encode(cursor, "UTF-8"))
                 }
             }
-            val body = getString(url) ?: break
+            val body = getString(url) ?: return null
             val parsed = runCatching {
                 val root = JSONObject(body)
                 cursor = root.optJSONObject("pagination")
@@ -1982,10 +2027,23 @@ object MdbListClient {
                 collect("movies", "movie")
                 collect("shows", "series")
             }
-            if (parsed.isFailure) break
+            if (parsed.isFailure) return null
             guard += 1
         } while (!cursor.isNullOrBlank() && guard < 30)
-        return out
+        // More pages still indicated: the guard stopped the walk, so this is
+        // not the whole list.
+        if (!cursor.isNullOrBlank()) return null
+        // The combined and split arrays can carry the same title, which used to
+        // render it twice in the list.
+        return out.distinctBy { entryIdentity(it) }
+    }
+
+    /** One title's identity across the response's different shapes. */
+    private fun entryIdentity(entry: MdbListEntry): String {
+        val id = entry.imdbId?.takeIf { it.isNotBlank() }
+            ?: entry.tmdbId?.toString()
+            ?: entry.title.orEmpty()
+        return entry.mediaType + "\u0001" + id
     }
 
     /**
@@ -2074,8 +2132,10 @@ object MdbListClient {
      * pagination cursor exactly as [getListItems] does. The old single
      * `limit=1000` request silently truncated a watchlist longer than that
      * (LS-P2-11).
+     *
+     * NULL on an unfinished walk, exactly like [getListItems].
      */
-    suspend fun getWatchlist(context: Context): List<MdbListEntry> {
+    suspend fun getWatchlist(context: Context): List<MdbListEntry>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
 
@@ -2090,7 +2150,7 @@ object MdbListClient {
                     append(java.net.URLEncoder.encode(cursor, "UTF-8"))
                 }
             }
-            val body = getString(url) ?: break
+            val body = getString(url) ?: return null
             val parsed = runCatching {
                 val root = JSONObject(body)
                 cursor = root.optJSONObject("pagination")
@@ -2111,10 +2171,11 @@ object MdbListClient {
                 // Some responses carry both kinds under a combined "items".
                 collect("items", "movie")
             }
-            if (parsed.isFailure) break
+            if (parsed.isFailure) return null
             guard += 1
         } while (!cursor.isNullOrBlank() && guard < 30)
-        return out
+        if (!cursor.isNullOrBlank()) return null
+        return out.distinctBy { entryIdentity(it) }
     }
 
     /** POST /watchlist/items/add — add to the MDBList watchlist. */

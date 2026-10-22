@@ -65,8 +65,18 @@ internal object NewEpisodeRules {
     /**
      * Stable notification id per show: a newer episode for a show the user
      * already has a notification for REPLACES it instead of stacking.
+     *
+     * Masked into the episode band (0x00000000..0x1FFFFFFF) of the app-wide id
+     * space. Episode, live-reminder and game alerts share one
+     * NotificationManager namespace, and an id collision makes one alert replace
+     * the other - with the tap opening the wrong target - so each kind gets a
+     * disjoint band (see [ReminderRules.notificationId] and
+     * [SportsGameReminderRules.notificationId]).
      */
-    fun notificationId(showKey: String): Int = showKey.hashCode() and 0x7FFFFFFF
+    fun notificationId(showKey: String): Int = showKey.hashCode() and ID_BAND_MASK
+
+    /** Low 29 bits: the episode band. Shared by the three rules files. */
+    internal const val ID_BAND_MASK = 0x1FFFFFFF
 
     /**
      * Series-shaped media type. The app speaks several dialects for the same

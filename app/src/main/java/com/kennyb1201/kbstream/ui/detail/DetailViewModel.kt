@@ -491,8 +491,29 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     // Hot reactive check to observe if the current item is marked watched in real-time
+    /**
+     * The series-level watched flag, ONE flow per (id, type).
+     *
+     * The episode rail remembered a flow per EPISODE CARD, but every one of
+     * those calls had the series' id and type - so a 24-episode season built 24
+     * distinct `stateIn(WhileSubscribed)` upstreams that all re-ran the same
+     * mutex-guarded lookup on each watched-state bump, and recomposed 24 cards
+     * for one Boolean. Serving the same instance makes it one upstream and one
+     * collection, whatever the rail does. Only the current title is kept: the
+     * screen has exactly one, and a navigation replaces it.
+     */
+    private var watchedFlowKey: String? = null
+    private var watchedFlow: StateFlow<Boolean>? = null
+
     fun observeIsWatched(id: String, type: String): StateFlow<Boolean> {
-        return watchedStatusRepository.observeIsWatched(id, type)
+        val key = "$type:$id"
+        watchedFlow
+            ?.takeIf { watchedFlowKey == key }
+            ?.let { return it }
+        return watchedStatusRepository.observeIsWatched(id, type).also { flow ->
+            watchedFlowKey = key
+            watchedFlow = flow
+        }
     }
 
     /**
@@ -1878,6 +1899,12 @@ for ((metaAddon, response, error) in probeResults) {
                             voteAverage = null
                         )
                     }
+                    // Same stale-season guard as the TMDB branch below: two
+                    // rapid season switches used to leave the earlier season's
+                    // episodes under the later season's chip. The window is
+                    // small (a local map over already-loaded videos), which is
+                    // exactly why it went unnoticed - not a reason to publish.
+                    if (latestEpisodeSeasonRequest != season) return@launch
                     _episodes.value = applyAirDateCorrections(syntheticEpisodes, season)
                     _loadedSeason.value = season
                     val targetEp = _episodes.value.firstOrNull { ep ->

@@ -187,6 +187,19 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      */
     private var fetchGeneration = 0
 
+    /**
+     * Owns the published state, and nothing else.
+     *
+     * [load] (the picker) and [resolve] (auto-play) publish to the SAME
+     * _streams/_sourceAddons/_loadedKey/_isLoading, and neither path checked
+     * which request it was: whichever fetch finished LAST won, regardless of
+     * which target was asked for last. Auto-play resolving in the background
+     * while the picker opened for another title could therefore repaint the
+     * picker with the first title's sources. A publish only lands when its
+     * ticket is still the newest.
+     */
+    private var stateGeneration = 0
+
     private sealed class AddonLoadResult {
         data class Success(val addonName: String, val streams: List<Stream>) : AddonLoadResult()
         data class Failure(val addonName: String, val message: String?) : AddonLoadResult()
@@ -206,6 +219,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // requests' sources.
         loadJob?.cancel()
         lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)
+        val generation = ++stateGeneration
         loadJob = viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
@@ -222,11 +236,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 streamId,
                 debugLines,
                 onAddonResult = { incoming ->
-                    _streams.value = _streams.value + incoming
+                    if (generation == stateGeneration) {
+                        _streams.value = _streams.value + incoming
+                    }
                 },
                 runtimeMinutes = runtimeMinutes
             )
 
+            // Cancellation alone does not cover this: there is no suspension
+            // between the fetch returning and these writes, so a superseded
+            // load could still publish over the newer one.
+            if (generation != stateGeneration) return@launch
             _debug.value = debugLines
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
@@ -261,6 +281,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         streamId: String,
         runtimeMinutes: Int? = null
     ): ResolvedSources {
+        val generation = ++stateGeneration
         val debugLines = mutableListOf<String>()
         val resolved = fetch(
             contentType,
@@ -273,11 +294,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             firstResultGraceMs = AUTOPLAY_FIRST_RESULT_GRACE_MS
         )
 
-        _debug.value = debugLines
-        _streams.value = resolved.streams
-        _sourceAddons.value = resolved.addons
-        _loadedKey.value = "$contentType:$streamId"
-        _isLoading.value = false
+        // The result still goes back to the caller - auto-play needs it - but
+        // it only becomes the picker's state if this resolve is still the most
+        // recent request. A picker load that started meanwhile owns the state.
+        if (generation == stateGeneration) {
+            _debug.value = debugLines
+            _streams.value = resolved.streams
+            _sourceAddons.value = resolved.addons
+            _loadedKey.value = "$contentType:$streamId"
+            _isLoading.value = false
+        }
         return resolved
     }
 

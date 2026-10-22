@@ -849,11 +849,14 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             getInstalledAddons()
                 .toMutableList()
 
+        // URL FIRST, id only as a fallback. Two installs can share a manifest
+        // id while differing by config URL (an import or a synced blob can
+        // produce that; the add flow cannot), and matching on id OR url in list
+        // order merged a refresh for the second install into - and over - the
+        // first.
         val existing =
-            current.firstOrNull {
-                it.id == manifest.id ||
-                    it.manifestUrl == manifestUrl
-            }
+            current.firstOrNull { it.manifestUrl == manifestUrl }
+                ?: current.firstOrNull { it.id == manifest.id }
 
         val existingCatalogs =
             existing?.catalogs.orEmpty()
@@ -937,11 +940,12 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                         ?: true
             )
 
+        // Same order as `existing` above, so the row that supplied the
+        // carried-over settings is the row that gets replaced.
         val index =
-            current.indexOfFirst {
-                it.id == updatedAddon.id ||
-                    it.manifestUrl == manifestUrl
-            }
+            current.indexOfFirst { it.manifestUrl == manifestUrl }
+                .takeIf { it >= 0 }
+                ?: current.indexOfFirst { it.id == updatedAddon.id }
 
         if (index >= 0) {
 

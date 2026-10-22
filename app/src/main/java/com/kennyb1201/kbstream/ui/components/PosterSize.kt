@@ -6,7 +6,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 
@@ -44,7 +43,7 @@ enum class PosterSize(val width: Dp, val height: Dp) {
 @Composable
 fun rememberPosterSize(): PosterSize {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) {
         PosterSize.fromPref(AppPreferences.getPosterSize(context))
     }
@@ -107,7 +106,7 @@ fun rememberHomeLandscape(): Boolean {
     // Reactive for the same reason as [rememberGlobalLandscape]: the Home-rails
     // switch is device-local, but flipping it in Settings must reshape Home's
     // rails live instead of after the next screen build.
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     return remember(syncedRevision) { AppPreferences.homeLandscapeActive(context) }
 }
 

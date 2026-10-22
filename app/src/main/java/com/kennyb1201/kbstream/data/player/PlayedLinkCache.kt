@@ -88,6 +88,7 @@ internal object PlayedLinkCache {
      * Records [played] and the ordered [sources] it came from. A blank key or a
      * blank URL is a no-op: there would be nothing to replay.
      */
+    @Synchronized
     fun remember(context: Context, key: String, played: Stream, sources: List<Stream>) {
         if (key.isBlank() || played.url.isNullOrBlank()) return
         runCatching {
@@ -125,6 +126,7 @@ internal object PlayedLinkCache {
         return CachedPlay(played, entry.sources.mapNotNull { it.toStream() })
     }
 
+    @Synchronized
     fun forget(context: Context, key: String) {
         if (key.isBlank()) return
         runCatching {
@@ -141,6 +143,7 @@ internal object PlayedLinkCache {
      * survives and a replay of it loops until the TTL (SD-2). A null
      * [profileId] - the legacy no-profiles device - falls back to the active one.
      */
+    @Synchronized
     fun forgetForProfile(context: Context, key: String, profileId: String?) {
         if (key.isBlank()) return
         if (profileId == null) return forget(context, key)

@@ -94,18 +94,17 @@ class EpgRefreshWorker(
                 .onSuccess { didImport ->
                     if (didImport) {
                         imported++
-                        // Stamp the freshness marker PER SOURCE, not once after
-                        // the loop. Each source has its own 8-minute budget, so
-                        // two slow ones exceed the job's ~10-minute window; a
-                        // worker killed mid-pass used to lose the marker for a
-                        // source that HAD imported, and the next run
-                        // re-downloaded it. A source that is stored stays
-                        // stored.
-                        prefs.edit()
-                            .putLong(KEY_EPG_UPDATED_AT, System.currentTimeMillis())
-                            .putString(KEY_EPG_DB_NAME, activeGuideName())
-                            .putInt(KEY_EPG_EMPTY_RUNS, 0)
-                            .apply()
+                        // Recorded PER SOURCE, and the global marker is then
+                        // re-derived as the OLDEST source stamp (see
+                        // [stampImportedSource]). Per source, because a worker
+                        // killed mid-pass must keep the credit for a source it
+                        // really stored - each has its own 8-minute budget and
+                        // two slow ones exceed the job's window. Oldest, because
+                        // stamping the SHARED key per source made "source B
+                        // failed" invisible: A's stamp marked the whole set
+                        // fresh for the full 12 h window, so B's channels had no
+                        // programs until the day's next pass.
+                        stampImportedSource(prefs, url, epgUrls)
                     }
                 }
                 .onFailure { error ->
@@ -148,6 +147,50 @@ class EpgRefreshWorker(
         // stale, so the next chance retries it.
         return Result.success()
     }
+
+    /**
+     * Records [url] as imported at [now] and republishes the global freshness
+     * marker as the oldest stamp among [urls].
+     *
+     * A source with no stamp counts as 0, i.e. never imported, which is what
+     * keeps a failed or newly added source from being served "fresh" because a
+     * sibling imported successfully. The per-source stamps are deliberately
+     * durable (plain prefs, written as soon as a source lands) so a job that is
+     * killed partway through does not lose the credit for what it stored.
+     */
+    private fun stampImportedSource(
+        prefs: SharedPreferences,
+        url: String,
+        urls: List<String>
+    ) {
+        val now = System.currentTimeMillis()
+        val stamps = readSourceStamps(prefs).toMutableMap()
+        stamps[url] = now
+        val oldest =
+            urls.map { target -> if (target == url) now else stamps[target] ?: 0L }
+                .minOrNull()
+                ?: now
+        prefs.edit()
+            .putString(
+                KEY_EPG_SOURCE_STAMPS,
+                stamps.entries.joinToString("\n") { (key, at) -> "$at|$key" }
+            )
+            .putLong(KEY_EPG_UPDATED_AT, oldest)
+            .putString(KEY_EPG_DB_NAME, activeGuideName())
+            .putInt(KEY_EPG_EMPTY_RUNS, 0)
+            .apply()
+    }
+
+    /** `url -> last import` from the persisted "<epochMs>|<url>" lines. */
+    private fun readSourceStamps(prefs: SharedPreferences): Map<String, Long> =
+        prefs.getString(KEY_EPG_SOURCE_STAMPS, "").orEmpty()
+            .lineSequence()
+            .mapNotNull { line ->
+                val at = line.substringBefore('|').toLongOrNull() ?: return@mapNotNull null
+                val key = line.substringAfter('|', "")
+                if (key.isBlank()) null else key to at
+            }
+            .toMap()
 
     /**
      * Imports one guide source, giving it the per-source time budget.
@@ -220,6 +263,9 @@ class EpgRefreshWorker(
         const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
         const val KEY_EPG_DB_NAME = "epg_db_name"
+
+        /** `"<epochMs>|<url>"` lines: when each configured source last imported. */
+        const val KEY_EPG_SOURCE_STAMPS = "epg_source_stamps"
 
         /** Consecutive all-sources-failed runs before this worker stops retrying. */
         const val KEY_EPG_EMPTY_RUNS = "epg_empty_runs"

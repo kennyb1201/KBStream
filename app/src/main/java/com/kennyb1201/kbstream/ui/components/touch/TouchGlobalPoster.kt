@@ -9,15 +9,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.isCollectionArtType
 import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscapeArt
+import com.kennyb1201.kbstream.ui.components.posterTileRevision
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 
 /**
@@ -61,7 +60,7 @@ fun TouchGlobalPosterCard(
     landscape: Boolean? = null
 ) {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     // Read unconditionally and let [landscape] win afterwards: a `remember`
     // behind `?:` is a CONDITIONAL call, and Compose's slot table is positional
     // (the same rule LandscapeCard's eye badge follows).
@@ -144,7 +143,7 @@ fun TouchGlobalPosterTile(
     landscape: Boolean? = null
 ) {
     val context = LocalContext.current
-    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val syncedRevision = posterTileRevision()
     val prefLandscape = remember(syncedRevision) {
         AppPreferences.landscapePostersActive(context)
     }

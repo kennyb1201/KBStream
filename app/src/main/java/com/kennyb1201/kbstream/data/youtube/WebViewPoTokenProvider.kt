@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.youtube
 
 import android.content.Context
 import android.util.Log
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -152,8 +153,56 @@ internal class WebViewPoTokenProvider(
                     )
                 } else {
                     PoTokenTrace.record(PoTokenContext.GVS, PoTokenState.NONE, elapsedMs)
-                    Log.d(TAG, "PO token mint produced no token for $videoId (${elapsedMs}ms)")
+                    // Warning for this one too: "the page loaded but its player
+                    // never showed a token" is the field signature of an
+                    // upstream break, and Fire OS suppresses debug.
+                    Log.w(
+                        TAG,
+                        "PO token mint produced no token for $videoId " +
+                            "(state=none ${elapsedMs}ms)"
+                    )
                 }
+                return@withLock null
+            }
+
+            val bind = bindState(minted.visitorData, visitorData)
+            val gvsState =
+                if (minted.gvsToken != null) PoTokenState.MINTED else PoTokenState.NONE
+            val playerState =
+                if (minted.playerToken != null) PoTokenState.MINTED else PoTokenState.NONE
+
+            if (bind == "mismatch") {
+                // A PO token is bound to the visitor it was minted for, so a
+                // token minted for ANOTHER visitor is not a token for this
+                // resolve: spending it is a refusal with extra steps. Neither
+                // token is cached or returned - the resolve then takes exactly
+                // the tokenless path it would have taken with no mint at all -
+                // and both lines say why (`spent=no`).
+                //
+                // Never the visitor string itself: it is a live session
+                // identifier, and the state is what a capture needs.
+                PoTokenTrace.record(
+                    PoTokenContext.GVS,
+                    gvsState,
+                    elapsedMs,
+                    bind = bind,
+                    // Only a token that exists can be withheld; the other half
+                    // of a partial mint has nothing to say beyond `state=none`.
+                    spent = if (minted.gvsToken != null) false else null
+                )
+                PoTokenTrace.record(
+                    PoTokenContext.PLAYER,
+                    playerState,
+                    null,
+                    bind = bind,
+                    spent = if (minted.playerToken != null) false else null
+                )
+                Log.w(
+                    TAG,
+                    "PO token minted for a different visitor than the watch config " +
+                        "holds (gvs=$gvsState player=$playerState bind=$bind " +
+                        "${elapsedMs}ms); withholding both, resolving without one"
+                )
                 return@withLock null
             }
 
@@ -162,28 +211,27 @@ internal class WebViewPoTokenProvider(
                 minted.gvsToken?.let { gvsTokens[videoId] = it }
             }
 
-            val bind = bindState(minted.visitorData, visitorData)
             PoTokenTrace.record(
                 PoTokenContext.GVS,
-                if (minted.gvsToken != null) PoTokenState.MINTED else PoTokenState.NONE,
+                gvsState,
                 elapsedMs,
                 bind = bind
             )
             PoTokenTrace.record(
                 PoTokenContext.PLAYER,
-                if (minted.playerToken != null) PoTokenState.MINTED else PoTokenState.NONE,
+                playerState,
                 null,
                 bind = bind
             )
-            if (bind == "mismatch") {
-                // Never the visitor string itself: it is a live session
-                // identifier, and the state is what a capture needs.
-                Log.w(
-                    TAG,
-                    "PO token minted for a different visitor than the watch config " +
-                        "holds; the token may be refused at playback"
-                )
-            }
+            // A SUCCESS is a warning too, on purpose: it is the line that tells
+            // a field capture the minter works on this box, and it used to be
+            // only in the diagnostics report - which a refusal now survives,
+            // but which a support log without the report still would not show.
+            Log.w(
+                TAG,
+                "PO token minted gvs=$gvsState player=$playerState bind=$bind " +
+                    "${elapsedMs}ms for $videoId"
+            )
             minted.gvsToken
         }
     }
@@ -232,11 +280,48 @@ internal class WebViewPoTokenProvider(
  * a normal outcome, not an error.
  */
 internal class WebViewPoTokenMinter(
-    private val appContext: Context
+    private val appContext: Context,
+    /**
+     * Where the seeded visitor cookie goes. A parameter so the seeding is
+     * testable at this boundary without a WebView - the one part of the mint
+     * that cannot run in a unit test.
+     */
+    private val setCookie: (url: String, cookie: String) -> Unit = ::setWebViewCookie
 ) : PoTokenMinter {
 
     companion object {
         private const val TAG = "PoTokenMinter"
+
+        /** The origin the embed page - and the visitor cookie - live on. */
+        internal const val YOUTUBE_ORIGIN = "https://www.youtube.com"
+
+        /**
+         * How long the injected script watches the page before reporting what
+         * it has. Silence past this is a mint that produced nothing.
+         *
+         * The three windows form ONE ladder, innermost first: this script
+         * window (5 s) < the resolve's GVS budget
+         * ([InnerTubeExtractor.GVS_TOKEN_BUDGET_MS], 6 s) < this minter's
+         * provider timeout ([WebViewPoTokenProvider.DEFAULT_MINT_TIMEOUT_MS],
+         * 10 s). They were 7 s inside 4 s inside 10 s, so on a slow box the
+         * resolve cancelled every mint before the page could finish observing,
+         * and nothing in the field capture said the mint had been close.
+         */
+        internal const val MINT_SCRIPT_FALLBACK_MS = 5_000L
+
+        /**
+         * The cookie that makes the page's BotGuard mint for the visitor the
+         * watch config carries. Without it the page is a fresh cookie jar, i.e.
+         * a DIFFERENT visitor, and every token it mints is bound to a session
+         * this device never presents (bind=mismatch; refused at playback).
+         */
+        internal fun visitorCookie(visitorData: String): String =
+            "VISITOR_INFO1_LIVE=$visitorData; Domain=.youtube.com; Path=/"
+
+        /** The production seam: Android's shared WebView cookie jar. */
+        internal fun setWebViewCookie(url: String, cookie: String) {
+            CookieManager.getInstance().setCookie(url, cookie)
+        }
     }
 
     override suspend fun mint(videoId: String, visitorData: String): MintedPoTokens? =
@@ -249,14 +334,33 @@ internal class WebViewPoTokenMinter(
                 ?: return@withContext null
 
             try {
-                mintOn(webView, videoId)
+                mintOn(webView, videoId, visitorData)
             } finally {
                 runCatching { webView.stopLoading() }
                 runCatching { webView.destroy() }
             }
         }
 
-    private suspend fun mintOn(webView: WebView, videoId: String): MintedPoTokens? {
+    /**
+     * Puts the watch config's visitor into the WebView's cookie jar.
+     *
+     * Called before [WebView.loadUrl], because the page reads the cookie when it
+     * boots - seeding afterwards would hand the load a session that already
+     * decided which visitor it is.
+     */
+    internal fun seedVisitor(visitorData: String) {
+        if (visitorData.isBlank()) return
+        runCatching { setCookie(YOUTUBE_ORIGIN, visitorCookie(visitorData)) }
+            .onFailure {
+                Log.w(TAG, "PO token mint could not seed the visitor cookie")
+            }
+    }
+
+    private suspend fun mintOn(
+        webView: WebView,
+        videoId: String,
+        visitorData: String
+    ): MintedPoTokens? {
         val bridge = PoTokenJsBridge()
         with(webView.settings) {
             javaScriptEnabled = true
@@ -274,6 +378,9 @@ internal class WebViewPoTokenMinter(
                 view.evaluateJavascript(MINT_SCRIPT, null)
             }
         }
+        // Before the load: the page's BotGuard mints for whichever visitor its
+        // cookie jar presents, and a fresh WebView's jar is an empty one.
+        seedVisitor(visitorData)
         webView.loadUrl(youtubeEmbedUrl(videoId))
 
         val json = bridge.await() ?: return null
@@ -397,7 +504,7 @@ internal class WebViewPoTokenMinter(
           setTimeout(function () { kick(); scanInitial(); }, 300);
           setTimeout(function () { kick(); scanInitial(); }, 1200);
           setTimeout(function () { kick(); scanInitial(); }, 3000);
-          setTimeout(finish, 7000);
+          setTimeout(finish, ${MINT_SCRIPT_FALLBACK_MS});
         })();
     """.trimIndent()
 }

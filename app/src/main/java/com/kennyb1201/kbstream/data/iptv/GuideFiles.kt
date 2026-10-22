@@ -141,13 +141,30 @@ internal fun playlistUrlsOf(
     playlistUrl.orEmpty()
         .trim()
         .takeIf(String::isNotEmpty)
-        ?.let(::add)
+        ?.let { add(barePlaylistUrl(it)) }
     addAll(
         extraPlaylistUrls.orEmpty()
             .split('\n', ';')
             .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            .map(::barePlaylistUrl)
     )
 }.distinct()
+
+/**
+ * The URL an extra-playlist entry names, without its optional `|name` label.
+ *
+ * An extra entry is documented as `<url>|<display name>`, and the VIEW MODEL
+ * strips that suffix before fetching or caching - so the playlist cache is keyed
+ * by the bare URL. This function passed the raw entry on, which meant
+ * `loadCachedPlaylist("url|name")` always missed: an extra playlist then
+ * contributed zero EPG match keys, and because a non-empty primary key set makes
+ * the importer treat every other guide channel as unreachable, all of that
+ * playlist's channels showed "No program data" for good. It also made renaming
+ * an extra playlist change the guide's identity (the key hashed the label), so a
+ * rename forced a full re-import into a differently named file.
+ */
+private fun barePlaylistUrl(entry: String): String =
+    entry.substringBefore('|').trim().ifEmpty { entry.trim() }
 
 /**
  * A stable key for a set of playlist URLs, or null when there are none.

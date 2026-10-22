@@ -66,8 +66,14 @@ internal fun CopyAddonsDialog(
     val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp - 40.dp
 
     var sourceId by remember { mutableStateOf(profiles.firstOrNull()?.id) }
+    // distinctAddonRows, like the add-ons list itself: a profile can hold one
+    // manifestUrl twice (a hand-edited prefs blob, a profile merge), and this
+    // list is keyed by manifestUrl - a duplicate key is a hard crash. This is
+    // the surface that reads ANOTHER profile's installs, i.e. a blob this
+    // screen's own add flow did not write, so it is the likeliest place to meet
+    // one.
     val sourceAddons = remember(sourceId) {
-        sourceId?.let(loadAddons).orEmpty()
+        sourceId?.let(loadAddons).orEmpty().let(::distinctAddonRows)
     }
     var selected by remember(sourceId) {
         mutableStateOf<Set<String>>(sourceAddons.map { it.manifestUrl }.toSet())
