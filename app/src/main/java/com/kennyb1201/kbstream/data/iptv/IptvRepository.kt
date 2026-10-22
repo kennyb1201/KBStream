@@ -76,6 +76,8 @@ data class GuideSourceState(
     val url: String,
     val channels: Int,
     val programsInWindow: Int,
+    /** The newest program end this source holds, or null when it holds none. */
+    val newestProgramEndMs: Long?,
     val hasValidators: Boolean
 )
 
@@ -392,14 +394,23 @@ class IptvRepository(
 
                 when (fetch) {
                     is IptvHttpClient.XmltvFetch.Streamed -> {
+                        // Stored even when the import was REFUSED (an empty
+                        // feed): the response was current, it is the content
+                        // that was empty, so the next refresh must not
+                        // re-download a dead file every tick. When the feed
+                        // regenerates its validators change and the next fetch
+                        // is unconditional by itself.
                         GuideCacheHeaders.put(
                             appContext,
                             normalizedUrl,
                             fetch.etag,
                             fetch.lastModified
                         )
-                        importedFresh = true
-                        GuideImportOutcome.Imported(fetch.value.keptPrograms)
+                        val streamed = streamedOutcome(fetch.value)
+                        // A refusal promoted nothing: the rows every live
+                        // instance is holding are still current.
+                        importedFresh = !fetch.value.emptyFeedKeptLive
+                        streamed
                     }
 
                     IptvHttpClient.XmltvFetch.NotModified -> {
@@ -456,8 +467,9 @@ class IptvRepository(
                                     fresh.etag,
                                     fresh.lastModified
                                 )
-                                importedFresh = true
-                                GuideImportOutcome.Imported(fresh.value.keptPrograms)
+                                val refetched = streamedOutcome(fresh.value)
+                                importedFresh = !fresh.value.emptyFeedKeptLive
+                                refetched
                             } else {
                                 // A server that answers 304 to an UNCONDITIONAL
                                 // request leaves us exactly where we started.
@@ -491,6 +503,27 @@ class IptvRepository(
     }
 
     /**
+     * What a STREAMED fetch means for the viewer, and for every live instance.
+     *
+     * A body that kept no programs over a guide that had some is the empty-feed
+     * guard's refusal ([XmltvImporter]): the live rows did not change, so this
+     * answers [GuideImportOutcome.EmptyFeedKeptLive], and the caller leaves
+     * `importedFresh` false for it - there is nothing new for the guide screen
+     * to read, exactly as with a satisfied `304`. The guide was still USED, and a
+     * refused import writes nothing, so the idle sweep's marker is bumped the
+     * same way the `304` branch does it.
+     *
+     * Anything else was promoted and reports the count it stored.
+     */
+    private fun streamedOutcome(stats: GuideImportStats): GuideImportOutcome {
+        if (stats.emptyFeedKeptLive) {
+            GuideStorage.touchActive(appContext)
+            return GuideImportOutcome.EmptyFeedKeptLive
+        }
+        return GuideImportOutcome.Imported(stats.keptPrograms)
+    }
+
+    /**
      * What each configured guide source actually HOLDS, for diagnostics.
      *
      * The field case this exists for took three rounds of guessing: the guide
@@ -516,10 +549,24 @@ class IptvRepository(
                     nowMs - EpgWindow.READ_PAST_MS,
                     nowMs + EpgWindow.READ_FUTURE_MS
                 ),
+                newestProgramEndMs = dao.maxProgramEndForSource(normalizedUrl),
                 hasValidators = GuideCacheHeaders.get(appContext, normalizedUrl) != null
             )
         }
     }
+
+    /**
+     * The newest program end across every configured guide source, or null when
+     * no source holds a single program.
+     *
+     * The one fact that says a feed is FROZEN rather than merely unchanged. The
+     * guide screens render it beside a finished import's outcome (see
+     * [GuideImportProgress.withStaleness]); across sources, because the lineup
+     * reads programs from all of them.
+     */
+    suspend fun newestGuideProgramEndMs(): Long? = guideStateRows()
+        .mapNotNull { it.newestProgramEndMs }
+        .maxOrNull()
 
     /**
      * Resolves each [GuideMatchQuery] against the guide imported for its

@@ -593,7 +593,9 @@ object Diagnostics {
      * guide empty while the file, its size and its timestamp all look healthy.
      * `channels=0` is "never imported", `channels>0` with
      * `programsInWindow=0` is "the schedule aged out (or was skipped)" - the
-     * state that used to be invisible - and `validators=yes` is what would let a
+     * state that used to be invisible - `newestProgramEnd` in the past is "the
+     * feed itself is frozen" (the second field report's state: TiviMate on the
+     * same feed was empty too), and `validators=yes` is what would let a
      * conditional fetch be honored on the next refresh.
      *
      * Null when no guide source is configured: an absent line is a fact too.
@@ -609,7 +611,13 @@ object Diagnostics {
                 appendLine()
                 append("  ${Redaction.url(row.url)}: channels=${row.channels} ")
                 append("programsInWindow=${row.programsInWindow} ")
-                append("validators=${if (row.hasValidators) "yes" else "no"}")
+                append("newestProgramEnd=")
+                append(
+                    row.newestProgramEndMs
+                        ?.let { DateFormats.time(it, DateFormats.DATE_TIME_SECONDS) }
+                        ?: "none"
+                )
+                append(" validators=${if (row.hasValidators) "yes" else "no"}")
             }
         }
     }

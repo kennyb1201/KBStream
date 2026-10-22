@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import com.kennyb1201.kbstream.data.format.DateFormats
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,19 @@ sealed interface GuideImportOutcome {
 
     /** Nothing landed; [message] names the class (an HTTP code when there is one). */
     data class Failed(val message: String) : GuideImportOutcome
+
+    /**
+     * The feed answered with a body that held NO programs, and the live guide
+     * had some, so the import was refused and the existing guide kept (see the
+     * empty-feed guard in [XmltvImporter]).
+     *
+     * Deliberately an outcome and not a [Failed]: nothing went wrong on this
+     * device, the provider's guide is empty. Saying so is the whole point - the
+     * field case this comes from read as a silent two-second no-op at "0
+     * programs" through three rounds of triage, while the app had quietly kept
+     * (or, before this guard, discarded) the guide underneath.
+     */
+    data object EmptyFeedKeptLive : GuideImportOutcome
 }
 
 /**
@@ -65,7 +79,17 @@ data class GuideImportState(
      * Null while the pass is running; set on the terminal state published by
      * [GuideImportProgress.finish] so the status line can state what happened.
      */
-    val outcome: GuideImportOutcome? = null
+    val outcome: GuideImportOutcome? = null,
+    /**
+     * The newest program end the LIVE guide held when the pass finished.
+     *
+     * Carried on the terminal state - not recomputed by the screen - because it
+     * is a fact about the import's own moment: a feed that is frozen shows up
+     * as a date in the past, next to the outcome that just told the viewer
+     * nothing landed. Null when the guide has never held a program (nothing to
+     * say) and while a pass is running.
+     */
+    val guideEndsAtMs: Long? = null
 )
 
 /**
@@ -172,9 +196,14 @@ object GuideImportProgress {
      * class instead: a download that completed must not read as a silent return
      * to zero, and a `304` the store could satisfy must say so - it is the
      * outcome most easily mistaken for "nothing happened".
+     *
+     * [guideEndsAtMs] is the live guide's newest program end, published so a
+     * frozen feed reads as one (see [label]).
      */
-    fun finish(outcome: GuideImportOutcome? = null) {
-        _state.value = outcome?.let { GuideImportState(outcome = it) }
+    fun finish(outcome: GuideImportOutcome? = null, guideEndsAtMs: Long? = null) {
+        _state.value = outcome?.let {
+            GuideImportState(outcome = it, guideEndsAtMs = guideEndsAtMs)
+        }
     }
 
     private fun update(block: (GuideImportState) -> GuideImportState) {
@@ -199,8 +228,7 @@ object GuideImportProgress {
         nowMs: Long
     ): String {
         if (state == null) return ""
-        state.outcome?.let { return outcomeLabel(it) }
-        return buildList {
+        val text = state.outcome?.let { outcomeLabel(it) } ?: buildList {
             if (state.sourceCount > 1) {
                 add("source ${state.sourceIndex}/${state.sourceCount}")
             }
@@ -212,6 +240,23 @@ object GuideImportProgress {
             }
             add(elapsed(state.startedAtMs, nowMs))
         }.joinToString(" · ")
+        return withStaleness(text, state.guideEndsAtMs, nowMs)
+    }
+
+    /**
+     * The staleness fact appended to a finished pass: when the newest program
+     * the live guide holds ENDED in the past, the guide is frozen, and that is
+     * the one sentence that would have closed the field case immediately (the
+     * guide read "No program data" on every channel while the provider, TiviMate
+     * on the same feed and the app all agreed the file was there).
+     *
+     * Only ever past: a guide that runs to next Thursday says nothing here, and
+     * neither does a source that has never held a program.
+     */
+    internal fun withStaleness(text: String, guideEndsAtMs: Long?, nowMs: Long): String {
+        if (guideEndsAtMs == null || guideEndsAtMs <= 0L || guideEndsAtMs >= nowMs) return text
+        val ended = DateFormats.time(guideEndsAtMs, DateFormats.MONTH_DAY_CLOCK_12H)
+        return "$text · Guide data ended $ended"
     }
 
     /**
@@ -228,6 +273,9 @@ object GuideImportProgress {
         is GuideImportOutcome.Unchanged ->
             "Guide unchanged on server (${grouped(outcome.channels)} channels · " +
                 "${grouped(outcome.programsInWindow)} programs)"
+
+        is GuideImportOutcome.EmptyFeedKeptLive ->
+            "Feed returned no programs — kept your existing guide"
 
         is GuideImportOutcome.Failed -> outcome.message
     }

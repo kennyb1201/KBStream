@@ -195,6 +195,21 @@ interface IptvDao {
         windowEndMs: Long
     ): Int
 
+    /**
+     * The newest program end [sourceUrl]'s guide holds, or null when it holds
+     * none.
+     *
+     * A date in the past is the one figure that separates "this provider's
+     * guide is frozen" from "this provider's guide has not changed" - both of
+     * which read as "No program data" on screen and as `validators=yes` in
+     * diagnostics. See [com.kennyb1201.kbstream.data.iptv.IptvRepository.guideStateRows].
+     */
+    @Query(
+        "SELECT MAX(endUtcMillis) FROM epg_programs " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)"
+    )
+    suspend fun maxProgramEndForSource(sourceUrl: String): Long?
+
     @Query(
         "UPDATE epg_channels " +
             "SET sourceId = (SELECT id FROM epg_sources WHERE url = :newUrl) " +

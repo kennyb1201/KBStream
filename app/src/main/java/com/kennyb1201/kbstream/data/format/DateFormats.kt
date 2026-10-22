@@ -63,6 +63,9 @@ object DateFormats {
     /** `Tue, 2:05 PM` - the guide's clock label. */
     val WEEKDAY_CLOCK_12H: DateTimeFormatter = us("EEE, h:mm a")
 
+    /** `Oct 20, 6:30 PM` - when a schedule stopped, in a diagnostics/status line. */
+    val MONTH_DAY_CLOCK_12H: DateTimeFormatter = us("MMM d, h:mm a")
+
     // ── Locale-aware clocks ─────────────────────────────────────────────
     // The viewer's own clock, so a locale's own day/month names apply. Kept as
     // factories because the pattern must be rebuilt per locale; callers hold

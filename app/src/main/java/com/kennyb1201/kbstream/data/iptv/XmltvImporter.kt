@@ -131,6 +131,17 @@ class XmltvImporter(
         // import has nothing to protect).
         dao.clearGuideBySource(stagingUrl)
         val hadLiveGuide = dao.hasChannelsForSource(sourceUrl)
+        // The EMPTY-FEED guard's evidence, read before this import writes
+        // anything: how many programs the live guide holds inside the very
+        // window this import would replace. Read up front so the decision at
+        // the swap is about the guide the viewer had, not about whatever the
+        // staging writes left behind (they cannot touch live rows, but reading
+        // once makes that explicit). See the guard before the swap below.
+        val liveProgramsInWindow = dao.countProgramsForSourceInWindow(
+            sourceUrl,
+            windowStartMs,
+            windowEndMs
+        )
         // Every staged row carries this id instead of a copy of the URL (see
         // EpgSourceEntity). Resolved once per import, not once per row.
         val stagingSourceId = dao.ensureSourceId(stagingUrl)
@@ -265,6 +276,53 @@ class XmltvImporter(
         // well as at the batch flushes, because this write is the one that is
         // destructive rather than additive.
         currentCoroutineContext().ensureActive()
+
+        // ── the empty-feed guard ──────────────────────────────────────────
+        // A parse that kept CHANNELS and zero programs is not an update: the
+        // provider froze, or its generator returned an empty schedule. Swapping
+        // it in replaced a guide that had programs with one that has none, and
+        // the viewer got "No program data" on every channel with nothing
+        // anywhere saying why. When the live guide for this source still holds
+        // programs in the window this import covers, the import is refused: the
+        // live rows stay exactly as they are, the staged rows are discarded,
+        // and the pass ends as `EMPTY_FEED_KEPT_LIVE` - explicitly NOT an
+        // error, so no exception, no watchdog retry, no failure banner.
+        //
+        // The zero-yield case only: a healthy import that keeps fewer programs
+        // than the one before it is a provider's business, not a refusal.
+        //
+        // Nothing is left to re-download: the RESPONSE was current (the caller
+        // stores its validators as usual), it is the CONTENT that is empty, and
+        // when the feed regenerates its validators change and the next refresh
+        // fetches it in full.
+        if (keptPrograms == 0 && liveProgramsInWindow > 0) {
+            // The staged rows go, exactly as a failed attempt's are swept at
+            // the start of the next one - but now, so the discarded parse
+            // cannot sit in the database waiting for that next import.
+            dao.clearGuideBySource(stagingUrl)
+            val refused = GuideImportStats(
+                parsedChannels = parsedChannels,
+                parsedPrograms = parsedPrograms,
+                keptPrograms = keptPrograms,
+                skippedPrograms = skippedPrograms,
+                emptyFeedKeptLive = true
+            )
+            logImportEnd(
+                sourceUrl = sourceUrl,
+                stats = refused,
+                promoted = false,
+                hadLiveGuide = hadLiveGuide,
+                liveProgramsInWindow = liveProgramsInWindow,
+                elapsedMs = System.currentTimeMillis() - startedAt
+            )
+            Log.w(
+                TAG,
+                "IMPORT EMPTY FEED refused source=${Redaction.url(sourceUrl)} " +
+                    "liveProgramsInWindow=$liveProgramsInWindow"
+            )
+            return refused
+        }
+
         // This is the single heaviest guide write (re-keying every imported
         // row), so it is the one most worth deferring past playback.
         EpgWriteGate.holdWhilePlaying()
@@ -291,12 +349,19 @@ class XmltvImporter(
             false
         }
 
-        val elapsedMs = System.currentTimeMillis() - startedAt
-        Log.i(
-            TAG,
-            "IMPORT END channels=$parsedChannels parsedPrograms=$parsedPrograms " +
-                "keptPrograms=$keptPrograms skippedPrograms=$skippedPrograms swapped=$swapped " +
-                "hadLiveGuide=$hadLiveGuide elapsedMs=$elapsedMs source=${Redaction.url(sourceUrl)}"
+        val stats = GuideImportStats(
+            parsedChannels = parsedChannels,
+            parsedPrograms = parsedPrograms,
+            keptPrograms = keptPrograms,
+            skippedPrograms = skippedPrograms
+        )
+        logImportEnd(
+            sourceUrl = sourceUrl,
+            stats = stats,
+            promoted = swapped,
+            hadLiveGuide = hadLiveGuide,
+            liveProgramsInWindow = liveProgramsInWindow,
+            elapsedMs = System.currentTimeMillis() - startedAt
         )
 
         if (!swapped) {
@@ -315,14 +380,9 @@ class XmltvImporter(
 
         // Handed back so the caller can TELL the viewer what landed instead of
         // returning to zero in silence: "Imported 128,400 programs" is the same
-        // figure as the IMPORT END line below, which until now only logcat
-        // ever saw.
-        return GuideImportStats(
-            parsedChannels = parsedChannels,
-            parsedPrograms = parsedPrograms,
-            keptPrograms = keptPrograms,
-            skippedPrograms = skippedPrograms
-        )
+        // figure as the IMPORT END line just logged, which until now only
+        // logcat ever saw.
+        return stats
     } catch (error: Throwable) {
         // The staged rows may be half-written; they live under the staging
         // key and are swept at the start of the next attempt, so the live
@@ -333,6 +393,31 @@ class XmltvImporter(
         runCatching { xmlInput?.close() ?: input.close() }
     }
 }
+
+    /**
+     * `IMPORT END`, the one line every import leaves: what it parsed, how much
+     * of that was kept, whether it was promoted, and - since the empty-feed
+     * guard exists - what the live guide held in the window it would have
+     * replaced.
+     */
+    private fun logImportEnd(
+        sourceUrl: String,
+        stats: GuideImportStats,
+        promoted: Boolean,
+        hadLiveGuide: Boolean,
+        liveProgramsInWindow: Int,
+        elapsedMs: Long
+    ) {
+        Log.i(
+            TAG,
+            "IMPORT END channels=${stats.parsedChannels} " +
+                "parsedPrograms=${stats.parsedPrograms} " +
+                "keptPrograms=${stats.keptPrograms} " +
+                "skippedPrograms=${stats.skippedPrograms} promoted=$promoted " +
+                "hadLiveGuide=$hadLiveGuide liveProgramsInWindow=$liveProgramsInWindow " +
+                "elapsedMs=$elapsedMs source=${Redaction.url(sourceUrl)}"
+        )
+    }
 
     private suspend fun flushChannels(batch: MutableList<EpgChannelEntity>) {
     if (batch.isEmpty()) return
@@ -608,5 +693,12 @@ data class GuideImportStats(
     val parsedChannels: Int = 0,
     val parsedPrograms: Int = 0,
     val keptPrograms: Int = 0,
-    val skippedPrograms: Int = 0
+    val skippedPrograms: Int = 0,
+    /**
+     * True when this parse kept NO programs and the live guide had some in the
+     * window this import covered, so the swap was refused and the live guide
+     * left in place (see the empty-feed guard in [XmltvImporter.import]). Not a
+     * failure: the import completed, it just had nothing better to offer.
+     */
+    val emptyFeedKeptLive: Boolean = false
 )

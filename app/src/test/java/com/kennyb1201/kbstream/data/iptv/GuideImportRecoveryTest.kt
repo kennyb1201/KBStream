@@ -8,8 +8,12 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgChannelEntity
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramEntity
 import com.kennyb1201.kbstream.data.iptv.db.EpgSearchIndexCallback
 import com.kennyb1201.kbstream.data.iptv.db.IptvDao
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import java.io.File
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -123,6 +127,95 @@ class GuideImportRecoveryTest {
         )
     }
 
+    // ── the empty-feed guard, driven through the real importer ─────────
+
+    @Test
+    fun `an empty import never replaces a live guide that has programs`() = runBlocking {
+        val importer = XmltvImporter(daoProvider = { dao })
+        val now = System.currentTimeMillis()
+
+        val first = importer.import(
+            guideUrl,
+            guideXml(withProgramme = true, nowMs = now).byteInputStream()
+        )
+        assertEquals("the first import is the guide everything else is judged against", 1, first.keptPrograms)
+        assertEquals(2, dao.countChannelsForSource(guideUrl))
+        val channelsBefore = dao.getChannelsBySource(guideUrl)
+        val programsBefore = programRows(guideUrl)
+        assertTrue(programsBefore.isNotEmpty())
+
+        // The provider's guide is now frozen: its file still lists the channels
+        // and no programme at all.
+        val second = importer.import(
+            guideUrl,
+            guideXml(withProgramme = false, nowMs = now).byteInputStream()
+        )
+
+        assertTrue(
+            "the caller must be told the existing guide was kept",
+            second.emptyFeedKeptLive
+        )
+        assertEquals(0, second.keptPrograms)
+        assertEquals("the empty file did parse its channels", 2, second.parsedChannels)
+        assertEquals(
+            "the live channels are untouched",
+            channelsBefore,
+            dao.getChannelsBySource(guideUrl)
+        )
+        assertEquals(
+            "and so is every live program row",
+            programsBefore,
+            programRows(guideUrl)
+        )
+        assertEquals(
+            "the discarded parse leaves nothing staged",
+            0,
+            dao.countChannelsForSource("$guideUrl@importing")
+        )
+        assertEquals(
+            0,
+            dao.countProgramsForSourceInWindow("$guideUrl@importing", 0L, Long.MAX_VALUE)
+        )
+    }
+
+    @Test
+    fun `a first import with no programs still promotes its channels`() = runBlocking {
+        val importer = XmltvImporter(daoProvider = { dao })
+        val now = System.currentTimeMillis()
+        val xml = guideXml(withProgramme = false, nowMs = now)
+
+        val first = importer.import(guideUrl, xml.byteInputStream())
+
+        assertFalse(
+            "there was no live schedule to protect, so this is not a refusal",
+            first.emptyFeedKeptLive
+        )
+        assertEquals(0, first.keptPrograms)
+        assertEquals(2, dao.countChannelsForSource(guideUrl))
+
+        // An already-empty guide is in the same class: the channels are
+        // refreshed and the import still promotes.
+        val again = importer.import(guideUrl, xml.byteInputStream())
+        assertFalse(again.emptyFeedKeptLive)
+        assertEquals(2, dao.countChannelsForSource(guideUrl))
+    }
+
+    @Test
+    fun `a healthy import promotes and the guard stays inert`() = runBlocking {
+        val importer = XmltvImporter(daoProvider = { dao })
+        val now = System.currentTimeMillis()
+
+        importer.import(guideUrl, guideXml(withProgramme = true, nowMs = now).byteInputStream())
+        val second = importer.import(
+            guideUrl,
+            guideXml(withProgramme = true, nowMs = now + 60_000L).byteInputStream()
+        )
+
+        assertFalse(second.emptyFeedKeptLive)
+        assertEquals(1, second.keptPrograms)
+        assertEquals(1, dao.countProgramsForSourceInWindow(guideUrl, 0L, Long.MAX_VALUE))
+    }
+
     // ── the wiring: recovery, forced fetch, and the outcome ────────────
 
     @Test
@@ -156,7 +249,7 @@ class GuideImportRecoveryTest {
         )
         assertTrue(
             "the refetch's result is what the viewer is told about",
-            branch.contains("GuideImportOutcome.Imported(fresh.value.keptPrograms)")
+            branch.contains("streamedOutcome(fresh.value)")
         )
     }
 
@@ -214,22 +307,50 @@ class GuideImportRecoveryTest {
     }
 
     @Test
+    fun `the repository reports the refusal and keeps the stored validators`() {
+        val repository = flat(read(REPOSITORY))
+        val streamed = repository.substringAfter("is IptvHttpClient.XmltvFetch.Streamed -> {")
+            .substringBefore("IptvHttpClient.XmltvFetch.NotModified")
+
+        assertTrue(
+            "the response was current, so its validators are stored even when " +
+                "the content was empty - otherwise a dead feed is re-downloaded " +
+                "on every tick",
+            streamed.indexOf("GuideCacheHeaders.put(") in
+                0 until streamed.indexOf("streamedOutcome(fetch.value)")
+        )
+        assertTrue(
+            "a refusal has its own outcome, not an import",
+            repository.contains("if (stats.emptyFeedKeptLive)") &&
+                repository.contains("return GuideImportOutcome.EmptyFeedKeptLive")
+        )
+        assertTrue(
+            "nothing was promoted, so no live instance is told to re-read",
+            repository.contains("importedFresh = !fetch.value.emptyFeedKeptLive") &&
+                repository.contains("importedFresh = !fresh.value.emptyFeedKeptLive")
+        )
+    }
+
+    @Test
     fun `a finished import reports its outcome instead of returning to zero`() {
         val vm = flat(read(VIEW_MODEL))
         val progress = flat(read(PROGRESS))
 
         assertTrue(
-            "the pass must hand its outcome to the status line",
-            vm.contains("GuideImportProgress.finish(outcome)")
+            "the pass must hand its outcome - and where the live schedule " +
+                "stops - to the status line",
+            vm.contains("GuideImportProgress.finish(outcome, guideEndsAtMs)") &&
+                vm.contains("guideEndsAtMs = guideDataEndsAt()")
         )
         assertTrue(
             "a failure says what failed, with the HTTP code when there is one",
             vm.contains("httpCode != null -> \"Guide download failed: \$httpCode\"")
         )
         assertTrue(
-            "the outcome line is rendered BEFORE the live counters",
-            progress.indexOf("state.outcome?.let { return outcomeLabel(it) }") in
-                1 until progress.indexOf("if (state.phase == GuideImportPhase.SAVING)")
+            "the outcome line is rendered INSTEAD of the live counters",
+            progress.contains(
+                "val text = state.outcome?.let { outcomeLabel(it) } ?: buildList {"
+            )
         )
         // No pass at all keeps the old behaviour: the line clears. A RUNNING
         // pass still renders its live counters, not an outcome.
@@ -257,13 +378,83 @@ class GuideImportRecoveryTest {
             outcomeLabel(GuideImportOutcome.Failed("Guide download failed: HTTP 404"))
         )
         assertEquals(
+            "a feed with no programs is a feed fact, not an app failure",
+            "Feed returned no programs — kept your existing guide",
+            outcomeLabel(GuideImportOutcome.EmptyFeedKeptLive)
+        )
+        assertEquals(
             "the status line is what the two guide screens already render",
             "Imported 7 programs",
             GuideImportProgress.label(GuideImportState(outcome = GuideImportOutcome.Imported(7)), 0L)
         )
     }
 
+    @Test
+    fun `a finished pass states when the guide's schedule has already ended`() {
+        val now = 1_790_000_000_000L
+        val endedAt = now - 6 * 60 * 60 * 1000L
+        val ended = DateFormats.time(endedAt, DateFormats.MONTH_DAY_CLOCK_12H)
+
+        assertEquals(
+            "the feed's own emptiness comes first, then the reason it stays empty",
+            "Feed returned no programs — kept your existing guide · Guide data ended $ended",
+            GuideImportProgress.label(
+                GuideImportState(
+                    outcome = GuideImportOutcome.EmptyFeedKeptLive,
+                    guideEndsAtMs = endedAt
+                ),
+                now
+            )
+        )
+        assertEquals(
+            "a schedule that runs ahead says nothing about ending",
+            "Imported 12 programs",
+            GuideImportProgress.label(
+                GuideImportState(
+                    outcome = GuideImportOutcome.Imported(12),
+                    guideEndsAtMs = now + 60_000L
+                ),
+                now
+            )
+        )
+        assertEquals(
+            "and a guide that has never held a program has no end to report",
+            "Imported 12 programs",
+            GuideImportProgress.label(
+                GuideImportState(outcome = GuideImportOutcome.Imported(12)),
+                now
+            )
+        )
+        assertEquals(
+            "the staleness fact is past-only",
+            "anything",
+            GuideImportProgress.withStaleness("anything", now + 1L, now)
+        )
+    }
+
     // ── diagnostics ──────────────────────────────────────────────────
+
+    @Test
+    fun `the newest program end is per source, and null when there is none`() = runBlocking {
+        assertEquals(
+            "a source that never landed has no newest end",
+            null,
+            dao.maxProgramEndForSource(guideUrl)
+        )
+        val sourceId = dao.ensureSourceId(guideUrl)
+        dao.insertPrograms(
+            listOf(
+                program(sourceId, start = 1_000L, end = 2_000L),
+                program(sourceId, start = 5_000L, end = 9_000L)
+            )
+        )
+        assertEquals(9_000L, dao.maxProgramEndForSource(guideUrl))
+        assertEquals(
+            "another source's programs never answer for this one",
+            null,
+            dao.maxProgramEndForSource(otherUrl)
+        )
+    }
 
     @Test
     fun `diagnostics prints channels, programs in window and validators per source`() {
@@ -281,7 +472,13 @@ class GuideImportRecoveryTest {
                 "the field states",
             line.contains("channels=\${row.channels}") &&
                 line.contains("programsInWindow=\${row.programsInWindow}") &&
+                line.contains("newestProgramEnd=") &&
                 line.contains("validators=\${if (row.hasValidators) \"yes\" else \"no\"}")
+        )
+        assertTrue(
+            "a channels-only source prints its schedule as absent rather than " +
+                "as a date",
+            line.contains("?: \"none\"")
         )
         assertTrue(
             "read from the configured sources, so one that never landed still shows",
@@ -293,6 +490,46 @@ class GuideImportRecoveryTest {
 
     private fun outcomeLabel(outcome: GuideImportOutcome): String =
         GuideImportProgress.label(GuideImportState(outcome = outcome), 0L)
+
+    /**
+     * The live guide's program rows in a comparable shape: the import must leave
+     * exactly these behind when it refuses an empty feed.
+     */
+    private fun programRows(sourceUrl: String): List<String> {
+        val sql = "SELECT p.channelId, p.title, p.startUtcMillis, p.endUtcMillis " +
+            "FROM epg_programs p JOIN epg_sources s ON s.id = p.sourceId " +
+            "WHERE s.url = ? ORDER BY p.channelId, p.startUtcMillis"
+        return db.openHelper.readableDatabase
+            .query(sql, arrayOf<Any>(sourceUrl))
+            .use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(
+                            "${cursor.getString(0)}|${cursor.getString(1)}|" +
+                                "${cursor.getLong(2)}|${cursor.getLong(3)}"
+                        )
+                    }
+                }
+            }
+    }
+
+    private fun guideXml(withProgramme: Boolean, nowMs: Long): String {
+        val startsAt = xmltvDate(nowMs - 15 * 60_000L)
+        val endsAt = xmltvDate(nowMs + 45 * 60_000L)
+        return buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?><tv>")
+            append("<channel id=\"ch0\"><display-name>Channel 0</display-name></channel>")
+            append("<channel id=\"ch1\"><display-name>Channel 1</display-name></channel>")
+            if (withProgramme) {
+                append("<programme channel=\"ch0\" start=\"$startsAt\" stop=\"$endsAt\">")
+                append("<title>A program</title></programme>")
+            }
+            append("</tv>")
+        }
+    }
+
+    private fun xmltvDate(atMs: Long): String =
+        XMLTV_UTC.format(Instant.ofEpochMilli(atMs))
 
     private fun channels(sourceId: Long, count: Int): List<EpgChannelEntity> =
         (0 until count).map { index ->
@@ -339,6 +576,9 @@ class GuideImportRecoveryTest {
     }
 
     private companion object {
+        val XMLTV_UTC: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
+
         const val IPTV = "com/kennyb1201/kbstream/data/iptv/"
         const val REPOSITORY = "${IPTV}IptvRepository.kt"
         const val PROGRESS = "${IPTV}GuideImportProgress.kt"

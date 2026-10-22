@@ -1142,6 +1142,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // Null means the pass never got a usable answer to report, and the
         // status line clears exactly as before.
         var outcome: GuideImportOutcome? = null
+        // Where the live guide's schedule actually stops, published with the
+        // outcome: a finished import that says nothing landed must also say the
+        // guide itself is frozen (see GuideImportProgress.withStaleness).
+        var guideEndsAtMs: Long? = null
         try {
             var lastError: Throwable? = null
             var imported = 0
@@ -1211,6 +1215,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     "GUIDE IMPORT PARTIAL: freshness marker left alone so the failed source retries"
                 )
             }
+            guideEndsAtMs = guideDataEndsAt()
             val playlist = _playlist.value
             clearGuideMemory(
                 buildGuideSourceKey(
@@ -1230,19 +1235,29 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             if (t is CancellationException) throw t
             reportFailure(_guideError, t)
             outcome = GuideImportOutcome.Failed(guideFailureLabel(t))
+            guideEndsAtMs = guideDataEndsAt()
             Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
             _isImportingGuide.value = false
-            GuideImportProgress.finish(outcome)
+            GuideImportProgress.finish(outcome, guideEndsAtMs)
         }
     }
+
+    /**
+     * The newest program end the live guide holds, or null when it holds none
+     * (or the read itself fails - the status line then simply omits the fact).
+     */
+    private suspend fun guideDataEndsAt(): Long? =
+        runCatching { repository.newestGuideProgramEndMs() }.getOrNull()
 
     /**
      * N sources' outcomes as the one line the status shows.
      *
      * A pass is one action to the viewer, so anything that actually imported
      * wins (with the total it stored); a pass where every source answered
-     * `304` reports that instead, with the counts that satisfied them.
+     * `304` reports that instead, with the counts that satisfied them; and a
+     * pass whose only answers were empty feeds says so - "unchanged" would be
+     * a lie there, because the server's answer was a new, empty body.
      */
     private fun mergeOutcomes(outcomes: List<GuideImportOutcome>): GuideImportOutcome? {
         val imported = outcomes.filterIsInstance<GuideImportOutcome.Imported>()
@@ -1250,11 +1265,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             return GuideImportOutcome.Imported(imported.sumOf { it.programs })
         }
         val unchanged = outcomes.filterIsInstance<GuideImportOutcome.Unchanged>()
-        if (unchanged.isEmpty()) return null
-        return GuideImportOutcome.Unchanged(
-            channels = unchanged.sumOf { it.channels },
-            programsInWindow = unchanged.sumOf { it.programsInWindow }
-        )
+        if (unchanged.isNotEmpty()) {
+            return GuideImportOutcome.Unchanged(
+                channels = unchanged.sumOf { it.channels },
+                programsInWindow = unchanged.sumOf { it.programsInWindow }
+            )
+        }
+        if (outcomes.any { it is GuideImportOutcome.EmptyFeedKeptLive }) {
+            return GuideImportOutcome.EmptyFeedKeptLive
+        }
+        return null
     }
 
     /**
