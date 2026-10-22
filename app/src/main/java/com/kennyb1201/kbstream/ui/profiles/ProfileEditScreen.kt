@@ -248,6 +248,9 @@ fun ProfileEditScreen(
     var parentPinNew by remember(effectiveEditId) { mutableStateOf("") }
     var parentPinConfirm by remember(effectiveEditId) { mutableStateOf("") }
     var parentPinError by remember(effectiveEditId) { mutableStateOf<String?>(null) }
+    // One verification per editor session (see [ParentPinSession]): the three
+    // prompts the field report had for one change become one.
+    val parentPinSession = rememberParentPinSession(effectiveEditId)
     // Bumped whenever the parent PIN is written, so the row's own label re-reads
     // it: KidsTimeGuard reads the prefs file directly and is not observable
     // state, so a remember keyed on nothing would keep saying "SET".
@@ -304,11 +307,15 @@ fun ProfileEditScreen(
     // is accepted ([parentPinAfterVerify]), and `why` is what the parent reads.
     val gateWithParentPin: (String, ProfileManager.Profile?, () -> Unit) -> Unit =
         { why, target, action ->
-            parentPinPromptGated = true
-            parentPinPromptWhy = why
-            parentPinGateTarget = target
-            parentPinAfterVerify = action
-            parentPinPrompt = true
+            // Already verified in this sitting: the action runs. Otherwise the
+            // prompt is raised for it, and only for it.
+            parentPinSession.gate(action = action) { gated ->
+                parentPinPromptGated = true
+                parentPinPromptWhy = why
+                parentPinGateTarget = target
+                parentPinAfterVerify = gated
+                parentPinPrompt = true
+            }
         }
 
     // The save itself, as its own lambda rather than inline in the SAVE button:
@@ -1106,15 +1113,20 @@ fun ProfileEditScreen(
     // ── The parent-PIN prompt (audit C2/C3/C5/M6/M7 + M11) ─────────
     // One dialog for every caller: the Parent PIN row above (set/change), and
     // each GATED action - a kids configuration about to change, a profile about
-    // to be created, deleted, or opened in the editor. When any credential
-    // exists the CURRENT one is required first (the same contract the
-    // profile-PIN fields follow) and the action runs only once the new parent
-    // PIN is written; a gated action has no other way through.
+    // to be created, deleted, or opened in the editor. Which fields it shows and
+    // what SAVE means live in one shared rule (see parentPinPromptSpec /
+    // submitParentPin, used by the phone editor too): a gated action that has a
+    // credential to answer is VERIFY-ONLY - the PIN is used, never rotated - and
+    // only the row above ever asks for a new one.
     if (parentPinPrompt) {
         val gateTarget = parentPinGateTarget
         val credentialExists = remember(parentPinRevision, gateTarget?.id, effectiveEditId) {
             KidsGate.hasCredential(gateTarget)
         }
+        val spec = parentPinPromptSpec(
+            gated = parentPinPromptGated,
+            credentialExists = credentialExists
+        )
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { closeParentPinPrompt(true) }
         ) {
@@ -1139,42 +1151,59 @@ fun ProfileEditScreen(
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                if (credentialExists) {
+                if (spec.askCurrentPin) {
                     KBTextField(
                         value = parentPinCurrent,
                         onValueChange = {
                             parentPinCurrent = it.filter(Char::isDigit).take(4)
                             parentPinError = null
                         },
-                        placeholder = "Current PIN",
+                        placeholder = if (spec.mode == ParentPinPromptMode.VERIFY) {
+                            "PIN"
+                        } else {
+                            "Current PIN"
+                        },
+                        // The focus lands on whichever field this mode opens
+                        // with; the other one is not composed at all.
+                        focusRequester = if (spec.mode == ParentPinPromptMode.VERIFY) {
+                            parentPinFieldRequester
+                        } else {
+                            null
+                        },
                         openKeyboardOnFocus = false,
                         keyboardType = KeyboardType.NumberPassword,
                         visualTransformation = PasswordVisualTransformation()
                     )
                 }
-                KBTextField(
-                    value = parentPinNew,
-                    onValueChange = {
-                        parentPinNew = it.filter(Char::isDigit).take(4)
-                        parentPinError = null
-                    },
-                    placeholder = "New PIN (4 digits)",
-                    focusRequester = parentPinFieldRequester,
-                    openKeyboardOnFocus = false,
-                    keyboardType = KeyboardType.NumberPassword,
-                    visualTransformation = PasswordVisualTransformation()
-                )
-                KBTextField(
-                    value = parentPinConfirm,
-                    onValueChange = {
-                        parentPinConfirm = it.filter(Char::isDigit).take(4)
-                        parentPinError = null
-                    },
-                    placeholder = "Confirm PIN",
-                    openKeyboardOnFocus = false,
-                    keyboardType = KeyboardType.NumberPassword,
-                    visualTransformation = PasswordVisualTransformation()
-                )
+                if (spec.askNewPin) {
+                    KBTextField(
+                        value = parentPinNew,
+                        onValueChange = {
+                            parentPinNew = it.filter(Char::isDigit).take(4)
+                            parentPinError = null
+                        },
+                        placeholder = "New PIN (4 digits)",
+                        focusRequester = if (spec.mode == ParentPinPromptMode.VERIFY) {
+                            null
+                        } else {
+                            parentPinFieldRequester
+                        },
+                        openKeyboardOnFocus = false,
+                        keyboardType = KeyboardType.NumberPassword,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    KBTextField(
+                        value = parentPinConfirm,
+                        onValueChange = {
+                            parentPinConfirm = it.filter(Char::isDigit).take(4)
+                            parentPinError = null
+                        },
+                        placeholder = "Confirm PIN",
+                        openKeyboardOnFocus = false,
+                        keyboardType = KeyboardType.NumberPassword,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                }
                 parentPinError?.let { message ->
                     Text(
                         text = message,
@@ -1190,27 +1219,28 @@ fun ProfileEditScreen(
                         label = "SAVE",
                         enabled = true
                     ) {
-                        val failure = when {
-                            !ProfileManager.isValidPin(parentPinNew) ->
-                                "The PIN must be 4 digits"
-                            parentPinNew != parentPinConfirm -> "PINs don't match"
-                            // Either credential answers whosever gate this is:
-                            // the target's own PIN, or the parent PIN (see
-                            // KidsGate.verifies).
-                            credentialExists && !KidsGate.verifies(gateTarget, parentPinCurrent) ->
-                                "Current PIN is incorrect"
-                            else -> null
-                        }
-                        if (failure != null) {
-                            parentPinError = failure
-                        } else {
-                            // Written before the action that was waiting on it,
-                            // so the gate it already passed stays passed.
-                            KidsTimeGuard.setParentPin(parentPinNew)
-                            parentPinRevision += 1
-                            val after = parentPinAfterVerify
-                            closeParentPinPrompt(false)
-                            after?.invoke()
+                        // The decision itself is shared with the phone editor
+                        // (see submitParentPin): verify writes nothing, create
+                        // and rotate honour the write's own answer, and a
+                        // refusal keeps this dialog open without running the
+                        // action that was waiting on it.
+                        when (
+                            val result = submitParentPin(
+                                spec = spec,
+                                gateTarget = gateTarget,
+                                currentPin = parentPinCurrent,
+                                newPin = parentPinNew,
+                                confirmPin = parentPinConfirm
+                            )
+                        ) {
+                            is ParentPinSubmit.Rejected -> parentPinError = result.message
+                            is ParentPinSubmit.Accepted -> {
+                                parentPinSession.markVerified()
+                                if (result.wrotePin) parentPinRevision += 1
+                                val after = parentPinAfterVerify
+                                closeParentPinPrompt(false)
+                                after?.invoke()
+                            }
                         }
                     }
                     KBButton(

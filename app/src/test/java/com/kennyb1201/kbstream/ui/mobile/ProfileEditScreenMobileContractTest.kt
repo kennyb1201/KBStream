@@ -144,10 +144,16 @@ class ProfileEditScreenMobileContractTest {
             mobile.contains("\"Required to set this limit\"")
         )
         assertTrue(
-            "the prompt accepts the profile's PIN or the parent PIN",
+            "the prompt accepts the profile's PIN or the parent PIN, through the " +
+                "one rule both editors share (verify vs create vs rotate)",
             mobile.contains("KidsGate.hasCredential(gateTarget)") &&
-                mobile.contains("KidsGate.verifies(gateTarget, parentPinCurrent)") &&
-                mobile.contains("KidsTimeGuard.setParentPin(parentPinNew)")
+                mobile.contains("parentPinPromptSpec(") &&
+                mobile.contains("submitParentPin(")
+        )
+        assertTrue(
+            "and one verification covers the rest of the editor session",
+            mobile.contains("rememberParentPinSession(effectiveEditId)") &&
+                mobile.contains("parentPinSession.gate(action = action)")
         )
         assertTrue(
             "backing out of a gated prompt refuses the action",

@@ -153,36 +153,38 @@ class ParentPinWiringContractTest {
     }
 
     @Test
-    fun `the prompt writes the PIN and then runs the save it interrupted`() {
+    fun `the prompt decides through the shared rule and runs the save it interrupted`() {
         val dialog = editor
             .substringAfter("if (parentPinPrompt) {")
             .substringBefore("private fun")
         assertTrue(
-            "the same 4-digit rule as a profile PIN, stated once",
-            dialog.contains("!ProfileManager.isValidPin(parentPinNew) ->") &&
-                dialog.contains("\"The PIN must be 4 digits\"")
-        )
-        assertTrue(
-            "a confirm step",
-            dialog.contains("parentPinNew != parentPinConfirm -> \"PINs don't match\"")
-        )
-        assertTrue(
-            "and the CURRENT credential is verified before a change, the contract " +
-                "the profile-PIN fields follow",
+            "the fields are the shared rule's decision (see ParentPinPrompt.kt), so a " +
+                "gate with a credential to answer shows the PIN alone rather than a " +
+                "rotation every time",
             dialog.contains(
-                "credentialExists && !KidsGate.verifies(gateTarget, parentPinCurrent) -> " +
-                    "\"Current PIN is incorrect\""
+                "val spec = parentPinPromptSpec( gated = parentPinPromptGated, " +
+                    "credentialExists = credentialExists )"
+            ) &&
+                dialog.contains("if (spec.askCurrentPin) {") &&
+                dialog.contains("if (spec.askNewPin) {")
+        )
+        assertTrue(
+            "and the submission - wrong PIN, mismatch, failed write - is decided once, " +
+                "for this editor and the phone's",
+            dialog.contains(
+                "val result = submitParentPin( spec = spec, gateTarget = gateTarget, " +
+                    "currentPin = parentPinCurrent, newPin = parentPinNew, " +
+                    "confirmPin = parentPinConfirm )"
             )
         )
         assertTrue(
-            "nothing is written on a failure",
-            dialog.contains("if (failure != null) { parentPinError = failure } else {")
+            "a refusal stays in the dialog: nothing was written and the action does not run",
+            dialog.contains("is ParentPinSubmit.Rejected -> parentPinError = result.message")
         )
         assertTrue(
-            "on success the PIN is written, then the interrupted action runs - which " +
-                "is what makes the lock land on the same press",
-            dialog.indexOf("KidsTimeGuard.setParentPin(parentPinNew)") <
-                dialog.indexOf("after?.invoke()")
+            "on acceptance the interrupted action runs - which is what makes the lock " +
+                "land on the same press",
+            dialog.indexOf("is ParentPinSubmit.Accepted ->") < dialog.indexOf("after?.invoke()")
         )
         assertTrue(
             "and the row above re-reads it, because the guard's prefs file is " +
