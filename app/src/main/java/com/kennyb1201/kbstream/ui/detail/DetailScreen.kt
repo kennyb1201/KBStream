@@ -128,7 +128,6 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
-import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
@@ -646,16 +645,41 @@ fun DetailScreen(
     }
 
     /**
-     * Hands the focus back to the chip, card or control that a menu or an
-     * overlay was raised from - the app's one hand-back (see
-     * [rememberFocusHandBack]): retried across frames and read from the
-     * request's own answer, because the ask is made in the same frame the menu's
-     * scrim is leaving the tree and a node that cannot take focus yet answers
-     * FALSE rather than throwing. A one-shot request that misses would leave the
-     * D-pad at the top of the page, which is the exact complaint every one of
-     * these hand-backs exists for.
+     * The page's one hand-back driver (see [rememberDetailHandBack]).
+     *
+     * A dismissal RECORDS the surface it was raised from and then closes; the
+     * driver's single effect delivers the hand-back a frame later, once the
+     * menu's scrim and its focused node have left the tree and the card
+     * underneath has been recomposed. The ask is retried across frames and its
+     * landing is the request's own answer - a request against a node that
+     * cannot take focus yet answers FALSE rather than throwing, so the one-shot
+     * ask missed silently and the D-pad restarted at the top of the page (the
+     * episode row, which is the reported scroll-up).
+     *
+     * A record may carry a LIVE resolver: the rail targets are filed in the
+     * maps below as their rails compose, and a card whose requester was rebuilt
+     * while the overlay was up is found there again instead of being asked
+     * through a dead instance. Whatever the resolver answers, the target is the
+     * surface that opened the menu or overlay - only its delivery changed.
      */
-    val handFocusBack = rememberFocusHandBack()
+    val handFocusBack = rememberDetailHandBack()
+
+    // The requesters every rail files as it composes: what a hand-back's live
+    // resolver reads (see the driver above) and what the page's own vertical
+    // handoff aims at. Declared before the dismiss functions because they
+    // record through them.
+    val railFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+    val episodeFocusRequesters =
+        remember { mutableMapOf<Pair<Int, Int>, FocusRequester>() }
+    // One ordered slot per COLUMN of the narrow chip rails whose vertical
+    // neighbours are decided here (the NETWORK, PRODUCTION and PEOPLE rails),
+    // the row key naming the rail and the list index being the column: what a
+    // vertical press steps by. A column nothing has been laid out for is null,
+    // so a press into a rail that is not composing falls through rather than
+    // pulling the focus out of the page.
+    val chipColumnRequesters =
+        remember { mutableMapOf<String, MutableList<FocusRequester?>>() }
 
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
 
@@ -678,8 +702,17 @@ fun DetailScreen(
     }
 
     fun dismissStudioChipMenu() {
+        val chipKey = studioChipMenu?.let { menu ->
+            if (menu.categoryKey == "services") {
+                "network:${menu.id}"
+            } else {
+                "company:${menu.id}"
+            }
+        }
         studioChipMenu = null
-        handFocusBack(lastStudioChipFocusRequester)
+        handFocusBack("network/production chip menu", lastStudioChipFocusRequester) {
+            chipKey?.let { railFocusRequesters[it] }
+        }
     }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
 
@@ -695,8 +728,11 @@ fun DetailScreen(
     }
 
     fun dismissReviewOverlay() {
+        val reviewId = selectedReview?.id
         selectedReview = null
-        handFocusBack(lastReviewTileFocusRequester)
+        handFocusBack("review overlay", lastReviewTileFocusRequester) {
+            reviewId?.let { railFocusRequesters["review:$it"] }
+        }
     }
 
     // Long-press context menu for More Like This / collection rail posters.
@@ -713,8 +749,11 @@ fun DetailScreen(
     }
 
     fun dismissPosterMenu() {
+        val railKey = posterMenu?.returnTarget?.targetKey
         posterMenu = null
-        handFocusBack(lastPosterFocusRequester)
+        handFocusBack("poster menu", lastPosterFocusRequester) {
+            railKey?.let { railFocusRequesters[it] }
+        }
     }
 
     // Long-press context menu for the season chips (mark a whole season
@@ -732,8 +771,11 @@ fun DetailScreen(
     }
 
     fun dismissSeasonMenu() {
+        val seasonNumber = seasonMenu?.seasonNumber
         seasonMenu = null
-        handFocusBack(lastSeasonFocusRequester)
+        handFocusBack("season menu", lastSeasonFocusRequester) {
+            seasonNumber?.let { seasonFocusRequesters[it] }
+        }
     }
 
     // Spoiler-free mode: the episode cards already hide an episode the viewer
@@ -767,8 +809,11 @@ fun DetailScreen(
     }
 
     fun dismissEpisodeMenu() {
+        val slot = episodeMenu?.let { it.season to it.episode }
         episodeMenu = null
-        handFocusBack(lastEpisodeFocusRequester)
+        handFocusBack("episode menu", lastEpisodeFocusRequester) {
+            slot?.let { episodeFocusRequesters[it] }
+        }
     }
 
     var userManuallyChangedSeason by remember { mutableStateOf(false) }
@@ -789,16 +834,6 @@ fun DetailScreen(
     val collectionRowState = rememberLazyListState()
     val mediaRowState = rememberLazyListState()
     val recsRowState = rememberLazyListState()
-    val railFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
-    val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
-    // One ordered slot per COLUMN of the narrow chip rails whose vertical
-    // neighbours are decided here (the NETWORK, PRODUCTION and PEOPLE rails),
-    // the row key naming the rail and the list index being the column: what a
-    // vertical press steps by. A column nothing has been laid out for is null,
-    // so a press into a rail that is not composing falls through rather than
-    // pulling the focus out of the page.
-    val chipColumnRequesters =
-        remember { mutableMapOf<String, MutableList<FocusRequester?>>() }
 
     /**
      * Where a card of the rail keyed [rowKey] sits right now: the record a
@@ -1015,8 +1050,6 @@ fun DetailScreen(
     // resume episode) does not pull the focus back out of the rail the viewer
     // just returned to when a slow episode list lands a moment later.
     var restoredReturnFocus by remember { mutableStateOf(false) }
-    val episodeFocusRequesters =
-        remember { mutableMapOf<Pair<Int, Int>, FocusRequester>() }
     var episodeTransitionState by remember {
         mutableStateOf(EpisodeTransitionState())
     }
@@ -1399,7 +1432,7 @@ fun DetailScreen(
 
     fun dismissBackdropOverlay() {
         selectedBackdrop = null
-        handFocusBack(lastBackdropCardFocusRequester)
+        handFocusBack("backdrop overlay", lastBackdropCardFocusRequester)
     }
 
 
@@ -1435,7 +1468,7 @@ fun DetailScreen(
 
     fun dismissMediaImageMenu() {
         mediaImageMenu = null
-        handFocusBack(mediaImageMenuCardFocusRequester)
+        handFocusBack("media image menu", mediaImageMenuCardFocusRequester)
     }
 
     val premiereDateFormatter = remember {
@@ -2759,7 +2792,7 @@ fun DetailScreen(
             // do (dismissPosterMenu and friends).
             fun dismissPlayButtonMenu() {
                 playButtonMenu = false
-                handFocusBack(playButtonFocusRequester)
+                handFocusBack("play button menu", playButtonFocusRequester)
             }
 
             val wantsBeginning =
@@ -5382,6 +5415,14 @@ fun DetailScreen(
                                             remember(review.id) {
                                                 FocusRequester()
                                             }
+                                        // Filed by id as well as by column, so the
+                                        // fullscreen overlay's hand-back can find
+                                        // THIS tile again at delivery time even if
+                                        // its requester instance was rebuilt while
+                                        // the overlay was up (see the page's
+                                        // hand-back driver).
+                                        railFocusRequesters["review:${review.id}"] =
+                                            reviewFocusRequester
                                         // Filed by column like every rail in the
                                         // list, so a press into the review rail
                                         // from the More Like This rail above (or
@@ -5863,7 +5904,10 @@ fun DetailScreen(
                                         selected.mediaType
                                     )
                                 }
-                                handFocusBack(lastPosterFocusRequester)
+                                handFocusBack("poster menu", lastPosterFocusRequester) {
+                                    selected.returnTarget?.targetKey
+                                        ?.let { railFocusRequesters[it] }
+                                }
                             }
                         ),
                         onDismiss = {
@@ -5916,7 +5960,9 @@ fun DetailScreen(
                                         selected.episodeNumbers
                                     )
                                 }
-                                handFocusBack(lastSeasonFocusRequester)
+                                handFocusBack("season menu", lastSeasonFocusRequester) {
+                                    seasonFocusRequesters[target.seasonNumber]
+                                }
                             },
                             PosterContextAction(
                                 label = if (wholeSeriesWatched) {
@@ -5938,7 +5984,9 @@ fun DetailScreen(
                                         wholeSeriesEpisodeNumbers
                                     )
                                 }
-                                handFocusBack(lastSeasonFocusRequester)
+                                handFocusBack("season menu", lastSeasonFocusRequester) {
+                                    seasonFocusRequesters[target.seasonNumber]
+                                }
                             }
                         ) + listOfNotNull(
                             // Simkl's attribution rule, at the one place on this
@@ -6050,7 +6098,9 @@ fun DetailScreen(
                                             selected.streamId
                                         )
                                     }
-                                    handFocusBack(lastEpisodeFocusRequester)
+                                    handFocusBack("episode menu", lastEpisodeFocusRequester) {
+                                        episodeFocusRequesters[target.season to target.episode]
+                                    }
                                 }
                             )
 
@@ -6076,7 +6126,9 @@ fun DetailScreen(
                                                 selected.episode
                                             )
                                         }
-                                        handFocusBack(lastEpisodeFocusRequester)
+                                        handFocusBack("episode menu", lastEpisodeFocusRequester) {
+                                            episodeFocusRequesters[target.season to target.episode]
+                                        }
                                     }
                                 )
                             }
@@ -6102,7 +6154,9 @@ fun DetailScreen(
                                             selected.seasonEpisodeNumbers
                                         )
                                     }
-                                    handFocusBack(lastEpisodeFocusRequester)
+                                    handFocusBack("episode menu", lastEpisodeFocusRequester) {
+                                        episodeFocusRequesters[target.season to target.episode]
+                                    }
                                 }
                             )
 
@@ -6127,7 +6181,9 @@ fun DetailScreen(
                                             wholeSeriesEpisodeNumbers
                                         )
                                     }
-                                    handFocusBack(lastEpisodeFocusRequester)
+                                    handFocusBack("episode menu", lastEpisodeFocusRequester) {
+                                        episodeFocusRequesters[target.season to target.episode]
+                                    }
                                 }
                             )
 

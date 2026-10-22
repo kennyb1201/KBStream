@@ -136,7 +136,7 @@ class UiUniformityBatchAContractTest {
                 "than a single request, because the menu's scrim is leaving the " +
                 "tree in the same frame and a missed request is silent",
             detail.contains("fun dismissPlayButtonMenu() { playButtonMenu = false") &&
-                detail.contains("handFocusBack(playButtonFocusRequester)")
+                detail.contains("handFocusBack(\"play button menu\", playButtonFocusRequester)")
         )
         assertTrue(
             "both the action rows and the Back/dismiss path share that hand-back",
@@ -161,9 +161,12 @@ class UiUniformityBatchAContractTest {
         assertTrue(
             "and closing them must hand focus back through one helper, whose " +
                 "landing is read from the request's own answer instead of assumed",
-            detail.contains("fun dismissStudioChipMenu() { studioChipMenu = null") &&
-                detail.contains("handFocusBack(lastStudioChipFocusRequester)") &&
-                detail.contains("val handFocusBack = rememberFocusHandBack()")
+            detail.contains("fun dismissStudioChipMenu() { val chipKey = studioChipMenu?.let") &&
+                detail.contains(
+                    "handFocusBack(\"network/production chip menu\", " +
+                        "lastStudioChipFocusRequester)"
+                ) &&
+                detail.contains("val handFocusBack = rememberDetailHandBack()")
         )
         assertEquals(
             "the menu state is only ever cleared by that helper",

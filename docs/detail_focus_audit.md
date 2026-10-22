@@ -115,7 +115,7 @@ page, so the rule now lives in one place and the other rail screens use it.
 | Search | the title menu's dismiss and watched row, and the browse-chip menu's action and Back, asked once | all four go through `handFocusBack`; the chip's own return-by-name fallback (`browseChipMenuReturn`) stays |
 | Home | `restoreFocus` was already verified, but every dismiss started a new retry loop without cancelling the last one | `focusRestoreJob` cancels the superseded landing; the frame cadence is kept because the bar lives in an `AnimatedVisibility`. The rail menu's watched row uses it too |
 | Catalog grid (`CatalogGridScreen`) | already verified (`landFocusOn` when the menu closes) | unchanged |
-| This page | its own local helper | the same shared helper |
+| This page | its own local helper | `ui/detail/DetailHandBack.kt`: dismissals RECORD the surface, one effect in the page's composition DELIVERS the hand-back after the overlay has closed (frame-paced, bounded, logged under `DETAIL_FOCUS`), and rail targets resolve from the page's live registries so a rebuilt requester cannot strand the restore |
 
 Deliberately still a direct request: `PosterContextMenu`'s `onBeforeHide`
 successor hand-off (Search, the catalog grid). The successor's node is attached

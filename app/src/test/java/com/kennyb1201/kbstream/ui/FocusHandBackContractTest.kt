@@ -71,12 +71,6 @@ class FocusHandBackContractTest {
                 listOf(
                     "handFocusBack(lastPosterFocusRequester)",
                     "handFocusBack(lastChipFocusRequester)"
-                ),
-            "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt" to
-                listOf(
-                    "handFocusBack(lastStudioChipFocusRequester)",
-                    "handFocusBack(lastEpisodeFocusRequester)",
-                    "handFocusBack(playButtonFocusRequester)"
                 )
         ).forEach { (file, handBacks) ->
             val text = source(file)
@@ -92,6 +86,24 @@ class FocusHandBackContractTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun `the detail page hands the focus back through its own record-then-deliver driver`() {
+        // The page has one extra rule the browse screens do not need: its
+        // overlay can outlive the requester instance it was raised from, so the
+        // hand-back is RECORDED by the dismiss and DELIVERED by an effect once
+        // the overlay has closed (see DetailFocusHandBackContractTest).
+        val detail = source("com/kennyb1201/kbstream/ui/detail/DetailScreen.kt")
+        assertTrue(
+            "the detail page's dismissals go through the one driver",
+            detail.contains("val handFocusBack = rememberDetailHandBack()") &&
+                listOf(
+                    "handFocusBack(\"review overlay\", lastReviewTileFocusRequester)",
+                    "handFocusBack(\"episode menu\", lastEpisodeFocusRequester)",
+                    "handFocusBack(\"play button menu\", playButtonFocusRequester)"
+                ).all { detail.contains(it) }
+        )
     }
 
     @Test
