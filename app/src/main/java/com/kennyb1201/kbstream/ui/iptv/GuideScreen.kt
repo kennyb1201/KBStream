@@ -2154,6 +2154,19 @@ private fun SetupPanel(
             )
         }
 
+        // What the last finished import DID. Shown outside `isImportingGuide`
+        // on purpose: the pass this exists for is the one that ends in a
+        // `304` (or a download) while the guide stays empty, and a finished
+        // import that reads as a silent return to zero is the report itself.
+        if (!isImportingGuide && guideImportLabel.isNotBlank()) {
+            Text(
+                text = guideImportLabel,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
         Spacer(modifier = Modifier.height(14.dp))
 
         if (playlistUrl.isNotBlank()) {

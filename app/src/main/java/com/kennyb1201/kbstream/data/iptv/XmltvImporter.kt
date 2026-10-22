@@ -64,9 +64,9 @@ class XmltvImporter(
 
     private val dao: IptvDao get() = daoProvider()
 
-    suspend fun import(sourceUrl: String, input: InputStream) {
+    suspend fun import(sourceUrl: String, input: InputStream): GuideImportStats {
         val now = System.currentTimeMillis()
-        import(
+        return import(
             sourceUrl = sourceUrl,
             input = input,
             windowStartMs = now - DEFAULT_PAST_WINDOW_MS,
@@ -79,7 +79,7 @@ class XmltvImporter(
         input: InputStream,
         windowStartMs: Long,
         windowEndMs: Long
-    ) = withContext(Dispatchers.Default) {
+    ): GuideImportStats = withContext(Dispatchers.Default) {
         // Every import serializes on one process-wide mutex, but the stall
         // watchdog measures only the SHARED progress counters - so a manual
         // import queued behind a worker's import of another source published
@@ -107,7 +107,7 @@ class XmltvImporter(
     input: InputStream,
     windowStartMs: Long,
     windowEndMs: Long
-) {
+): GuideImportStats {
     var xmlInput: InputStream? = null
 
     // Rows are parsed into a STAGING source key first and only promoted to
@@ -312,6 +312,17 @@ class XmltvImporter(
                 swapFailure
             )
         }
+
+        // Handed back so the caller can TELL the viewer what landed instead of
+        // returning to zero in silence: "Imported 128,400 programs" is the same
+        // figure as the IMPORT END line below, which until now only logcat
+        // ever saw.
+        return GuideImportStats(
+            parsedChannels = parsedChannels,
+            parsedPrograms = parsedPrograms,
+            keptPrograms = keptPrograms,
+            skippedPrograms = skippedPrograms
+        )
     } catch (error: Throwable) {
         // The staged rows may be half-written; they live under the staging
         // key and are swept at the start of the next attempt, so the live
@@ -582,3 +593,20 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         var dateParseFailureLogsRemaining = MAX_DATE_PARSE_FAILURE_LOGS
     }
 }
+
+/**
+ * What one import parsed and kept.
+ *
+ * These are the counts `IMPORT END` prints, and until this type existed they
+ * lived nowhere but logcat - which is exactly what a TV cannot show and a field
+ * report cannot attach. [keptPrograms] is the one the viewer's "Imported N
+ * programs" is made of; [parsedPrograms] beside it is what tells an empty guide
+ * from a skipped one (parsed > 0 with kept == 0 is the match-key skip, not a
+ * broken provider).
+ */
+data class GuideImportStats(
+    val parsedChannels: Int = 0,
+    val parsedPrograms: Int = 0,
+    val keptPrograms: Int = 0,
+    val skippedPrograms: Int = 0
+)

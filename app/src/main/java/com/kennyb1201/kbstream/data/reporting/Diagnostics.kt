@@ -11,6 +11,7 @@ import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -79,6 +80,13 @@ object Diagnostics {
         report.appendLine(localLine(app))
         report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }
+        // What each configured guide source actually holds: channels, the
+        // programs inside the window the guide reads, and whether a stored
+        // validator would make the next refresh a conditional fetch. "Channels
+        // with no programs" and "validators hiding the import" are the two
+        // states a "No program data" report could not be told apart from a
+        // healthy guide without this line (see IptvRepository.guideStateRows).
+        guideLine(app)?.let { report.appendLine(it) }
         report.appendLine(addonLine(app))
         // How the last source fetch ordered its results, and why the head of the
         // list is the head: the two rules that outrank every quality label
@@ -575,6 +583,35 @@ object Diagnostics {
                 "${db.watchHistoryDao().getAll().size} history"
         }.getOrElse { "unavailable (${it.message})" }
         "local: $counts"
+    }
+
+    /**
+     * The guide's own state, per configured source.
+     *
+     * One line per source, because the failure this exists for is per source: a
+     * provider that answers `304` to a device whose rows have aged out keeps the
+     * guide empty while the file, its size and its timestamp all look healthy.
+     * `channels=0` is "never imported", `channels>0` with
+     * `programsInWindow=0` is "the schedule aged out (or was skipped)" - the
+     * state that used to be invisible - and `validators=yes` is what would let a
+     * conditional fetch be honored on the next refresh.
+     *
+     * Null when no guide source is configured: an absent line is a fact too.
+     */
+    private suspend fun guideLine(context: Context): String? {
+        val rows = runCatching { IptvRepository.shared(context).guideStateRows() }
+            .getOrNull()
+            .orEmpty()
+        if (rows.isEmpty()) return null
+        return buildString {
+            append("guide: ${rows.size} source(s)")
+            rows.forEach { row ->
+                appendLine()
+                append("  ${Redaction.url(row.url)}: channels=${row.channels} ")
+                append("programsInWindow=${row.programsInWindow} ")
+                append("validators=${if (row.hasValidators) "yes" else "no"}")
+            }
+        }
     }
 
     /**

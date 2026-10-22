@@ -47,7 +47,11 @@ class GuideImportCancelContractTest {
     @Test
     fun `the button routes through the shared launcher`() {
         val button = body("fun importGuide() {")
-        assertTrue("IMPORT EPG must go through the one launcher", button.contains("launchGuideImport()"))
+        assertTrue(
+            "IMPORT EPG must go through the one launcher (forcing a fresh " +
+                "fetch is the button's own business - see GuideImportRecoveryTest)",
+            button.contains("launchGuideImport(forceFresh = true)")
+        )
         assertTrue(
             "and it must NOT start an import on a handle of its own",
             !button.contains("guideImportJob =")
@@ -61,7 +65,7 @@ class GuideImportCancelContractTest {
 
     @Test
     fun `the launcher stops the running pass and waits for it`() {
-        val launcher = body("private fun launchGuideImport() {")
+        val launcher = body("private fun launchGuideImport(forceFresh: Boolean = false) {")
         assertTrue(
             "whichever path started the running import, this is what stops it",
             launcher.contains("previous?.cancel()")
@@ -146,7 +150,7 @@ class GuideImportCancelContractTest {
 
     @Test
     fun `each source import is watched, with a fresh connection on the retry`() {
-        val pass = body("private suspend fun importGuideInternal(epgUrl: String) {")
+        val pass = body("private suspend fun importGuideInternal(")
         assertTrue(
             "a wedged source has to be noticed inside the pass, not by the " +
                 "twenty-minute call timeout",
@@ -160,7 +164,9 @@ class GuideImportCancelContractTest {
         assertTrue(
             "the retry must open its own connection: joining the attempt the " +
                 "watchdog just aborted would await the corpse",
-            pass.contains("importGuideSource(url, freshConnection = attempt > 0)")
+            pass.replace(Regex("\\s+"), " ").contains(
+                "importGuideSource( url = url, freshConnection = attempt > 0,"
+            )
         )
         assertTrue(
             "a loud stall is recorded so the entry stops hammering this provider",

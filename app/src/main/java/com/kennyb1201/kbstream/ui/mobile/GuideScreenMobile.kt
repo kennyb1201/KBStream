@@ -656,9 +656,17 @@ fun GuideScreenMobile(
                 }
             }
 
-            if (isImportingGuide && guideImportLabel.isNotBlank()) {
+            // The line keeps showing after the pass ends, because a finished
+            // import now has something to say ("Imported N programs" /
+            // "Guide unchanged on server ..."). It used to be gated on the
+            // pass being open, so a finished import silently returned to 0.
+            if (guideImportLabel.isNotBlank()) {
                 Text(
-                    text = "Importing guide · $guideImportLabel",
+                    text = if (isImportingGuide) {
+                        "Importing guide · $guideImportLabel"
+                    } else {
+                        guideImportLabel
+                    },
                     color = KBAccent,
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
@@ -1393,7 +1401,7 @@ private fun MobileGuideSetup(
                 modifier = Modifier.fillMaxWidth()
             ) { onImportGuide() }
 
-            if (isImportingGuide && guideImportLabel.isNotBlank()) {
+            if (guideImportLabel.isNotBlank()) {
                 Text(
                     text = guideImportLabel,
                     color = KBAccent,

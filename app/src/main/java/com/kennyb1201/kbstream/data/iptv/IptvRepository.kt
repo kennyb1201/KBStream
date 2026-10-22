@@ -68,6 +68,34 @@ data class GuideMatchQuery(
     val nameCandidates: List<String?>
 )
 
+/**
+ * One guide source's stored state, as diagnostics print it (see
+ * [IptvRepository.guideStateRows]).
+ */
+data class GuideSourceState(
+    val url: String,
+    val channels: Int,
+    val programsInWindow: Int,
+    val hasValidators: Boolean
+)
+
+/**
+ * Whether a `304 Not Modified` may be honored for a source with [channels]
+ * channels and [programsInWindow] programs inside the window the guide reads.
+ *
+ * Channels ALONE was the old test, and it is the field report this exists for:
+ * a provider whose file did not change kept answering 304 while the stored
+ * schedule aged out of the window and the rows were pruned. The channels were
+ * still there, so every refresh was honored - a two-second no-op, an empty
+ * guide, and no error anywhere. A guide is current only when the schedule the
+ * screens read is in it.
+ *
+ * Pure and separate so the two cases are pinned by a test rather than only by
+ * reading the branch.
+ */
+internal fun honorNotModified(channels: Int, programsInWindow: Int): Boolean =
+    channels > 0 && programsInWindow > 0
+
 class IptvRepository(
     context: Context,
     private val client: OkHttpClient = IptvHttpClient.create(),
@@ -263,7 +291,7 @@ class IptvRepository(
     }
 
     /**
-     * Imports one EPG source.
+     * Imports one EPG source, and answers HOW it ended.
      *
      * [joinActiveImport] is the normal case and stays the invariant: callers
      * that ask for the same URL at the same time (the background worker and the
@@ -272,16 +300,25 @@ class IptvRepository(
      * open a connection of its own instead of awaiting the attempt it has just
      * aborted, since that attempt is still unwinding and would fail the retry
      * with its own cancellation.
+     *
+     * [forceFresh] is the manual IMPORT EPG button's: it sends NO validators, so
+     * the server has to answer with a body. The button is the viewer's recovery
+     * act ("the one I press because the last one wedged"), and a conditional
+     * fetch turns it into the same two-second `304` no-op the automatic refresh
+     * already performed - which is exactly the state the field report came from.
+     * Every automatic path keeps the conditional fetch: the bandwidth saving is
+     * theirs to keep.
      */
     suspend fun importGuide(
         epgUrl: String,
-        joinActiveImport: Boolean = true
-    ) = withContext(Dispatchers.IO) {
+        joinActiveImport: Boolean = true,
+        forceFresh: Boolean = false
+    ): GuideImportOutcome = withContext(Dispatchers.IO) {
         val normalizedUrl = epgUrl.trim()
         require(normalizedUrl.isNotBlank()) { "EPG URL is required" }
 
         val requestKey = normalizeGuideKey(normalizedUrl)
-        val waiter = CompletableDeferred<Result<Unit>>()
+        val waiter = CompletableDeferred<Result<GuideImportOutcome>>()
         val myJob = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
 
         // The attempt this call displaces, if any. Cancelled OUTSIDE the lock
@@ -337,12 +374,14 @@ class IptvRepository(
             // a rethrow here would leave those joiners awaiting a deferred
             // nobody completes. The cancellation still propagates:
             // result.getOrThrow() rethrows it just below.
-            val result: Result<Unit> = runCatching {
+            val result: Result<GuideImportOutcome> = runCatching {
                 // The validators stored by the last successful import of this
                 // URL, if any. They make the fetch conditional, which is the
                 // whole point: a 10-100 MB guide that has not changed must not
-                // be re-downloaded and re-parsed every refresh.
-                val validators = GuideCacheHeaders.get(appContext, normalizedUrl)
+                // be re-downloaded and re-parsed every refresh. A FORCED import
+                // sends none: see [forceFresh] on this function.
+                val validators =
+                    if (forceFresh) null else GuideCacheHeaders.get(appContext, normalizedUrl)
                 val fetch = IptvHttpClient.streamXmltvWithRetry(
                     client,
                     normalizedUrl,
@@ -360,24 +399,49 @@ class IptvRepository(
                             fetch.lastModified
                         )
                         importedFresh = true
+                        GuideImportOutcome.Imported(fetch.value.keptPrograms)
                     }
 
                     IptvHttpClient.XmltvFetch.NotModified -> {
-                        if (dao.hasChannelsForSource(normalizedUrl)) {
+                        // Whether this 304 can be HONORED is not "does the
+                        // database have the source's channels" - that was the
+                        // bug: programs age out of the stored window while the
+                        // provider's file sits unchanged, so the channels
+                        // survived, the schedule did not, and every refresh
+                        // (manual presses included) was honored into a two
+                        // second no-op with the guide empty and no visible
+                        // cause. The window read here is the one the screens
+                        // query with.
+                        val nowMs = System.currentTimeMillis()
+                        val channels = dao.countChannelsForSource(normalizedUrl)
+                        val programsInWindow = dao.countProgramsForSourceInWindow(
+                            normalizedUrl,
+                            nowMs - EpgWindow.READ_PAST_MS,
+                            nowMs + EpgWindow.READ_FUTURE_MS
+                        )
+                        if (honorNotModified(channels, programsInWindow)) {
                             // The guide is current: count it as used, or the idle
                             // sweep deletes it for not having been WRITTEN in a
                             // fortnight (a 304 writes nothing).
                             GuideStorage.touchActive(appContext)
                             Log.d(
                                 TAG,
-                                "GUIDE NOT MODIFIED source=${Redaction.url(normalizedUrl)}"
+                                "GUIDE NOT MODIFIED source=${Redaction.url(normalizedUrl)} " +
+                                    "channels=$channels programsInWindow=$programsInWindow"
                             )
+                            GuideImportOutcome.Unchanged(channels, programsInWindow)
                         } else {
-                            // A 304 the database cannot satisfy: the rows this
-                            // validator was minted against are gone (a recreated
-                            // profile DB, a prune), so honoring it would leave
-                            // the guide empty. Drop the stale validators and
-                            // fetch the whole file once.
+                            // A 304 the database cannot satisfy: no channels at
+                            // all (a recreated profile DB, a prune) or channels
+                            // with nothing in the window the guide reads. Drop
+                            // the stale validators and fetch the whole file
+                            // once.
+                            Log.w(
+                                TAG,
+                                "GUIDE NOT MODIFIED but unusable " +
+                                    "(channels=$channels programsInWindow=$programsInWindow) " +
+                                    "source=${Redaction.url(normalizedUrl)}; refetching in full"
+                            )
                             GuideCacheHeaders.clear(appContext, normalizedUrl)
                             val fresh = IptvHttpClient.streamXmltvWithRetry(
                                 client,
@@ -393,6 +457,13 @@ class IptvRepository(
                                     fresh.lastModified
                                 )
                                 importedFresh = true
+                                GuideImportOutcome.Imported(fresh.value.keptPrograms)
+                            } else {
+                                // A server that answers 304 to an UNCONDITIONAL
+                                // request leaves us exactly where we started.
+                                // Said out loud rather than thrown: nothing
+                                // failed, and the counts are what was just read.
+                                GuideImportOutcome.Unchanged(channels, programsInWindow)
                             }
                         }
                     }
@@ -400,7 +471,7 @@ class IptvRepository(
             }
 
             waiter.complete(result)
-            result.getOrThrow()
+            val outcome = result.getOrThrow()
             if (importedFresh) {
                 // Bumped BEFORE the local invalidation: this is what tells every
                 // other live instance (the guide screen's ViewModel) that the
@@ -408,6 +479,7 @@ class IptvRepository(
                 GuideRevision.bump(normalizedUrl)
                 invalidateGuideSnapshot(normalizedUrl)
             }
+            outcome
         } finally {
             importRequestMutex.withLock {
                 activeGuideImports.remove(requestKey, waiter)
@@ -415,6 +487,37 @@ class IptvRepository(
             }
 
             Log.d(TAG, "GUIDE IMPORT END source=${Redaction.url(normalizedUrl)}")
+        }
+    }
+
+    /**
+     * What each configured guide source actually HOLDS, for diagnostics.
+     *
+     * The field case this exists for took three rounds of guessing: the guide
+     * read "No program data" everywhere, the file was 32 MB and recently
+     * written, and nothing in the report could tell "channels, no programs"
+     * from a healthy guide or from a source whose validators were suppressing
+     * the import. Per source: the channels, the programs inside the window the
+     * guide reads, and whether a conditional fetch would be sent at all.
+     *
+     * Read through [GuideFiles.guideUrls] so the rows are the sources this
+     * profile is configured with, including one that has never landed (all
+     * three figures then read "nothing").
+     */
+    suspend fun guideStateRows(): List<GuideSourceState> = withContext(Dispatchers.IO) {
+        val nowMs = System.currentTimeMillis()
+        GuideFiles.guideUrls(appContext).map { url ->
+            val normalizedUrl = url.trim()
+            GuideSourceState(
+                url = normalizedUrl,
+                channels = dao.countChannelsForSource(normalizedUrl),
+                programsInWindow = dao.countProgramsForSourceInWindow(
+                    normalizedUrl,
+                    nowMs - EpgWindow.READ_PAST_MS,
+                    nowMs + EpgWindow.READ_FUTURE_MS
+                ),
+                hasValidators = GuideCacheHeaders.get(appContext, normalizedUrl) != null
+            )
         }
     }
 
@@ -1400,7 +1503,7 @@ class IptvRepository(
 
         private val importRequestMutex = Mutex()
         private val activeGuideImports =
-            ConcurrentHashMap<String, CompletableDeferred<Result<Unit>>>()
+            ConcurrentHashMap<String, CompletableDeferred<Result<GuideImportOutcome>>>()
 
         /**
          * The Job of whoever OWNS each active import, keyed like

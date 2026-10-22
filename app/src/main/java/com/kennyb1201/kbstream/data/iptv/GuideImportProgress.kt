@@ -6,6 +6,36 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
+ * How an import ENDED - the class a finished pass reports, because "back to
+ * zero" is not an outcome.
+ *
+ * The field report behind this: every refresh and every manual press ended as a
+ * silent return to "0 programs" whether the guide had been re-downloaded, the
+ * server had answered `304 Not Modified` (and been honored for a guide with no
+ * programs at all), or the download had failed. These three are the answers the
+ * viewer and the support capture actually need.
+ */
+sealed interface GuideImportOutcome {
+    /** A body was parsed and promoted; [programs] is what the guide now holds. */
+    data class Imported(val programs: Int) : GuideImportOutcome
+
+    /**
+     * The server said `304 Not Modified` and the stored guide could satisfy it.
+     *
+     * [channels] and [programsInWindow] are the counts that satisfied it - the
+     * evidence that "unchanged" is the right answer rather than a stale
+     * validator hiding an empty guide.
+     */
+    data class Unchanged(
+        val channels: Int,
+        val programsInWindow: Int
+    ) : GuideImportOutcome
+
+    /** Nothing landed; [message] names the class (an HTTP code when there is one). */
+    data class Failed(val message: String) : GuideImportOutcome
+}
+
+/**
  * The phase of a guide import, as far as anyone outside it can tell.
  *
  * Only two, because they are the two a viewer can tell apart: the long
@@ -30,7 +60,12 @@ data class GuideImportState(
     val bytesRead: Long = 0L,
     val rowsParsed: Int = 0,
     val phase: GuideImportPhase = GuideImportPhase.READING,
-    val startedAtMs: Long = 0L
+    val startedAtMs: Long = 0L,
+    /**
+     * Null while the pass is running; set on the terminal state published by
+     * [GuideImportProgress.finish] so the status line can state what happened.
+     */
+    val outcome: GuideImportOutcome? = null
 )
 
 /**
@@ -129,9 +164,17 @@ object GuideImportProgress {
         update { state -> state.copy(phase = phase) }
     }
 
-    /** Closes the pass. A finished import shows nothing at all. */
-    fun finish() {
-        _state.value = null
+    /**
+     * Closes the pass, reporting [outcome] when the caller has one.
+     *
+     * With no outcome this CLEARS the line, which is what the background worker
+     * wants (it publishes nothing at all). A pass the viewer started reports its
+     * class instead: a download that completed must not read as a silent return
+     * to zero, and a `304` the store could satisfy must say so - it is the
+     * outcome most easily mistaken for "nothing happened".
+     */
+    fun finish(outcome: GuideImportOutcome? = null) {
+        _state.value = outcome?.let { GuideImportState(outcome = it) }
     }
 
     private fun update(block: (GuideImportState) -> GuideImportState) {
@@ -156,6 +199,7 @@ object GuideImportProgress {
         nowMs: Long
     ): String {
         if (state == null) return ""
+        state.outcome?.let { return outcomeLabel(it) }
         return buildList {
             if (state.sourceCount > 1) {
                 add("source ${state.sourceIndex}/${state.sourceCount}")
@@ -168,6 +212,24 @@ object GuideImportProgress {
             }
             add(elapsed(state.startedAtMs, nowMs))
         }.joinToString(" · ")
+    }
+
+    /**
+     * The finished pass in the viewer's words.
+     *
+     * "programs", not "programmes": the guide screen says "No program data" and
+     * the button says IMPORT EPG, so the status line says programs too. Only the
+     * importer's own log spells it the XMLTV way.
+     */
+    internal fun outcomeLabel(outcome: GuideImportOutcome): String = when (outcome) {
+        is GuideImportOutcome.Imported ->
+            "Imported ${grouped(outcome.programs)} programs"
+
+        is GuideImportOutcome.Unchanged ->
+            "Guide unchanged on server (${grouped(outcome.channels)} channels · " +
+                "${grouped(outcome.programsInWindow)} programs)"
+
+        is GuideImportOutcome.Failed -> outcome.message
     }
 
     /** One decimal place, so 0.4 MB is visibly moving while a guide arrives. */

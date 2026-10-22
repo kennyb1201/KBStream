@@ -61,6 +61,10 @@ internal object GuideFiles {
     private const val KEY_PLAYLIST = "playlist_url"
     private const val KEY_EXTRA_PLAYLISTS = "extra_playlist_urls"
 
+    // The two guide-source keys, spelled exactly as IptvViewModel writes them.
+    private const val KEY_EPG_URL = "epg_url"
+    private const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
+
     /** The unreachable pre-profile name, for a device with no profile yet. */
     private const val NO_PROFILE = GuideStorage.LEGACY_DB_NAME
 
@@ -103,26 +107,59 @@ internal object GuideFiles {
 
     /** The playlist URLs a profile is configured with, in the order it wrote them. */
     fun playlistUrls(context: Context, profileId: String?): List<String> {
-
-        // The active profile's store is resolved through the context (the
-        // legacy un-prefixed name when no profile exists yet); any other
-        // profile's is named after it directly, which is how a profile-scoped
-        // store is read without switching profiles.
-        val name =
-            when {
-                profileId == null -> ProfileStorage.prefsName(context, PREFS)
-                profileId == ProfileStorage.activeProfileId(context) ->
-                    ProfileStorage.prefsName(context, PREFS)
-                else -> ProfileStorage.prefsName(profileId, PREFS)
-            }
-
-        val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
-
+        val prefs = prefsFor(context, profileId)
         return playlistUrlsOf(
             playlistUrl = prefs.getString(KEY_PLAYLIST, ""),
             extraPlaylistUrls = prefs.getString(KEY_EXTRA_PLAYLISTS, "")
         )
     }
+
+    /**
+     * The GUIDE sources a profile is configured with, in import order.
+     *
+     * The same pair `IptvViewModel.allEpgUrls()` assembles and `EpgRefreshWorker`
+     * re-reads for a background pass: primary first, then the extras textarea
+     * (one per line, or `;`-separated), trimmed, blanks dropped, duplicates
+     * collapsed. It lives here because diagnostics need it from OUTSIDE the
+     * ViewModel, next to the store name both already share - and because a
+     * third spelling of the split is how the extras textarea came to be read
+     * differently by the worker once already.
+     */
+    fun guideUrls(context: Context, profileId: String? = null): List<String> {
+        val prefs = prefsFor(context, profileId)
+        return buildList {
+            prefs.getString(KEY_EPG_URL, "")
+                .orEmpty()
+                .trim()
+                .takeIf(String::isNotEmpty)
+                ?.let(::add)
+            addAll(
+                prefs.getString(KEY_EXTRA_EPG_URLS, "")
+                    .orEmpty()
+                    .split('\n', ';')
+                    .mapNotNull { entry -> entry.trim().takeIf(String::isNotEmpty) }
+            )
+        }.distinct()
+    }
+
+    /**
+     * The `iptv_prefs` store of [profileId] - the ACTIVE profile when null.
+     *
+     * The active profile's store is resolved through the context (the legacy
+     * un-prefixed name when no profile exists yet); any other profile's is named
+     * after it directly, which is how a profile-scoped store is read without
+     * switching profiles.
+     */
+    private fun prefsFor(context: Context, profileId: String?) =
+        context.getSharedPreferences(
+            when {
+                profileId == null -> ProfileStorage.prefsName(context, PREFS)
+                profileId == ProfileStorage.activeProfileId(context) ->
+                    ProfileStorage.prefsName(context, PREFS)
+                else -> ProfileStorage.prefsName(profileId, PREFS)
+            },
+            Context.MODE_PRIVATE
+        )
 }
 
 /**

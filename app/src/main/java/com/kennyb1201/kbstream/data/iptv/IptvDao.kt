@@ -167,6 +167,34 @@ interface IptvDao {
     )
     suspend fun hasChannelsForSource(sourceUrl: String): Boolean
 
+    /** How many channels [sourceUrl]'s guide holds (0 when it has never landed). */
+    @Query(
+        "SELECT COUNT(*) FROM epg_channels " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)"
+    )
+    suspend fun countChannelsForSource(sourceUrl: String): Int
+
+    /**
+     * How many of [sourceUrl]'s programs OVERLAP the window
+     * [windowStartMs]..[windowEndMs] - the same now-anchored window the guide
+     * screens query with.
+     *
+     * Counted rather than "any": this is the figure diagnostics print, and it is
+     * what separates "channels but no schedule" from a healthy guide. Overlap
+     * (`start < end AND end > start`), not containment, because that is how the
+     * read queries select the rows they draw.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM epg_programs " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl) " +
+            "AND startUtcMillis < :windowEndMs AND endUtcMillis > :windowStartMs"
+    )
+    suspend fun countProgramsForSourceInWindow(
+        sourceUrl: String,
+        windowStartMs: Long,
+        windowEndMs: Long
+    ): Int
+
     @Query(
         "UPDATE epg_channels " +
             "SET sourceId = (SELECT id FROM epg_sources WHERE url = :newUrl) " +

@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
 import com.kennyb1201.kbstream.data.iptv.EpgStalledException
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
+import com.kennyb1201.kbstream.data.iptv.GuideImportOutcome
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.epgEntryImportCoolingDown
 import com.kennyb1201.kbstream.data.iptv.GuideImportState
@@ -940,7 +941,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // Always forces the attempt: this is the button the viewer presses
         // BECAUSE the last one wedged, so it ignores the stall cooldown and
         // cancels whatever pass is running, whichever path started it.
-        launchGuideImport()
+        //
+        // And it forces a FRESH fetch (see launchGuideImport): a recovery press
+        // that goes out with the stored validators gets the same `304` the
+        // automatic refresh already got, which is the two-second no-op the
+        // field report came from.
+        launchGuideImport(forceFresh = true)
     }
 
     /**
@@ -953,12 +959,15 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * go, so a replacement that started first would join an import that is
      * already dead and inherit its cancellation.
      */
-    private fun launchGuideImport() {
+    private fun launchGuideImport(forceFresh: Boolean = false) {
         val previous = guideImportJob
         previous?.cancel()
         guideImportJob = viewModelScope.launch {
             previous?.join()
-            importGuideInternal(allEpgUrls().firstOrNull().orEmpty())
+            importGuideInternal(
+                epgUrl = allEpgUrls().firstOrNull().orEmpty(),
+                forceFresh = forceFresh
+            )
         }
     }
 
@@ -984,9 +993,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private suspend fun importGuideSource(
         url: String,
-        freshConnection: Boolean = false
-    ) {
-        withDatabaseSwapRetry(
+        freshConnection: Boolean = false,
+        forceFresh: Boolean = false
+    ): GuideImportOutcome {
+        return withDatabaseSwapRetry(
             attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
             onRetry = { attempt, error ->
                 Log.w(
@@ -1000,7 +1010,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             // A first attempt shares whatever import is already running for
             // this URL (the worker's); the watchdog's retry must not, because
             // the attempt it replaces is the one it just aborted.
-            repository.importGuide(url, joinActiveImport = !freshConnection)
+            repository.importGuide(
+                epgUrl = url,
+                joinActiveImport = !freshConnection,
+                forceFresh = forceFresh
+            )
         }
     }
 
@@ -1114,15 +1128,24 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private suspend fun importGuideInternal(epgUrl: String) {
+    private suspend fun importGuideInternal(
+        epgUrl: String,
+        forceFresh: Boolean = false
+    ) {
         if (epgUrl.isBlank()) return
         _isImportingGuide.value = true
         _guideError.value = null
         val urls = allEpgUrls()
         GuideImportProgress.begin(sourceCount = urls.size)
+        // What this pass will say when it ends (see GuideImportProgress.finish):
+        // "Imported N programs", "Guide unchanged on server" or the failure.
+        // Null means the pass never got a usable answer to report, and the
+        // status line clears exactly as before.
+        var outcome: GuideImportOutcome? = null
         try {
             var lastError: Throwable? = null
             var imported = 0
+            val outcomes = mutableListOf<GuideImportOutcome>()
             for (url in urls) {
                 GuideImportProgress.startSource(imported + 1)
                 try {
@@ -1134,8 +1157,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // behind someone else's import" from "reading": a queued
                     // source publishes nothing, and its clock must not run
                     // while it waits.
-                    epgImportWatchdog.runWithStallRetry(url) { attempt ->
-                        importGuideSource(url, freshConnection = attempt > 0)
+                    outcomes += epgImportWatchdog.runWithStallRetry(url) { attempt ->
+                        importGuideSource(
+                            url = url,
+                            freshConnection = attempt > 0,
+                            // The button's whole point survives the watchdog's
+                            // retry: a retried recovery press is still a press.
+                            forceFresh = forceFresh
+                        )
                     }
                     imported++
                 } catch (t: Throwable) {
@@ -1161,6 +1190,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     lastError,
                     prefix = "Some EPG sources failed: "
                 )
+                outcome = GuideImportOutcome.Failed(guideFailureLabel(lastError))
+            } else {
+                outcome = mergeOutcomes(outcomes)
             }
             // The freshness marker is stamped only when EVERY source imported.
             // It was unconditional ("at least one made it"), so one source
@@ -1197,10 +1229,50 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             reportFailure(_guideError, t)
+            outcome = GuideImportOutcome.Failed(guideFailureLabel(t))
             Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
             _isImportingGuide.value = false
-            GuideImportProgress.finish()
+            GuideImportProgress.finish(outcome)
+        }
+    }
+
+    /**
+     * N sources' outcomes as the one line the status shows.
+     *
+     * A pass is one action to the viewer, so anything that actually imported
+     * wins (with the total it stored); a pass where every source answered
+     * `304` reports that instead, with the counts that satisfied them.
+     */
+    private fun mergeOutcomes(outcomes: List<GuideImportOutcome>): GuideImportOutcome? {
+        val imported = outcomes.filterIsInstance<GuideImportOutcome.Imported>()
+        if (imported.isNotEmpty()) {
+            return GuideImportOutcome.Imported(imported.sumOf { it.programs })
+        }
+        val unchanged = outcomes.filterIsInstance<GuideImportOutcome.Unchanged>()
+        if (unchanged.isEmpty()) return null
+        return GuideImportOutcome.Unchanged(
+            channels = unchanged.sumOf { it.channels },
+            programsInWindow = unchanged.sumOf { it.programsInWindow }
+        )
+    }
+
+    /**
+     * The failure in the viewer's words.
+     *
+     * The HTTP code when there is one - `Guide download failed: HTTP 404` is
+     * the field case that started this (a provider answering 404 for any URL
+     * but the exact signed one), and it is the only part of the provider's
+     * answer the viewer can act on. Anything else keeps the message, so a stall
+     * or a parse failure still reads as itself rather than as "failed".
+     */
+    private fun guideFailureLabel(error: Throwable): String {
+        val message = error.message.orEmpty()
+        val httpCode = Regex("HTTP (\\d{3})").find(message)?.value
+        return when {
+            httpCode != null -> "Guide download failed: $httpCode"
+            message.isNotBlank() -> "Guide download failed: " + message.take(120)
+            else -> "Guide download failed: " + error.javaClass.simpleName
         }
     }
 
