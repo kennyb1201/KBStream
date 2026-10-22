@@ -96,6 +96,13 @@ import com.kennyb1201.kbstream.ui.theme.OswaldFamily
 fun StreamsScreenMobile(
     title: String,
     displayName: String,
+    /**
+     * The target on screen - the route's own contentType/streamId. REFRESH re-asks
+     * for THIS title instead of replaying one remembered in the ViewModel (see
+     * StreamsViewModel.refresh).
+     */
+    contentType: String,
+    streamId: String,
     season: Int?,
     episode: Int?,
     runtimeMinutes: Int?,
@@ -273,7 +280,7 @@ fun StreamsScreenMobile(
                         label = if (refreshed && isLoading) "REFRESHING…" else "REFRESH",
                         onClick = {
                             refreshed = true
-                            viewModel.refresh()
+                            viewModel.refresh(contentType, streamId, runtimeMinutes)
                         }
                     )
                     if (addonGroups.size > 1) {

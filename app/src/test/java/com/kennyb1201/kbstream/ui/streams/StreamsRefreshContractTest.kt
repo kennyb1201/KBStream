@@ -65,8 +65,10 @@ class StreamsRefreshContractTest {
             call.contains("refreshing = refreshed && isLoading,")
         )
         assertTrue(
-            "and the press re-asks for sources rather than only clearing a flag",
-            call.contains("refreshed = true") && call.contains("viewModel.refresh()")
+            "and the press re-asks for sources rather than only clearing a flag - for the " +
+                "target this picker is displaying, not one remembered elsewhere",
+            call.contains("refreshed = true") &&
+                call.contains("viewModel.refresh(contentType, streamId, runtimeMinutes)")
         )
     }
 
@@ -144,16 +146,17 @@ class StreamsRefreshContractTest {
     }
 
     @Test
-    fun `refresh re-asks the ViewModel for the target it last loaded`() {
+    fun `refresh re-asks for the target the picker is showing`() {
+        val refresh = slice(viewModel, "fun refresh(contentType", "private fun noteRequest(")
         assertTrue(
-            "the request is remembered when it is made",
-            viewModel.contains("lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)")
+            "the target is the caller's, so a picker can only refresh its OWN title",
+            viewModel.contains("fun refresh(contentType: String, streamId: String, runtimeMinutes: Int? = null)")
         )
-        val refresh = body(viewModel, "fun refresh()")
         assertTrue(
-            "and the button re-runs it rather than reading a cache",
-            refresh.contains("val request = lastRequest ?: return") &&
-                refresh.contains("load(request.contentType, request.streamId, request.runtimeMinutes)")
+            "and the button re-runs that request rather than reading a cache - or a target " +
+                "the ViewModel remembered",
+            refresh.contains("load(contentType, streamId, runtimeMinutes)") &&
+                !refresh.contains("lastRequest")
         )
         assertTrue(
             "a second load supersedes the first, so a repeated press cannot interleave two " +

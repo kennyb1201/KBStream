@@ -161,13 +161,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     val loadedKey: StateFlow<String?> = _loadedKey.asStateFlow()
 
     /**
-     * The request [load] was last given, so [refresh] can ask for the same
-     * target again.
+     * The request this ViewModel last served - stamped by BOTH publish paths
+     * ([load] and [resolve]) through [noteRequest], so it cannot disagree with
+     * [_loadedKey].
      *
-     * Kept here rather than handed back in by the route: the picker's refresh
-     * button has no target of its own - it re-runs the fetch this ViewModel
-     * already knows how to make - and the navigation's target is the
-     * navigation's business.
+     * Reported: a title whose sources arrived through the autoplay resolver left
+     * this pointing at whatever title a picker load had served last, and
+     * `refresh()` replayed exactly that - the previous title's sources, from the
+     * previous profile. Neither record drives a fetch any more (the pickers hand
+     * [refresh] the route target they are displaying), but the pair stays honest
+     * because a second identity record that can lie is how the bug started.
      */
     private var lastRequest: StreamsRequest? = null
 
@@ -218,8 +221,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // per-add-on callback, the list could end up showing a mix of the two
         // requests' sources.
         loadJob?.cancel()
-        lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)
+        noteRequest(contentType, streamId, runtimeMinutes)
         val generation = ++stateGeneration
+        // The fetch's own ticket, handed in rather than created inside [fetch], so
+        // [resolve] can check the one its publish belongs to.
+        val ticket = ++fetchGeneration
         loadJob = viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
@@ -232,9 +238,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             // Streams appear as each addon answers; the final ranked/badged
             // list replaces the raw accumulation when every addon finished.
             val resolved = fetch(
-                contentType,
-                streamId,
-                debugLines,
+                ticket = ticket,
+                contentType = contentType,
+                streamId = streamId,
+                debugLines = debugLines,
                 onAddonResult = { incoming ->
                     if (generation == stateGeneration) {
                         _streams.value = _streams.value + incoming
@@ -256,20 +263,62 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Re-asks for the target [load] last resolved - the streams screen's
+     * Re-asks for the target the picker is DISPLAYING - the streams screen's
      * refresh button.
+     *
+     * The target is a parameter rather than replayed from [lastRequest]: a target
+     * the picker is showing is a fact about the route, and its own record is what
+     * let a refresh answer another title's sources (see [lastRequest]). Passing it
+     * in makes a wrong replay impossible by construction instead of depending on
+     * two books kept in step.
      *
      * A fresh request, not a cache read: the picker is open BECAUSE the viewer
      * wants sources, and a provider that answered thin - or that did not answer
      * in time - a moment ago is exactly what they are pressing for. Sources
      * appear per add-on as they arrive, the same as the first load.
-     *
-     * A no-op only when nothing has been loaded yet, which is a state the
-     * button cannot be drawn in.
      */
-    fun refresh() {
-        val request = lastRequest ?: return
-        load(request.contentType, request.streamId, request.runtimeMinutes)
+    fun refresh(contentType: String, streamId: String, runtimeMinutes: Int? = null) {
+        load(contentType, streamId, runtimeMinutes)
+    }
+
+    /**
+     * Records the target a publish is about to serve.
+     *
+     * Called by [load] and [resolve] alike, BEFORE they fetch: every path that
+     * publishes picker state stamps both identity slots ([_loadedKey] at the
+     * publish, this one here), so the two cannot split again.
+     */
+    private fun noteRequest(contentType: String, streamId: String, runtimeMinutes: Int?) {
+        lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)
+    }
+
+    /**
+     * Drops the picker's state because the active PROFILE changed.
+     *
+     * This ViewModel is activity-scoped and shared by the TV and phone pickers,
+     * and nothing reset it on a profile switch, so a picker's target, sources and
+     * request crossed the profile boundary - the reported case had a refresh on
+     * profile 2's title answer with profile 1's streams. Hooked where the
+     * ViewModel is owned (MainActivity), keyed on the profile ID so a sync update
+     * to the same profile's object does not wipe a live picker.
+     *
+     * Both tickets are bumped, not just the state one: an in-flight [load] is
+     * cancelled, but a [resolve] that is still collecting add-ons publishes
+     * unconditionally at its end and would re-stamp the cleared state with the
+     * pre-switch title - it checks [fetchGeneration] for exactly this.
+     */
+    fun resetForProfileChange() {
+        loadJob?.cancel()
+        loadJob = null
+        stateGeneration++
+        fetchGeneration++
+        _streams.value = emptyList()
+        _addonGroups.value = emptyList()
+        _sourceAddons.value = emptyList()
+        _debug.value = emptyList()
+        _loadedKey.value = null
+        lastRequest = null
+        _isLoading.value = true
     }
 
     // Resolve sources for a target in the background (autoselect flow) and
@@ -282,11 +331,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         runtimeMinutes: Int? = null
     ): ResolvedSources {
         val generation = ++stateGeneration
+        val ticket = ++fetchGeneration
+        // A resolve publishes the SAME state a load does, so it stamps the same
+        // identity records a load does. It used to publish without recording its
+        // request, which is how the two records split.
+        noteRequest(contentType, streamId, runtimeMinutes)
         val debugLines = mutableListOf<String>()
         val resolved = fetch(
-            contentType,
-            streamId,
-            debugLines,
+            ticket = ticket,
+            contentType = contentType,
+            streamId = streamId,
+            debugLines = debugLines,
             runtimeMinutes = runtimeMinutes,
             // The press-of-Play path: this resolve is on the critical path to
             // the first frame, so it stops collecting a short grace after the
@@ -296,8 +351,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         // The result still goes back to the caller - auto-play needs it - but
         // it only becomes the picker's state if this resolve is still the most
-        // recent request. A picker load that started meanwhile owns the state.
-        if (generation == stateGeneration) {
+        // recent request. A picker load that started meanwhile owns the state,
+        // and a profile switch has dropped it entirely ([resetForProfileChange]
+        // bumps both tickets for this check).
+        if (generation == stateGeneration && ticket == fetchGeneration) {
             _debug.value = debugLines
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
@@ -312,6 +369,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * bounds the whole wait: they all start together.
      */
     private suspend fun fetch(
+        ticket: Int,
         contentType: String,
         streamId: String,
         debugLines: MutableList<String>,
@@ -319,7 +377,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         runtimeMinutes: Int? = null,
         firstResultGraceMs: Long? = null
     ): ResolvedSources {
-        val generation = ++fetchGeneration
+        val generation = ticket
         // A new target's groups replace the last one's as soon as this fetch
         // starts, so a background resolve cannot leave stale tabs behind.
         _addonGroups.value = emptyList()

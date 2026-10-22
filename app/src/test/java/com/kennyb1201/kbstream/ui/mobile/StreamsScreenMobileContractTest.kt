@@ -115,7 +115,7 @@ class StreamsScreenMobileContractTest {
             "viewModel.isLoading",
             "viewModel.loadedKey",
             "viewModel.addonGroups",
-            "viewModel.refresh()"
+            "viewModel.refresh(contentType, streamId, runtimeMinutes)"
         ).forEach { read ->
             assertTrue("mobile Streams must read $read", mobile.contains(read))
         }
@@ -148,8 +148,9 @@ class StreamsScreenMobileContractTest {
             mobile.contains("PlayerEngine.clearLaunchAnime()")
         )
         assertTrue(
-            "a viewer refresh must re-ask for the same target",
-            mobile.contains("viewModel.refresh()")
+            "a viewer refresh must re-ask for the target on screen - the route's own " +
+                "contentType/streamId, never one the ViewModel remembered",
+            mobile.contains("viewModel.refresh(contentType, streamId, runtimeMinutes)")
         )
         assertFalse(
             "REFRESH must stay pressable while a fetch is in flight - a hanging " +

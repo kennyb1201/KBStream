@@ -183,6 +183,9 @@ import androidx.compose.animation.togetherWith
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Screen-level log tag for this activity (startup lines use TAG_STARTUP). */
@@ -1364,6 +1367,23 @@ fun AppRoot(
     // Every consumer calls getInstance itself, and the repository now builds its
     // reflection-heavy half on IO (see TmdbRepository.warmUpReflectionStack).
     val streamsViewModel: StreamsViewModel = viewModel()
+    // The picker's state must not survive a profile switch. The ViewModel is
+    // activity-scoped and shared by both pickers, so profile 1's target, sources
+    // and remembered request were still there for profile 2 - which is how a
+    // REFRESH on one profile's title answered with another profile's streams.
+    //
+    // Keyed on the ID, not the profile object: sync re-emits the active profile
+    // with the same id on every remote update, and that must not wipe a picker
+    // the viewer is looking at. The first emission is the session's own profile,
+    // not a switch, so it is dropped - otherwise a configuration change (this
+    // activity recomposed, the ViewModel surviving) would refetch for nothing.
+    LaunchedEffect(streamsViewModel) {
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+            .map { it?.id }
+            .distinctUntilChanged()
+            .drop(1)
+            .collect { streamsViewModel.resetForProfileChange() }
+    }
 
     // Activity-scoped search state, referenced by the BackHandler so exiting
     // Search commits the query to history and clears the session.
@@ -2867,6 +2887,10 @@ fun AppRoot(
             StreamsScreen(
                 title = current.target.title,
                 displayName = current.target.displayName,
+                // REFRESH re-asks for the title on screen from these, rather
+                // than replaying a target the ViewModel remembered.
+                contentType = current.target.contentType,
+                streamId = current.target.streamId,
                 season = current.target.season,
                 episode = current.target.episode,
                 runtimeMinutes = current.target.runtimeMinutes,

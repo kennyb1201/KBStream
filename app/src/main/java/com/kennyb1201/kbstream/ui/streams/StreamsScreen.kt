@@ -92,6 +92,13 @@ private const val ALL_ADDONS_TAB = -1
 fun StreamsScreen(
     title: String,
     displayName: String,
+    /**
+     * The target this picker is showing, both halves of it as the request spells
+     * them. Carried so REFRESH re-asks for THIS title rather than replaying a
+     * target remembered somewhere else (see StreamsViewModel.refresh).
+     */
+    contentType: String,
+    streamId: String,
     season: Int?,
     episode: Int?,
     runtimeMinutes: Int? = null,
@@ -119,6 +126,8 @@ fun StreamsScreen(
         StreamsScreenMobile(
             title = title,
             displayName = displayName,
+            contentType = contentType,
+            streamId = streamId,
             season = season,
             episode = episode,
             runtimeMinutes = runtimeMinutes,
@@ -458,7 +467,7 @@ fun StreamsScreen(
                 refreshing = refreshed && isLoading,
                 onRefresh = {
                     refreshed = true
-                    viewModel.refresh()
+                    viewModel.refresh(contentType, streamId, runtimeMinutes)
                 },
                 onSelect = { selectedAddonTab = it },
                 // The entry-focus fallback: with no source to land on, this is
