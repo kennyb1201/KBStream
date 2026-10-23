@@ -507,9 +507,18 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * TorBox cloud → Library rounds. Armed only when the toggle is on and a
      * TorBox key is set (see the worker), so an unrelated device never wakes
      * for it.
+     *
+     * A round is queued here as well as the periodic one, because
+     * [com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore]'s own record says
+     * the sync runs "on a schedule and on every app launch" and only the
+     * schedule was ever armed: a viewer who turned the switch on and reopened
+     * the app still waited out a window before anything reached the Library.
+     * The round is cheap once caught up (only torrents new since the last one
+     * cost a TMDB lookup), and the worker's own gate skips it entirely when the
+     * switch is off or the key is blank.
      */
     private fun scheduleTorBoxLibrarySync() {
-        TorBoxLibraryWorker.syncScheduleForPrefs(this)
+        TorBoxLibraryWorker.syncScheduleForPrefs(this, runImmediate = true)
     }
 
     private fun scheduleAddonManifestRefresh() {

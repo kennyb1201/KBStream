@@ -92,6 +92,12 @@ object Diagnostics {
         // list is the head: the two rules that outrank every quality label
         // (playability, availability) are invisible in the picker itself.
         StreamRankReport.lines().forEach { report.appendLine(it) }
+        // What the TorBox key last did: how many sources carried an infohash,
+        // how many TorBox answered for, and how many of those it holds. Both
+        // TorBox features fail soft (no chip, no library rows, no message), so
+        // this line is the only place a capture can tell "no source had a
+        // hash" from "the key was rejected" (see TorBoxTrace).
+        TorBoxTrace.lines().forEach { report.appendLine("torbox: $it") }
         // The launch breakdown, printed explicitly: it is the one set of samples
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }

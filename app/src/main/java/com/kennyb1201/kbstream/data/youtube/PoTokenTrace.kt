@@ -51,6 +51,19 @@ object PoTokenTrace {
     private var eventLine: String? = null
 
     /**
+     * The one line a trailer boundary death leaves behind (see
+     * [recordTrailerDeath]). Null on a session no trailer died in, so an
+     * ordinary capture stays exactly as short as it was.
+     */
+    private var deathLine: String? = null
+
+    /** The signing client of the last resolve, for the resume path. */
+    private var lastResolveClient: String? = null
+
+    /** The source shape the last resolve returned: hls | adaptive | progressive. */
+    private var lastResolveKind: String? = null
+
+    /**
      * Records the last state of one context.
      *
      * [state] is [PoTokenState]'s vocabulary (`none | minted | cached |
@@ -113,12 +126,61 @@ object PoTokenTrace {
         videoId: String,
         playerToken: Boolean,
         pot: Boolean,
-        client: String? = null
+        client: String? = null,
+        /** The shape the resolve returned: `hls`, `adaptive` or `progressive`. */
+        kind: String? = null
     ) {
+        lastResolveClient = client?.takeIf { it.isNotBlank() }
+        lastResolveKind = kind?.takeIf { it.isNotBlank() }
         resolveLine = buildString {
             append("pot.resolve: video=$videoId playerToken=$playerToken pot=$pot")
             if (!client.isNullOrBlank()) append(" client=$client")
+            if (!kind.isNullOrBlank()) append(" kind=$kind")
         }
+    }
+
+    /**
+     * The client that signed the most recent resolve's URLs, or null.
+     *
+     * Read by a trailer that died at its first chunk boundary: the resume has
+     * to exclude the client whose URL class refused every offset read, and this
+     * is the only record of which one that was.
+     */
+    @Synchronized
+    fun resolveClient(): String? = lastResolveClient
+
+    /** The most recent resolve's source shape (`hls`/`adaptive`/`progressive`). */
+    @Synchronized
+    fun resolveKind(): String? = lastResolveKind
+
+    /**
+     * Records a trailer that died mid-play.
+     *
+     * The field case this exists for (2026-10-22: every trailer, every device,
+     * at the first boundary past the initially-probed bytes) left NO line
+     * anywhere in the report: the death is a soft one, the identity classifier
+     * fires, and the session ends without a card. One capture had to be able to
+     * say which client's URL class died, how far it got, and whether the
+     * re-resolve with a different client recovered it.
+     *
+     * [resume] is the report's own vocabulary:
+     * `none`, `client <key> ok`, `client <key> died`, or a short reason the
+     * replacement could not be had. Never a URL and never a token.
+     */
+    @Synchronized
+    fun recordTrailerDeath(
+        videoId: String,
+        client: String?,
+        kind: String?,
+        positionMs: Long,
+        durationMs: Long,
+        resume: String
+    ) {
+        val who = client?.takeIf { it.isNotBlank() } ?: "unknown"
+        val shape = kind?.takeIf { it.isNotBlank() } ?: "unknown"
+        val length = if (durationMs > 0L) durationMs.toString() else "?"
+        deathLine = "trailer.death: video=$videoId client=$who kind=$shape " +
+            "at=${positionMs.coerceAtLeast(0L)}/$length resume=$resume"
     }
 
     /**
@@ -153,6 +215,7 @@ object PoTokenTrace {
         resolveLine?.let { add(it) }
         add(warmLine ?: "pot.warm: state=$WARM_COLD")
         eventLine?.let { add(it) }
+        deathLine?.let { add(it) }
     }
 
     /** Test seam. */
@@ -162,5 +225,8 @@ object PoTokenTrace {
         resolveLine = null
         warmLine = null
         eventLine = null
+        deathLine = null
+        lastResolveClient = null
+        lastResolveKind = null
     }
 }

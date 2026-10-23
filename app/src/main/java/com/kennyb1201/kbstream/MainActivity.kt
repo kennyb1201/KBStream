@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.getValue
@@ -3572,37 +3571,24 @@ fun AppRoot(
     val pending = pendingAutoPlay
     val playerSplash = current as? Screen.Player
 
-    // The phone holds the playback orientation for exactly the lifetime of the
-    // pre-playback splash above.
+    // The pre-playback splash above is a screen of THIS window, so it keeps the
+    // browsing orientation: on a phone held upright that is portrait, and it is
+    // only sideways when the phone itself is (or when the app was opened in
+    // landscape).
     //
-    // This is the app's OWN window, not a player's: a phone's MainActivity
-    // follows the device, so held upright it is portrait and the splash used to
-    // come up vertical - only rotating when the player activity, which asks for
-    // landscape before its window exists, arrived on top and covered it. Source
-    // resolution takes seconds, so that was a visible flip mid-load.
+    // It used to hold SENSOR_LANDSCAPE for its lifetime so the splash matched
+    // the player about to cover it - and that is exactly what was reported from
+    // the field: a Play press on a phone threw the splash up sideways, art
+    // cropped for a landscape frame, only for it to come back upright when the
+    // hold was released. The player activity still asks for landscape before
+    // its own window exists, so the picture arrives sideways either way; the
+    // one rotation belongs at that hand-off, not over a loading screen.
     //
-    // Keyed on the splash's own visibility, so it is the SAME state change that
-    // paints the splash and no tap can strand a request: a successful hand-off
-    // (the player sets its own request, so the screen is already landscape and
-    // there is no portrait bounce), a back/cancel out of the splash, and a
-    // resolve that gives up all drop the hold the moment the splash goes. On TV
-    // both helpers return before touching the activity, so the TV flow is the
-    // one it has always been.
-    val splashShowing = detailAutoPlay != null || pending != null || playerSplash != null
-    // The activity this composition lives in, read once at the top of the shell
-    // (see [hostActivity]) rather than by casting the Context.
-    val splashActivity = hostActivity
-    DisposableEffect(splashActivity, splashShowing) {
-        if (splashActivity != null && splashShowing) {
-            FormFactor.applyPlaybackOrientation(splashActivity)
-        }
-        onDispose {
-            if (splashActivity != null && splashShowing) {
-                FormFactor.releasePlaybackOrientation(splashActivity)
-            }
-        }
-    }
-
+    // MainActivity declares orientation in its `configChanges`, so turning the
+    // phone while the splash is up (or while its resolve is in flight) follows
+    // the device without re-creating the activity and dropping the pending
+    // autoplay. On TV every one of these paths is the manifest's landscape lock
+    // and none of this runs.
     when {
         detailAutoPlay != null -> AutoPlayLoadSplash(
             // Detail's own resolved still first, the deep link's own (usually

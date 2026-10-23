@@ -142,6 +142,19 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         identityBlocked.contains(normalizeId(videoIdOrUrl))
 
     /**
+     * The client that signed the source this process last resolved for
+     * [videoIdOrUrl], or null when it is not known.
+     *
+     * Read at a trailer death, BEFORE the caller invalidates anything: the
+     * resume has to exclude exactly this client, and the cached entry it is
+     * recorded on is what makes the answer video-specific. The trace's last
+     * resolve is the fallback for a cache entry already gone (evicted, or a
+     * resolve from a previous launch that this one served from the cache).
+     */
+    fun signingClient(videoIdOrUrl: String): String? =
+        sourceCache[normalizeId(videoIdOrUrl)]?.client ?: PoTokenTrace.resolveClient()
+
+    /**
      * The stored form of a video key: the extracted id when one can be read, so
      * the hero (which passes a bare id) and the detail screen (which passes a
      * watch URL) agree on the entry.
@@ -155,6 +168,16 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
 
     private data class CachedSource(
         val source: PlayableSource,
+        /**
+         * The client whose response carried the winning source's URL(s), or
+         * null for the NewPipe/Piped fallback (which names no client).
+         *
+         * Kept beside the source because a trailer that dies at its first chunk
+         * boundary has to be re-resolved EXCLUDING this client: its URL class
+         * refuses every offset read, so re-signing with it only produces
+         * another URL that dies at the same place.
+         */
+        val client: String? = null,
         val cachedAt: Long = System.currentTimeMillis()
     ) {
         /**
@@ -209,7 +232,18 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
          * (network hiccup, transient extractor outage) must NOT poison the
          * real post-dwell resolve via the failure cache.
          */
-        recordFailure: Boolean = true
+        recordFailure: Boolean = true,
+        /**
+         * The client whose URL class just died, skipped when the winners are
+         * chosen (see [InnerTubeExtractor.extractPlaybackSourceWithClient]).
+         *
+         * A non-null exclusion also BYPASSES the per-video cache: the cached
+         * URL may be exactly the class being excluded, so answering the resume
+         * from it would hand back the dead source and look like the resume did
+         * nothing. The replacement is stored, so the next ordinary resolve
+         * serves the working source.
+         */
+        excludeClient: String? = null
     ): Result<PlayableSource> = resolveMutex.withLock {
 
         // Keep the two process-wide caches bounded (see [pruneCaches]). Every
@@ -261,25 +295,31 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             resolutionFailures.remove(videoId)
         }
 
-        // Serve from cache if fresh
-        sourceCache[videoId]?.let { cached ->
-            if (!cached.isStale) {
-                Log.w(TAG, "Trailer source cache hit for $videoId")
-                return@withLock Result.success(cached.source)
+        // Serve from cache if fresh - unless this is an exclusion resolve, whose
+        // whole point is a source DIFFERENT from the one the cache holds.
+        if (excludeClient == null) {
+            sourceCache[videoId]?.let { cached ->
+                if (!cached.isStale) {
+                    Log.w(TAG, "Trailer source cache hit for $videoId")
+                    return@withLock Result.success(cached.source)
+                }
+                sourceCache.remove(videoId)
             }
-            sourceCache.remove(videoId)
         }
 
         // Primary: direct InnerTube player API. This runs from the device's
         // own network. A TV at home is on a residential IP — the exact kind
         // of network YouTube does NOT flag — so anonymous client requests
         // work here with no po-token/proxy infrastructure at all.
-        val innerTubeSource = InnerTubeExtractor.extractPlaybackSource(videoId)
-        if (innerTubeSource != null) {
-            sourceCache[videoId] = CachedSource(innerTubeSource)
+        val resolved = InnerTubeExtractor.extractPlaybackSourceWithClient(
+            videoId,
+            excludeClient = excludeClient
+        )
+        if (resolved != null) {
+            sourceCache[videoId] = CachedSource(resolved.source, resolved.client)
             resolutionFailures.remove(videoId)
-            logResolved("InnerTube", innerTubeSource)
-            return@withLock Result.success(innerTubeSource)
+            logResolved("InnerTube", resolved.source)
+            return@withLock Result.success(resolved.source)
         }
         Log.w(TAG, "InnerTube extraction failed; falling back to NewPipe")
 
@@ -287,7 +327,10 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         return NewPipeManager
             .getPlayableUrl(videoId)
             .onSuccess { source ->
-                sourceCache[videoId] = CachedSource(source)
+                // NewPipe names no InnerTube client, so the entry carries none:
+                // a later death starts its exclusion from the trace's fallback
+                // rather than from a client that never signed anything.
+                sourceCache[videoId] = CachedSource(source, client = null)
                 resolutionFailures.remove(videoId)
                 logResolved("NewPipe/Piped", source)
             }

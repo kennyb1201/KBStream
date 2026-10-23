@@ -136,7 +136,7 @@ class TrailerIdentityRefreshContractTest {
     fun `the hero checks the block before it invalidates or resolves`() {
         val blockedAt = home.indexOf("TrailerPlayerLauncher.isIdentityBlocked(trailerKey)")
         val invalidateAt = home.indexOf("TrailerPlayerLauncher.invalidate(trailerKey)")
-        val resolveAt = home.indexOf(".resolvePlayableUrl(trailerKey)", blockedAt)
+        val resolveAt = home.indexOf(".resolvePlayableUrl(trailerKey", blockedAt)
 
         assertTrue("the resolve effect must consult the blocked set", blockedAt >= 0)
         assertTrue("the retry still busts the cached URL", invalidateAt > blockedAt)
@@ -152,7 +152,7 @@ class TrailerIdentityRefreshContractTest {
     fun `a blocked video is not resolved at all`() {
         val source = flat(launcher)
         val blockedAt = source.indexOf("if (identityBlocked.contains(videoId)) {")
-        val fetchAt = source.indexOf("InnerTubeExtractor.extractPlaybackSource(videoId)")
+        val fetchAt = source.indexOf("InnerTubeExtractor.extractPlaybackSourceWithClient(")
 
         assertTrue("the blocked check must exist", blockedAt >= 0)
         assertTrue("the resolve must still be there", fetchAt > 0)

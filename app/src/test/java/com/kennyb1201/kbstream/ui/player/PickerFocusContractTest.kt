@@ -213,6 +213,59 @@ class PickerFocusContractTest {
         )
     }
 
+    @Test
+    fun `an end-of-episode card clears the picker before it takes the D-pad`() {
+        // The guard above is what made the card unreachable: it re-armed on every
+        // focus change while the picker was open, so the card's own PLAY NEXT
+        // request was answered by a picker row and the panel sat there unable to
+        // be driven. The card is the decision once it is up, so the side panels
+        // close first - on both engines, for both end panels.
+        assertTrue(
+            "the exo card dismisses the picker and the settings panel",
+            functionBody(NATIVE, "private fun closePanelsForEndCard() {")
+                .let { it.contains("dismissPicker()") && it.contains("dismissSettingsPanel()") }
+        )
+        assertTrue(
+            "and it clears the guide and the INFO readout, the other two overlays " +
+                "that own the remote",
+            functionBody(NATIVE, "private fun closePanelsForEndCard() {")
+                .let { it.contains("dismissChannelGuide()") && it.contains("hideInfoPanel()") }
+        )
+        assertTrue(
+            "mpv clears pickerOpen itself: its guard is gated on that flag, so " +
+                "hiding the container alone would leave the trap armed",
+            functionBody(MPV, "private fun closePanelsForEndCard() {")
+                .contains("pickerOpen = false")
+        )
+        assertTrue(
+            "and it hides both side containers with it",
+            functionBody(MPV, "private fun closePanelsForEndCard() {")
+                .let {
+                    it.contains("pickerContainer?.visibility = View.GONE") &&
+                        it.contains("settingsContainer?.visibility = View.GONE")
+                }
+        )
+
+        listOf(
+            NATIVE to "private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {",
+            MPV to "private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {",
+            NATIVE to "private fun showBecauseYouWatchedPanel() {",
+            MPV to "private fun showBecauseYouWatchedPanel() {"
+        ).forEach { (path, signature) ->
+            val body = functionBody(path, signature)
+            val close = body.indexOf("closePanelsForEndCard()")
+            assertTrue(
+                "$path $signature must close the side panels before it is raised",
+                close >= 0
+            )
+            val focus = body.indexOf("requestFocus()")
+            assertTrue(
+                "$path $signature must clear them BEFORE it parks the D-pad on the " +
+                    "card, or the guard bounces that request straight back",
+                focus < 0 || close < focus
+            )        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────
 
     private fun readSource(path: String): String {

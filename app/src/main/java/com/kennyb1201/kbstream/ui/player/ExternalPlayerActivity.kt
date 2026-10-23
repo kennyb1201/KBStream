@@ -1297,33 +1297,14 @@ class ExternalPlayerActivity : ComponentActivity() {
             finish()
             return
         }
-        // The panel is only ever raised for a title the session has finished
-        // with, so the episode MUST already be filed as watched: the two
-        // systems that stand behind "watched" - the local history row and the
-        // tracker push - were told by the completion this session wrote. This
-        // line is the assertion the field report asked for ("BYW appeared but
-        // the episode is not marked watched"): a capture showing `byw shown`
-        // with `filed=false` is that inconsistency, caught the moment it
-        // happens rather than weeks later on Continue Watching.
-        if (!completionFiled) {
-            Log.w(
-                TAG,
-                "BYW raised without a filed completion for ${historyId} " +
-                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
-                    "not marked watched"
-            )
-            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        } else {
-            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        }
-        ui.show(itemName)
-        scrim?.visibility = View.VISIBLE
-        ui.focusFirst()
-
+        // The picks are fetched BEFORE the panel is raised.
+        //
+        // It used to open on the spot and fill in a few seconds later, because
+        // the TMDB round-trip behind build() ran after show(): the field report
+        // of a BYW panel that "pops up blank for 3 to 7 seconds and then fills
+        // in". Nothing is raised now when there is nothing to suggest: the
+        // session simply ends, where the old code raised a panel and took it
+        // straight back down.
         lifecycleScope.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
                 val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
@@ -1349,15 +1330,43 @@ class ExternalPlayerActivity : ComponentActivity() {
                 )
             }
 
-            if (picks.isEmpty() || !ui.isVisible) {
-                withContext(Dispatchers.Main) {
-                    ui.hide()
-                    finish()
-                }
+            if (picks.isEmpty() || bywDismissed) {
+                withContext(Dispatchers.Main) { finish() }
                 return@launch
             }
 
-            withContext(Dispatchers.Main) { ui.build(picks) }
+            withContext(Dispatchers.Main) {
+                // The panel is only ever raised for a title the session has
+                // finished with, so the episode MUST already be filed as
+                // watched: the two systems that stand behind "watched" - the
+                // local history row and the tracker push - were told by the
+                // completion this session wrote. This line is the assertion the
+                // field report asked for ("BYW appeared but the episode is not
+                // marked watched"): a capture showing `byw shown` with
+                // `filed=false` is that inconsistency, caught the moment it
+                // happens rather than weeks later on Continue Watching.
+                if (!completionFiled) {
+                    Log.w(
+                        TAG,
+                        "BYW raised without a filed completion for ${historyId} " +
+                            "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                            "not marked watched"
+                    )
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                } else {
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                }
+                ui.show(itemName)
+                scrim?.visibility = View.VISIBLE
+                // Built in the same turn as the raise, so the panel is never on
+                // screen without its row; focus lands on the first pick.
+                ui.build(picks)
+                ui.focusFirst()
+            }
         }
     }
 

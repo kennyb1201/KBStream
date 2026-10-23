@@ -89,6 +89,15 @@ object InnerTubeExtractor {
     internal const val PREFERRED_SEPARATE_CLIENT = "android"
 
     /**
+     * The three source shapes a resolve can return, as the death line names
+     * them: a trailer URL class that refuses offset reads is not the same on an
+     * HLS manifest as on a progressive googlevideo URL.
+     */
+    internal const val KIND_HLS = "hls"
+    internal const val KIND_ADAPTIVE = "adaptive"
+    internal const val KIND_PROGRESSIVE = "progressive"
+
+    /**
      * TV playback ceiling for trailers. YouTube serves up to 4K in adaptive
      * formats; 4K VP9 overwhelms TV hardware decoders (Realtek TCL stutters,
      * Firestick never buffers enough and gives up). Trailers are hero/inline
@@ -180,19 +189,53 @@ object InnerTubeExtractor {
     private val configMutex = Mutex()
 
     /**
+     * A resolve's answer: the source, and which client signed it.
+     *
+     * The client is carried because a URL class can be unreadable past its
+     * opening window (the 2026-10-22 field case: every offset read 403s while
+     * `bytes=0-<pos>` still serves), and the only way to recover from that is
+     * to re-resolve EXCLUDING the client whose URL died. A caller that only
+     * gets the source cannot name the exclusion.
+     */
+    internal data class ResolvedSource(
+        val source: PlayableSource,
+        val client: String?
+    )
+
+    /**
      * Resolves a YouTube video to a directly playable [PlayableSource].
      * Returns null if no client could produce a usable stream.
      */
     suspend fun extractPlaybackSource(youtubeUrl: String): PlayableSource? =
+        extractPlaybackSourceWithClient(youtubeUrl)?.source
+
+    /**
+     * The same resolve, naming the client that signed the winning source.
+     *
+     * [excludeClient] skips that client when the winners are picked - HLS,
+     * adaptive video/audio and progressive alike. The harvest still runs (the
+     * requests are what make the fresh visitor's URLs), only the SELECTION
+     * skips it, because the refusal is a property of the URL class that client
+     * signs, not of the resolve or the identity. Null (every ordinary resolve)
+     * selects exactly as before.
+     */
+    suspend fun extractPlaybackSourceWithClient(
+        youtubeUrl: String,
+        excludeClient: String? = null
+    ): ResolvedSource? =
         withContext(Dispatchers.IO) {
             if (youtubeUrl.isBlank()) return@withContext null
 
-            Log.d(TAG, "Starting extraction for $youtubeUrl")
+            Log.d(TAG, "Starting extraction for $youtubeUrl (exclude=${excludeClient ?: "none"})")
 
-            var source: PlayableSource? = null
+            var resolved: ResolvedSource? = null
             try {
-                source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
-                    extractInternal(youtubeUrl, forceRefreshConfig = false)
+                resolved = withTimeout(EXTRACTOR_TIMEOUT_MS) {
+                    extractInternal(
+                        youtubeUrl,
+                        forceRefreshConfig = false,
+                        excludeClient = excludeClient
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -201,11 +244,15 @@ object InnerTubeExtractor {
             }
 
             // Retry with a fresh watch config if the first attempt failed
-            if (source == null) {
+            if (resolved == null) {
                 Log.d(TAG, "First attempt failed; retrying with fresh config")
                 try {
-                    source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
-                        extractInternal(youtubeUrl, forceRefreshConfig = true)
+                    resolved = withTimeout(EXTRACTOR_TIMEOUT_MS) {
+                        extractInternal(
+                            youtubeUrl,
+                            forceRefreshConfig = true,
+                            excludeClient = excludeClient
+                        )
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -214,16 +261,17 @@ object InnerTubeExtractor {
                 }
             }
 
-            if (source == null) {
+            if (resolved == null) {
                 Log.w(TAG, "No playable source for $youtubeUrl")
             }
-            source
+            resolved
         }
 
     private suspend fun extractInternal(
         youtubeUrl: String,
-        forceRefreshConfig: Boolean
-    ): PlayableSource? {
+        forceRefreshConfig: Boolean,
+        excludeClient: String? = null
+    ): ResolvedSource? {
         val videoId = extractVideoId(youtubeUrl) ?: return null
         // The id is known before the config call on purpose: the visitor is
         // minted on THIS video's embed page, not on an unrelated one.
@@ -289,21 +337,34 @@ object InnerTubeExtractor {
             return null
         }
 
+        // A resume after a boundary death asks for a source signed by a
+        // DIFFERENT client than the one whose URL class refused every offset
+        // read. The exclusion is applied at selection, not at harvest: the
+        // requests are what minted this visitor's URLs, and skipping one would
+        // only shrink the pool for no gain.
+        val allowedHls = hlsUrls.filter { it.first != excludeClient }
+        val allowedProgressive = progressive.filter { it.client != excludeClient }
+        val allowedVideo = adaptiveVideo.filter { it.client != excludeClient }
+        val allowedAudio = adaptiveAudio.filter { it.client != excludeClient }
+
         // Prefer HLS first. Media3 handles manifest segments, refreshes and
         // seeking without reopening googlevideo URLs at arbitrary byte offsets.
         // HLS manifests are signed for the client that received them, so the
         // manifest fetch (and its segment fetches) must carry that client's UA.
-        val bestHls = pickBestHls(hlsUrls)
+        val bestHls = pickBestHls(allowedHls)
         if (bestHls != null) {
             Log.d(TAG, "Using HLS trailer manifest (client=${bestHls.first})")
-            return PlayableSource.Muxed(
-                bestHls.third,
-                userAgent = userAgentFor(bestHls.first)
-            ).withResolveTokens(videoId, tokens, bestHls.first)
+            return ResolvedSource(
+                PlayableSource.Muxed(
+                    bestHls.third,
+                    userAgent = userAgentFor(bestHls.first)
+                ).withResolveTokens(videoId, tokens, bestHls.first, KIND_HLS),
+                bestHls.first
+            )
         }
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
-        val bestVideo = pickBest(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
+        val bestVideo = pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClient)
 
         val resolvedVideo = bestVideo?.let {
             resolveReachableUrl(it.url, userAgentFor(it.client))
@@ -316,7 +377,7 @@ object InnerTubeExtractor {
         // audio) — exactly the "trailers play muted" report.
         var resolvedAudio: String? = null
         if (resolvedVideo != null) {
-            val audioCandidates = adaptiveAudio.sortedWith(
+            val audioCandidates = allowedAudio.sortedWith(
                 compareByDescending<StreamCandidate> { it.score }
                     .thenBy { if (it.hasN) 1 else 0 }
                     .thenBy { it.priority }
@@ -350,8 +411,11 @@ object InnerTubeExtractor {
             // with android-signed still 403ing at ~36 s says the remaining wall
             // is attestation, not the client table.
             Log.d(TAG, "Using adaptive video+audio (client=${bestVideo?.client})")
-            return PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
-                .withResolveTokens(videoId, tokens, bestVideo?.client)
+            return ResolvedSource(
+                PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
+                    .withResolveTokens(videoId, tokens, bestVideo?.client, KIND_ADAPTIVE),
+                bestVideo?.client
+            )
         }
 
         // No verified adaptive audio (or no video at all): fall through to
@@ -364,7 +428,7 @@ object InnerTubeExtractor {
                     "falling through to muxed progressive"
             )
         }
-        val bestProgressive = progressive.sortedWith(
+        val bestProgressive = allowedProgressive.sortedWith(
             compareByDescending<StreamCandidate> { it.score }
                 .thenBy { if (it.hasN) 1 else 0 }
                 .thenBy { it.priority }
@@ -379,10 +443,18 @@ object InnerTubeExtractor {
                 "Falling back to muxed progressive stream " +
                     "(audio safety, client=${bestProgressive.client})"
             )
-            return PlayableSource.Muxed(
-                resolvedProgressive,
-                userAgent = userAgentFor(bestProgressive.client)
-            ).withResolveTokens(videoId, tokens, bestProgressive.client)
+            return ResolvedSource(
+                PlayableSource.Muxed(
+                    resolvedProgressive,
+                    userAgent = userAgentFor(bestProgressive.client)
+                ).withResolveTokens(
+                    videoId,
+                    tokens,
+                    bestProgressive.client,
+                    KIND_PROGRESSIVE
+                ),
+                bestProgressive.client
+            )
         }
 
         return null
@@ -502,14 +574,16 @@ object InnerTubeExtractor {
     private fun PlayableSource.withResolveTokens(
         videoId: String,
         tokens: ResolveTokens,
-        client: String?
+        client: String?,
+        kind: String
     ): PlayableSource {
         val decorated = withPotToken(tokens.gvs)
         PoTokenTrace.recordResolve(
             videoId = videoId,
             playerToken = !tokens.player.isNullOrBlank(),
             pot = decorated.carriesPot(),
-            client = client
+            client = client,
+            kind = kind
         )
         return decorated
     }
@@ -618,9 +692,17 @@ object InnerTubeExtractor {
         )
     }
 
-    private fun pickBest(items: List<StreamCandidate>, preferredClient: String): StreamCandidate? {
-        val preferred = items.filter { it.client == preferredClient }
-        val pool = if (preferred.isNotEmpty()) preferred else items
+    private fun pickBest(
+        items: List<StreamCandidate>,
+        preferredClient: String,
+        excludeClient: String? = null
+    ): StreamCandidate? {
+        // Defence in depth: the pools are already filtered by the caller, but
+        // this is the one function that decides what plays, so an exclusion
+        // that reaches here must never win by being the preferred client.
+        val eligible = items.filter { it.client != excludeClient }
+        val preferred = eligible.filter { it.client == preferredClient }
+        val pool = if (preferred.isNotEmpty()) preferred else eligible
         return pool.sortedWith(
             compareByDescending<StreamCandidate> { it.score }
                 .thenBy { if (it.hasN) 1 else 0 }

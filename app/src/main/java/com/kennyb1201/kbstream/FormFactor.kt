@@ -116,14 +116,13 @@ object FormFactor {
      *
      * A player calls it BEFORE `super.onCreate`, like [applyOrientation], so
      * the window is created in the orientation the viewer will watch in instead
-     * of rotating a frame in. MainActivity also calls it while its own
-     * pre-playback splash is on screen (see AppRoot): the splash is a screen of
-     * the browsing window, and it should be sideways from the moment it appears
-     * rather than flipping when the player arrives. That activity declares the
-     * orientation change in its manifest `configChanges`, so the request rotates
-     * it without re-creating it mid-resolve. On TV this returns before touching
-     * the activity: the manifest's landscape lock is the only orientation policy
-     * a television has.
+     * of rotating a frame in. It is the PLAYER's request only: MainActivity's
+     * own pre-playback splash is a screen of the browsing window and keeps
+     * [applyOrientation]'s policy (portrait on a phone held upright), because a
+     * landscape loading screen under a portrait app was the reported fault - the
+     * splash came up sideways and then had to flip. On TV this returns before
+     * touching the activity: the manifest's landscape lock is the only
+     * orientation policy a television has.
      */
     fun applyPlaybackOrientation(activity: Activity) {
         if (isTv) return
@@ -131,15 +130,12 @@ object FormFactor {
     }
 
     /**
-     * Releases the playback request on the way out of a player - and out of
-     * MainActivity's pre-playback splash - so the browsing activity is free to
-     * follow the device again.
+     * Releases the playback request on the way out of a player, so the browsing
+     * activity is free to follow the device again.
      *
      * A phone returning from a film to a portrait-held Home must not inherit the
-     * player's landscape request, and a splash that was backed out of or gave up
-     * must not leave the browsing window sideways either. On TV this is a no-op
-     * for the same reason as every other method here: the manifest owns that
-     * lock.
+     * player's landscape request. On TV this is a no-op for the same reason as
+     * every other method here: the manifest owns that lock.
      */
     fun releasePlaybackOrientation(activity: Activity) {
         if (isTv) return

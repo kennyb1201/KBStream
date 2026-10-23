@@ -170,6 +170,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -739,10 +740,17 @@ internal fun HeroInlineTrailerPlayer(
     /**
      * YouTube refused the client identity for this playback (see
      * [isYouTubeIdentityBlocked]). The watch config has already been
-     * invalidated by the time this fires, so the owner only has to keep count:
-     * a repeat refusal of the same video is a refusal on the fresh identity.
+     * invalidated by the time this fires.
+     *
+     * Returns whether the owner took its one client-exclusion re-resolve. The
+     * refusal is NOT an identity verdict on the 2026-10-22 evidence - the same
+     * signed URL served bytes=0-0, 0-1M and 0-<pos> while every offset read was
+     * refused - so the owner is asked first, and only the owner knows whether
+     * the session's one attempt is still unspent (see the hero's own
+     * `trailerAttempt` budget). [durationMs] is passed so the owner can stamp
+     * the death line the diagnostics report reads.
      */
-    onIdentityBlocked: () -> Unit = {}
+    onIdentityBlocked: (positionMs: Long, durationMs: Long) -> Boolean = { _, _ -> false }
 ) {
     val context = LocalContext.current
     // One pooled player for every hero trailer: renderer initialization is
@@ -977,9 +985,14 @@ internal fun HeroInlineTrailerPlayer(
                     // an addon host's own refusal keeps the cached identity and
                     // the ordinary retry.
                     val identityBlocked = error.isYouTubeIdentityBlocked()
+                    var resumeRequested = false
                     if (identityBlocked) {
                         InnerTubeExtractor.invalidateConfig()
-                        onIdentityBlocked()
+                        // The owner decides, because the one-attempt budget for
+                        // a trailer is its state, not this composable's: one
+                        // client-exclusion re-resolve is worth spending, a
+                        // second one on the same clip is not.
+                        resumeRequested = onIdentityBlocked(positionMs, durationMs)
                     }
                     handler.removeCallbacks(watchdog)
                     onEnded()
@@ -995,12 +1008,22 @@ internal fun HeroInlineTrailerPlayer(
                         // Ambient content: a refusal the app cannot fix has to
                         // be invisible. The backdrop is already up (onEnded
                         // above), there is no error card or spinner anywhere on
-                        // this path, and skipping the retry is what removes the
+                        // this path, and not retrying is what removes the
                         // re-mount / re-buffer stutter the field log recorded.
+                        //
+                        // When the owner DID take its one client-exclusion
+                        // resume, the re-mount is deliberate and the line says
+                        // so - a capture must not read the recovery as the old
+                        // "skipped" path.
                         Log.w(
                             "HOME_HERO",
-                            "Trailer refused by YouTube for this identity; " +
-                                "skipping the retry and leaving the backdrop up"
+                            if (resumeRequested) {
+                                "Trailer refused by YouTube for this identity; " +
+                                    "re-resolving once with another client"
+                            } else {
+                                "Trailer refused by YouTube for this identity; " +
+                                    "skipping the retry and leaving the backdrop up"
+                            }
                         )
                     } else {
                         Log.w(
@@ -1301,6 +1324,16 @@ private fun HomeHero(
     // value like that would follow the viewer into the next play.
     var trailerResumeMs by remember(trailerKey) { mutableLongStateOf(0L) }
 
+    // The client to skip when a refused trailer is re-resolved, one-shot for
+    // the same reason as the resume above: the exclusion belongs to the source
+    // that just died, and a foreground re-arm must not inherit it.
+    var trailerExcludeClient by remember(trailerKey) { mutableStateOf<String?>(null) }
+
+    // How long the trailer said it was when it died - the diagnostics death line
+    // reports the death point against it, and it is only known at the failure,
+    // not at the resolve that follows. Consumed with the same one-shot resume.
+    var trailerDeathDurationMs by remember(trailerKey) { mutableLongStateOf(0L) }
+
     // One-shot playback-failure retry: googlevideo signed URLs can go stale
     // mid-stream (403 on a later chunk). Re-resolving fetches a fresh URL —
     // capped at a single retry per trailer so a genuinely dead video can't
@@ -1359,8 +1392,17 @@ private fun HomeHero(
         // autoplay toggle) starts from the top because the value is gone.
         val resumeFrom = trailerResumeMs
         trailerResumeMs = 0L
+        // Consumed with it: the exclusion is part of the same one-shot retry.
+        val excludeClient = trailerExcludeClient
+        trailerExcludeClient = null
+        val deathDurationMs = trailerDeathDurationMs
+        trailerDeathDurationMs = 0L
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
+            // Non-null from the guard above, and captured by the lambdas below:
+            // naming it once keeps the death line and the resolve on the same
+            // id without a smart cast crossing a lambda boundary.
+            val key = trailerKey
             // A video YouTube already refused on a fresh identity is not
             // resolved again this session: the retry below would invalidate
             // (which lifts the block) and then pay a watch-page fetch + full
@@ -1389,19 +1431,45 @@ private fun HomeHero(
             )
 
             TrailerPlayerLauncher
-                .resolvePlayableUrl(trailerKey)
+                .resolvePlayableUrl(trailerKey, excludeClient = excludeClient)
                 .onSuccess { source ->
                     resolvedTrailer = HeroTrailerPlayback(
                         source = source,
                         startPositionMs = resumeFrom
                     )
+                    if (excludeClient != null) {
+                        // The resume the refusal asked for: name the client that
+                        // signed the replacement, so a capture shows the fix
+                        // working rather than inferring it from a smooth play.
+                        PoTokenTrace.recordTrailerDeath(
+                            videoId = key,
+                            client = excludeClient,
+                            kind = PoTokenTrace.resolveKind(),
+                            positionMs = resumeFrom,
+                            durationMs = deathDurationMs,
+                            resume = "client " +
+                                (TrailerPlayerLauncher.signingClient(trailerKey)
+                                    ?: "unknown") + " ok"
+                        )
+                    }
                     Log.w(
                         "HOME_HERO",
                         "Hero trailer resolved: " +
-                            heroSourceOrigin(source)
+                            heroSourceOrigin(source) +
+                            if (excludeClient != null) " (excluded $excludeClient)" else ""
                     )
                 }
                 .onFailure { error ->
+                    if (excludeClient != null) {
+                        PoTokenTrace.recordTrailerDeath(
+                            videoId = key,
+                            client = excludeClient,
+                            kind = PoTokenTrace.resolveKind(),
+                            positionMs = resumeFrom,
+                            durationMs = deathDurationMs,
+                            resume = "none: no other client"
+                        )
+                    }
                     Log.e(
                         "HOME_HERO",
                         "Failed to resolve hero trailer, " +
@@ -1739,21 +1807,61 @@ private fun HomeHero(
                                         resolvedTrailer = null
                                     }
                                 },
-                                onIdentityBlocked = {
+                                onIdentityBlocked = { positionMs, durationMs ->
                                     // The first refusal already invalidated the
                                     // watch config, so the resolve that follows
-                                    // it is signed with a fresh visitor. A second
-                                    // refusal of the same video is therefore the
-                                    // fresh identity being refused too, and that
-                                    // is when the video is marked for the
-                                    // session - so a later re-arm goes straight
-                                    // to the backdrop instead of buying a
-                                    // watch-page fetch every time.
+                                    // it is signed with a fresh visitor AND, now,
+                                    // a different client: the 2026-10-22 log is
+                                    // a URL class that refuses offset reads, not
+                                    // an identity verdict. A second refusal of
+                                    // the same video is therefore the fresh
+                                    // identity and the replacement both being
+                                    // refused, and that is when the video is
+                                    // marked for the session - so a later re-arm
+                                    // goes straight to the backdrop instead of
+                                    // buying a watch-page fetch every time.
+                                    val key = trailerKey
                                     trailerIdentityRefusals += 1
                                     if (trailerIdentityRefusals >= 2) {
                                         trailerKey?.let {
                                             TrailerPlayerLauncher.markIdentityBlocked(it)
                                         }
+                                        val died = key?.let {
+                                            TrailerPlayerLauncher.signingClient(it)
+                                        }
+                                        if (key != null) {
+                                            PoTokenTrace.recordTrailerDeath(
+                                                videoId = key,
+                                                client = died,
+                                                kind = PoTokenTrace.resolveKind(),
+                                                positionMs = positionMs,
+                                                durationMs = durationMs,
+                                                resume = "client " +
+                                                    (died ?: "unknown") + " died"
+                                            )
+                                        }
+                                        false
+                                    } else if (key != null && trailerAttempt < 1) {
+                                        // One re-resolve, signed by a client
+                                        // other than the one that just died,
+                                        // resumed where it did.
+                                        val deadClient =
+                                            TrailerPlayerLauncher.signingClient(key)
+                                        trailerExcludeClient = deadClient
+                                        trailerResumeMs = positionMs
+                                        trailerDeathDurationMs = durationMs
+                                        PoTokenTrace.recordTrailerDeath(
+                                            videoId = key,
+                                            client = deadClient,
+                                            kind = PoTokenTrace.resolveKind(),
+                                            positionMs = positionMs,
+                                            durationMs = durationMs,
+                                            resume = "none"
+                                        )
+                                        trailerAttempt += 1
+                                        true
+                                    } else {
+                                        false
                                     }
                                 }
                             )

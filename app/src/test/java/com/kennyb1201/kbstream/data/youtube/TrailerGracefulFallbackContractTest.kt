@@ -83,12 +83,19 @@ class TrailerGracefulFallbackContractTest {
     // ------------------------------------------------------------- the hero --
 
     @Test
-    fun `the hero never retries a refused identity`() {
+    fun `the hero never re-signs a refused identity with the same client`() {
         val handler = heroHandler()
 
         assertTrue(
-            "the gate must be handed the classifier's verdict",
+            "the gate must be handed the classifier's verdict, so the plain " +
+                "re-sign retry stays off for a 403",
             handler.contains("isIdentityBlocked = identityBlocked")
+        )
+        assertTrue(
+            "the ONE recovery a refusal gets is the owner's client-exclusion " +
+                "resume - asked for with the death point, and answered by whether " +
+                "the session still had that attempt",
+            handler.contains("resumeRequested = onIdentityBlocked(positionMs, durationMs)")
         )
         assertTrue(
             "and the verdict must come from the shared classifier",
@@ -214,8 +221,12 @@ class TrailerGracefulFallbackContractTest {
             flat(home).contains("internal const val HeroTrailerNearEndMs = 3_000L")
         )
         assertTrue(
-            "the trailer is still resolved through the launcher",
-            flat(home).contains("TrailerPlayerLauncher .resolvePlayableUrl(trailerKey)")
+            "the trailer is still resolved through the launcher - now with the " +
+                "one-shot client exclusion the refusal asks for",
+            flat(home).contains(
+                "TrailerPlayerLauncher .resolvePlayableUrl(trailerKey, " +
+                    "excludeClient = excludeClient)"
+            )
         )
         assertEquals(
             "the hero keeps exactly one onFailed call site",

@@ -78,6 +78,8 @@ import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
@@ -1527,6 +1529,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * something - and the next resolve is only worth making with a fresh one.
      */
     private var trailerVideoId: String? = null
+
+    /**
+     * Whether this trailer session has already spent its one client-exclusion
+     * re-resolve (see [refreshIdentityOnTrailerRefusal]).
+     *
+     * Per session, so a replacement that dies too takes today's path instead of
+     * walking client after client on a two-minute clip.
+     */
+    private var trailerRefusalResumed = false
 
     // Zap banner (CH+/CH- channel info overlay) — bound in bindViews(),
     // populated by showZapBanner() during a live-channel zap.
@@ -10407,6 +10418,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * Takes the remote away from every side panel before an end-of-episode
+     * panel is raised.
+     *
+     * The picker and the settings panel hold the D-pad with the window-level
+     * guards in bindViews: while either is open, any focus that leaves it is
+     * pulled straight back inside. The end-of-episode card is raised from the
+     * progress tick, so a subtitle picker the viewer happened to have open was
+     * still up - and still armed - the moment the card appeared. Its own
+     * `PLAY NEXT` request was answered by the guard on the spot, so the card sat
+     * on screen with no way to reach it (the field report: "the next up popup
+     * popped up and it wouldn't let me gain focus on the popup because it was in
+     * the subtitle picker"), and its countdown could run out while they were
+     * still reading the picker.
+     *
+     * The card is the decision now, so the panels close with it. The card parks
+     * focus on PLAY NEXT itself once it is visible; anything these dismissals
+     * hand back to the chrome is superseded by that.
+     */
+    private fun closePanelsForEndCard() {
+        if (isGuideShowing) dismissChannelGuide()
+        if (isPickerShowing) dismissPicker()
+        if (showSettingsPanel) dismissSettingsPanel()
+        if (infoPanel.visibility == View.VISIBLE) hideInfoPanel()
+    }
+
+    /**
      * Gives the D-pad back to the picker after it has escaped the panel.
      *
      * Called from the window's global focus-change listener (see bindViews), so
@@ -11076,14 +11113,124 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun refreshIdentityOnTrailerRefusal(error: PlaybackException): Boolean {
         if (trailerVideoId == null || !error.isYouTubeIdentityBlocked()) return false
+        val videoId = trailerVideoId ?: return false
+        val player = exoPlayer
+        // Read the death point BEFORE anything rebuilds: the resume has to pick
+        // up here, so the interruption reads as a rebuffer rather than a
+        // restart. Same rule the hero's error handler follows.
+        val positionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val durationMs = runCatching { player?.duration ?: C.TIME_UNSET }
+            .getOrDefault(C.TIME_UNSET)
+        val deadClient = TrailerPlayerLauncher.signingClient(videoId)
+        val kind = PoTokenTrace.resolveKind()
+
         Log.w(
             "PLAYER_RETRY",
-            "Trailer stream refused by YouTube (403 on googlevideo); " +
-                "invalidating the watch config and closing the trailer session"
+            "Trailer stream refused by YouTube (403 on googlevideo) at " +
+                "${positionMs}ms of ${if (durationMs > 0L) "${durationMs}ms" else "?"}; " +
+                "client=${deadClient ?: "unknown"} kind=${kind ?: "unknown"}"
         )
+        // A fresh visitor does no harm to the replacement resolve, and is what
+        // today's path did anyway.
         InnerTubeExtractor.invalidateConfig()
-        finish()
+
+        if (trailerRefusalResumed) {
+            // The replacement died on the same refusal. That is today's story,
+            // and its only ending: the session ends and the row stays tappable.
+            TrailerPlayerLauncher.markIdentityBlocked(videoId)
+            PoTokenTrace.recordTrailerDeath(
+                videoId = videoId,
+                client = deadClient,
+                kind = kind,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                resume = "client ${deadClient ?: "unknown"} died"
+            )
+            Log.w(
+                "PLAYER_RETRY",
+                "Trailer died again after the client-exclusion resume; closing the " +
+                    "trailer session"
+            )
+            finish()
+            return true
+        }
+
+        trailerRefusalResumed = true
+        PoTokenTrace.recordTrailerDeath(
+            videoId = videoId,
+            client = deadClient,
+            kind = kind,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            resume = "none"
+        )
+        // The 2026-10-22 case is a SOURCE problem, not an identity one: the
+        // DIAG ladder showed this URL class serving bytes=0-0, 0-1M and
+        // 0-<pos> with 206 while every offset read and every oversized from-0
+        // window was refused. So one resolve is made excluding the client that
+        // signed it, and the replacement is sought where the trailer died.
+        lifecycleScope.launch {
+            val replacement = TrailerPlayerLauncher
+                .resolvePlayableUrl(videoId, excludeClient = deadClient)
+                .getOrNull()
+            if (isFinishing || isDestroyed) return@launch
+            if (replacement == null) {
+                Log.w(
+                    "PLAYER_RETRY",
+                    "No source from another client for this trailer; closing the " +
+                        "trailer session"
+                )
+                PoTokenTrace.recordTrailerDeath(
+                    videoId = videoId,
+                    client = deadClient,
+                    kind = kind,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    resume = "none: no other client"
+                )
+                finish()
+                return@launch
+            }
+            PoTokenTrace.recordTrailerDeath(
+                videoId = videoId,
+                client = deadClient,
+                kind = kind,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                resume = "client ${TrailerPlayerLauncher.signingClient(videoId) ?: "unknown"} ok"
+            )
+            Log.w(
+                "PLAYER_RETRY",
+                "Resuming the trailer at ${positionMs}ms on a replacement source " +
+                    "(client=${TrailerPlayerLauncher.signingClient(videoId) ?: "unknown"})"
+            )
+            applyTrailerReplacement(replacement, positionMs)
+        }
         return true
+    }
+
+    /**
+     * Hands the running session a replacement trailer source at [positionMs].
+     *
+     * The same pieces [switchToSource] swaps before a rebuild - the link, its
+     * separate audio track, and the headers its host expects - plus the carried
+     * playhead, so the rebuild lands where the trailer died instead of at 0. It
+     * goes through [recreatePlayer] because a trailer is a single small file
+     * and a fresh player is the path the box already trusts for a source swap;
+     * the splash is not shown for it.
+     */
+    private fun applyTrailerReplacement(source: PlayableSource, positionMs: Long) {
+        currentUrl = when (source) {
+            is PlayableSource.Muxed -> source.url
+            is PlayableSource.Adaptive -> source.videoUrl
+        }
+        currentAudioUrl = (source as? PlayableSource.Adaptive)?.audioUrl
+        streamHeaders = source.userAgent
+            ?.takeIf { it.isNotBlank() }
+            ?.let { ua -> mapOf("User-Agent" to ua) }
+            ?: emptyMap()
+        carryPositionMs = positionMs.coerceAtLeast(0L)
+        recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
     }
 
     /**
@@ -11714,6 +11861,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun showBecauseYouWatchedPanel() {
         if (bywDismissed || isLiveChannel) return
+        // A side panel left up would keep the D-pad (see closePanelsForEndCard).
+        closePanelsForEndCard()
         // This is the panel for "there is nothing left to chain to", so
         // nothing an earlier Up Next decision left behind may fire: a held
         // countdown carrying those stale pendingNext* fields used to resolve
@@ -11729,34 +11878,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pendingNextEpisodeName = null
         pendingNextEpisodeRuntime = null
         pendingNextEpisodeOverview = null
-        // The panel is only ever raised for a title the session has finished
-        // with, so the episode MUST already be filed as watched: the two
-        // systems that stand behind "watched" - the local history row and the
-        // tracker push - were told by the completion this session wrote. This
-        // line is the assertion the field report asked for ("BYW appeared but
-        // the episode is not marked watched"): a capture showing `byw shown`
-        // with `filed=false` is that inconsistency, caught the moment it
-        // happens rather than weeks later on Continue Watching.
-        if (!completionFiled) {
-            Log.w(
-                TAG,
-                "BYW raised without a filed completion for ${historyId} " +
-                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
-                    "not marked watched"
-            )
-            PlaybackSessionTrace.note(
-                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        } else {
-            PlaybackSessionTrace.note(
-                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        }
-        bywUi.show(itemName)
-        // Credits are rolling: shrink the video into the corner so the picks
-        // own the screen while the credits keep playing.
-        enterCreditsMode()
-
+        // The picks are fetched BEFORE the panel is raised.
+        //
+        // It used to open on the spot and fill in a few seconds later, because
+        // the TMDB round-trip behind build() ran after show(): the field report
+        // of a BYW panel that "pops up blank for 3 to 7 seconds and then fills
+        // in". Nothing is raised now when there is nothing to suggest - the
+        // credits simply keep playing full screen - so the panel can never be
+        // seen as an empty box.
         scope?.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
                 val tmdbId = resolveParentTmdbId() ?: return@withContext emptyList()
@@ -11771,14 +11900,45 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 )
             }
 
-            if (picks.isEmpty() || !bywUi.isVisible) {
-                // Nothing to recommend: put the video back full screen.
-                bywUi.hide()
-                exitCreditsMode()
+            // This session's own scope is not lifecycle-bound (it owns the clock
+            // and the IntroDB read too), so a fetch that lands after the viewer
+            // left must not raise anything. The panel is no longer shown before
+            // the fetch, so there is no on-screen state to put back either.
+            if (picks.isEmpty() || bywDismissed || isFinishing || isDestroyed) {
                 return@launch
             }
 
             withContext(Dispatchers.Main) {
+                // The panel is only ever raised for a title the session has
+                // finished with, so the episode MUST already be filed as
+                // watched: the two systems that stand behind "watched" - the
+                // local history row and the tracker push - were told by the
+                // completion this session wrote. This line is the assertion the
+                // field report asked for ("BYW appeared but the episode is not
+                // marked watched"): a capture showing `byw shown` with
+                // `filed=false` is that inconsistency, caught the moment it
+                // happens rather than weeks later on Continue Watching.
+                if (!completionFiled) {
+                    Log.w(
+                        TAG,
+                        "BYW raised without a filed completion for ${historyId} " +
+                            "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                            "not marked watched"
+                    )
+                    PlaybackSessionTrace.note(
+                        "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                } else {
+                    PlaybackSessionTrace.note(
+                        "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                }
+                bywUi.show(itemName)
+                // Credits are rolling: shrink the video into the corner so the
+                // picks own the screen while the credits keep playing.
+                enterCreditsMode()
+                // Filled in the same turn as the raise, so there is no frame in
+                // which the panel is up with an empty row.
                 bywUi.build(picks)
             }
         }
@@ -11835,6 +11995,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {
+        // A side panel left up would keep the D-pad (see closePanelsForEndCard).
+        closePanelsForEndCard()
         pendingNextSeason = targetSeason
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null

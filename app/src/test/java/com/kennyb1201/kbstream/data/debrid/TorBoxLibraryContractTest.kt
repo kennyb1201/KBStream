@@ -45,6 +45,8 @@ class TorBoxLibraryContractTest {
         const val PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
         const val PREFS_PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
         const val SETTINGS = "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
+        const val MOBILE_SETTINGS =
+            "com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"
         const val APP = "com/kennyb1201/kbstream/MainApplication.kt"
     }
 
@@ -114,8 +116,41 @@ class TorBoxLibraryContractTest {
             source(SETTINGS).contains("TorBoxLibraryWorker")
         )
         assertTrue(
-            "startup must re-arm the round",
-            source(APP).contains("TorBoxLibraryWorker")
+            "startup must re-arm the round, and run one there too: only the " +
+                "periodic window used to be armed, so a launch after turning the " +
+                "switch on still showed an empty Library until that fired",
+            source(APP).contains("syncScheduleForPrefs(this, runImmediate = true)")
         )
+    }
+
+    @Test
+    fun `both settings panes arm the round, not just write the switch`() {
+        // The phone's switch was the field report: it wrote the preference and
+        // nothing else, so turning it on armed no work at all - the first round
+        // was up to a schedule window away, and only if the app was launched
+        // again. The library stayed exactly as it was, with no error anywhere.
+        assertTrue(
+            "the TV switch arms the round as it is turned on",
+            source(SETTINGS).contains("syncScheduleForPrefs(context, runImmediate = it)")
+        )
+        assertTrue(
+            "and the phone switch must arm it too",
+            source(MOBILE_SETTINGS).contains("syncScheduleForPrefs(ctx, runImmediate = enabled)")
+        )
+        listOf(SETTINGS, MOBILE_SETTINGS).forEach { path ->
+            val pane = source(path)
+            assertTrue(
+                "$path: a key CHANGED after the switch was already on arms the " +
+                    "round too - the switch's own call skipped it while the key " +
+                    "was blank, and nothing else looked again until a launch",
+                pane.contains("if (changed && key.isNotBlank() &&") &&
+                    pane.contains("AppPreferences.getTorboxLibrarySync(context)")
+            )
+            assertTrue(
+                "$path: and only a real change arms it, so tabbing through the " +
+                    "field does not fire a round",
+                pane.contains("val changed = key != AppPreferences.getTorboxApiKey(context)")
+            )
+        }
     }
 }

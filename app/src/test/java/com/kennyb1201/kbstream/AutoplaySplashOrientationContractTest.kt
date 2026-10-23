@@ -1,23 +1,30 @@
 package com.kennyb1201.kbstream
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The phone's pre-playback splash must be sideways from the moment it appears.
+ * The phone's pre-playback splash keeps the browsing orientation.
  *
- * The splash is a screen of MainActivity's own window, not the player's, so the
- * viewing orientation has to be held by MainActivity for the splash's lifetime
- * and released on every way out. Two things make that possible and neither is
- * visible to a JVM test any other way:
+ * The splash is a screen of MainActivity's own window, not the player's. It used
+ * to ask for landscape for its whole lifetime so it matched the player about to
+ * cover it, and the field read that as a fault: a Play press threw the loading
+ * cover up sideways - widescreen art cropped into a frame the rest of the app
+ * never shows - and it then had to rotate back once the hold was released.
  *
- *  1. MainActivity declares the rotation in its manifest `configChanges`, or the
- *     request re-creates the activity mid-resolve and drops the in-flight
- *     autoplay (its pending target is composition state) - the flip comes back;
- *  2. the hold follows the splash's visibility (apply while it shows, release
- *     when it goes), so a tap / back / failed resolve cannot strand it either
- *     way.
+ * So the splash now follows the device exactly as every browse screen does
+ * ([FormFactor.applyOrientation]): portrait on a phone held upright, sideways
+ * only when the phone itself is. The single rotation belongs at the hand-off to
+ * the player, which asks for landscape before its own window exists. Two things
+ * make that possible and neither is visible to a JVM test any other way:
+ *
+ *  1. MainActivity does NOT call `applyPlaybackOrientation` for its splash, so
+ *     no code path can turn the loading cover sideways;
+ *  2. MainActivity declares the rotation in its manifest `configChanges`, so
+ *     turning the phone while the splash is up (or while its resolve is in
+ *     flight) does not re-create the activity and drop the pending autoplay.
  */
 class AutoplaySplashOrientationContractTest {
 
@@ -51,15 +58,36 @@ class AutoplaySplashOrientationContractTest {
     }
 
     @Test
-    fun `the splash's rotation does not re-create the activity`() {
+    fun `the browsing activity never asks for the playback orientation`() {
+        val activity = source("com/kennyb1201/kbstream/MainActivity.kt")
+        assertFalse(
+            "the pre-playback splash is a screen of the browsing window and " +
+                "must keep the browsing orientation: holding landscape for it is " +
+                "what put the loading cover sideways on a phone held upright",
+            activity.contains("applyPlaybackOrientation")
+        )
+        assertFalse(
+            "and nothing there may release it either - a release without a hold " +
+                "is a request of its own",
+            activity.contains("releasePlaybackOrientation")
+        )
+        assertTrue(
+            "the browse policy itself stays: follows the device on a phone, " +
+                "before super.onCreate so no window rotates a frame in",
+            activity.contains("FormFactor.applyOrientation(this)")
+        )
+    }
+
+    @Test
+    fun `a rotation under the splash does not re-create the activity`() {
         val activity = mainActivityBlock()
         val configChanges = activity.substringAfter("android:configChanges=\"")
             .substringBefore("\"")
         listOf("orientation", "screenSize", "smallestScreenSize", "screenLayout").forEach {
             assertTrue(
-                "MainActivity must handle $it itself: it asks for playback " +
-                    "orientation while its splash is up, and a re-create there " +
-                    "aborts the resolve the splash is waiting on",
+                "MainActivity must handle $it itself: the splash follows the " +
+                    "device now, and a re-create mid-resolve aborts the autoplay " +
+                    "the splash is waiting on",
                 configChanges.split("|").contains(it)
             )
         }
@@ -70,29 +98,17 @@ class AutoplaySplashOrientationContractTest {
     }
 
     @Test
-    fun `the hold follows the splash's visibility and is released on the way out`() {
-        val activity = source("com/kennyb1201/kbstream/MainActivity.kt")
-        assertTrue(
-            "the hold must key on the splash itself - both MainActivity-hosted " +
-                "shapes and the player cover - not on a tap handler",
-            activity.contains(
-                "val splashShowing = " +
-                    "detailAutoPlay != null || pending != null || playerSplash != null"
+    fun `the player still asks for landscape of its own`() {
+        listOf(
+            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
+        ).forEach { path ->
+            assertTrue(
+                "$path must still request the playback orientation, or the " +
+                    "picture arrives in a portrait window",
+                source(path).contains("FormFactor.applyPlaybackOrientation(this)")
             )
-        )
-
-        val effect = activity.indexOf("DisposableEffect(splashActivity, splashShowing)")
-        assertTrue("no splash-driven orientation effect", effect >= 0)
-        val body = activity.substring(effect).substringBefore("\n    }")
-
-        val apply = body.indexOf("FormFactor.applyPlaybackOrientation(splashActivity)")
-        val dispose = body.indexOf("onDispose")
-        val release = body.indexOf("FormFactor.releasePlaybackOrientation(splashActivity)")
-        assertTrue("the splash must ask for landscape while it shows", apply >= 0)
-        assertTrue("the hold must be released when the splash goes", dispose >= 0)
-        assertTrue(
-            "the release belongs on the exit, after the apply",
-            release > dispose && dispose > apply
-        )
+        }
     }
 }

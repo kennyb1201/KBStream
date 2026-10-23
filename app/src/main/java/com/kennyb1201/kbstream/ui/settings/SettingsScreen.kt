@@ -96,6 +96,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
+import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -591,12 +592,16 @@ fun SettingsScreen(
     var mdbListKeySaved by remember {
         mutableStateOf(AppPreferences.getMdbListApiKey(context).isNotBlank())
     }
-    // Key-verification posture (SI-P2-3): MDBList is the ONLY tracker with an
-    // opt-in VERIFY, so its status line can say "Connected". The other two have
-    // no verification endpoint wired, and their feedback says "Saved" rather
+    // Key-verification posture (SI-P2-3): MDBList and TorBox each have a
+    // verification call, so their status lines can say "Connected".
+    // OpenSubtitles and OMDb do not, and their feedback says "Saved" rather
     // than claiming a connection it has not tested. That wording is deliberate
     // and honest - the key really was saved - and adding VERIFY for them means
     // specifying a verification call per provider first.
+    //
+    // TorBox's probe is not a nicety: both of its features fail soft, so a key
+    // it rejects produced no chip and no library rows with nothing said. See
+    // TorBoxClient.verifyKey.
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
     var subsKeySaved by remember {
         mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context).isNotBlank())
@@ -1248,10 +1253,30 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(top = 2.dp)
                         )
+                        // One commit path for all three ways this field saves
+                        // itself (paste, IME done, losing focus). A key entered
+                        // AFTER the library switch was already on is the moment
+                        // that round first becomes possible: the switch's own
+                        // call skipped it while the key was blank, and nothing
+                        // else looked again until the next launch - so the key
+                        // and the schedule have to move together here. Only a
+                        // real change arms a round, so tabbing through the field
+                        // does not fire one.
+                        val commitTorboxKey: (String) -> Unit = { value ->
+                            val key = value.trim()
+                            val changed = key != AppPreferences.getTorboxApiKey(context)
+                            torboxKeyInput = key
+                            AppPreferences.setTorboxApiKey(context, key)
+                            torboxKeySaved = key.isNotBlank()
+                            if (changed && key.isNotBlank() &&
+                                AppPreferences.getTorboxLibrarySync(context)
+                            ) {
+                                com.kennyb1201.kbstream.work.TorBoxLibraryWorker
+                                    .syncScheduleForPrefs(context, runImmediate = true)
+                            }
+                        }
                         val torboxPaste: (String) -> Unit = { pasted ->
-                            torboxKeyInput = pasted.trim()
-                            AppPreferences.setTorboxApiKey(context, torboxKeyInput)
-                            torboxKeySaved = torboxKeyInput.isNotBlank()
+                            commitTorboxKey(pasted)
                         }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1272,27 +1297,70 @@ fun SettingsScreen(
                                 placeholder = "Paste key",
                                 modifier = Modifier.weight(1f),
                                 focusRequester = torboxFocusRequester,
-                                onDone = {
-                                    AppPreferences.setTorboxApiKey(context, torboxKeyInput)
-                                    torboxKeySaved = torboxKeyInput.isNotBlank()
-                                },
+                                onDone = { commitTorboxKey(torboxKeyInput) },
                                 onFocusChanged = { focusedNow ->
-                                    if (!focusedNow) {
-                                        AppPreferences.setTorboxApiKey(context, torboxKeyInput)
-                                        torboxKeySaved = torboxKeyInput.isNotBlank()
-                                    }
+                                    if (!focusedNow) commitTorboxKey(torboxKeyInput)
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             KBPasteChip(onPaste = torboxPaste)
                         }
                         if (torboxKeySaved) {
-                            Text(
-                                text = "Saved — cached sources are badged in the stream picker.",
-                                color = KBAccent,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(top = 5.dp)
-                            )
+                            // The same VERIFY the MDBList card has, for a sharper
+                            // reason: both TorBox features fail soft, so a key
+                            // TorBox rejects looked exactly like a working one
+                            // from here - no Cached chip, no library rows, no
+                            // message. The probe reads the account's own library
+                            // route and names the outcome (or the HTTP code),
+                            // which is the one fact neither feature reports.
+                            var torboxVerify by remember {
+                                mutableStateOf<Pair<String?, String?>?>(null)
+                            }
+                            var torboxVerifying by remember { mutableStateOf(false) }
+                            val torboxVerifyScope = rememberCoroutineScope()
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .padding(top = 5.dp)
+                                    .fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = when {
+                                        torboxVerifying -> "Verifying…"
+                                        torboxVerify?.first != null ->
+                                            "Connected — ${torboxVerify?.first}"
+                                        torboxVerify?.second != null ->
+                                            torboxVerify?.second ?: ""
+                                        else -> "Saved — cached sources are badged in " +
+                                            "the stream picker."
+                                    },
+                                    color = if (torboxVerify?.second != null) KBTextLo else KBAccent,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                KBCard(
+                                    onClick = {
+                                        torboxVerifying = true
+                                        torboxVerify = null
+                                        torboxVerifyScope.launch {
+                                            torboxVerify = TorBoxClient.verifyKey(context)
+                                            torboxVerifying = false
+                                        }
+                                    },
+                                    modifier = Modifier.width(120.dp)
+                                ) {
+                                    Text(
+                                        text = if (torboxVerifying) "VERIFYING…" else "VERIFY",
+                                        color = KBAccent,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier
+                                            .background(KBSurface, KBShapeSmall)
+                                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }

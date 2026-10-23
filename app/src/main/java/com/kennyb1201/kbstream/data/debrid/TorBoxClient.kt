@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.debrid
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -123,13 +124,25 @@ internal object TorBoxClient {
     suspend fun checkCached(context: Context, hashes: Collection<String?>): Set<String> =
         withContext(Dispatchers.IO) {
             val apiKey = AppPreferences.getTorboxApiKey(context)
-            if (apiKey.isBlank()) return@withContext emptySet()
+            if (apiKey.isBlank()) {
+                TorBoxTrace.note("${hashes.size} sources · no key, nothing checked")
+                return@withContext emptySet()
+            }
 
             val wanted = hashes
                 .mapNotNull { it?.trim()?.lowercase() }
                 .filter { it.length >= MIN_HASH_LENGTH }
                 .toSet()
-            if (wanted.isEmpty()) return@withContext emptySet()
+            if (wanted.isEmpty()) {
+                // The answer to "I never see a Cached chip", said in one line:
+                // a source with no infohash cannot be looked up at all, and a
+                // debrid add-on that has already resolved the torrent hands over
+                // a CDN link rather than a hash. A list of those is a chip-less
+                // picker with nothing wrong with the key, and this is how a field
+                // capture tells that case from a rejected key.
+                TorBoxTrace.note("${hashes.size} sources · none carried an infohash")
+                return@withContext emptySet()
+            }
 
             val now = System.currentTimeMillis()
             val toQuery = wanted.filter { hash ->
@@ -139,17 +152,24 @@ internal object TorBoxClient {
             toQuery.chunked(BATCH_SIZE).forEach { batch ->
                 // A failed batch is left uncached so the next fetch can retry it,
                 // rather than teaching the memo that everything is uncached.
-                val result = runCatching { query(apiKey, batch) }.getOrNull() ?: return@forEach
+                val result = runCatching { query(apiKey, batch) }
+                    .onFailure { TorBoxTrace.note("checkcached failed: ${it.message}") }
+                    .getOrNull() ?: return@forEach
                 val stamp = System.currentTimeMillis()
                 batch.forEach { hash -> cache[hash] = Entry(cached = hash in result, atMs = stamp) }
                 pruneCache(stamp)
             }
 
             val at = System.currentTimeMillis()
-            wanted.filter { hash ->
+            val cachedNow = wanted.filter { hash ->
                 val entry = cache[hash] ?: return@filter false
                 entry.cached && at - entry.atMs < CACHE_TTL_MS
             }.toSet()
+            TorBoxTrace.note(
+                "${hashes.size} sources · ${wanted.size} with a hash · " +
+                    "${cachedNow.size} cached"
+            )
+            cachedNow
         }
 
     private fun query(apiKey: String, hashes: List<String>): Set<String> {
@@ -226,6 +246,48 @@ internal object TorBoxClient {
                 .onFailure { Log.w(TAG, "mylist failed: ${it.message}") }
                 .getOrDefault(emptyList())
         }
+
+    /**
+     * Probes the account's key against TorBox's own library route, for the
+     * VERIFY action beside the key in Settings. Answers (what the account holds,
+     * null) when the key works, or (null, why it failed) when it does not - the
+     * same shape `MdbListClient.verifyKey` returns, so both settings panes can
+     * render it with the code they already have.
+     *
+     * This exists because the key's two features both fail soft: a rejected key
+     * means no Cached chip AND no library rows, with nothing on screen to say
+     * so. A probe is the only thing that can tell the viewer which of the two
+     * halves is wrong - and the torrent count it answers with doubles as a check
+     * that the library side has something to sync at all.
+     */
+    suspend fun verifyKey(context: Context): Pair<String?, String?> {
+        val apiKey = AppPreferences.getTorboxApiKey(context)
+        if (apiKey.isBlank()) return null to "No key pasted yet"
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$MYLIST_URL?bypassCache=true")
+                    .header("Authorization", "Bearer $apiKey")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    when {
+                        response.isSuccessful -> {
+                            val count = parseCloudTorrents(response.body?.string().orEmpty()).size
+                            val what = if (count == 1) "1 torrent" else "$count torrents"
+                            "$what in your TorBox cloud" to null
+                        }
+                        response.code == 401 || response.code == 403 ->
+                            null to "Key rejected — check it on torbox.app → Account → API"
+                        else -> null to "TorBox error HTTP ${response.code}"
+                    }
+                }
+            }.getOrElse { e ->
+                // Never the key itself: it travels in the Authorization header,
+                // not the URL, so an IO message cannot carry it.
+                null to (e.message ?: "Network error reaching torbox.app")
+            }
+        }
+    }
 
     private fun queryLibrary(apiKey: String): List<CloudTorrent> {
         // bypassCache so a torrent just added shows up immediately instead of

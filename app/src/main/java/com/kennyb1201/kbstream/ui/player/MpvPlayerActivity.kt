@@ -2475,6 +2475,39 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
+     * Takes the remote away from every side panel before an end-of-episode
+     * panel is raised.
+     *
+     * The picker holds the D-pad with the window-level guard in bindViews: while
+     * it is open, any focus that leaves it is pulled straight back to its
+     * remembered row. The end-of-episode card is raised from the progress tick, so a
+     * subtitle picker the viewer happened to have open was still up - and still
+     * armed - the moment the card appeared. Its own `PLAY NEXT` request was
+     * answered by the guard on the spot, so the card sat on screen with no way
+     * to reach it (the field report: "the next up popup popped up and it
+     * wouldn't let me gain focus on the popup because it was in the subtitle
+     * picker"), and its countdown could run out while they were still reading
+     * the picker.
+     *
+     * The card is the decision now, so the side panels close with it. INFO is
+     * the third takeover and goes too. The chrome is left as it was - the card
+     * parks focus on PLAY NEXT itself once it is visible.
+     */
+    private fun closePanelsForEndCard() {
+        hideInfoPanel()
+        if (pickerOpen) {
+            pickerOpen = false
+            currentPickerMode = null
+            pickerLastFocus = null
+            pickerContainer?.visibility = View.GONE
+        }
+        // showPicker raises settingsOpen for itself, so this clears whether the
+        // picker or the settings panel was the one showing.
+        settingsOpen = false
+        settingsContainer?.visibility = View.GONE
+    }
+
+    /**
      * Gives the D-pad back to the picker after it has escaped the panel.
      *
      * Called from the window's global focus-change listener (see bindViews), so
@@ -3935,6 +3968,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** Fills and shows the card, then arms its countdown. */
     private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {
         val panel = nextUpPanel ?: return
+        // A side panel left up would keep the D-pad (see closePanelsForEndCard).
+        closePanelsForEndCard()
         pendingNextSeason = targetSeason
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null
@@ -4085,37 +4120,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // an exit - the panel opens while the credits are still rolling, and
         // closing the session there would cut them short.
         if (ui == null || bywDismissed) return
-        // The panel is only ever raised for a title the session has finished
-        // with, so the episode MUST already be filed as watched: the two
-        // systems that stand behind "watched" - the local history row and the
-        // tracker push - were told by the completion this session wrote. This
-        // line is the assertion the field report asked for ("BYW appeared but
-        // the episode is not marked watched"): a capture showing `byw shown`
-        // with `filed=false` is that inconsistency, caught the moment it
-        // happens rather than weeks later on Continue Watching.
-        if (!completionFiled) {
-            Log.w(
-                TAG,
-                "BYW raised without a filed completion for ${historyId} " +
-                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
-                    "not marked watched"
-            )
-            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        } else {
-            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
-            )
-        }
-        ui.show(itemName)
-        // The credits themselves are still rolling: shrink the video into the
-        // corner so the picks get the screen, and take the chrome down with it -
-        // the panel owns the remote while it is up.
-        removeAutoHide()
-        setControlsVisible(View.GONE)
-        enterCreditsMode()
-
+        // A side panel left up would keep the D-pad (see closePanelsForEndCard).
+        closePanelsForEndCard()
+        // The picks are fetched BEFORE the panel is raised.
+        //
+        // It used to open on the spot and fill in a few seconds later, because
+        // the TMDB round-trip behind build() ran after show(): the field report
+        // of a BYW panel that "pops up blank for 3 to 7 seconds and then fills
+        // in". Nothing is raised now when there is nothing to suggest - the
+        // credits simply keep playing full screen - so the panel can never be
+        // seen as an empty box.
         lifecycleScope.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
                 val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
@@ -4131,17 +4145,43 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 )
             }
 
-            if (picks.isEmpty() || !ui.isVisible) {
-                // Nothing to recommend: put the video back full screen and let
-                // the session run its course, exactly as the main player does.
-                withContext(Dispatchers.Main) {
-                    ui.hide()
-                    exitCreditsMode()
-                }
-                return@launch
-            }
+            if (picks.isEmpty() || bywDismissed) return@launch
 
             withContext(Dispatchers.Main) {
+                // The panel is only ever raised for a title the session has
+                // finished with, so the episode MUST already be filed as
+                // watched: the two systems that stand behind "watched" - the
+                // local history row and the tracker push - were told by the
+                // completion this session wrote. This line is the assertion the
+                // field report asked for ("BYW appeared but the episode is not
+                // marked watched"): a capture showing `byw shown` with
+                // `filed=false` is that inconsistency, caught the moment it
+                // happens rather than weeks later on Continue Watching.
+                if (!completionFiled) {
+                    Log.w(
+                        TAG,
+                        "BYW raised without a filed completion for ${historyId} " +
+                            "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                            "not marked watched"
+                    )
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                } else {
+                    com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                        "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+                    )
+                }
+                ui.show(itemName)
+                // The credits themselves are still rolling: shrink the video
+                // into the corner so the picks get the screen, and take the
+                // chrome down with it - the panel owns the remote while it is
+                // up.
+                removeAutoHide()
+                setControlsVisible(View.GONE)
+                enterCreditsMode()
+                // Filled in the same turn as the raise, so there is no frame in
+                // which the panel is up with an empty row.
                 ui.build(picks)
             }
         }

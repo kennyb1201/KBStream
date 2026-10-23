@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
+import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
@@ -605,8 +606,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             )
         )
 
-        if (badgeHashes.any { !it.isNullOrBlank() }) {
-            requestCachedBadges(generation, badgeHashes)
+        if (hasDebridServiceConfigured()) {
+            // A list with NO infohash in it gets no check to perform, so the
+            // client's own trace never runs and the report would say nothing at
+            // all - which is exactly the capture that cannot answer "why is
+            // there never a Cached chip". Recorded here instead.
+            if (badgeHashes.any { !it.isNullOrBlank() }) {
+                requestCachedBadges(generation, badgeHashes)
+            } else if (badgeHashes.isNotEmpty()) {
+                TorBoxTrace.note(
+                    "${badgeHashes.size} sources · none carried an infohash"
+                )
+            }
         }
 
         // The parallel add-on list for the final order: each surviving row's

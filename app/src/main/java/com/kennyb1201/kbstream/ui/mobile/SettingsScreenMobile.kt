@@ -56,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -100,6 +101,7 @@ import com.kennyb1201.kbstream.ui.theme.argbFromHsv
 import com.kennyb1201.kbstream.ui.theme.hsvFromArgb
 import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
+import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
@@ -634,11 +636,30 @@ private fun IntegrationsPaneMobile(
         )
         KeyCardMobile(
             title = "TorBox API Key",
-            description = "Adds your TorBox cloud library to the Debrid rows.",
+            description = "From torbox.app → Account → API. Badges the sources your " +
+                "account already holds, and feeds the TorBox library sync below.",
             placeholder = "Paste key",
             loadedValue = AppPreferences.getTorboxApiKey(context),
-            onSave = { key -> AppPreferences.setTorboxApiKey(context, key) },
-            savedDescription = "Saved — the TorBox library syncs with the active profile."
+            onSave = { key ->
+                val changed = key != AppPreferences.getTorboxApiKey(context)
+                AppPreferences.setTorboxApiKey(context, key)
+                // A key entered AFTER the sync was switched on is the moment the
+                // round first becomes possible: the toggle's own call skipped it
+                // while the key was blank, and nothing else looks again until the
+                // next launch - which read as "the switch does nothing".
+                if (changed && key.isNotBlank() &&
+                    AppPreferences.getTorboxLibrarySync(context)
+                ) {
+                    TorBoxLibraryWorker.syncScheduleForPrefs(context, runImmediate = true)
+                }
+            },
+            // Both TorBox features fail soft, so a rejected key used to look
+            // exactly like a working one here: no Cached chip, no library rows,
+            // no message. The probe reads the account's own library route and
+            // answers with what it holds (or why it said no).
+            verify = { TorBoxClient.verifyKey(context) },
+            savedHint = "Connected —",
+            savedDescription = "Saved — cached sources are badged, and the library sync uses this key."
         )
 
         // ── Subtitles & Debrid ──────────────────────────────────────────
@@ -655,9 +676,17 @@ private fun IntegrationsPaneMobile(
         )
         SyncedToggleMobile(
             label = "TorBox library sync",
-            description = "Keep the TorBox cloud library in step with the active profile.",
+            description = "Add the torrents in your TorBox cloud to My List. Needs the " +
+                "TorBox key above; each is matched to a title on TMDB, and anything " +
+                "that can't be matched confidently is left out.",
             get = AppPreferences::getTorboxLibrarySync,
-            set = AppPreferences::setTorboxLibrarySync
+            set = AppPreferences::setTorboxLibrarySync,
+            // The TV pane has always armed the round from its switch; this one
+            // only wrote the boolean, so turning it on produced no rows for up
+            // to a schedule window (or until the next launch re-armed it).
+            onChanged = { ctx, enabled ->
+                TorBoxLibraryWorker.syncScheduleForPrefs(ctx, runImmediate = enabled)
+            }
         )
 
         // ── Stream badges ────────────────────────────────────────────────
@@ -2959,7 +2988,13 @@ private fun SyncedToggleMobile(
     label: String,
     description: String,
     get: (android.content.Context) -> Boolean,
-    set: (android.content.Context, Boolean) -> Unit
+    set: (android.content.Context, Boolean) -> Unit,
+    /**
+     * Runs after the preference is written, for a switch that also has work to
+     * arm (the TorBox library sync). Kept off [set] so the pref write stays the
+     * same method reference the TV pane's own key contract compares against.
+     */
+    onChanged: ((android.content.Context, Boolean) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val revision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
@@ -2971,6 +3006,7 @@ private fun SyncedToggleMobile(
         onChange = {
             checked = it
             set(context, it)
+            onChanged?.invoke(context, it)
         }
     )
 }
