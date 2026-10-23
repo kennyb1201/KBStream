@@ -88,7 +88,19 @@ fun LibraryCalendarPane(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val touch = !FormFactor.isTv
 
-    val dayRequesters = remember { mutableMapOf<LocalDate, FocusRequester>() }
+    /*
+     * One requester per day of the visible month, built in a remember rather
+     * than lazily by the grid's cell loop: FocusRequester() is
+     * @RememberInComposition, so constructing one while composing a cell is a
+     * composition-time allocation lint refuses (and the map only ever holds the
+     * month on screen, so keying it on the month is the whole lifetime it
+     * needs).
+     */
+    val dayRequesters = remember(state.month) {
+        calendarCells(state.month)
+            .filterNotNull()
+            .associateWith { FocusRequester() }
+    }
     val listFocusRequester = remember { FocusRequester() }
 
     // The day the D-pad should be on, once the month it belongs to has landed.
@@ -283,7 +295,7 @@ private fun CalendarGrid(
     selected: LocalDate,
     today: LocalDate,
     touch: Boolean,
-    dayRequesters: MutableMap<LocalDate, FocusRequester>,
+    dayRequesters: Map<LocalDate, FocusRequester>,
     onSelect: (LocalDate) -> Unit,
     onPrevMonth: () -> Unit,
     onNextMonth: () -> Unit,
@@ -312,11 +324,7 @@ private fun CalendarGrid(
                                 isFirstColumn = column == 0,
                                 isLastColumn = column == 6,
                                 isLastRow = rowIndex == rows.lastIndex,
-                                requester = if (touch) {
-                                    null
-                                } else {
-                                    dayRequesters.getOrPut(day) { FocusRequester() }
-                                },
+                                requester = if (touch) null else dayRequesters[day],
                                 onSelect = onSelect,
                                 onPrevMonth = onPrevMonth,
                                 onNextMonth = onNextMonth,

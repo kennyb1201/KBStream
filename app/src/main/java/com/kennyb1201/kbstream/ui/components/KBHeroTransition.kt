@@ -237,7 +237,12 @@ fun Modifier.heroSourceOnPress(type: String, id: String): Modifier {
     val transition = LocalKBHeroTransition.current ?: return Modifier
     val key = KBHeroTransition.keyOf(type, id)
     val isSource = remember(key) { derivedStateOf { heroSourceKey.value == key } }
-    return if (isSource.value) transition.sourceModifierFor(key) else Modifier
+    // Chain onto the receiver: returning the flight modifier (or a bare
+    // Modifier) on its own dropped every modifier the caller had already
+    // chained before this one, the press target's own size/click among them.
+    return this.then(
+        if (isSource.value) transition.sourceModifierFor(key) else Modifier
+    )
 }
 
 @Composable
