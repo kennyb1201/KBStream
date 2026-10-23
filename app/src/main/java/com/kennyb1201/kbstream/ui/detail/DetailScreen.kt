@@ -180,6 +180,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -3441,7 +3442,13 @@ fun DetailScreen(
                             )
                             .focusGroup()
                             .focusRestorer()
-                            .scrollToTopOnFocus(detailListState, scope)
+                            .scrollToTopOnFocus(detailListState, scope) {
+                                // Not while a menu's hand-back is in flight: the
+                                // focus the header sees then is the framework's
+                                // temporary pick, not the viewer's destination
+                                // (see the modifier).
+                                handFocusBack.pending == null
+                            }
                     ) {
                         val openStreams: () -> Unit = {
                             // The viewer has taken the play action themselves, so
@@ -3616,7 +3623,9 @@ fun DetailScreen(
                                 end = 24.dp,
                                 bottom = 6.dp
                             )
-                            .scrollToTopOnFocus(detailListState, scope)
+                            .scrollToTopOnFocus(detailListState, scope) {
+                                handFocusBack.pending == null
+                            }
                     ) {
                         val metaLine = remember(
                             m,
@@ -3901,12 +3910,16 @@ fun DetailScreen(
                                                 )
                                             ),
                                             modifier = Modifier
-                                                .onFocusChanged { focusState ->
-                                                    if (focusState.hasFocus) {
-                                                        scope.launch {
-                                                            detailListState.animateScrollToItem(0)
-                                                        }
-                                                    }
+                                                // The same snap as the header's, with the
+                                                // same gates: this toggle is the topmost
+                                                // focusable INSIDE the list, so it is the
+                                                // other node a dismissing menu's transient
+                                                // focus can land on - and the ad-hoc
+                                                // `animateScrollToItem(0)` that used to sit
+                                                // here fired for that frame too. See
+                                                // [scrollToTopOnFocus].
+                                                .scrollToTopOnFocus(detailListState, scope) {
+                                                    handFocusBack.pending == null
                                                 }
                                                 .padding(top = 8.dp)
                                         ) {
@@ -7426,20 +7439,56 @@ private fun PosterGridCard(
  * is the list's first, non-focusable item: walking focus back up used to
  * keep the old scroll offset, leaving the overview permanently scrolled out
  * of view. Composable so it can read `detailListState` composition-locally.
+ *
+ * The snap is the one thing on this page that moves the list on its own, so
+ * it is spent only on the focus it was written for: the viewer WALKING UP to
+ * the header. It used to fire on any focus the header reported, and the field
+ * report (0.9.36) is what that costs - long-press an episode card, mark it
+ * watched, and the page scrolled up to the PLAY button while the hand-back put
+ * the focus back on the card: the overlay's focused node leaves the tree in
+ * the same recomposition that records the hand-back, the header is the row the
+ * framework picks while the ask is still a frame away, and this modifier turned
+ * that one transient frame into a full `animateScrollToItem(0)` - which then
+ * kept animating after the focus was already back on the card. Two gates:
+ *
+ *  - [canSnap] is false while a hand-back is pending, and a pending hand-back
+ *    means focus is being delivered to a recorded surface (the card that raised
+ *    the menu) rather than being left here by the viewer;
+ *  - the snap waits a frame and re-reads the header's focus, so a focus that
+ *    lands and leaves again within that frame can never move the page. A snap
+ *    that already started is cancelled the moment the header loses focus, and
+ *    the check is repeated on the way in for a focus the gate could not predict.
  */
 @Composable
 private fun Modifier.scrollToTopOnFocus(
     listState: LazyListState,
-    scope: kotlinx.coroutines.CoroutineScope
-): Modifier = this.onFocusChanged { state ->
-    if (
-        state.hasFocus &&
-        (
+    scope: kotlinx.coroutines.CoroutineScope,
+    canSnap: () -> Boolean
+): Modifier {
+    var headerFocused by remember { mutableStateOf(false) }
+    var snapJob by remember { mutableStateOf<Job?>(null) }
+    return this.onFocusChanged { state ->
+        headerFocused = state.hasFocus
+        if (!state.hasFocus) {
+            // Whatever was travelling belongs to the focus that just left the
+            // header: let it stop here rather than settle the page somewhere
+            // nobody asked for.
+            snapJob?.cancel()
+            return@onFocusChanged
+        }
+        val scrolled =
             listState.firstVisibleItemIndex > 0 ||
                 listState.firstVisibleItemScrollOffset > 0
-            )
-    ) {
-        scope.launch { listState.animateScrollToItem(0) }
+        if (!scrolled || snapJob?.isActive == true) return@onFocusChanged
+        snapJob =
+            scope.launch {
+                awaitFrame()
+                // A transient focus has been replaced by now (the hand-back asks
+                // one frame after the dismissal), so this is the viewer's own
+                // arrival at the header and only it may move the list.
+                if (!headerFocused || !canSnap()) return@launch
+                listState.animateScrollToItem(0)
+            }
     }
 }
 
