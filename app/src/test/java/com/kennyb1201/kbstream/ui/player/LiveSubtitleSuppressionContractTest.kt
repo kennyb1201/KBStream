@@ -58,14 +58,19 @@ class LiveSubtitleSuppressionContractTest {
         val body = functionBody(NATIVE, "private fun maybeAutoFetchSubtitle() {")
         val guard = body.indexOf("if (isLiveChannel) return")
         assertTrue("the live guard is missing", guard >= 0)
-        // The guard must precede the network call, the attach and the toast, so
-        // none of them can run for a channel.
+        // The guard must precede the network call and the attach, so neither
+        // can run for a channel. The announcement is gone entirely: an
+        // automatically fetched subtitle is no longer toasted at all (it used
+        // to pop up over the picture) - what the route does instead is attach
+        // it without a player rebuild.
         val search = body.indexOf("SubtitleSearchHelper.search(")
         val attach = body.indexOf("attachExternalSubtitle(")
-        val toast = body.indexOf("\"Subtitles: ")
         assertTrue("the guard must precede the search", guard < search)
         assertTrue("the guard must precede the attach", guard < attach)
-        assertTrue("the guard must precede the announcement", guard < toast)
+        assertTrue(
+            "and a live channel must reach neither the prefetch nor the attach",
+            guard in 0 until body.indexOf("SubtitlePrefetch.get(")
+        )
     }
 
     @Test

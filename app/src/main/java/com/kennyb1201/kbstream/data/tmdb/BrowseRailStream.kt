@@ -89,7 +89,20 @@ internal suspend fun streamBrowseSections(
             // An ANSWERED fast path with no rows does report, as an empty rail.
             // That is a rail this page turns out not to have, and saying so
             // keeps the widening pages from reviving it later, out of order.
+            //
+            // The two used to be the same event: every discover branch collapsed
+            // a failed request to `emptyList()`, so a flaky page 1 REPORTED as an
+            // empty rail, the publisher sealed it, and the deepening pass that
+            // carried its rows was dropped - a rail whose first request flaked
+            // could only appear once the slowest rail on the page had finished,
+            // which is exactly the case the two-stage publish exists for. The
+            // page now says which of the two it is (see [TagRailPage.failed]), so
+            // a failed fast path stays unreported and the retry behind it places
+            // the rail, in order.
+            var reported = false
             runCatchingCancellable { load(title, false) }.getOrNull()?.let { shallow ->
+                if (shallow.failed) return@let
+                reported = true
                 publisher.report(
                     index,
                     shallow.items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
@@ -97,10 +110,21 @@ internal suspend fun streamBrowseSections(
             }
 
             val deep = load(title, true)
-            publisher.report(
-                index,
-                deep.items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-            )
+            when {
+                !deep.failed -> {
+                    reported = true
+                    publisher.report(
+                        index,
+                        deep.items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
+                    )
+                }
+                // Both stages failed: this rail has still not reported, and the
+                // publisher holds every rail BELOW it until it does. Report the
+                // failure as the empty answer it is - the finished set still
+                // carries whatever the next open finds, and the rails behind this
+                // one are not held hostage to it.
+                !reported -> publisher.report(index, null)
+            }
         }
     }.awaitAll()
 

@@ -96,7 +96,7 @@ import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
-import com.kennyb1201.kbstream.work.ReminderWorker
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
@@ -124,6 +124,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.work.ReminderWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
@@ -1079,7 +1080,13 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             attempts++
         }
         if (!focused) {
-            runCatching { channelListFocusRequester.requestFocus() }
+            // The last resort is a DRIVEN ask too, not the bare one this used
+            // to be: the list's node can be just as unattached on this frame as
+            // the chip's was (channels present, list not yet laid out), and an
+            // unobserved request there left the guide focusless in the branch
+            // whose whole purpose is to prevent that. It is a different target,
+            // not a different standard.
+            landFocusOn(channelListFocusRequester)
         }
     }
   }

@@ -192,9 +192,8 @@ class HomeFocusedCardContractTest {
             "and that landing is the verified one: scrolled to the head, then " +
                 "retried until the request's own answer says it landed",
             home.contains("railState.scrollToItem(CONTINUE_WATCHING_HEAD_INDEX)") &&
-                home.contains(
-                    "landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)"
-                )
+                home.contains("runCatching { headRequester.requestFocus() }.getOrDefault(false)") &&
+                home.contains("landed = verdict.accepted(")
         )
     }
 

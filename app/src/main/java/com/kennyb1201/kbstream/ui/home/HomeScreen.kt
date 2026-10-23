@@ -123,6 +123,7 @@ import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
@@ -2758,11 +2759,17 @@ private fun BuiltinContinueWatchingRail(
         // grabs use. requestFocus() reports a miss by its RETURN value (it
         // throws only for a requester with nothing attached), so success is
         // read from it rather than from runCatching alone.
+        // Two consecutive acceptances, not one (see [FocusLandingVerdict]):
+        // an answer that accepted and was disposed a frame later - the rail
+        // reloading under the landing - used to be logged as a delivery here.
         var landed = false
         var attempts = 0
+        val verdict = FocusLandingVerdict()
         while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {
             awaitFrame()
-            landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            landed = verdict.accepted(
+                runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            )
             attempts++
         }
         if (freshEntryLanding) {
@@ -2948,11 +2955,16 @@ private fun BuiltinUpcomingRail(
             return@LaunchedEffect
         }
         railState.scrollToItem(CONTINUE_WATCHING_HEAD_INDEX)
+        // Verified, like the Continue Watching head above: one acceptance is
+        // not a landing (see [FocusLandingVerdict]).
         var landed = false
         var attempts = 0
+        val verdict = FocusLandingVerdict()
         while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {
             awaitFrame()
-            landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            landed = verdict.accepted(
+                runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            )
             attempts++
         }
     }

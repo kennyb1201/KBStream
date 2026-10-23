@@ -80,7 +80,8 @@ class PlayerAssOverlayContractTest {
 
         assertTrue(
             "the gate must read the coverage of the current selection",
-            body.contains("assOverlayClaimsSelection()")
+            body.contains("assOverlayOwns()") &&
+                player.contains("assOverlayClaimsSelection() ||")
         )
         assertTrue(
             "and still require a script that actually loaded",
@@ -126,8 +127,10 @@ class PlayerAssOverlayContractTest {
 
         assertTrue(
             "the tick used to hide the text view for ANY loaded script, which blanked the " +
-                "pipeline's cues for a track the overlay had not claimed",
-            tick.contains("if (!assOverlayClaimsSelection()) {")
+                "pipeline's cues for a track the overlay had not claimed - and the claim " +
+                "it reads now also covers a sidecar this app attaches without arming a " +
+                "track (see the auto-fetch path)",
+            tick.contains("if (!assOverlayOwns()) {")
         )
         assertTrue(
             "an unclaimed script must not be drawn over the picture either",

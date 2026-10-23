@@ -81,6 +81,17 @@ class AutoSubtitleFetchGateContractTest {
 
     private val gate = "SubtitleSearchHelper.isUsableSubtitleBody("
 
+    /**
+     * How the auto-fetch attaches: no player rebuild.
+     *
+     * The rebuild is what the attach cost before - a re-open of the stream,
+     * a second or two of buffering - and it is exactly what an automatic
+     * subtitle must not do to a film already playing (see
+     * `NativePlayerActivity.attachExternalSubtitle`). The manual routes keep
+     * the rebuild, because the viewer asked for that one and expects a beat.
+     */
+    private val nativeAutoAttach = "attachExternalSubtitle(uri, rebuild = false)"
+
     @Test
     fun `all four download routes gate on the shared usability rule`() {
         listOf(
@@ -95,12 +106,31 @@ class AutoSubtitleFetchGateContractTest {
 
     @Test
     fun `native routes reject before the player is rebuilt`() {
-        listOf("auto-fetch" to nativeAuto, "manual picker" to nativeManual).forEach {
-                (route, body) ->
-            val check = body.indexOf(gate)
-            val attach = body.indexOf("attachExternalSubtitle(uri)")
-            assertTrue("$route must still attach a usable body", attach > check)
-        }
+        val autoCheck = nativeAuto.indexOf(gate)
+        val autoAttach = nativeAuto.indexOf(nativeAutoAttach)
+        assertTrue(
+            "the auto-fetch must still attach a usable body, without a rebuild",
+            autoAttach > autoCheck
+        )
+        val manualCheck = nativeManual.indexOf(gate)
+        val manualAttach = nativeManual.indexOf("attachExternalSubtitle(uri)")
+        assertTrue("the manual pick must still attach a usable body", manualAttach > manualCheck)
+    }
+
+    @Test
+    fun `an automatic subtitle never announces itself over the picture`() {
+        // The toast that used to pop up "Subtitles: …" mid-playback. An
+        // automatically fetched track is not news the viewer needs, and the
+        // popup landed on top of the film at the exact moment the attach used
+        // to stall it. The subtitle appearing IS the feedback.
+        assertFalse(
+            "the native auto-fetch must not raise a toast",
+            nativeAuto.contains("Toast")
+        )
+        assertTrue(
+            "and it must attach without rebuilding the player",
+            nativeAuto.contains(nativeAutoAttach)
+        )
     }
 
     @Test
@@ -128,7 +158,7 @@ class AutoSubtitleFetchGateContractTest {
     fun `an auto-fetch with no readable cues is dropped silently, never announced`() {
         // ExoPlayer: log and bail before the attach; no toast for a bad body.
         val check = nativeAuto.indexOf(gate)
-        val attach = nativeAuto.indexOf("attachExternalSubtitle(uri)")
+        val attach = nativeAuto.indexOf(nativeAutoAttach)
         val reject = nativeAuto.substring(check, attach)
         assertTrue("the rejected body must leave the coroutine", reject.contains("return@launch"))
         assertTrue("the rejected body must be logged", reject.contains("Log.w("))
@@ -171,7 +201,7 @@ class AutoSubtitleFetchGateContractTest {
             capture < nativeAuto.indexOf("SubtitleSearchHelper.search(")
         )
 
-        val attach = nativeAuto.indexOf("attachExternalSubtitle(uri)")
+        val attach = nativeAuto.indexOf(nativeAutoAttach)
         assertTrue("the route must still attach", attach > capture)
         assertTrue(
             "the identity must be re-checked right before the attach",

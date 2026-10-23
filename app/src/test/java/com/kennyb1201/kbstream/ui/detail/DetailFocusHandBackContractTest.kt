@@ -70,9 +70,12 @@ class DetailFocusHandBackContractTest {
             driver.contains("awaitFrame()")
         )
         assertTrue(
-            "a miss is asked again, and the exit is the request's own landing - " +
-                "the only focus observation Compose exposes - not a silent one-shot",
-            driver.contains("val landed = requester != null &&") &&
+            "a miss is asked again, and the exit is a VERIFIED landing - two " +
+                "consecutive acceptances through the shared verdict, because one " +
+                "answer cannot tell a stable card from one disposed a frame later",
+            driver.contains("val verdict = FocusLandingVerdict()") &&
+                driver.contains("val landed = verdict.accepted(") &&
+                driver.contains("requester != null &&") &&
                 driver.contains("runCatching { requester.requestFocus() }.getOrDefault(false)")
         )
         assertTrue(

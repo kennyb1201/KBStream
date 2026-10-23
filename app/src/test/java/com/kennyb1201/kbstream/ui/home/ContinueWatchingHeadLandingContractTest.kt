@@ -162,9 +162,13 @@ class ContinueWatchingHeadLandingContractTest {
         assertTrue(
             "requestFocus() misses by RETURNING false, so the loop reads the " +
                 "value - runCatching alone would look like success on frame one",
-            landing.contains(
-                "landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)"
-            )
+            landing.contains("runCatching { headRequester.requestFocus() }.getOrDefault(false)")
+        )
+        assertTrue(
+            "and the answer goes through the shared verdict: an accepted request " +
+                "that was disposed a frame later is not a landing",
+            landing.contains("val verdict = FocusLandingVerdict()") &&
+                landing.contains("landed = verdict.accepted(")
         )
         assertTrue(
             "bounded, so a rail that never attaches its head cannot spin",
@@ -300,9 +304,11 @@ class ContinueWatchingHeadLandingContractTest {
         assertTrue("in that order: a request against a card that is not laid out is a silent miss", scroll < ask)
         assertTrue(
             "and the ask reports its own miss, so it is retried rather than lost",
-            upcomingLanding.contains(
-                "landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)"
-            )
+            upcomingLanding.contains("runCatching { headRequester.requestFocus() }.getOrDefault(false)")
+        )
+        assertTrue(
+            "through the same verified verdict as the Continue Watching head",
+            upcomingLanding.contains("landed = verdict.accepted(")
         )
     }
 

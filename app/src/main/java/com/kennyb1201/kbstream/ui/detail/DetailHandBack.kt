@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
+import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import kotlinx.coroutines.android.awaitFrame
 
 /** The logcat tag a delivered (or abandoned) hand-back is reported under. */
@@ -32,12 +33,11 @@ internal enum class DetailHandBackStep { RETRY, DELIVERED, ABANDONED }
 /**
  * The delivery loop's decision, pure so the budget is pinnable in a unit test.
  *
- * [landed] is the request's own answer, which is the only focus observation
- * Compose exposes: `requestFocus()` reports whether the focus system moved
- * focus to that node - an unattached node answers FALSE rather than throwing -
- * and there is no public "is this requester focused right now" query. Reading
- * that answer is the difference between this and the one-shot ask it replaces,
- * whose miss was silent.
+ * [landed] is a VERIFIED landing, not one ask's answer: the request's own answer
+ * is the only focus observation Compose exposes, so a landing is two consecutive
+ * acceptances across frames (see [FocusLandingVerdict]) - the one extra check
+ * that catches a node which accepted and was disposed a frame later, which used
+ * to log "delivered" while the viewer was left with focus nowhere.
  */
 internal fun detailHandBackStep(
     frame: Int,
@@ -143,18 +143,21 @@ internal suspend fun deliverDetailHandBack(
     cap: Int = DETAIL_HAND_BACK_FRAMES
 ): Boolean {
     var frame = 0
+    val verdict = FocusLandingVerdict()
     while (true) {
         awaitFrame()
         frame += 1
         val requester = handBack.resolve()
-        val landed =
+        // Two consecutive acceptances, not one: see [detailHandBackStep].
+        val landed = verdict.accepted(
             requester != null &&
                 runCatching { requester.requestFocus() }.getOrDefault(false)
+        )
         when (detailHandBackStep(frame, landed, cap)) {
             DetailHandBackStep.DELIVERED -> {
                 Log.i(
                     DETAIL_FOCUS_TAG,
-                    "hand-back delivered: ${handBack.label} after $frame frame(s)"
+                    "hand-back delivered: ${handBack.label} after $frame frame(s), verified"
                 )
                 return true
             }

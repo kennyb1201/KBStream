@@ -1177,6 +1177,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // (SubtitleCueHandler.updateFromPosition) so subs can appear early.
     private var externalSubtitleCues: List<SubtitleFileParser.TimedCue> = emptyList()
 
+    /**
+     * True while the attached sidecar is drawn by THIS app instead of by the
+     * engine - the auto-fetched subtitle's path (see [attachExternalSubtitle]).
+     *
+     * Attaching a sidecar the ordinary way rebuilds the player, because the
+     * track only exists once a MediaItem carries its SubtitleConfiguration. That
+     * rebuild is what made an automatically fetched subtitle cost a re-open of
+     * the stream mid-playback (a second or two of buffering, right after the
+     * "Subtitles: …" toast). The auto-fetch path does not rebuild: it parses the
+     * file into [externalSubtitleCues] and drives rendering from the playhead,
+     * the same machinery a negative offset already used, so the picture is never
+     * interrupted. A rebuild for any OTHER reason (a source switch, a background
+     * return, the viewer picking a track) arms the real track and clears this
+     * flag, at which point the engine renders the sidecar again.
+     */
+    private var sidecarRenderedByApp = false
+
     // --- ASS (SSA) sidecars ---
     //
     // media3 does not typeset ASS (google/ExoPlayer#8435, open since 2021) and
@@ -2711,7 +2728,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * and OpenSubtitles downloads (cache file). Rebuilds the player so the
      * sidecar subtitle config attaches, preserving position.
      */
-    private fun attachExternalSubtitle(uri: Uri) {
+    /**
+     * Attaches a sidecar subtitle file.
+     *
+     * [rebuild] = false is the AUTO-FETCH path: the file is parsed and drawn by
+     * the app (see [sidecarRenderedByApp]) instead of being armed into a new
+     * MediaItem and re-opened, because that re-open stalled the picture for a
+     * second or two in the middle of playback - a subtitle arriving on its own
+     * must not cost a rebuffer. Nothing can be lost by not arming the track: the
+     * cue pipeline was only rendering it, and this path renders the same cues
+     * from the playhead (offsets included), which the negative-offset mode has
+     * always done for an external file.
+     */
+    private fun attachExternalSubtitle(uri: Uri, rebuild: Boolean = true) {
         externalSubtitleUri = uri
         // Remembered per video (not per show: a sidecar file belongs to one
         // episode) so reopening it re-attaches automatically. Profile-scoped
@@ -2721,13 +2750,49 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             key = subtitleMemoryKey(),
             uri = uri.toString()
         )
+        // Set BEFORE the parse: its answer is what starts the position tick
+        // (loadExternalSubtitleCues → updateFromPosition), and the tick only
+        // runs when this flag or a negative offset asks it to.
+        sidecarRenderedByApp = !rebuild
         loadExternalSubtitleCues(uri)
+        if (!rebuild) {
+            Log.i(
+                "PLAYER_SUB",
+                "sidecar attached without a player rebuild: drawn from the playhead, " +
+                    "no interruption"
+            )
+            return
+        }
         // Frame-gated like the other carry writes: an attach before the first
         // frame must not replace the launch position with a broken clock read.
         if (firstFrameRendered) {
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
         recreatePlayer()
+    }
+
+    /**
+     * Stops drawing a sidecar this app rendered without arming a player track
+     * (see [sidecarRenderedByApp]), because the viewer has just chosen something
+     * else: OFF, or one of the embedded tracks.
+     *
+     * The remembered [externalSubtitleUri] is deliberately NOT cleared - exactly
+     * as before, the file is remembered for this video and re-armed by the next
+     * player rebuild. Only the drawing stops, and it stops at once: the
+     * position-driven renderer asks the cue pipeline to stand down, so leaving it
+     * running would paint the old sidecar over the track that was just picked.
+     */
+    private fun releaseAppRenderedSidecar() {
+        if (!sidecarRenderedByApp) return
+        sidecarRenderedByApp = false
+        externalSubtitleCues = emptyList()
+        // [releasePositionDriven], not [SubtitleCueHandler.cancelPending]: that
+        // one exists for teardown and every caller discards the handler right
+        // after it. This handler is KEPT - the pipeline's cues take the area
+        // back on the very next group.
+        subtitleCueHandler?.releasePositionDriven()
+        if (assOverlaySource == AssOverlaySource.SIDECAR) detachAssSubtitle()
+        Log.i("PLAYER_SUB", "app-rendered sidecar released: the viewer picked a track")
     }
 
     /**
@@ -5929,6 +5994,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         } else {
                             setMediaSource(progressiveMediaSourceFactory.createMediaSource(currentItem))
                         }
+                        // The sidecar's track now exists in the timeline, so the
+                        // ENGINE renders it again: hand the subtitle area back
+                        // from the app-side renderer the auto-fetch path used
+                        // (see [sidecarRenderedByApp]) - two renderers for one
+                        // file would disagree about timing.
+                        sidecarRenderedByApp = false
                     } else {
                         Log.w(TAG, "External subtitles are not merged with a separate audio source")
                     }
@@ -8593,12 +8664,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 )?.let { hit ->
                     if (!stillSameVideo(launchIdentity)) return@launch
                     Log.i("PLAYER_LANG", "auto subtitle fetch: using prefetched ${hit.fileName}")
-                    attachExternalSubtitle(hit.uri)
-                    Toast.makeText(
-                        this@NativePlayerActivity,
-                        "Subtitles: ${hit.fileName.take(48)}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    // No rebuild and no toast: an automatically fetched track is
+                    // not an event the viewer needs announcing, and the rebuild
+                    // it used to cost re-opened the stream mid-playback. The
+                    // subtitle appearing IS the feedback.
+                    attachExternalSubtitle(hit.uri, rebuild = false)
                     return@launch
                 }
                 val results = SubtitleSearchHelper.search(
@@ -8642,12 +8712,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             pick,
                             result.body
                         )
-                        attachExternalSubtitle(uri)
-                        Toast.makeText(
-                            this@NativePlayerActivity,
-                            "Subtitles: ${pick.fileName.take(48)}",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        // Same rule as the prefetched branch above: attach
+                        // without a rebuild and without a toast, so a subtitle
+                        // this app fetched for the viewer never stops the film.
+                        Log.i("PLAYER_LANG", "auto subtitle fetch: attached ${pick.fileName}")
+                        attachExternalSubtitle(uri, rebuild = false)
                     }
                 }
             } finally {
@@ -9165,7 +9234,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          * from the playback position instead.
          */
         private val positionDriven: Boolean
-            get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0 && !assOwned()
+            get() = externalSubtitleCues.isNotEmpty() &&
+                (subtitleOffsetMs < 0 || sidecarRenderedByApp) &&
+                !assOwned()
 
         /**
          * True when the overlay is typesetting the CURRENTLY SELECTED text
@@ -9180,7 +9251,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          * the overlay's own claim has to cover the track selected right now.
          */
         private fun assOwned(): Boolean {
-            val owned = assRenderer.active && assOverlayClaimsSelection()
+            val owned = assRenderer.active && assOverlayOwns()
             if (owned != assGateSuppressed) {
                 assGateSuppressed = owned
                 Log.i(
@@ -9274,6 +9345,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // last bitmap frame on screen: the view belongs to the surface, not
             // to this handler.
             clearBitmapCues()
+        }
+
+        /**
+         * Stops position-driven rendering and clears the line it drew, WITHOUT
+         * abandoning this handler - the cue pipeline takes the subtitle area
+         * back on the next group it emits.
+         *
+         * This is the counterpart of [cancelPending] for a live hand-back: a
+         * sidecar the app rendered itself is released when the viewer picks a
+         * track or OFF (see `releaseAppRenderedSidecar`), and nulling the handler
+         * there would have dropped the pipeline's listener with it.
+         */
+        fun releasePositionDriven() {
+            handler.removeCallbacks(positionTick)
+            renderText("")
         }
 
         /**
@@ -9579,7 +9665,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // script still held for another one - and a claim that comes back
             // (the same addon track selected again) re-draws from here, which is
             // why this poll keeps running rather than stopping.
-            if (!assOverlayClaimsSelection()) {
+            if (!assOverlayOwns()) {
                 if (subtitleAssImage.visibility != View.GONE) {
                     subtitleAssImage.setImageDrawable(null)
                     subtitleAssImage.visibility = View.GONE
@@ -9879,6 +9965,22 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         return assClaimCovers(assSelection(tracks))
     }
 
+    /**
+     * Whether the overlay owns the subtitle area, including the claim the engine
+     * cannot see.
+     *
+     * [assOverlayClaimsSelection] reads the SELECTED TRACK, which only exists
+     * when the sidecar was armed into a MediaItem - i.e. after a player rebuild.
+     * The auto-fetch path attaches without one (see [attachExternalSubtitle]), so
+     * its ASS script has no track to be selected and the plain claim said "not
+     * mine": the frame tick hid every rendered frame and the cue gate let the
+     * flattened cues through instead. A sidecar drawn by this app IS the
+     * overlay's claim, whichever way it was attached.
+     */
+    private fun assOverlayOwns(): Boolean =
+        assOverlayClaimsSelection() ||
+            (sidecarRenderedByApp && assOverlaySource == AssOverlaySource.SIDECAR)
+
     /** The ASS source URL of the currently SELECTED text track, or null. */
     private fun selectedAddonAssUrl(): String? =
         exoPlayer?.currentTracks?.let { assSelection(it).addonUrl }
@@ -10113,8 +10215,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 val anySelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
                 val offItem = PickerItem(
                     label = "OFF",
-                    isSelected = !anySelected,
+                    // An app-rendered sidecar IS subtitles on, even though the
+                    // engine has no selected track to point at.
+                    isSelected = !anySelected && !sidecarRenderedByApp,
                     onClick = {
+                        // OFF must also take down a sidecar this app is drawing
+                        // itself (see [sidecarRenderedByApp]); the engine-side
+                        // track selection below cannot do it, because that
+                        // sidecar has no track.
+                        releaseAppRenderedSidecar()
                         // Through the bridge: OFF is remembered per show, so the
                         // ready-time language pass cannot turn subtitles back on
                         // at the next rebuffer.
@@ -10172,6 +10281,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
                                 dismissPicker()
+                                // Picking a track hands the subtitle area back to
+                                // the engine: an app-rendered sidecar would keep
+                                // painting over the track just chosen (it asks
+                                // the cue pipeline to stand down while it runs).
+                                releaseAppRenderedSidecar()
                                 if (cannotDraw != null) {
                                     // Arming it here would draw nothing and
                                     // report nothing, which is exactly the

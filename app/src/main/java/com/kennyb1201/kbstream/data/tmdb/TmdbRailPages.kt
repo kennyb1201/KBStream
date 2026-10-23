@@ -17,6 +17,13 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * setting and hands the per-page fetch (`*PageItems`) to
  * [TmdbRepository.finishDeepRailPage], which also decides how many TMDB pages
  * a rail renders with (see `RAIL_DEPTH_TARGET_ITEMS`).
+ *
+ * A discovered request that FAILS answers null, not an empty list: an empty page
+ * is a fact about the rail (it has no more rows) and a failure is a fact about
+ * the network, and a browse screen needs the difference to decide whether it may
+ * seal a rail. [TmdbRepository.finishDeepRailPage] turns that null into
+ * [TagRailPage.failed]; the "else" branches below stay non-null because an
+ * unknown rail title really has no rows.
  */
 internal object TmdbRailPages {
 
@@ -76,7 +83,7 @@ internal object TmdbRailPages {
         title: String,
         page: Int,
         lang: String?
-    ): List<StudioItem> {
+    ): List<StudioItem>? {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
@@ -88,7 +95,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
@@ -100,7 +107,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
@@ -112,7 +119,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
@@ -124,7 +131,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
@@ -136,7 +143,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
@@ -148,7 +155,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
@@ -186,7 +193,7 @@ internal object TmdbRailPages {
         title: String,
         page: Int,
         lang: String?
-    ): List<StudioItem> {
+    ): List<StudioItem>? {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
@@ -198,7 +205,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
@@ -210,7 +217,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
@@ -222,7 +229,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
@@ -234,7 +241,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
@@ -246,7 +253,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
@@ -258,7 +265,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
@@ -314,7 +321,7 @@ internal object TmdbRailPages {
         title: String,
         page: Int,
         lang: String?
-    ): List<StudioItem> {
+    ): List<StudioItem>? {
         val results = when (title) {
             "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
@@ -326,7 +333,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
@@ -338,7 +345,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
@@ -350,7 +357,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             else -> emptyList()
         }
@@ -401,7 +408,7 @@ internal object TmdbRailPages {
         title: String,
         page: Int,
         lang: String?
-    ): List<StudioItem> {
+    ): List<StudioItem>? {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
@@ -413,7 +420,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
@@ -425,7 +432,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
@@ -437,7 +444,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
+            }.getOrNull()?.map { StudioItem(it, "movie") }
 
             "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
@@ -449,7 +456,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
@@ -461,7 +468,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
@@ -473,7 +480,7 @@ internal object TmdbRailPages {
                     withOriginalLanguage = lang,
                     page = page
                 ).results
-            }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
+            }.getOrNull()?.map { StudioItem(it, "series") }
 
             else -> emptyList()
         }

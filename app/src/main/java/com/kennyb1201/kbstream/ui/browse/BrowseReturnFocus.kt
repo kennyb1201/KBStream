@@ -268,14 +268,52 @@ internal class FocusHandBack(private val scope: CoroutineScope) {
 
 internal suspend fun landFocusOn(requester: FocusRequester?): Boolean {
     if (requester == null) return false
+    val verdict = FocusLandingVerdict()
     var landed = false
     var attempts = 0
     while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
         delay(BROWSE_RETURN_FOCUS_DELAY_MS)
-        landed = runCatching { requester.requestFocus() }.getOrDefault(false)
+        landed = verdict.accepted(
+            runCatching { requester.requestFocus() }.getOrDefault(false)
+        )
         attempts++
     }
     return landed
+}
+
+/**
+ * The verdict every driven focus landing shares: one acceptance is not a
+ * landing.
+ *
+ * Compose offers exactly one observation of a focus request - `requestFocus()`'s
+ * own answer - and an unattached node answers false, so a false is already a
+ * miss the retry loops handle. What they did NOT handle is a node that ACCEPTS
+ * the request and is disposed a frame later: a rail rebuilding under a
+ * hand-back, a card replaced by a reload. That answers true and leaves the
+ * viewer with focus nowhere while the log says "landed".
+ *
+ * There is no public "is this requester focused right now" query, so the second
+ * observation is a second ASK: the same requester on the next attempt must also
+ * accept, and only two CONSECUTIVE acceptances answer true [accepted]. A miss
+ * in between resets the streak, so a node that came and went cannot inherit an
+ * older acceptance.
+ *
+ * This is the profile picker's observed-state standard expressed with the
+ * observation the rest of the app can get: the picker's own tiles each report
+ * their focus state, which is stronger and stays where it is (see
+ * ProfilePickerFocus) - but no landing may now call a single unconfirmed answer
+ * a delivery.
+ */
+internal class FocusLandingVerdict {
+
+    private var acceptedOnPreviousAsk = false
+
+    /** Records one ask's answer; true only for the second acceptance in a row. */
+    fun accepted(asked: Boolean): Boolean {
+        val landed = asked && acceptedOnPreviousAsk
+        acceptedOnPreviousAsk = asked
+        return landed
+    }
 }
 
 /**

@@ -520,6 +520,28 @@ internal object DolbyVisionCompat {
         ExposedByteArrayOutputStream(STRIP_SCRATCH_INITIAL_BYTES)
     }
 
+    /**
+     * True when a native strip's answer cannot be written back into the caller's
+     * sample, which holds exactly its own length in bytes.
+     *
+     * Every other rewrite in this file is guarded the same way: the SEI pass
+     * only ever compacts downwards, and a VPS/SPS rewrite is refused unless it is
+     * no longer than the NAL it replaces (see the `rewriteTooLong` accounting in
+     * [stripAnnexB]). A grown native answer is the one remaining way a strip could
+     * write past the sample - libdovi only removes bytes today, which is exactly
+     * why this is cheap insurance rather than a fix for a known input - and it is
+     * answered as "nothing stripped" so the Kotlin parser owns the sample.
+     */
+    private fun nativeStripTooLong(written: Int, length: Int): Boolean {
+        if (written <= length) return false
+        Log.w(
+            "PLAYER_DV",
+            "DV strip grew the sample (${length}B -> ${written}B): keeping the " +
+                "original and letting the Kotlin strip handle it"
+        )
+        return true
+    }
+
     /** The calling thread's scratch buffer, grown to at least [length] bytes. */
     private fun stripScratchFor(length: Int): ByteArray {
         val current = stripScratch.get().backingArray()
@@ -646,6 +668,7 @@ internal object DolbyVisionCompat {
             // libdovi forwards an unmatched sample byte-for-byte.
             if (written >= 0) {
                 if (written == length) return -1
+                if (nativeStripTooLong(written, length)) return -1
                 System.arraycopy(out, 0, buf, 0, written)
                 // Accounting: the native path drops RPU/EL + HDR10+ SEI NALs
                 // without reporting them one by one - record the categories
@@ -931,6 +954,7 @@ internal object DolbyVisionCompat {
             )
             if (written >= 0) {
                 if (written == length) return -1
+                if (nativeStripTooLong(written, length)) return -1
                 System.arraycopy(out, 0, buf, 0, written)
                 if (accounting != null) {
                     recordNativeStripAccounting(accounting, stripDv, stripHdr10Plus)
@@ -972,30 +996,52 @@ internal object DolbyVisionCompat {
                 // (see [stripAnnexB]): each rewritten set is re-emitted with its
                 // own length prefix, so the NALs after it shift by what it lost.
                 if (keep && rewriteParamSets) {
+                    // The SAME size guard the Annex-B path applies, and for the
+                    // same reason: the rewritten NAL is emitted at the compaction
+                    // point, so it may not be longer than the one it replaces -
+                    // a growing rewrite would copy over bytes that have not been
+                    // read yet, and here it could also push the sample past its
+                    // own length. This path was missing the guard (the Annex-B
+                    // twin has it), so a future encoder that produced a longer
+                    // set would have corrupted the sample silently instead of
+                    // keeping the original NAL.
+                    val origRbspSize = nal - 2
                     when (nalType) {
                         NAL_VPS -> when (val res = rewriteVpsToHdr10(buf, payload + 2, payload + nal)) {
-                            is VpsRewriteOutcome.Rewritten -> {
+                            is VpsRewriteOutcome.Rewritten -> if (res.rbsp.size <= origRbspSize) {
                                 changed = true
                                 writeLength(buf, write, res.rbsp.size + 2, fieldLen)
                                 System.arraycopy(buf, payload, buf, write + fieldLen, 2)
                                 System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
                                 write += fieldLen + 2 + res.rbsp.size
                                 keep = false
+                            } else {
+                                accounting?.record(
+                                    nalType, nal,
+                                    SeiStripAccounting.Action.KEPT,
+                                    reason = "rewriteTooLong"
+                                )
                             }
                             is VpsRewriteOutcome.Failed -> Unit
                             VpsRewriteOutcome.NoDvExtension -> Unit
                         }
                         NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, payload + 2, payload + nal)) {
-                            is SpsRewriteOutcome.Rewritten -> {
+                            is SpsRewriteOutcome.Rewritten -> if (res.rbsp.size <= origRbspSize) {
                                 changed = true
                                 writeLength(buf, write, res.rbsp.size + 2, fieldLen)
                                 System.arraycopy(buf, payload, buf, write + fieldLen, 2)
                                 System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
                                 write += fieldLen + 2 + res.rbsp.size
                                 keep = false
+                            } else {
+                                accounting?.record(
+                                    nalType, nal,
+                                    SeiStripAccounting.Action.KEPT,
+                                    reason = "rewriteTooLong"
+                                )
                             }
                             is SpsRewriteOutcome.Failed -> Unit
-                            SpsRewriteOutcome.NoDvExtension -> Unit
+                            is SpsRewriteOutcome.NoDvExtension -> Unit
                         }
                     }
                 }

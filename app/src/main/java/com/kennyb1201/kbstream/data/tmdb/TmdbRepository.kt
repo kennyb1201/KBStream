@@ -168,7 +168,21 @@ data class CrossBase(
 data class TagRailPage(
     val items: List<StudioItem>,
     val hasMore: Boolean,
-    val nextPage: Int = 2
+    val nextPage: Int = 2,
+    /**
+     * True when the rail's page could not be FETCHED at all - an outage, a
+     * timeout, a 429 - as opposed to an answer that genuinely had no rows.
+     *
+     * The two used to be one fact: every discover branch in [TmdbRailPages]
+     * collapsed a failure to `emptyList()`, so a browse screen could not tell a
+     * rail it does not have from a rail whose first request flaked. It reported
+     * the failed one as "genuinely empty", the ordered publisher sealed it, and
+     * the deepening pass that would have carried rows for it was dropped - so a
+     * rail could only appear when the slowest rail on the page had finished,
+     * which is precisely the case the two-stage publish exists for. Nothing
+     * persists this flag: it is a statement about one attempt.
+     */
+    val failed: Boolean = false
 )
 
 
@@ -424,11 +438,19 @@ class TmdbRepository private constructor(context: Context) :
      * of a short catalog (cheap to re-ask) or a failed request, and caching a
      * failure would blank that rail until the TTL expired.
      */
+    /**
+     * One rail page, cached when it answers and passed straight through when it
+     * does not.
+     *
+     * The null is the changed part: a fetch that FAILED says so instead of
+     * arriving as an empty page (see [TagRailPage.failed]), and a failure is
+     * never cached - the next attempt is entitled to a real answer.
+     */
     private suspend fun cachedRailPage(
         cacheKey: String?,
         page: Int,
-        load: suspend (Int) -> List<StudioItem>
-    ): List<StudioItem> {
+        load: suspend (Int) -> List<StudioItem>?
+    ): List<StudioItem>? {
         if (cacheKey == null) return load(page)
 
         val key = "$cacheKey|$page"
@@ -438,7 +460,7 @@ class TmdbRepository private constructor(context: Context) :
             if (now - storedAt < railPageTtlMs) return items
         }
 
-        val items = load(page)
+        val items = load(page) ?: return null
 
         if (items.isNotEmpty()) {
             if (railPageCache.size > railPageCacheMaxEntries) {
@@ -2456,9 +2478,13 @@ class TmdbRepository private constructor(context: Context) :
          */
         cacheKey: String? = null,
         deepen: Boolean = true,
-        load: suspend (Int) -> List<StudioItem>
+        load: suspend (Int) -> List<StudioItem>?
     ): TagRailPage = coroutineScope {
         val first = cachedRailPage(cacheKey, page, load)
+            // A failed page is REPORTED as failed, not as an empty rail: the
+            // caller decides what to do with that (a browse screen keeps the
+            // rail unsealed so the retry behind it can still place it).
+            ?: return@coroutineScope TagRailPage(emptyList(), false, failed = true)
         if (page != 1) {
             return@coroutineScope finishRailPage(first, nextPage = page + 1)
         }
@@ -2481,7 +2507,10 @@ class TmdbRepository private constructor(context: Context) :
         val merged = first.toMutableList()
         var next = 2
         for (pending in deeper) {
-            val more = pending.await()
+            // A deepening page that failed ends the merge exactly as an empty
+            // one does - page 1 answered, so this rail is a real rail with less
+            // depth for now, not a failed rail.
+            val more = pending.await() ?: break
             if (more.isEmpty()) break
             merged += more
             next++
@@ -2511,6 +2540,11 @@ class TmdbRepository private constructor(context: Context) :
         // language and the vote floor.
         val cacheKey = "discover|$mediaType|$sortBy|$filters"
 
+        // `?: emptyList()`: these discover-backed rails (service, decade,
+        // cross-genre) still read a failed page as an empty one. Only the four
+        // dimension rails behind [TmdbRailPages] carry [TagRailPage.failed] so
+        // far; widening this one means teaching every "load more" caller the
+        // difference, which is a separate change.
         suspend fun load(p: Int): List<StudioItem> =
             cachedRailPage(cacheKey, p) { requestedPage ->
                 runCatchingCancellable {
@@ -2523,7 +2557,7 @@ class TmdbRepository private constructor(context: Context) :
                 }.getOrNull().orEmpty()
                     .map { StudioItem(it, itemType) }
                     .distinctBy { it.item.id }
-            }
+            } ?: emptyList()
 
         val first = load(page)
         if (page != 1) return@coroutineScope first to (page + 1)

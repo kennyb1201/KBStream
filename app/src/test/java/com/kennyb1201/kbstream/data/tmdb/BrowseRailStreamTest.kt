@@ -150,6 +150,50 @@ class BrowseRailStreamTest {
     }
 
     @Test
+    fun `a failed page 1 does not seal the rail the retry then places`() = runBlocking {
+        // The shape the repository reports now: a discover request that FAILED is
+        // `failed = true`, not an empty page. Reported as empty it sealed the
+        // rail (the publisher marks hasRows=false on a first report) and the deep
+        // pass carrying its rows was dropped, so a rail whose page 1 flaked could
+        // not stream in at all.
+        val published = mutableListOf<Pair<Int, Int>>()
+
+        val result = streamBrowseSections(titles, onSection = { index, section ->
+            published += index to section.items.size
+        }) { title, deepen ->
+            if (title == "MOVIES · POPULAR" && !deepen) {
+                TagRailPage(emptyList(), hasMore = false, failed = true)
+            } else {
+                page(1, 2)
+            }
+        }
+
+        // The rail is on screen with the rows the retry found, not dropped as
+        // "nothing there".
+        assertEquals(listOf(2), published.filter { it.first == 1 }.map { it.second })
+        assertEquals(titles, result.map { it.title })
+    }
+
+    @Test
+    fun `an empty answer still seals the rail, so a late rail cannot slide in`() = runBlocking {
+        // The other half of the distinction: `failed = false` with no rows is a
+        // real empty rail, and it must keep suppressing the deep pass - that is
+        // what stops a rail appearing above rows already on screen.
+        val published = mutableListOf<Int>()
+
+        val result = streamBrowseSections(titles, onSection = { index, _ -> published += index }) { title, deepen ->
+            if (title == "MOVIES · POPULAR") {
+                if (deepen) page(9) else TagRailPage(emptyList(), hasMore = false)
+            } else {
+                page(1)
+            }
+        }
+
+        assertEquals(listOf(0, 2), published.distinct())
+        assertEquals(listOf(9), result[1].items.map { it.item.id })
+    }
+
+    @Test
     fun `a rail that really fails still reaches the caller`() = runBlocking {
         var threw = false
 
