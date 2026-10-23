@@ -159,11 +159,19 @@ internal object TorBoxClient {
             .header("Authorization", "Bearer $apiKey")
             .build()
         client.newCall(request).execute().use { response ->
+            // A failed batch THROWS so the caller's runCatching leaves it
+            // uncached, which is what the comment there intends. Returning
+            // emptySet() instead made a 500 indistinguishable from "none of
+            // these are cached", so every hash in the batch was stamped
+            // cached=false for the full hour TTL and the picker lost its
+            // TorBox badges for those titles.
             if (!response.isSuccessful) {
                 Log.w(TAG, "checkcached HTTP ${response.code}")
-                return emptySet()
+                throw IllegalStateException("checkcached HTTP ${response.code}")
             }
-            return parseCached(body = response.body?.string().orEmpty())
+            val body = response.body?.string().orEmpty()
+            return parseCachedOrNull(body)
+                ?: throw IllegalStateException("checkcached body was not the expected shape")
         }
     }
 
@@ -175,9 +183,17 @@ internal object TorBoxClient {
      * (`{"data": {"<hash>": {...}}}`) is handled too, because a caller that ever
      * switches `format` must not silently start reading nothing.
      */
-    internal fun parseCached(body: String): Set<String> {
+    internal fun parseCached(body: String): Set<String> = parseCachedOrNull(body) ?: emptySet()
+
+    /**
+     * The same read, answering NULL for a body that is not the expected shape at
+     * all - the answer [query] needs to tell a genuinely empty list from a
+     * broken response. [parseCached] keeps its forgiving contract for callers
+     * that only want the hashes.
+     */
+    private fun parseCachedOrNull(body: String): Set<String>? {
         val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject
-            ?: return emptySet()
+            ?: return null
         return when (val data = root["data"]) {
             is JsonArray -> data.mapNotNullTo(mutableSetOf()) { element ->
                 ((element as? JsonObject)?.get("hash") as? JsonPrimitive)
@@ -186,7 +202,7 @@ internal object TorBoxClient {
 
             is JsonObject -> data.keys.mapTo(mutableSetOf()) { it.trim().lowercase() }
 
-            else -> emptySet()
+            else -> null
         }
     }
 

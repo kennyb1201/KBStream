@@ -23,7 +23,14 @@ data class TraktListRef(
  */
 data class TraktListEntry(
     val media: TraktMediaEntry,
-    val isMovie: Boolean
+    val isMovie: Boolean,
+    /**
+     * The item's position in the list, exactly as Trakt sent it. Carried so the
+     * two halves can be merged back into ONE order: the read is per media type,
+     * so merging movies then shows without it rendered every curated mixed list
+     * as "all films, then all shows", whatever order its owner arranged.
+     */
+    val rank: Int? = null
 )
 
 /**

@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamResponse
 import com.kennyb1201.kbstream.data.airdates.TvmazeEpisode
 import com.kennyb1201.kbstream.data.airdates.TvmazeShow
+import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.badges.StreamBadgeGroup
 import com.kennyb1201.kbstream.data.badges.StreamBadgePack
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
@@ -17,6 +18,8 @@ import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.simkl.SimklTokenResponse
+import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.squareup.moshi.JsonAdapter
@@ -150,6 +153,31 @@ class MoshiCodegenTest {
      * one of those reads is wrapped in `runCatching`, so the failure was SILENT
      * (the caches simply never hit and every cold start re-fetched).
      */
+    /**
+     * Bug Sweep 7's three: models that round-trip through a DISK cache (or, in
+     * StreamBadge's case, sit inside a cached model) with no @JsonClass, so
+     * their adapter came from kotlin-reflect - the shape sweep 5 proved throws
+     * under R8 on a default-argument constructor. Each read is wrapped in
+     * `runCatching`, so the failure would be silent: the season cache would
+     * never hit and every cold start would re-fetch every season, and the hero
+     * artwork would re-resolve on every launch.
+     */
+    @Test
+    fun `the disk-cached models have generated adapters, not reflective ones`() {
+        val models = listOf(
+            ResolvedEpisode::class.java,
+            HeroArtwork::class.java,
+            StreamBadge::class.java
+        )
+        models.forEach { model ->
+            val adapterClass = Class.forName(Types.generatedJsonAdapterName(model))
+            assertTrue(
+                "${adapterClass.name} is not a JsonAdapter",
+                JsonAdapter::class.java.isAssignableFrom(adapterClass)
+            )
+        }
+    }
+
     @Test
     fun `the sweep-5 models have generated adapters, not reflective ones`() {
         val models = listOf(

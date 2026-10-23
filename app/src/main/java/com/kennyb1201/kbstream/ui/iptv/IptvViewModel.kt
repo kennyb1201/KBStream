@@ -227,11 +227,15 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                         break
                     }
                 }
-                _catchupPrograms.value = found
+                // The LIST is generation-guarded too, not just the spinner: the
+                // reason the generation exists is that a superseded job still
+                // reaches its own resume points, and an unguarded write here put
+                // channel A's DVR programs in channel B's dialog.
+                if (generation == catchupGeneration) _catchupPrograms.value = found
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
-                _catchupPrograms.value = emptyList()
+                if (generation == catchupGeneration) _catchupPrograms.value = emptyList()
             } finally {
                 // Only the CURRENT load may clear the flag (see
                 // [catchupGeneration]).
@@ -300,6 +304,19 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private var guideImportJob: Job? = null
 
     private var refreshJob: Job? = null
+
+    /**
+     * The cached-playlist restore in flight.
+     *
+     * It used to be an anonymous launch, so a profile switch could not cancel
+     * it: the old profile's restore then applied its lineup over the new
+     * profile's cleared state (the guide showing the previous profile's
+     * channels), refreshed against the new profile's prefs, and cleared the
+     * spinner while the new restore was still running. Named like its
+     * siblings, and cancelled with them, so `loadJob`/`guideImportJob`/
+     * `refreshJob` are no longer the only jobs the switch knows about.
+     */
+    private var restoreJob: Job? = null
 
     /**
      * Aborts a source that stops sending data, so a wedged download is a visible
@@ -518,6 +535,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     loadJob?.cancel()
                     guideImportJob?.cancel()
                     refreshJob?.cancel()
+                    restoreJob?.cancel()
 
                     // Re-read the incoming profile's scoped config.
                     _playlistUrl.value = prefs.getString(KEY_PLAYLIST_URL, "").orEmpty()
@@ -796,13 +814,22 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             Log.d(TAG, "CACHE RESTORE SKIPPED playlist URL is blank")
             return
         }
+        restoreJob?.cancel()
         _isLoading.value = true
         // Playlist URLs go through Redaction.url: Xtream-style providers put
         // the account username and password in the query string.
         Log.w(TAG, "CACHE RESTORE START source=${Redaction.url(url)}")
-        viewModelScope.launch {
+        restoreJob = viewModelScope.launch {
             try {
                 val cachedPlaylist = repository.loadCachedPlaylist(url, name)
+                // A profile switch rewrote the pref while this was reading, and
+                // its own restore is the one that owns the state now. Applying
+                // here would put the PREVIOUS profile's lineup under the new
+                // profile - the reported cross-profile guide.
+                if (_playlistUrl.value.trim() != url) {
+                    Log.w(TAG, "CACHE RESTORE DROPPED: profile/URL changed mid-read")
+                    return@launch
+                }
                 if (cachedPlaylist != null) {
                     // Extras must survive app restarts too — otherwise the
                     // cached restore shows only the primary playlist until
@@ -824,10 +851,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
+                if (_playlistUrl.value.trim() != url) return@launch
                 reportFailure(_error, t)
                 Log.e(TAG, "CACHE RESTORE FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
             } finally {
-                _isLoading.value = false
+                // Only the restore that still owns the page may stop its
+                // spinner: clearing it here for a superseded one stopped the
+                // new profile's restore mid-flight.
+                if (_playlistUrl.value.trim() == url) _isLoading.value = false
             }
         }
     }

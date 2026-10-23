@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -30,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,6 +94,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The Library's own page key, the only place it is spelled out (see
@@ -151,6 +154,10 @@ fun LibraryScreen(
     }
 
     val topFocusRequester = remember { FocusRequester() }
+    // The strip's own scroll state, so the entry landing can bring the SELECTED
+    // chip into composed view before asking it for focus (see the landing below).
+    val stripState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     // The grid state and the return record, both owned here rather than inside
     // the grid: a Back out of Detail disposes THIS composable and everything in
@@ -166,13 +173,43 @@ fun LibraryScreen(
         mutableStateOf<BrowseReturnTarget?>(null)
     }
     val returnFocusRequester = remember { FocusRequester() }
+
+    /**
+     * The Library's entry landing: put the D-pad on the SELECTED filter chip,
+     * and keep asking until it is actually there.
+     *
+     * This was the app's last bare one-shot entry ask, and its target makes the
+     * miss likely rather than rare: the chip strip is a `LazyRow`, the selected
+     * filter lives in the activity-scoped ViewModel, so re-entering Library on
+     * WATCHLIST or LISTS could ask a chip that was outside the row's composed
+     * window. An unattached requester answers false, once, with no retry and the
+     * answer discarded, and nothing else on this screen re-asked - so the page
+     * opened with nothing focused. Scrolling the strip to that chip first makes
+     * the node real, and [landFocusOn] covers the frames between the scroll and
+     * the attach. The same rule is used by the return's last resort above.
+     */
+    suspend fun landOnSelectedChip() {
+        val index = LibraryFilter.entries.indexOf(state.filter)
+        if (index >= 0) {
+            runCatching { stripState.scrollToItem(index) }
+        }
+        landFocusOn(topFocusRequester)
+    }
     // What the grid reports when it has finished with the record: the place is
     // spent either way, and a return this page could not put back (the poster
     // was removed while Detail was open) still owes the viewer a focus target,
     // which is the strip's first chip the ordinary open uses.
     val onReturnHandled: (Boolean) -> Unit = { landed ->
         returnTarget = null
-        if (!landed) topFocusRequester.requestFocus()
+        if (!landed) {
+            // The same landing the ordinary open uses, not a bare ask: this is
+            // the last-resort hand-back, and the chip it aims at can be outside
+            // the strip's composed window exactly as it can on entry (see the
+            // landing below).
+            scope.launch {
+                landOnSelectedChip()
+            }
+        }
     }
 
     // The row whose long-press menu is open (null = no menu). A long press
@@ -228,7 +265,7 @@ fun LibraryScreen(
         if (recorded != null) {
             returnTarget = recorded
         } else {
-            topFocusRequester.requestFocus()
+            landOnSelectedChip()
         }
     }
 
@@ -277,6 +314,7 @@ fun LibraryScreen(
         // breaking into "RATI/NG" when the old fixed Row ran out of room). The
         // sort group is separated by a rule rather than pushed to its own line.
         LazyRow(
+            state = stripState,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             // The strip is a lazy row, so it clips its own content - the
             // first control (which this screen focuses on entry) lost its

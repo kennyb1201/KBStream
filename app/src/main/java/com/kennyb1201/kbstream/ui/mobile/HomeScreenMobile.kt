@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -88,7 +87,9 @@ import com.kennyb1201.kbstream.ui.components.touch.MobileSectionHeader
 import com.kennyb1201.kbstream.ui.components.touch.MobileSpacing
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
+import com.kennyb1201.kbstream.ui.components.touch.rememberTouchTileWidth
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -114,6 +115,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -644,14 +646,33 @@ fun HomeScreenMobile(
                 }
 
                 if (isLoading && rails.isEmpty() && upNext.isEmpty() && !upcomingVisible) {
+                    // Shaped placeholders, not a spinner (improvement F1): the
+                    // phone reserved 180dp for a circle and then shoved the whole
+                    // page down when the real hero and rails arrived. The TV
+                    // skeleton is reused as-is - pocket-sized through the touch
+                    // poster geometry and the phone's 16dp gutter, so the two
+                    // surfaces cannot drift into different placeholder shapes.
                     item(key = "loading", contentType = "skeleton") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = KBAccent)
+                        val posterSize = rememberTouchPosterSize()
+                        val tileWidth = rememberTouchTileWidth(posterSize)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp)
+                                    .fillMaxWidth()
+                                    .aspectRatio(16f / 9f)
+                                    .background(KBSurfaceRaised, KBShapeCard)
+                            )
+                            KBSkeletonRail(
+                                posterWidth = tileWidth,
+                                posterHeight = posterSize.height,
+                                horizontalPadding = 16.dp
+                            )
+                            KBSkeletonRail(
+                                posterWidth = tileWidth,
+                                posterHeight = posterSize.height,
+                                horizontalPadding = 16.dp
+                            )
                         }
                     }
                 }

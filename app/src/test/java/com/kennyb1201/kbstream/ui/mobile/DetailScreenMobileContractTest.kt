@@ -410,7 +410,8 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "the title's genres are a chip rail, not a line of text",
             mobile.contains("val tmdbGenres = tmdbDetail?.genres.orEmpty()") &&
-                mobile.contains("items(tmdbGenres, key = { \"genre:\" + it.id })")
+                mobile.contains("tmdbGenres,") &&
+                mobile.contains("key = { \"genre:\" + it.id }")
         )
         assertTrue(
             "a genre chip opens that genre's page with the TV's arguments",
@@ -420,7 +421,8 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "the TMDB keywords are drawn too, from the same listing the TV row reads",
             mobile.contains("tmdbDetail?.keywords?.list().orEmpty()") &&
-                mobile.contains("items(keywords, key = { \"keyword:\" + it.id })")
+                mobile.contains("keywords,") &&
+                mobile.contains("key = { \"keyword:\" + it.id }")
         )
         assertTrue(
             "a keyword chip is the keyword page, and it keeps the TV chip's hash mark",

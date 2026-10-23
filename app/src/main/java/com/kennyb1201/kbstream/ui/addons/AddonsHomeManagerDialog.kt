@@ -312,13 +312,32 @@ internal fun CatalogManagerDialog(
                 return@LaunchedEffect
             }
         }
-        pendingFocus = null
-        pendingFocusAttempts = 0
         runCatching { listState.animateScrollToItem(lazyIndex) }
-        val focus = rowRequesters[key] ?: return@LaunchedEffect
-        focus.of(slot)?.let { requester ->
-            runCatching { requester.requestFocus() }
-        } ?: run { runCatching { focus.toggle.requestFocus() } }
+        // The record is kept until the landing is OBSERVED, not spent first and
+        // hoped over: a requester that registers a recomposition late, or one
+        // that answers false, used to have no second chance and no log line, so
+        // reordering a rail could leave the ring on the dialog header. The
+        // not-yet-landed branch above already keeps its half of the record this
+        // way - this is the same rule for the half that scrolls.
+        val focus = rowRequesters[key] ?: run {
+            pendingFocusAttempts += 1
+            if (pendingFocusAttempts > 4) {
+                pendingFocus = null
+                pendingFocusAttempts = 0
+            }
+            return@LaunchedEffect
+        }
+        val requester = focus.of(slot) ?: focus.toggle
+        if (com.kennyb1201.kbstream.ui.browse.landFocusOn(requester)) {
+            pendingFocus = null
+            pendingFocusAttempts = 0
+        } else {
+            pendingFocusAttempts += 1
+            if (pendingFocusAttempts > 4) {
+                pendingFocus = null
+                pendingFocusAttempts = 0
+            }
+        }
     }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {

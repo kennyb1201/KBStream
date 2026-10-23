@@ -40,6 +40,7 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -92,13 +93,15 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
-import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
+import kotlin.math.abs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The rail keys of the two filmography rails, and of the outer items that hold
@@ -131,6 +134,61 @@ private class ActorBringIntoViewSpec(
 
 @OptIn(ExperimentalFoundationApi::class)
 private val LocalActorBringIntoViewSpec = ActorBringIntoViewSpec()
+
+/**
+ * Focus scrolling for the page's own VERTICAL list - the bio and the rows under
+ * it - which is a different question from where a tile comes to rest in a rail.
+ *
+ * A rail's landing is a line ([ActorBringIntoViewSpec]): bring the focused card
+ * to 30% of the row so the viewer sees what is coming next. That is right for a
+ * horizontal row and wrong for the page, and the page used to install it on the
+ * whole screen - so every focus inside the vertical list was DRAGGED to 30% of
+ * the viewport, whether or not it was already on screen. The field report is
+ * that arithmetic: opening a person moved focus to the first filmography card
+ * (about 370dp down), the spec scrolled the list by the difference between that
+ * and 30% of the viewport, and the biography - the thing the page opens on - was
+ * pushed off the top, so the viewer had to scroll UP to read it; focusing
+ * "View more" then re-applied the same line and cut the bio's first lines off
+ * at the list's own top edge.
+ *
+ * This is the rule the app already uses for vertical lists (see
+ * `KBFocusRowInset` and the sports hub's own spec): keep that inset of room
+ * between the focused row and the edge of the viewport, scroll only as far as it
+ * takes to clear it, and answer ZERO when the row is already comfortably inside
+ * it. A page at rest therefore stays at rest, and the bio stays where the viewer
+ * arrived.
+ *
+ * `internal`, because the two answers that matter here - a visible row asks for
+ * no scroll, and an off-screen one lands on the margin rather than flush - are
+ * arithmetic a contract test asserts exactly, with no device and no D-pad.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+internal class ActorListBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float {
+        // A margin can never eat the viewport: a row taller than the room two
+        // margins leave still lands on the nearest edge rather than being
+        // scrolled somewhere it could not be seen at all.
+        val margin = insetPx.coerceAtMost(containerSize / 3f)
+        val trailingEdge = offset + abs(size)
+        // Already inside the viewport: there is no landing to make. This is the
+        // answer the page was missing, and it is also what keeps a row that
+        // merely remeasured from being nudged by its own re-request.
+        if (offset >= 0f && trailingEdge <= containerSize) return 0f
+        return when {
+            // Past the bottom margin: scroll forward just far enough to clear it.
+            trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
+            // Above the top one: back off by the same amount.
+            offset < margin -> offset - margin
+            // Already clear of both: no scroll at all.
+            else -> 0f
+        }
+    }
+}
 
 /**
  * Whether the viewer has hidden this credit.
@@ -468,7 +526,20 @@ fun ActorScreen(
                 }
             }
 
-            CompositionLocalProvider(LocalBringIntoViewSpec provides LocalActorBringIntoViewSpec) {
+            // The page installs its own vertical landing (see
+            // [ActorListBringIntoViewSpec]) instead of the rails' 30% line: the
+            // rails install that line around their OWN LazyRow (see
+            // [ActorCreditRail]), so the row that wants the focused card a third
+            // of the way in still gets it, while the page's own list - the bio
+            // and the rows under it - is no longer dragged to that line every
+            // time focus moves. Supplying the rail's line here is what scrolled
+            // the biography off the top on open.
+            val density = LocalDensity.current
+            val listBringIntoViewSpec = remember(density) {
+                ActorListBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+            }
+
+            CompositionLocalProvider(LocalBringIntoViewSpec provides listBringIntoViewSpec) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     backdropUrl?.let {
                         AsyncImage(
@@ -678,13 +749,40 @@ fun ActorScreen(
                                                         shape = KBShapeSmall
                                                     )
                                                 ),
+                                                // The CHIP glow (8dp), not the
+                                                // card's 12dp: this is the same
+                                                // control as Detail's overview
+                                                // toggle, it is the same size as
+                                                // the chips around the app, and a
+                                                // 12dp halo is nearly half a pill
+                                                // this tall (see
+                                                // UiUniformityBatchDContractTest).
                                                 glow = ClickableSurfaceDefaults.glow(
                                                     focusedGlow = Glow(
                                                         elevationColor = KBAccent,
-                                                        elevation = KBFocusGlow
+                                                        elevation = KBFocusGlowSmall
                                                     )
                                                 ),
-                                                modifier = Modifier.padding(top = 8.dp)
+                                                // Focusing the toggle recovers the
+                                                // biography instead of cutting it:
+                                                // this is the list's first item but
+                                                // not its first focusable one, so a
+                                                // D-pad walk up from the rails could
+                                                // leave the paragraph scrolled half
+                                                // off the top with the toggle alone
+                                                // in view. Detail's overview toggle
+                                                // does exactly this, for exactly this
+                                                // reason - and the bio is the thing
+                                                // the viewer came up to read.
+                                                modifier = Modifier
+                                                    .onFocusChanged { focusState ->
+                                                        if (focusState.hasFocus) {
+                                                            scope.launch {
+                                                                browseListState.animateScrollToItem(0)
+                                                            }
+                                                        }
+                                                    }
+                                                    .padding(top = 8.dp)
                                             ) {
                                                 Text(
                                                     text = if (bioExpanded) "View less" else "View more",
@@ -926,6 +1024,7 @@ fun ActorScreen(
  * outer page reveals the rail, this scrolls the row to the card, and the card
  * the record names carries [returnFocusRequester] (see [BrowseReturnFocus]).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ActorCreditRail(
     credits: List<TmdbPersonCredit>,
@@ -969,20 +1068,26 @@ private fun ActorCreditRail(
         }
     }
 
-    LazyRow(
-        state = rowState,
-        // Horizontal at the app's screen edge, and vertical with the room a
-        // focused tile needs INSIDE the row's own clips-to-bounds viewport:
-        // 8dp here cut the top of the first credits row's halo off flat (see
-        // [KBFocusRowInset]).
-        contentPadding = PaddingValues(
-            start = KBScreenEdge,
-            end = KBScreenEdge,
-            top = KBFocusRowInset,
-            bottom = KBFocusRowInset
-        ),
-        modifier = Modifier.padding(bottom = bottomPadding).focusGroup().focusRestorer()
-    ) {
+    // The rail's own landing line (see [ActorBringIntoViewSpec]): a focused
+    // card comes to rest at 30% of the ROW, so the viewer can see what is
+    // coming next. Supplied around this LazyRow alone - the page installs its
+    // own vertical rule at the top (see [ActorListBringIntoViewSpec]), and it
+    // was the two being the same object that scrolled the bio off on open.
+    CompositionLocalProvider(LocalBringIntoViewSpec provides LocalActorBringIntoViewSpec) {
+        LazyRow(
+            state = rowState,
+            // Horizontal at the app's screen edge, and vertical with the room a
+            // focused tile needs INSIDE the row's own clips-to-bounds viewport:
+            // 8dp here cut the top of the first credits row's halo off flat (see
+            // [KBFocusRowInset]).
+            contentPadding = PaddingValues(
+                start = KBScreenEdge,
+                end = KBScreenEdge,
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset
+            ),
+            modifier = Modifier.padding(bottom = bottomPadding).focusGroup().focusRestorer()
+        ) {
         itemsIndexed(
             items = credits,
             // One row per (title, character): TMDB's person credits carry a
@@ -1049,6 +1154,7 @@ private fun ActorCreditRail(
                     ?: firstCreditFocusRequester.takeIf { isFirstItem }
             )
         }
+    }
     }
 }
 

@@ -10445,6 +10445,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun switchChannelGuideGroup(direction: Int) {
         if (!isGuideShowing) return
         if (!LiveChannelZapRegistry.offsetGroup(direction)) return
+        // The zap anchor is an INDEX INTO THE LINEUP, and this press just swapped
+        // that lineup for another group's, so the index no longer names the
+        // channel being watched. Left alone it did two things: the guide named
+        // whatever now sits at that position as "playing" (and the next zap
+        // moved relative to the wrong anchor), and when the new group is shorter
+        // than the old index, currentZapChannel() answered null forever - it
+        // only resolves while the index is `< 0` - so CH+/CH- was dead for the
+        // rest of the player session without a word. Invalidating it makes the
+        // next zap re-resolve from parentId/currentUrl inside the group now
+        // active, or find nothing and stay put.
+        zapChannelIndex = -1
         channelGuideTitle?.text = channelGuideTitleText()
         publishChannelGuideRows(programs = emptyMap(), loading = true)
         focusChannelGuideCurrent()

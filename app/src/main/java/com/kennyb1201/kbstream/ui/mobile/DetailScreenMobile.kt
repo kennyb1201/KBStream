@@ -29,7 +29,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -104,6 +103,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchStudioChip
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
@@ -889,7 +889,35 @@ fun DetailScreenMobile(
             if (meta == null && tmdbDetail == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (isLoading) {
-                        CircularProgressIndicator(color = KBAccent)
+                        // Shaped like the page that is coming - hero still, then
+                        // the rails - instead of a mask-sized spinner that then
+                        // jolts everything upward when the page lands
+                        // (improvement F1).
+                        val posterSize = rememberTouchPosterSize()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp)
+                                    .fillMaxWidth()
+                                    .aspectRatio(16f / 9f)
+                                    .background(KBSurfaceRaised, KBShapeCard)
+                            )
+                            KBSkeletonRail(
+                                posterWidth = posterSize.width,
+                                posterHeight = posterSize.height,
+                                horizontalPadding = 16.dp
+                            )
+                            KBSkeletonRail(
+                                posterWidth = posterSize.width,
+                                posterHeight = posterSize.height,
+                                horizontalPadding = 16.dp
+                            )
+                        }
                     } else {
                         Text(
                             text = error ?: "This title could not be loaded.",
@@ -1007,7 +1035,11 @@ fun DetailScreenMobile(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    items(tmdbGenres, key = { "genre:" + it.id }) { genre ->
+                                    items(
+                                        tmdbGenres,
+                                        key = { "genre:" + it.id },
+                                        contentType = { "genre" }
+                                    ) { genre ->
                                         TouchLinkChip(
                                             label = genre.name,
                                             onClick = {
@@ -1022,7 +1054,11 @@ fun DetailScreenMobile(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    items(keywords, key = { "keyword:" + it.id }) { keyword ->
+                                    items(
+                                        keywords,
+                                        key = { "keyword:" + it.id },
+                                        contentType = { "keyword" }
+                                    ) { keyword ->
                                         TouchLinkChip(
                                             // The TV keyword chip's own mark: a
                                             // keyword is a tag, not a genre.
@@ -1084,7 +1120,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(seasons, key = { it.seasonNumber }) { summary ->
+                                items(
+                                    seasons,
+                                    key = { it.seasonNumber },
+                                    contentType = { "season" }
+                                ) { summary ->
                                     TouchChoiceChip(
                                         label = summary.name
                                             ?: "Season ${summary.seasonNumber}",
@@ -1132,7 +1172,11 @@ fun DetailScreenMobile(
                             }
                         }
                     } else {
-                        items(episodes, key = { "ep:" + it.streamId }) { episode ->
+                        items(
+                            episodes,
+                            key = { "ep:" + it.streamId },
+                            contentType = { "episode" }
+                        ) { episode ->
                             val visual = episodeVisual(episode)
                             EpisodeRow(
                                 episode = episode,
@@ -1167,7 +1211,8 @@ fun DetailScreenMobile(
                                     cast.take(20),
                                     key = { member ->
                                         "person${member.id}${member.character.orEmpty()}"
-                                    }
+                                    },
+                                    contentType = { "cast" }
                                 ) { member ->
                                     CastTile(
                                         member = member,
@@ -1190,7 +1235,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                items(networks, key = { "network:" + it.id }) { network ->
+                                items(
+                                    networks,
+                                    key = { "network:" + it.id },
+                                    contentType = { "network" }
+                                ) { network ->
                                     TouchStudioChip(
                                         name = network.name,
                                         logoPath = network.logoPath,
@@ -1212,7 +1261,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                items(productionCompanies, key = { "company:" + it.id }) { company ->
+                                items(
+                                    productionCompanies,
+                                    key = { "company:" + it.id },
+                                    contentType = { "company" }
+                                ) { company ->
                                     TouchStudioChip(
                                         name = company.name,
                                         logoPath = company.logoPath,
@@ -1254,7 +1307,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                items(collectionParts, key = { "part:" + it.id }) { part ->
+                                items(
+                                    collectionParts,
+                                    key = { "part:" + it.id },
+                                    contentType = { "part" }
+                                ) { part ->
                                     // Shape follows Settings' global landscape
                                     // switch, as it does on every catalog row -
                                     // and its size follows Settings' Poster Size.
@@ -1313,7 +1370,8 @@ fun DetailScreenMobile(
                             ) {
                                 items(
                                     recommendations.take(20),
-                                    key = { "rec:" + it.id }
+                                    key = { "rec:" + it.id },
+                                    contentType = { "recommendation" }
                                 ) { item ->
                                     RecommendationTile(
                                         item = item,
@@ -1348,7 +1406,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                items(reviews.take(60), key = { it.id }) { review ->
+                                items(
+                                    reviews.take(60),
+                                    key = { it.id },
+                                    contentType = { "review" }
+                                ) { review ->
                                     ReviewTile(
                                         review = review,
                                         onClick = { selectedReview = review }
@@ -1370,7 +1432,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(mediaTabs, key = { it.label }) { tab ->
+                                items(
+                                    mediaTabs,
+                                    key = { it.label },
+                                    contentType = { "media-tab" }
+                                ) { tab ->
                                     TouchChoiceChip(
                                         label = tab.label,
                                         selected = tab == activeMediaTab,
@@ -1382,7 +1448,11 @@ fun DetailScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                items(mediaCards, key = { it.id }) { card ->
+                                items(
+                                    mediaCards,
+                                    key = { it.id },
+                                    contentType = { "media-card" }
+                                ) { card ->
                                     MediaThumb(
                                         card = card,
                                         onClick = {

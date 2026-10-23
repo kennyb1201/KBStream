@@ -4025,7 +4025,14 @@ private fun UpdateRow() {
     // What the release says changed, from the release body the publish
     // workflow writes into it (see AppUpdater.releaseNotes). Blank for a
     // release with no body, which is why every use below is guarded.
-    val notes = (updateState as? AppUpdater.UpdateState.Available)?.notes.orEmpty()
+    // The offer's notes, and also the ones carried across a landed install: the
+    // confirmation is the only place the changelog of the build that just
+    // arrived can still be read (see AppUpdater.UpdateState.Updated).
+    val notes = when (val s = updateState) {
+        is AppUpdater.UpdateState.Available -> s.notes
+        is AppUpdater.UpdateState.Updated -> s.notes
+        else -> ""
+    }
     val label = when (val s = updateState) {
         is AppUpdater.UpdateState.Available -> "Update available — ${s.versionName}"
         is AppUpdater.UpdateState.Downloading ->

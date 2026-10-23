@@ -164,9 +164,32 @@ class KBRepository private constructor(context: Context) {
             return fresh
         }
 
-        val fresh = fetchAndParse(url)
+        // The fetch is the only step that can fail, so it is the only one that
+        // needs a fallback. An EXPIRED disk copy is still a good copy: serving it
+        // when the host is unreachable is what Simkl and MDBList already do, and
+        // without it every profile's collections simply vanished from Home and
+        // Collections at the 12h mark (or on any manual refresh during an outage)
+        // while a perfectly good file sat on disk.
+        val fresh = try {
+            fetchAndParse(url)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (disk != null) {
+                Log.w(
+                    TAG,
+                    "fetch failed for $url; serving the stale disk copy " +
+                        "(${disk.second.size} collections)"
+                )
+                cacheMutex.withLock { memoryCache[url] = (now to disk.second) }
+                return disk.second
+            }
+            throw e
+        }
         cacheMutex.withLock { memoryCache[url] = (now to fresh) }
-        writeDiskCache(url, fresh)
+        // A 200 that parses to nothing is not an answer: writing it over the disk
+        // cache destroyed the last good copy, so the next cold start had nothing
+        // to paint either. The in-memory copy still serves what arrived.
+        if (fresh.isNotEmpty() || disk == null) writeDiskCache(url, fresh)
         return fresh
     }
 

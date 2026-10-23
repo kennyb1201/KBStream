@@ -35,7 +35,10 @@ import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
+import kotlinx.coroutines.delay
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
@@ -293,11 +296,26 @@ fun SearchScreen(
     // came back on the right title with the D-pad still on the search field.
     // The record names the tile; the retry helper covers a rail that is still
     // putting that tile back (see SearchReturnFocus).
+    // The record is SPENT ONLY ONCE THE LANDING IS VERIFIED, and the tile is
+    // looked up again on every attempt. Resolving it once, before the retry
+    // loop, was the gap: the map has no entry until the tile that names it has
+    // been composed, so a first-composition miss was a null lookup, the record
+    // was already consumed, and nothing ever asked again - Back from a title
+    // left the D-pad on the search field with the viewer's place in the results
+    // silently lost. (SearchScreenPart2's chip return already keeps its record
+    // until the landing answers; GuideScreen's restore resolves inside its
+    // loop.)
     LaunchedEffect(Unit) {
-        val target = SearchReturnFocus.consume() ?: return@LaunchedEffect
-        com.kennyb1201.kbstream.ui.browse.landFocusOn(
-            titleTileFocusRequesters[target.tileKey]
-        )
+        val target = SearchReturnFocus.peek() ?: return@LaunchedEffect
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            attempts++
+            val requester = titleTileFocusRequesters[target.tileKey] ?: continue
+            landed = runCatching { requester.requestFocus() }.getOrDefault(false)
+        }
+        if (landed) SearchReturnFocus.consume()
     }
 
     // Counted from the RAW lists, before the hidden filter drops rows: a viewer
@@ -883,6 +901,7 @@ fun SearchScreen(
             val onHome = com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.contains(
                 browseHomeShortcuts,
                 categoryKey,
+                entry.id,
                 entry.name
             )
             // The rail the chip will land in, named in the menu so the

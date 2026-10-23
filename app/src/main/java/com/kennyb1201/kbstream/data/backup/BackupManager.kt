@@ -131,13 +131,16 @@ object BackupManager {
             )
         }
 
-        val history = json.optJSONArray("watchHistory")
-            ?.let { arr ->
-                (0 until arr.length()).mapNotNull { i ->
-                    arr.optJSONObject(i)?.toWatchHistoryEntity()
-                }
-            }
-            .orEmpty()
+        // A backup WITHOUT the history array is a malformed one, not an empty
+        // library: the restore clears both tables before upserting, so treating
+        // a missing key as "no rows" would wipe the device and report "Backup
+        // restored - 0 titles". The version gate above already rejects a newer
+        // file; this is the same objection one level down.
+        val historyArr = json.optJSONArray("watchHistory")
+            ?: error("This backup file is missing its watch history and was not imported")
+        val history = (0 until historyArr.length()).mapNotNull { i ->
+            historyArr.optJSONObject(i)?.toWatchHistoryEntity()
+        }
 
         val watched = json.optJSONArray("watchedStatus")
             ?.let { arr ->

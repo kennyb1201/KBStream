@@ -45,7 +45,17 @@ data class StreamBadgeGroup(
     val color: String? = null
 )
 
-/** A badge resolved onto a stream (a matched filter's display payload). */
+/**
+ * A badge resolved onto a stream (a matched filter's display payload).
+ *
+ * Annotated like every other model in this file: it is nested inside the
+ * generated `Stream` adapter, and being the only unannotated model here made it
+ * the one adapted reflectively - the shape sweep 5 proved can throw under R8 on
+ * its default-argument constructor. Add-on wire JSON never carries `badges`
+ * today, so nothing exercises that path yet; this keeps the first Moshi stream
+ * cache from inheriting the landmine.
+ */
+@JsonClass(generateAdapter = true)
 data class StreamBadge(
     val name: String,
     val imageURL: String = "",

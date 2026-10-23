@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -159,8 +160,11 @@ fun CatalogGridScreenMobile(
         val lazyItems = items
 
         // Hoisted above the loading branch so the scroll position belongs to the
-        // screen rather than to the first frame that had content.
-        val gridState = rememberLazyGridState()
+        // screen rather than to the first frame that had content - and `key`
+        // scopes that saveable record to THIS catalog, as the Actor/KBFolder
+        // grids do: unkeyed, opening another catalog in the same slot restored
+        // the previous one's offset instead of starting at the top.
+        val gridState = key(title, addonName) { rememberLazyGridState() }
 
         if (openHeader == null || lazyItems == null) {
             // The one loading frame (plus a possible cold-restore wait). The

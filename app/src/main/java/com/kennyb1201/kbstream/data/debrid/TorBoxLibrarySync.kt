@@ -58,15 +58,23 @@ internal object TorBoxLibrarySync {
             }
 
             val candidates = searchCandidates(repository, torrent.name, parsed)
+            if (candidates == null) {
+                // A FAILED search, not an empty one. TMDB being unreachable (an
+                // outage, an offline box) says nothing about whether this title
+                // exists, so it must not touch the give-up budget: that budget
+                // is IRREVERSIBLE - `markProcessed` never expires and
+                // `processed()` is consulted before searching - so three bad
+                // rounds would have dropped every unmatched torrent for good,
+                // even after TMDB came back. The torrent simply stays unrecorded
+                // and is looked at again next round.
+                Log.w(TAG, "TMDB search failed for '${torrent.name}'; leaving it for the next round")
+                continue
+            }
             if (candidates.isEmpty()) {
-                // A search that returned nothing is as likely to be a network
-                // blip as a missing title, and the two need opposite treatment:
-                // recording the torrent on the first empty answer lost a title
-                // to one bad round, while leaving it unrecorded (which is what
-                // this did) spent a TMDB search on it on every launch and every
-                // schedule tick, forever. It is retried for
-                // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS] rounds and then
-                // recorded as handled.
+                // A genuine no-match, which is a statement about the title. It is
+                // retried for [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS] rounds and
+                // then recorded as handled: leaving it unrecorded spent a TMDB
+                // search on it on every launch and every schedule tick, forever.
                 val attempts = store.noteEmptySearch(torrent.id)
                 if (!TorBoxCloudRules.retriesEmptySearch(attempts)) {
                     Log.i(
@@ -112,7 +120,16 @@ internal object TorBoxLibrarySync {
     }
 
     /**
-     * TMDB search results for [parsed], mapped into [TorBoxCloudRules.Candidate].
+     * TMDB search results for [parsed], mapped into [TorBoxCloudRules.Candidate],
+     * or NULL when a search could not be made at all.
+     *
+     * The null is the whole point: the repository's search methods answer
+     * `emptyList()` for "nothing matched" and for "the request failed" alike
+     * (they collapse every failure through `getOrDefault`), and the two need
+     * opposite treatment here - a no-match may be given up on, a failure may
+     * not. Catching at the call site is what keeps that distinction without
+     * changing a search API the rest of the app reads as a plain list.
+     *
      * A name with a season/episode marker is a series, so only the TV search
      * runs; anything else is searched as both a movie and a show, because a
      * release name alone cannot tell the two apart.
@@ -121,24 +138,20 @@ internal object TorBoxLibrarySync {
         repository: TmdbRepository,
         rawName: String,
         parsed: TorBoxCloudRules.ParsedName
-    ): List<TorBoxCloudRules.Candidate> {
+    ): List<TorBoxCloudRules.Candidate>? {
         val query = parsed.title
-        val out = mutableListOf<TorBoxCloudRules.Candidate>()
 
         if (TorBoxCloudRules.looksLikeSeries(rawName)) {
-            out += runCatchingCancellable { repository.searchTv(query) }
-                .getOrDefault(emptyList())
-                .map { it.toCandidate("series") }
-            return out
+            val shows = runCatchingCancellable { repository.searchTv(query) }.getOrNull()
+                ?: return null
+            return shows.map { it.toCandidate("series") }
         }
 
-        out += runCatchingCancellable { repository.searchMovies(query) }
-            .getOrDefault(emptyList())
-            .map { it.toCandidate("movie") }
-        out += runCatchingCancellable { repository.searchTv(query) }
-            .getOrDefault(emptyList())
-            .map { it.toCandidate("series") }
-        return out
+        val movies = runCatchingCancellable { repository.searchMovies(query) }.getOrNull()
+            ?: return null
+        val shows = runCatchingCancellable { repository.searchTv(query) }.getOrNull()
+            ?: return null
+        return movies.map { it.toCandidate("movie") } + shows.map { it.toCandidate("series") }
     }
 
     private fun TmdbSearchTitleResult.toCandidate(mediaType: String): TorBoxCloudRules.Candidate =

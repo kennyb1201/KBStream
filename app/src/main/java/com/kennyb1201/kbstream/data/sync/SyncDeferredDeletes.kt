@@ -122,7 +122,14 @@ internal object SyncDeferredDeletes {
             val array = JSONArray(raw)
             buildList {
                 for (index in 0 until array.length()) {
-                    val obj = array.getJSONObject(index)
+                    // optJSONObject, not getJSONObject: one non-object element
+                    // (prefs corruption, a build that wrote another shape) threw
+                    // inside the whole-blob runCatching and discarded EVERY
+                    // staged delete - and because stage/remove write back what
+                    // read() returned, the next mutation then persisted the
+                    // empty list and the rows those tombstones were holding down
+                    // could resurrect on the next pull.
+                    val obj = array.optJSONObject(index) ?: continue
                     val accountId =
                         obj.optString("accountId").takeIf { it.isNotEmpty() } ?: continue
                     val table = obj.optString("table").takeIf { it.isNotEmpty() } ?: continue

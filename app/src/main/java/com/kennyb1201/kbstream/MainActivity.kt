@@ -4116,6 +4116,11 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                         "KBStream ${s.versionName} (build ${s.versionCode}) is " +
                             "installed and running."
                     )
+                    // The build that landed says what it changed, carried across
+                    // the install in the updater's pending marker (audit 3.4):
+                    // the offer showed these notes, and this confirmation used
+                    // to be the one screen in the flow that could not.
+                    UpdateDialogNotes(s.notes)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(top = 18.dp)

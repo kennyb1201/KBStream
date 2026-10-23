@@ -102,6 +102,20 @@ object LiveChannelZapRegistry {
     @Volatile
     private var streamUrlIndex: Map<String, Int> = emptyMap()
 
+    /**
+     * The lineup's channel-number attributes, in lineup order, built alongside
+     * the two indexes above.
+     *
+     * [ChannelNumberEntry.target] needs the whole list (not a map: a typed
+     * number resolves by position and normalization, not by exact key), and it
+     * runs on the main thread from the player's typed-number tune. Mapping
+     * `channels.map { it.chno }` per commit rebuilt that list on every digit
+     * commit, which is the same tens-of-thousands-entry main-thread scan the
+     * indexes above exist to remove.
+     */
+    @Volatile
+    private var channelNumbers: List<String?> = emptyList()
+
     @Volatile
     private var groups: List<ZapGroup> = emptyList()
 
@@ -144,6 +158,7 @@ object LiveChannelZapRegistry {
             channels = emptyList()
             channelIndex = emptyMap()
             streamUrlIndex = emptyMap()
+            channelNumbers = emptyList()
             browsingGroupLabel = null
             activeGroupIndex = 0
             return
@@ -161,6 +176,7 @@ object LiveChannelZapRegistry {
         channels = group.channels
         channelIndex = firstIndexBy(group.channels) { it.channelId }
         streamUrlIndex = firstIndexBy(group.channels) { it.streamUrl }
+        channelNumbers = group.channels.map { it.chno }
         browsingGroupLabel = group.label.trim().takeIf { it.isNotBlank() }
     }
 
@@ -218,7 +234,7 @@ object LiveChannelZapRegistry {
 
     /** Index of the channel a typed number tunes to, or -1 (see [ChannelNumberEntry]). */
     fun indexOfChannelNumber(entry: String): Int =
-        ChannelNumberEntry.target(channels.map { it.chno }, entry)
+        ChannelNumberEntry.target(channelNumbers, entry)
 
     /**
      * First index whose stream URL matches — fallback identity when the
@@ -253,6 +269,7 @@ object LiveChannelZapRegistry {
         channels = emptyList()
         channelIndex = emptyMap()
         streamUrlIndex = emptyMap()
+        channelNumbers = emptyList()
         groups = emptyList()
         activeGroupIndex = 0
         browsingGroupLabel = null

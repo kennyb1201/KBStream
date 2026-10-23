@@ -29,18 +29,29 @@ class BrowseHomeShortcutsTest {
     // ── identity ────────────────────────────────────────────────────
 
     @Test
-    fun `a chip is identified by its category and its name`() {
-        assertEquals("genres\u0001Comedy", BrowseHomeShortcuts.chipKey("genres", "Comedy"))
+    fun `a chip is identified by its category, its id and its name`() {
+        assertEquals(
+            "genres\u000135\u0001Comedy",
+            BrowseHomeShortcuts.chipKey("genres", 35, "Comedy")
+        )
         // The name is trimmed so the same chip cannot land in the row twice
         // with different spacing.
         assertEquals(
-            BrowseHomeShortcuts.chipKey("genres", "Comedy"),
-            BrowseHomeShortcuts.chipKey("genres", "  Comedy  ")
+            BrowseHomeShortcuts.chipKey("genres", 35, "Comedy"),
+            BrowseHomeShortcuts.chipKey("genres", 35, "  Comedy  ")
         )
         // Same name, different category: two chips, not one.
         assertFalse(
-            BrowseHomeShortcuts.chipKey("genres", "Comedy") ==
-                BrowseHomeShortcuts.chipKey("keywords", "Comedy")
+            BrowseHomeShortcuts.chipKey("genres", 35, "Comedy") ==
+                BrowseHomeShortcuts.chipKey("keywords", 35, "Comedy")
+        )
+        // And the ID is part of identity, not just the display name: two TMDB
+        // companies (or a provider and a network) can share a name in one
+        // category, and a name-only key refused the second add and deleted
+        // BOTH on removal.
+        assertFalse(
+            BrowseHomeShortcuts.chipKey("companies", 12, "A24") ==
+                BrowseHomeShortcuts.chipKey("companies", 41077, "A24")
         )
     }
 
@@ -60,9 +71,11 @@ class BrowseHomeShortcutsTest {
     @Test
     fun `contains answers for the chip, not for the category`() {
         val added = listOf(shortcut())
-        assertTrue(BrowseHomeShortcuts.contains(added, "genres", "Comedy"))
-        assertFalse(BrowseHomeShortcuts.contains(added, "genres", "Drama"))
-        assertFalse(BrowseHomeShortcuts.contains(added, "keywords", "Comedy"))
+        assertTrue(BrowseHomeShortcuts.contains(added, "genres", 35, "Comedy"))
+        assertFalse(BrowseHomeShortcuts.contains(added, "genres", 35, "Drama"))
+        assertFalse(BrowseHomeShortcuts.contains(added, "keywords", 35, "Comedy"))
+        // A same-named chip with a different id is a different chip.
+        assertFalse(BrowseHomeShortcuts.contains(added, "genres", 41077, "Comedy"))
     }
 
     // ── placement ───────────────────────────────────────────────────

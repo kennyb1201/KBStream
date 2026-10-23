@@ -1364,6 +1364,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _browseHomeShortcuts.value = BrowseHomeShortcuts.remove(
             app,
             categoryKey,
+            entry.id,
             entry.name
         )
     }

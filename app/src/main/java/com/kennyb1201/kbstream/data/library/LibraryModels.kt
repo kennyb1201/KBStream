@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.library
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import org.json.JSONArray
@@ -133,9 +134,26 @@ data class LibraryList(
  */
 object LocalLibraryStore {
 
+    private const val TAG = "LIBRARY_STORE"
     private const val BASE_NAME = "kbstream_library"
     private const val KEY_MY_LIST = "my_list"
     private const val KEY_LISTS = "personal_lists"
+
+    /**
+     * The last copy of each blob that PARSED, per profile store.
+     *
+     * A blob that will not parse (a schema drift from a sideloaded newer/older
+     * build, a torn write) used to read as an EMPTY library, and the next
+     * add/remove persisted that emptiness and pushed it to the other devices - 
+     * the AddonManager blob-wipe shape, one store over. Reads now fall back to
+     * this instead of to nothing, and every read-modify-write REFUSES to write
+     * when it could not read (see [readListForWrite]). The map only ever holds
+     * data that really parsed, so a fallback can never invent a title.
+     */
+    private val lastGood = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+    private fun cacheKey(context: Context, key: String): String =
+        "${ProfileStorage.prefsName(context, BASE_NAME)}::$key"
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(
@@ -168,14 +186,42 @@ object LocalLibraryStore {
         )
     }
 
-    private fun readList(context: Context, key: String): MutableList<LibraryItem> {
+    /**
+     * The list for display: the parsed blob, or - when the blob will not parse -
+     * the last copy that did, so one bad read cannot blank the Library on screen.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun readList(context: Context, key: String): MutableList<LibraryItem> =
+        (readListOrNull(context, key)
+            ?: lastGood[cacheKey(context, key)] as? List<LibraryItem>
+            ?: emptyList()).toMutableList()
+
+    /**
+     * The list a READ-MODIFY-WRITE may start from: null when the stored blob
+     * exists and cannot be parsed, which is a refusal to write rather than an
+     * empty library to add to.
+     */
+    private fun readListForWrite(context: Context, key: String): MutableList<LibraryItem>? =
+        readListOrNull(context, key)
+
+    private fun readListOrNull(context: Context, key: String): MutableList<LibraryItem>? {
         val raw = prefs(context).getString(key, null) ?: return mutableListOf()
-        return runCatching {
+        val parsed = runCatching {
             val arr = JSONArray(raw)
             (0 until arr.length()).mapNotNull { i ->
                 arr.optJSONObject(i)?.let(::entryFromJson)
             }
-        }.getOrDefault(emptyList()).toMutableList()
+        }.getOrNull()
+        if (parsed == null) {
+            Log.w(
+                TAG,
+                "library blob '$key' will not parse; serving the last good copy and " +
+                    "refusing to write over it"
+            )
+            return null
+        }
+        lastGood[cacheKey(context, key)] = parsed
+        return parsed.toMutableList()
     }
 
     private fun writeList(context: Context, key: String, items: List<LibraryItem>) {
@@ -339,9 +385,20 @@ object LocalLibraryStore {
         val items: MutableList<LibraryItem>
     )
 
-    private fun readLists(context: Context): MutableList<StoredList> {
+    /** The personal lists for display: the parsed blob or the last good copy. */
+    @Suppress("UNCHECKED_CAST")
+    private fun readLists(context: Context): MutableList<StoredList> =
+        (readListsOrNull(context)
+            ?: lastGood[cacheKey(context, KEY_LISTS)] as? List<StoredList>
+            ?: emptyList()).toMutableList()
+
+    /** The lists a read-modify-write may start from: null when the blob is bad. */
+    private fun readListsForWrite(context: Context): MutableList<StoredList>? =
+        readListsOrNull(context)
+
+    private fun readListsOrNull(context: Context): MutableList<StoredList>? {
         val raw = prefs(context).getString(KEY_LISTS, null) ?: return mutableListOf()
-        return runCatching {
+        val parsed = runCatching {
             val root = JSONObject(raw)
             val out = mutableListOf<StoredList>()
             val keys = root.keys()
@@ -369,7 +426,17 @@ object LocalLibraryStore {
             }
             out.sortBy { it.createdAt }
             out
-        }.getOrDefault(mutableListOf())
+        }.getOrNull()
+        if (parsed == null) {
+            Log.w(
+                TAG,
+                "personal-lists blob will not parse; serving the last good copy and " +
+                    "refusing to write over it"
+            )
+            return null
+        }
+        lastGood[cacheKey(context, KEY_LISTS)] = parsed
+        return parsed.toMutableList()
     }
 
     private fun writeLists(context: Context, lists: List<StoredList>) {
@@ -405,7 +472,9 @@ object LocalLibraryStore {
     fun createList(context: Context, name: String): LibraryList? {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return null
-        val lists = readLists(context)
+        // A blob that will not parse must not be replaced by the one list this
+        // call is creating: that is how the other lists would be lost.
+        val lists = readListsForWrite(context) ?: return null
         if (lists.any { it.name.equals(trimmed, ignoreCase = true) }) {
             return userLists(context).firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
         }
@@ -435,7 +504,7 @@ object LocalLibraryStore {
     fun renameList(context: Context, listId: Int, name: String): Boolean {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return false
-        val lists = readLists(context)
+        val lists = readListsForWrite(context) ?: return false
         val target = lists.firstOrNull { it.id == listId } ?: return false
         val renamed = target.copy(name = trimmed)
         val updated = lists.map { if (it.id == listId) renamed else it }
@@ -445,7 +514,7 @@ object LocalLibraryStore {
 
     @Synchronized
     fun deleteList(context: Context, listId: Int): Boolean {
-        val lists = readLists(context)
+        val lists = readListsForWrite(context) ?: return false
         val filtered = lists.filter { it.id != listId }
         if (filtered.size == lists.size) return false
         writeLists(context, filtered)
@@ -482,7 +551,7 @@ object LocalLibraryStore {
 
     @Synchronized
     fun removeFromLocalList(context: Context, listId: Int, mediaType: String, imdbId: String?, tmdbId: Int?) {
-        val lists = readLists(context)
+        val lists = readListsForWrite(context) ?: return
         val target = lists.firstOrNull { it.id == listId } ?: return
         // Match on either id: a removal passes whatever id the row it came
         // from knows, which is often only one side of the stored pair.
@@ -515,7 +584,13 @@ object LocalLibraryStore {
         if (entry.imdbId == null && entry.tmdbId == null) return false
 
         if (storageKey != null) {
-            val items = readList(context, storageKey)
+            // Refuse to add over a blob that will not parse: the read-modify-write
+            // would persist a one-item library and push that erasure to the other
+            // devices (see [lastGood]).
+            val items = readListForWrite(context, storageKey) ?: run {
+                Log.w(TAG, "add refused: library blob will not parse")
+                return false
+            }
             if (items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
             items.add(0, entry)
             writeList(context, storageKey, items)
@@ -523,7 +598,10 @@ object LocalLibraryStore {
         }
 
         val id = listId ?: return false
-        val lists = readLists(context)
+        val lists = readListsForWrite(context) ?: run {
+            Log.w(TAG, "add refused: personal-lists blob will not parse")
+            return false
+        }
         val target = lists.firstOrNull { it.id == id } ?: return false
         if (target.items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
         target.items.add(0, entry)
@@ -532,7 +610,10 @@ object LocalLibraryStore {
     }
 
     private fun removeFromListInternal(context: Context, storageKey: String, mediaType: String, imdbId: String?, tmdbId: Int?) {
-        val items = readList(context, storageKey)
+        val items = readListForWrite(context, storageKey) ?: run {
+            Log.w(TAG, "remove refused: library blob will not parse")
+            return
+        }
         val filtered = items.filterNot { matches(it, mediaType, imdbId, tmdbId) }
         writeList(context, storageKey, filtered)
     }

@@ -68,6 +68,9 @@ object BrowseHomeShortcuts {
     private const val PREFS = "kbstream_browse_home_shortcuts"
     private const val KEY_BLOB = "browse_home_shortcuts_json"
 
+    /** Where an unparseable blob is parked instead of being overwritten. */
+    private const val KEY_BLOB_CORRUPT = "browse_home_shortcuts_json_corrupt"
+
     /**
      * The profile's raw chip blob, verbatim, for the cross-device payload.
      * The store owns its own encoding (see [save]) and the sync layer hands
@@ -113,9 +116,18 @@ object BrowseHomeShortcuts {
         .build()
         .adapter(BrowseHomeShortcutsBlob::class.java)
 
-    /** Stable identity for one added chip, matching the hidden-chip key shape. */
-    fun chipKey(categoryKey: String, name: String): String =
-        "$categoryKey$SEPARATOR${name.trim()}"
+    /**
+     * Stable identity for one added chip, matching the hidden-chip key shape.
+     *
+     * The ID is part of the key, not just the name: two chips in one category
+     * can share a display name (two TMDB companies of the same name; a provider
+     * and a network named for the same brand under Services), and a name-only
+     * key silently refused the second add - and deleted BOTH on removal. The id
+     * is the field that decides which screen the tile opens, so it is the field
+     * that decides identity.
+     */
+    fun chipKey(categoryKey: String, id: Int, name: String): String =
+        "$categoryKey$SEPARATOR$id$SEPARATOR${name.trim()}"
 
     /** True when [key] belongs to a Browse rail's arrangement key space. */
     fun isShortcutKey(key: String?): Boolean =
@@ -126,17 +138,32 @@ object BrowseHomeShortcuts {
 
     fun list(context: Context): List<BrowseHomeShortcut> {
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return emptyList()
-        return runCatching { adapter.fromJson(raw) }
-            .getOrNull()
-            ?.shortcuts
-            .orEmpty()
+        val parsed = runCatching { adapter.fromJson(raw) }.getOrNull()
+        if (parsed == null) {
+            // A blob that will not parse used to read as "no chips", and the next
+            // add() saved that emptiness plus the one new chip - the
+            // AddonManager blob wipe one store over. The bad blob is kept (so it
+            // can be inspected or restored) instead of being silently replaced.
+            android.util.Log.w(
+                "BROWSE_SHORTCUTS",
+                "chip blob will not parse; keeping a copy under $KEY_BLOB_CORRUPT and " +
+                    "starting from an empty row"
+            )
+            prefs(context).edit()
+                .putString(KEY_BLOB_CORRUPT, raw)
+                .remove(KEY_BLOB)
+                .apply()
+            return emptyList()
+        }
+        return parsed.shortcuts
     }
 
     fun contains(
         shortcuts: List<BrowseHomeShortcut>,
         categoryKey: String,
+        id: Int,
         name: String
-    ): Boolean = shortcuts.any { it.chipKey() == chipKey(categoryKey, name) }
+    ): Boolean = shortcuts.any { it.chipKey() == chipKey(categoryKey, id, name) }
 
     /**
      * Adds one chip; returns the updated set. Adding a chip that is already in
@@ -157,10 +184,11 @@ object BrowseHomeShortcuts {
     fun remove(
         context: Context,
         categoryKey: String,
+        id: Int,
         name: String
     ): List<BrowseHomeShortcut> {
         val current = list(context)
-        val updated = current.filterNot { it.chipKey() == chipKey(categoryKey, name) }
+        val updated = current.filterNot { it.chipKey() == chipKey(categoryKey, id, name) }
         if (updated.size == current.size) return current
         save(context, updated)
         return updated
@@ -202,7 +230,7 @@ object BrowseHomeShortcuts {
 
 /** Identity of this chip as an entry in its rail. */
 internal fun BrowseHomeShortcut.chipKey(): String =
-    BrowseHomeShortcuts.chipKey(categoryKey, name)
+    BrowseHomeShortcuts.chipKey(categoryKey, id, name)
 
 /**
  * The kind of browse chip a rail holds, and therefore where a chip added from

@@ -110,6 +110,15 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     private var currentId: Int? = null
 
     /**
+     * Which load owns the state. This ViewModel is activity-scoped, so the
+     * same-route guard above only stops a RE-load of one collection; two
+     * different collections opened in a row run two launches through one
+     * instance, and the slower one used to publish - its parts, its watched
+     * resolution and its spinner - under the other's page.
+     */
+    private var loadGeneration = 0
+
+    /**
      * The key a tile is compared under. Delegates to [WatchedStatusKeys.key],
      * so the keys the screen tests and the keys the sets above are built from
      * cannot describe the same title differently.
@@ -127,6 +136,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         if (isSameRoute) return
 
         currentId = collectionId
+        val generation = ++loadGeneration
 
         viewModelScope.launch {
             _isLoading.value = true
@@ -134,12 +144,19 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             _resolvedIds.value = emptyMap()
 
             try {
-                _collection.value = tmdbRepository.getCollection(collectionId)
+                val loaded = tmdbRepository.getCollection(collectionId)
+                if (generation != loadGeneration) return@launch
+                _collection.value = loaded
             } catch (e: Exception) {
                 Log.e("COLLECTION_VM", "load failed id=$collectionId", e)
+                if (generation != loadGeneration) return@launch
                 _collection.value = null
             }
 
+            // The spinner and the badge resolution belong to the page that owns
+            // the state: clearing it here would stop the in-flight newer load's
+            // spinner and resolve this collection's parts under its page.
+            if (generation != loadGeneration) return@launch
             _isLoading.value = false
 
             val detail = _collection.value

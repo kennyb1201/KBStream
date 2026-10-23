@@ -508,10 +508,29 @@ class AddonRepository private constructor() {
             val stampedAt =
                 System.currentTimeMillis()
 
+            // A 200 carrying no metas is NOT a statement that this catalog is
+            // empty: the Stremio model defaults `metas` to emptyList(), so a
+            // glitching add-on answering `{}` or an error payload looks exactly
+            // like a catalog with nothing in it. Filing that overwrote a good
+            // in-memory page AND destroyed the cold-start snapshot, so the next
+            // launch had nothing to paint either - and one bad round blanked the
+            // rail for the session. TMDB's cachedRailPage stores only non-empty
+            // pages for the same reason.
+            val previous = catalogMutex.withLock { catalogCache[cacheKey]?.metas }
+            // An empty answer is only fileable when there is nothing to protect:
+            // no page in memory and no snapshot on disk.
+            val snapshot = if (metas.isEmpty() && previous == null) {
+                withContext(Dispatchers.IO) { AddonCatalogSnapshotStore.load(cacheKey)?.metas }
+            } else {
+                null
+            }
+            val worthFiling = metas.isNotEmpty() || (previous == null && snapshot == null)
+            val filed = if (metas.isNotEmpty()) metas else (previous ?: snapshot ?: metas)
+
             catalogMutex.withLock {
                 catalogCache[cacheKey] =
                     CachedCatalog(
-                        metas = metas,
+                        metas = filed,
                         cachedAtMs = stampedAt
                     )
 
@@ -525,18 +544,20 @@ class AddonRepository private constructor() {
             }
 
             request.complete(
-                metas
+                filed
             )
 
-            withContext(Dispatchers.IO) {
-                AddonCatalogSnapshotStore.save(
-                    cacheKey = cacheKey,
-                    metas = metas,
-                    cachedAtMs = stampedAt
-                )
+            if (worthFiling) {
+                withContext(Dispatchers.IO) {
+                    AddonCatalogSnapshotStore.save(
+                        cacheKey = cacheKey,
+                        metas = metas,
+                        cachedAtMs = stampedAt
+                    )
+                }
             }
 
-            return metas
+            return filed
         } catch (throwable: Throwable) {
             catalogMutex.withLock {
                 pendingCatalogRequests.remove(
@@ -696,12 +717,19 @@ class AddonRepository private constructor() {
                 ).meta
 
             metaMutex.withLock {
-                metaCache[cacheKey] =
-                    CachedMeta(
-                        meta = meta,
-                        cachedAtMs =
-                            System.currentTimeMillis()
-                    )
+                // A NULL meta is not cached: the model's `meta` is absent from a
+                // 200 that carries nothing, and one add-on hiccup would then
+                // pin "no metadata" for this title/add-on pair for the whole
+                // TTL. The TMDB detail paths in this tree already never cache a
+                // miss for the same reason.
+                if (meta != null) {
+                    metaCache[cacheKey] =
+                        CachedMeta(
+                            meta = meta,
+                            cachedAtMs =
+                                System.currentTimeMillis()
+                        )
+                }
 
                 pendingMetaRequests.remove(
                     cacheKey

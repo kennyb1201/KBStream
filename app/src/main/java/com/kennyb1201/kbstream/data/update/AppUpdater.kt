@@ -125,7 +125,18 @@ object AppUpdater {
          * can, which is why [confirmInstallOnLaunch] raises this from a marker
          * written before the handoff. Consumed once by the UI, then Idle.
          */
-        data class Updated(val versionName: String, val versionCode: Long) : UpdateState
+        data class Updated(
+            val versionName: String,
+            val versionCode: Long,
+            /**
+             * What the build that just landed says changed, carried across the
+             * install so the confirmation can show it. The install kills this
+             * process, so the notes have to ride the pre-handoff marker
+             * ([recordPendingInstall]) - there is no in-memory path from the
+             * offer to the launch that reports it.
+             */
+            val notes: String = ""
+        ) : UpdateState
     }
 
     private const val REPO_OWNER = "kennyb1201"
@@ -146,6 +157,7 @@ object AppUpdater {
     private const val KEY_PENDING_INSTALL_CODE = "pending_install_code"
     private const val KEY_PENDING_INSTALL_NAME = "pending_install_name"
     private const val KEY_PENDING_INSTALL_AT = "pending_install_at"
+    private const val KEY_PENDING_INSTALL_NOTES = "pending_install_notes"
 
     /**
      * How long a handoff stays claimable. After this the marker cannot be
@@ -364,7 +376,10 @@ object AppUpdater {
                 // behind the release.
                 latestChangelog.value = releaseChangelog(release)
                 val apkAsset = assets(release)
-                    .firstOrNull { it.getString("name").endsWith(".apk") }
+                    .firstOrNull {
+                        it.optString("name").endsWith(".apk") &&
+                            it.optString("browser_download_url").isNotBlank()
+                    }
                 if (apkAsset == null) {
                     state.value = UpdateState.UpToDate
                     return@launch
@@ -378,7 +393,7 @@ object AppUpdater {
                     versionName = meta.versionName,
                     versionCode = meta.versionCode,
                     notes = releaseNotes(release),
-                    downloadUrl = apkAsset.getString("browser_download_url"),
+                    downloadUrl = apkAsset.optString("browser_download_url"),
                     sizeBytes = apkAsset.optLong("size", -1L),
                     sha256 = meta.sha256
                 )
@@ -419,7 +434,7 @@ object AppUpdater {
                     versionName = available.versionName,
                     versionCode = available.versionCode
                 )
-                installApk(context, apk)
+                installApk(context, apk, notes = available.notes)
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 state.value = UpdateState.Failed(t.message ?: "Download failed")
@@ -431,7 +446,7 @@ object AppUpdater {
      * Installs a downloaded APK. PackageInstaller session first; falls back to
      * the system install prompt when the session is denied (update-ownership).
      */
-    fun installApk(context: Context, apk: File) {
+    fun installApk(context: Context, apk: File, notes: String = "") {
         // The install kills this process. Persist the CURRENT Supabase
         // refresh token first — a background auto-refresh since the last
         // save would leave the stored token spent, and the post-update cold
@@ -441,7 +456,7 @@ object AppUpdater {
         // Remember what is being installed BEFORE the handoff: whether this
         // install works is only knowable from the next launch, and this marker
         // is what lets that launch say so.
-        recordPendingInstall(context, apk)
+        recordPendingInstall(context, apk, notes = notes)
         try {
             sessionInstall(context, apk)
         } catch (denied: SecurityException) {
@@ -477,7 +492,11 @@ object AppUpdater {
         clearPendingInstall(prefs)
         state.value = UpdateState.Updated(
             versionName = versionName.ifBlank { "build $pendingCode" },
-            versionCode = installed
+            versionCode = installed,
+            // What the offer promised, from the marker: the launch after an
+            // install is the only place its success can be reported, so this is
+            // the only place those notes can still be shown.
+            notes = prefs.getString(KEY_PENDING_INSTALL_NOTES, null).orEmpty()
         )
     }
 
@@ -512,6 +531,7 @@ object AppUpdater {
     internal fun recordPendingInstall(
         context: Context,
         apk: File,
+        notes: String = "",
         atMs: Long = System.currentTimeMillis()
     ) {
         val code = BUILD_NUMBER.find(apk.name)?.groupValues?.get(1)?.toLongOrNull() ?: return
@@ -520,6 +540,11 @@ object AppUpdater {
             .putLong(KEY_PENDING_INSTALL_CODE, code)
             .putString(KEY_PENDING_INSTALL_NAME, name)
             .putLong(KEY_PENDING_INSTALL_AT, atMs)
+            // The release notes ride the marker: an install kills the process,
+            // so this is the only way what the offer said can reach the launch
+            // that announces the install landed. Clamped like every other use
+            // of the body, since it is finally drawn in a dialog.
+            .putString(KEY_PENDING_INSTALL_NOTES, clampNotes(notes))
             .apply()
     }
 
@@ -528,6 +553,7 @@ object AppUpdater {
             .remove(KEY_PENDING_INSTALL_CODE)
             .remove(KEY_PENDING_INSTALL_NAME)
             .remove(KEY_PENDING_INSTALL_AT)
+            .remove(KEY_PENDING_INSTALL_NOTES)
             .apply()
     }
 
@@ -579,9 +605,18 @@ object AppUpdater {
         else @Suppress("DEPRECATION") info.versionCode.toLong()
     }
 
+    /**
+     * The release's asset objects, skipping anything malformed.
+     *
+     * opt* throughout, like the neighbouring release-body reads: a payload
+     * whose `assets` is absent (or holds a non-object entry) used to THROW out
+     * of [assets], which in [check] skipped both "nothing to install" exits and
+     * surfaced as a failed update check, and in [fetchMetadata] aborted before
+     * the filename fallback that function exists to provide.
+     */
     private fun assets(release: JSONObject): List<JSONObject> {
-        val arr = release.getJSONArray("assets")
-        return (0 until arr.length()).map { arr.getJSONObject(it) }
+        val arr = release.optJSONArray("assets") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
     }
 
     /**
@@ -594,6 +629,17 @@ object AppUpdater {
      */
     private fun releaseNotes(release: JSONObject): String =
         releaseBody(release, MAX_NOTES_CHARS)
+
+    /**
+     * A notes string already extracted from a release, clamped for the same
+     * reason [releaseNotes] is: it ends up in a fixed-height row or a dialog.
+     */
+    private fun clampNotes(notes: String): String =
+        if (notes.length <= MAX_NOTES_CHARS) {
+            notes.trim()
+        } else {
+            notes.take(MAX_NOTES_CHARS).trimEnd() + "…"
+        }
 
     /**
      * The same release body, with more room for the About card.
@@ -646,19 +692,22 @@ object AppUpdater {
      */
     private fun fetchMetadata(release: JSONObject): ReleaseMeta? {
         val metaAsset = assets(release)
-            .firstOrNull { it.getString("name") == "metadata.json" }
+            .firstOrNull { it.optString("name") == "metadata.json" }
         if (metaAsset != null) {
             try {
-                val request = Request.Builder()
-                    .url(metaAsset.getString("browser_download_url"))
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val obj = JSONObject(response.body?.string().orEmpty())
-                        val code = obj.getLong("versionCode")
-                        val name = obj.optString("versionName", "unknown")
-                        val sha = obj.optString("sha256", "").trim()
-                        return ReleaseMeta(code, name, sha.takeIf { it.isNotBlank() })
+                val metaUrl = metaAsset.optString("browser_download_url")
+                if (metaUrl.isNotBlank()) {
+                    val request = Request.Builder()
+                        .url(metaUrl)
+                        .build()
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val obj = JSONObject(response.body?.string().orEmpty())
+                            val code = obj.getLong("versionCode")
+                            val name = obj.optString("versionName", "unknown")
+                            val sha = obj.optString("sha256", "").trim()
+                            return ReleaseMeta(code, name, sha.takeIf { it.isNotBlank() })
+                        }
                     }
                 }
             } catch (_: Throwable) {
@@ -666,8 +715,8 @@ object AppUpdater {
             }
         }
         val apkName = assets(release)
-            .firstOrNull { it.getString("name").endsWith(".apk") }
-            ?.getString("name") ?: return null
+            .firstOrNull { it.optString("name").endsWith(".apk") }
+            ?.optString("name") ?: return null
         val match = BUILD_NUMBER.find(apkName) ?: return null
         val code = match.groupValues[1].toLongOrNull() ?: return null
         // No metadata.json means no published hash: filename fallback only.

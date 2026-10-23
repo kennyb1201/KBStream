@@ -125,7 +125,18 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     fun creditLookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
+    /**
+     * Which load owns the state, and the person it is for.
+     *
+     * This ViewModel is activity-scoped, so opening actor A, backing out and
+     * opening actor B genuinely runs two loads through ONE instance. Without a
+     * guard the slower one won: A's late answer put A's credits, backdrop and
+     * watched badges under B's page until the viewer left and re-entered.
+     */
+    private var loadGeneration = 0
+
     fun load(personId: Int) {
+        val generation = ++loadGeneration
         viewModelScope.launch {
             _isLoading.value = true
             _topWorkBackdropUrl.value = null
@@ -136,6 +147,10 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 val result = tmdbRepository.getPerson(personId)
+                // A newer load owns the page now: publish nothing. Everything
+                // below - the error line, the spinner and the two follow-up
+                // launches - is that page's to set, not this answer's.
+                if (generation != loadGeneration) return@launch
                 _person.value = result
                 _topWorkCredit.value = result?.let { sortedCredits(it).firstOrNull() }
 
@@ -143,10 +158,11 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                     _error.value = "TMDB returned this person but with zero credits"
                 }
             } catch (e: Exception) {
+                if (generation != loadGeneration) return@launch
                 _error.value = "TMDB request failed: ${e.message}"
                 Log.e("ACTOR_LOAD", "load failed for personId=$personId", e)
             } finally {
-                _isLoading.value = false
+                if (generation == loadGeneration) _isLoading.value = false
             }
 
             _person.value?.let { loadedPerson ->

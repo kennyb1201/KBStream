@@ -4264,6 +4264,23 @@ fun DetailScreen(
                                     item(
                                         key = "episodesrow"
                                     ) {
+                                        // ONE collector for the whole rail. Each
+                                        // episode card used to ask the ViewModel
+                                        // for this same series-level flow and
+                                        // collect it (observeIsWatched returns
+                                        // one shared flow per id/type), so a
+                                        // 24-episode season paid 24 collectors
+                                        // for one boolean - on the app's hottest
+                                        // screen. The poster tiles' half of this
+                                        // pattern was hoisted by PosterTileEnv;
+                                        // this is the rail's.
+                                        val seriesWatched by
+                                            remember(id, type) {
+                                                viewModel.observeIsWatched(
+                                                    id,
+                                                    type
+                                                )
+                                            }.collectAsStateWithLifecycle()
                                         CompositionLocalProvider(
                                             LocalBringIntoViewSpec
                                                 provides
@@ -4333,32 +4350,15 @@ fun DetailScreen(
                                                             }
                                                         }
 
-                                                    val isWatchedFlow =
-                                                        remember(
-                                                            id,
-                                                            type,
-                                                            episodeKey
-                                                        ) {
-                                                            viewModel
-                                                                .observeIsWatched(
-                                                                    id,
-                                                                    type
-                                                                )
-                                                        }
-
-                                                    val isWatchedCached
-                                                            by isWatchedFlow
-                                                                .collectAsStateWithLifecycle()
-
                                                     val isEpisodeWatched =
                                                         remember(
                                                             ep.episodeNumber,
                                                             watchedEpisodesForSeason,
                                                             episodeKey,
                                                             watchedEpisodeKeys,
-                                                            isWatchedCached
+                                                            seriesWatched
                                                         ) {
-                                                            isWatchedCached ||
+                                                            seriesWatched ||
                                                                 ep.episodeNumber in
                                                                     watchedEpisodesForSeason ||
                                                                 (
@@ -4963,6 +4963,7 @@ fun DetailScreen(
                                                                     chipMenuContext
                                                                 ),
                                                                 "services",
+                                                                n.id,
                                                                 n.name
                                                             )
                                                     )
@@ -5067,6 +5068,7 @@ fun DetailScreen(
                                                                     chipMenuContext
                                                                 ),
                                                                 "studios",
+                                                                c.id,
                                                                 c.name
                                                             )
                                                     )
@@ -5842,6 +5844,7 @@ fun DetailScreen(
                                     BrowseHomeShortcuts.remove(
                                         chipMenuContext,
                                         target.categoryKey,
+                                        target.id,
                                         target.name
                                     )
                                 } else {

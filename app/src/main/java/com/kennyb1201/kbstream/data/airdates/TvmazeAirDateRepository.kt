@@ -119,14 +119,19 @@ class TvmazeAirDateRepository private constructor(context: Context) {
                 }
             }
 
-            val fetched = runCatchingCancellable { limiter.withPermit { fetch(id) } }
+            val outcome = runCatchingCancellable { limiter.withPermit { fetch(id) } }
                 .onFailure { error ->
                     Log.i(
                         "KBStream",
                         "tvmaze air dates unavailable for $id: ${error.message}"
                     )
                 }
-                .getOrDefault(emptyMap())
+            // Memory follows the same rule the DISK half below already spells
+            // out: a FAILED fetch is not a show with no air dates, and caching it
+            // as one cost that show its date corrections for the full miss TTL.
+            // Only an ANSWERED empty map is a genuine miss.
+            if (outcome.isFailure) return@withContext emptyMap()
+            val fetched = outcome.getOrDefault(emptyMap())
 
             memoryCache[id] = now to fetched
             evictOldest(memoryCache, { it.first }, MAX_MEMORY_ENTRIES)

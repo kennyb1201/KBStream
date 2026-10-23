@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -127,8 +128,11 @@ fun CollectionScreenMobile(
 
     val screenKey = remember(collectionId) { collectionBrowseScreenKey(collectionId) }
     // Saveable, so turning the phone keeps the viewer's place in the
-    // collection instead of throwing the grid back to the first film.
-    val gridState = rememberLazyGridState()
+    // collection instead of throwing the grid back to the first film. `key`
+    // scopes that record to THIS collection (the sibling Actor/KBFolder
+    // screens' rule): unkeyed, the state lived in one composition slot and a
+    // short collection opened at the previous, longer one's clamped offset.
+    val gridState = key(collectionId) { rememberLazyGridState() }
     var returnTarget by remember(collectionId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }

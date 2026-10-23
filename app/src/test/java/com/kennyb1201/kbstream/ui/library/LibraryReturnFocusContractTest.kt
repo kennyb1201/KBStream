@@ -50,19 +50,40 @@ class LibraryReturnFocusContractTest {
     }
 
     @Test
-    fun `the record is read back on entry, before the first chip is focused`() {
-        // One string, in order: the record is read, and the chip is focused
-        // only on the branch where there was no record. The other way round the
-        // chip's landing would be stolen by nothing, but a chip focused first
-        // would steal the return's.
+    fun `the record is read back on entry, before the selected chip is landed on`() {
+        // One string, in order: the record is read, and the chip is asked for
+        // only on the branch where there was no record. The other way round
+        // nothing would steal the chip's landing, but a chip landed first would
+        // steal the return's.
         assertTrue(
-            "the page reads the record first and focuses the chip only on an " +
+            "the page reads the record first and lands on the chip only on an " +
                 "ordinary open",
             source.contains(
                 "val recorded = BrowseReturnFocus.consume(LIBRARY_BROWSE_SCREEN_KEY) " +
                     "if (recorded != null) { returnTarget = recorded } else { " +
-                    "topFocusRequester.requestFocus() }"
+                    "landOnSelectedChip() }"
             )
+        )
+    }
+
+    @Test
+    fun `the entry landing is driven, not a single unobserved ask`() {
+        // The report this sweep closed: the chip strip is a LazyRow and the
+        // selected filter is persisted, so re-entering on WATCHLIST or LISTS
+        // could ask a chip outside the row's composed window - one ask, answer
+        // discarded, no retry, nothing else on the page re-asking.
+        assertTrue(
+            "the selected chip is scrolled into composed view before it is asked for",
+            source.contains("val index = LibraryFilter.entries.indexOf(state.filter)") &&
+                source.contains("runCatching { stripState.scrollToItem(index) }")
+        )
+        assertTrue(
+            "and the ask itself is the driven landing, retried across frames",
+            source.contains("landFocusOn(topFocusRequester)")
+        )
+        assertFalse(
+            "the bare one-shot ask is what it replaced",
+            source.contains("topFocusRequester.requestFocus()")
         )
     }
 

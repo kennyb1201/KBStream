@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.flow
  * bump arrives without the Migration that carries it — the mistake that would
  * otherwise only show up as a wipe on a user's device.
  */
-internal const val WATCH_HISTORY_DB_VERSION = 15
+internal const val WATCH_HISTORY_DB_VERSION = 16
 
 @Database(
     entities = [
@@ -82,7 +82,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             get() = listOf(
                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
+                MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
             )
 
         /**
@@ -597,6 +597,24 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_watched_status_cache_updatedAt` " +
                         "ON `watched_status_cache` (`updatedAt`)"
+                )
+            }
+        }
+
+        /**
+         * v16: the index the v15 cache pass missed.
+         *
+         * `tmdb_json_cache` is the one cache table that got none - and it is the
+         * one the trim and the expiry scan both filter by `updatedAt` on, so
+         * those reads paid a full-table scan on every launch for a cache that
+         * only ever grows. Indexes only: no table is written, so this cannot
+         * lose a row.
+         */
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_tmdb_json_cache_updatedAt` " +
+                        "ON `tmdb_json_cache` (`updatedAt`)"
                 )
             }
         }

@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -171,6 +172,15 @@ data class TagRailPage(
 )
 
 
+/*
+ * Persisted through the on-disk tmdb_json_cache (see seasonEpisodesJsonAdapter),
+ * and the adapter is resolved reflectively when the model carries no
+ * @JsonClass - which under R8 is exactly the shape sweep 5 proved can throw on
+ * a default-argument call and be swallowed by the read's runCatching, leaving
+ * the cache silently never hitting. Annotated so the generated adapter is the
+ * one used, and pinned in MoshiCodegenTest.
+ */
+@JsonClass(generateAdapter = true)
 data class ResolvedEpisode(
     val streamId: String,
     val episodeNumber: Int,
@@ -1905,8 +1915,22 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun getBrowseGenres(): List<TmdbGenre> {
         browseGenreCache?.let { return it }
-        val movie = runCatchingCancellable { api.getMovieGenreList(apiKey).genres }.getOrDefault(emptyList())
-        val tv = runCatchingCancellable { api.getTvGenreList(apiKey).genres }.getOrDefault(emptyList())
+        // Each leg is checked on its OWN, and only a complete pair is cached.
+        // Collapsing a failure to an empty list and caching the union meant one
+        // transient movie-side failure left the Browse screens' movie genres
+        // missing until the process died - the cache has no TTL and no key.
+        val movie = runCatchingCancellable { api.getMovieGenreList(apiKey).genres }.getOrNull()
+        val tv = runCatchingCancellable { api.getTvGenreList(apiKey).genres }.getOrNull()
+        if (movie == null || tv == null) {
+            Log.w(
+                "TMDB_REPO",
+                "browse genres: movie=${movie?.size ?: -1} tv=${tv?.size ?: -1}; " +
+                    "not caching a partial answer"
+            )
+            return ((movie ?: emptyList()) + (tv ?: emptyList())
+                .filter { tvGenre -> movie?.any { it.id == tvGenre.id } != true })
+                .sortedBy { it.name }
+        }
         val merged = (movie + tv.filter { tvGenre -> movie.none { it.id == tvGenre.id } })
             .sortedBy { it.name }
         if (merged.isNotEmpty()) browseGenreCache = merged

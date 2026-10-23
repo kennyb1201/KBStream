@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.kb
 
 import android.content.Context
+import android.util.Log
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -329,6 +330,16 @@ object KBHomeOrderPrefs {
 
     private const val PREFS_NAME = "kbstream_kb_home_order"
     private const val KEY_BLOB = "home_order_json"
+
+    /**
+     * Where an unparseable blob is preserved before the default arrangement
+     * takes over (mirrors [BrowseHomeShortcuts.list]). The blob is not deleted:
+     * it is the viewer's whole Home arrangement, kept so it can be inspected or
+     * restored instead of vanishing behind a silent default.
+     */
+    private const val KEY_BLOB_CORRUPT = "home_order_json_corrupt"
+
+    private const val TAG = "KB_HOME_ORDER"
 
     /**
      * Last arrangement this device considers already synced (mirrors the key
@@ -770,7 +781,24 @@ object KBHomeOrderPrefs {
         lastContext = context.applicationContext
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return KBHomeOrder()
         val parsed = runCatching { adapter.fromJson(raw) }.getOrNull()
-            ?: KBHomeOrder()
+        if (parsed == null) {
+            // A blob that will not parse used to read as "no arrangement" with
+            // no log, and the next read-modify-write caller saved that default
+            // (plus its one move) over the viewer's entire Home order. The bad
+            // blob is preserved under its own key and logged loudly, so a
+            // schema drift from a sideloaded build is diagnosable rather than
+            // silently destructive.
+            Log.w(
+                TAG,
+                "home order blob will not parse; keeping a copy under " +
+                    "$KEY_BLOB_CORRUPT and serving the default arrangement"
+            )
+            prefs(context).edit()
+                .putString(KEY_BLOB_CORRUPT, raw)
+                .remove(KEY_BLOB)
+                .apply()
+            return KBHomeOrder()
+        }
         // Repairs the catalogs an older build pinned, on every read path
         // (manager dialog, Home's merged order, the cloud blob): they come
         // back out of pinned and take the top of the order block instead.

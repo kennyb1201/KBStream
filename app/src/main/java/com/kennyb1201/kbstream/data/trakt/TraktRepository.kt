@@ -934,7 +934,14 @@ class TraktRepository private constructor(private val context: Context?) {
         val token = validAccessToken() ?: return emptyList()
         val movies = readListHalf(ref, "movies")
         val shows = readListHalf(ref, "shows")
-        return movies + shows
+        // The two halves are read separately, so they arrive as "all films, then
+        // all shows" - not the order the list's owner arranged. Rank is the
+        // field that holds that order; entries without one keep their relative
+        // position after the ranked ones (sortedWith is stable) instead of being
+        // dropped.
+        return (movies + shows).sortedWith(
+            compareBy<TraktListEntry> { it.rank == null }.thenBy { it.rank ?: 0 }
+        )
     }
 
     private suspend fun readListHalf(
@@ -994,7 +1001,7 @@ class TraktRepository private constructor(private val context: Context?) {
                 val media = row.movie ?: row.show ?: return@forEach
                 val isMovie = row.movie != null || row.type == "movie"
                 if (!seen.add(mediaKey(isMovie, media))) return@forEach
-                entries += TraktListEntry(media = media, isMovie = isMovie)
+                entries += TraktListEntry(media = media, isMovie = isMovie, rank = row.rank)
                 added += 1
             }
 

@@ -2900,8 +2900,16 @@ private fun AboutPaneMobile() {
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 2.dp)
                     )
-                    (state as? AppUpdater.UpdateState.Available)?.notes
-                        ?.takeIf { it.isNotBlank() }
+                    // The offer's notes AND the ones carried across a landed
+                    // install (see AppUpdater.UpdateState.Updated): the
+                    // confirmation is the only place the changelog of the build
+                    // that just arrived can still be read.
+                    when (val s = state) {
+                        is AppUpdater.UpdateState.Available -> s.notes
+                        is AppUpdater.UpdateState.Updated -> s.notes
+                        else -> ""
+                    }
+                        .takeIf { it.isNotBlank() }
                         ?.let { notes ->
                             Text(
                                 text = notes,

@@ -57,6 +57,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -64,7 +65,6 @@ import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
-import com.kennyb1201.kbstream.ui.components.touch.MobileLoading
 import com.kennyb1201.kbstream.ui.components.touch.MobileStatus
 import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
@@ -366,7 +366,11 @@ fun SearchScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(suggestions, key = { "suggestion:$it" }) { suggestion ->
+                                items(
+                                    suggestions,
+                                    key = { "suggestion:$it" },
+                                    contentType = { "suggestion" }
+                                ) { suggestion ->
                                     TouchChoiceChip(
                                         label = suggestion,
                                         selected = false,
@@ -388,7 +392,11 @@ fun SearchScreenMobile(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(recentSearches, key = { "recent:$it" }) { recent ->
+                                items(
+                                    recentSearches,
+                                    key = { "recent:$it" },
+                                    contentType = { "recent" }
+                                ) { recent ->
                                     TouchChoiceChip(
                                         label = recent,
                                         selected = false,
@@ -422,7 +430,11 @@ fun SearchScreenMobile(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(browseCategories, key = { it.key }) { category ->
+                            items(
+                                browseCategories,
+                                key = { it.key },
+                                contentType = { "category" }
+                            ) { category ->
                                 TouchChoiceChip(
                                     label = category.label,
                                     selected = category.key == activeCategory?.key,
@@ -565,7 +577,8 @@ fun SearchScreenMobile(
                                 // for the same entry list.
                                 itemsIndexed(
                                     chipRows,
-                                    key = { index, _ -> "chiprow:$index" }
+                                    key = { index, _ -> "chiprow:$index" },
+                                    contentType = { _, _ -> "chiprow" }
                                 ) { _, row ->
                                     Row(
                                         modifier = Modifier
@@ -601,8 +614,17 @@ fun SearchScreenMobile(
                 }
 
                 if (isLoading) {
+                    // A shaped skeleton, not a spinner (improvement F1): results
+                    // arrive as poster rails, so the waiting state is a rail of
+                    // poster placeholders at the viewer's Poster Size - the space
+                    // the results will occupy, drawn before they land.
                     item(key = "loading") {
-                        MobileLoading()
+                        val loadingSize = rememberTouchPosterSize()
+                        KBSkeletonRail(
+                            posterWidth = loadingSize.width,
+                            posterHeight = loadingSize.height,
+                            itemCount = 4
+                        )
                     }
                 }
 
@@ -630,7 +652,8 @@ fun SearchScreenMobile(
                                 results,
                                 key = { result: SearchTitleResult ->
                                     "title:${result.type}:${result.id}"
-                                }
+                                },
+                                contentType = { "title" }
                             ) { result ->
                                 SearchTile(
                                     result = result,
@@ -679,7 +702,8 @@ fun SearchScreenMobile(
                                     group.results,
                                     key = { result: SearchTitleResult ->
                                         "addon:${result.type}:${result.id}"
-                                    }
+                                    },
+                                    contentType = { "addon-title" }
                                 ) { result ->
                                     SearchTile(
                                         result = result,
@@ -712,7 +736,8 @@ fun SearchScreenMobile(
                         MobileSearchRail(title = "Actors") {
                             items(
                                 actorResults,
-                                key = { person: TmdbSearchPersonResult -> "actor:${person.id}" }
+                                key = { person: TmdbSearchPersonResult -> "actor:${person.id}" },
+                                contentType = { "actor" }
                             ) { person ->
                                 PersonTile(
                                     person = person,
@@ -733,7 +758,8 @@ fun SearchScreenMobile(
                                 studioResults,
                                 key = { studio: TmdbSearchStudioResult ->
                                     "studio:${studio.id}"
-                                }
+                                },
+                                contentType = { "studio" }
                             ) { studio ->
                                 StudioTile(
                                     studio = studio,
@@ -754,7 +780,8 @@ fun SearchScreenMobile(
                                 collectionResults,
                                 key = { collection: TmdbSearchCollectionResult ->
                                     "collection:${collection.id}"
-                                }
+                                },
+                                contentType = { "collection" }
                             ) { collection ->
                                 CollectionTile(
                                     collection = collection,
@@ -842,6 +869,7 @@ fun SearchScreenMobile(
                 val onHome = com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.contains(
                     browseHomeShortcuts,
                     categoryKey,
+                    entry.id,
                     entry.name
                 )
                 val railTitle =

@@ -120,6 +120,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
         val remaining = BrowseHomeShortcuts.remove(
             getApplication(),
             shortcut.categoryKey,
+            shortcut.id,
             shortcut.name
         )
         _state.value = _state.value.copy(browseShortcuts = remaining)

@@ -386,6 +386,14 @@ class TmdbHeroArtworkRepository(
     }
 }
 
+/**
+ * Persisted for 30 days through the disk cache (see artworkAdapter), so it needs
+ * the same generated adapter its siblings in this file were widened for - an
+ * unannotated model here is adapted reflectively, which is the shape that can
+ * fail inside the read's swallowing catch in a release build and leave the
+ * artwork silently re-resolving on every cold start.
+ */
+@JsonClass(generateAdapter = true)
 data class HeroArtwork(
     val backdropUrl: String?,
     val logoUrl: String?

@@ -258,6 +258,14 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun loadMoreSection(title: String) {
         val decadeStart = currentDecadeStart ?: return
+        // Everything this page is FOR, captured at the call: the decade, the
+        // genre and the load that owns the state. Tag, Studio and the KB folder
+        // page were all fixed this way; Decade was the sibling that was missed,
+        // so a page landing after a decade/genre switch merged into the
+        // identically-titled rail of the NEW page - corrupting its nextPage and
+        // hasMore, and re-resolving its watched badges against the wrong list.
+        val generation = loadGeneration
+        val genreId = currentGenreId
         var pageToLoad: Int? = null
 
         _pagingStates.value = _pagingStates.value.toMutableMap().apply {
@@ -271,7 +279,6 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val genreId = currentGenreId
                 val page: TagRailPage =
                     if (genreId != null) {
                         tmdbRepository.getCrossGenreRailPage(
@@ -283,6 +290,11 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         tmdbRepository.getDecadeRailPage(decadeStart, title, pageNumber)
                     }
+
+                // A newer load owns the state now. Rails are matched by TITLE, so
+                // this is not merely stale data - it is data from one decade's
+                // list landing in another decade's rail of the same name.
+                if (generation != loadGeneration) return@launch
 
                 val existingSection = _sections.value.firstOrNull { it.title == title }
                 if (existingSection != null && page.items.isNotEmpty()) {
@@ -312,6 +324,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: Exception) {
                 Log.e("DECADE_VM", "loadMoreSection failed for $title", e)
+                if (generation != loadGeneration) return@launch
                 _pagingStates.value = _pagingStates.value.toMutableMap().apply {
                     val current = this[title] ?: return@apply
                     this[title] = current.copy(isLoadingMore = false)
