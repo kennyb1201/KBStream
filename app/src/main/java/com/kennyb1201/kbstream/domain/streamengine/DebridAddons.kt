@@ -13,13 +13,23 @@ package com.kennyb1201.kbstream.domain.streamengine
  * with a better-looking one (the reported case: AIOStreams 193 under
  * Flix-Streams 195).
  *
- * The list is deliberately tiny and deliberate: an addon goes in when it is
+ * The list is deliberately small and deliberate: an addon goes in when it is
  * VERIFIED to be debrid-first, never because its name sounds like it. A wrong
  * entry here promotes links that may not resolve at all, which is worse than the
- * mis-ordering it was meant to fix. AIOStreams is the reported addon;
- * Torrentio-style addons are NOT listed because they hand back resolved links
- * that name the service themselves, so the URL rule already covers them, and the
- * many "debrid wrapper" manifests vary per instance and are not verified.
+ * mis-ordering it was meant to fix.
+ *
+ * Every entry is one of the debrid-first searchers - an addon whose whole output
+ * is torrent hashes (or its own redirect to one) for the viewer's own account to
+ * serve. Torrentio-style addons are NOT listed because their debrid instances
+ * hand back resolved links that name the service themselves, so the URL rule
+ * already covers them, and the many "debrid wrapper" manifests vary per instance
+ * and are not verified.
+ *
+ * The list grew from AIOStreams alone (the reported addon) to the four other
+ * searchers people actually run. Nothing is installed or bundled by this: it is
+ * a set of names the RANKER compares a stream's addon against, so a wrong entry
+ * can only re-order a list - and only among rows that already play, because
+ * playability is its own tier above this one (see [StreamRanker.rank]).
  *
  * Matching is on the normalized name (see
  * [SourceAddonPreference.normalize]), which is what the caller can supply: the
@@ -37,7 +47,13 @@ internal object DebridAddons {
      * Normalization makes the case and punctuation of each entry irrelevant, so
      * one entry covers "AIOStreams", "aiostreams" and "AIO-Streams".
      */
-    val KNOWN_DEBRID_ADDON_IDS: Set<String> = setOf("aiostreams")
+    val KNOWN_DEBRID_ADDON_IDS: Set<String> = setOf(
+        "aiostreams",
+        "comet",
+        "mediafusion",
+        "peerflix",
+        "jackettio"
+    )
 
     /**
      * The same ids in the form [StreamRanker.rank] compares against:

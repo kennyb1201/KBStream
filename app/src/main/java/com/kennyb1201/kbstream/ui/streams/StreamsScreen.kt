@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.streams
 
+import android.widget.Toast
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -35,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +62,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
@@ -84,6 +87,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.launch
 
 /** The "All" tab's index; every real tab is an index into the add-on groups. */
 private const val ALL_ADDONS_TAB = -1
@@ -156,12 +160,41 @@ fun StreamsScreen(
      * handoff excludes DRM for the same reason), so picking one has to drop the
      * anime verdict published for this request - otherwise the anime rule would
      * send a protected source to an engine that cannot open it.
+     *
+     * A row with no URL of its own is a torrent hash, and this app has no
+     * torrent engine: it used to do nothing at all when pressed, which is the
+     * worst possible answer for the one row carrying a Cached chip. When the
+     * viewer's TorBox account already holds that torrent, ask it for the CDN
+     * link and play that (see TorBoxResolve); every failure - no key, not
+     * cached, a dead request - falls back to exactly that old behaviour, with a
+     * message so the press is not silent.
      */
+    val resolveScope = rememberCoroutineScope()
+
     fun selectSource(selected: Stream, allSources: List<Stream>, addons: List<String?>) {
         if (selected.drm?.licenseUrl != null) {
             PlayerEngine.clearLaunchAnime()
         }
-        onStreamSelected(selected, allSources, addons)
+        if (!TorBoxResolve.isUnresolved(selected)) {
+            onStreamSelected(selected, allSources, addons)
+            return
+        }
+        resolveScope.launch {
+            val resolved = TorBoxResolve.playableStream(context, selected)
+            if (resolved == null) {
+                Toast.makeText(
+                    context,
+                    "TorBox could not prepare this source",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            onStreamSelected(
+                resolved,
+                allSources.map { if (it === selected) resolved else it },
+                addons
+            )
+        }
     }
 
     // A picker opened by "Play Manually" (or by the detail screen's episode

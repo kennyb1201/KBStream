@@ -153,6 +153,12 @@ internal object SettingsSearchIndex {
             "torbox debrid cloud my list library torrent"
         ),
         SettingSearchEntry(
+            "integrations.torbox-add-missing",
+            SettingsPane.INTEGRATIONS,
+            "Add missing torrents on play",
+            "torbox debrid resolve instant cached hash torrent add cloud quota instant playback"
+        ),
+        SettingSearchEntry(
             "integrations.badges-above",
             SettingsPane.INTEGRATIONS,
             "Badges above the file name",

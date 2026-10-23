@@ -328,7 +328,7 @@ class TrailerBoundaryResumeContractTest {
 
     @Test
     fun `the death is recorded on both surfaces and on both outcomes`() {
-        listOf(PLAYER, HOME).forEach { path ->
+        listOf(NATIVE_PLAYER, HOME_SCREEN).forEach { path ->
             assertTrue("$path must record the death", source(path).contains("recordTrailerDeath("))
         }
         assertTrue(
@@ -382,8 +382,8 @@ class TrailerBoundaryResumeContractTest {
         const val YOUTUBE = "com/kennyb1201/kbstream/data/youtube/"
         const val INNER_TUBE = "${YOUTUBE}InnerTubeExtractor.kt"
         const val LAUNCHER = "${YOUTUBE}TrailerPlayerLauncher.kt"
-        const val PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
-        const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val NATIVE_PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
+        const val HOME_SCREEN = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
         const val VIDEO_ID = "7YpuMymmiJ8"
     }
 }

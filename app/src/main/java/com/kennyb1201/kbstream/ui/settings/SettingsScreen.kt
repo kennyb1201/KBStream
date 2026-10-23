@@ -626,6 +626,9 @@ fun SettingsScreen(
     var torboxLibrarySync by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getTorboxLibrarySync(context))
     }
+    var torboxResolveCreate by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getTorboxResolveCreate(context))
+    }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
     // the rail is ten panes deep and the one being tuned is rarely the first.
@@ -1378,6 +1381,28 @@ fun SettingsScreen(
                         AppPreferences.setTorboxLibrarySync(context, it)
                         com.kennyb1201.kbstream.work.TorBoxLibraryWorker
                             .syncScheduleForPrefs(context, runImmediate = it)
+                    }
+                )
+
+                // ── TORBOX: ADD A MISSING TORRENT ON PLAY ──────────────
+                // Off by default, and the one switch here that lets the app
+                // WRITE to the viewer's TorBox account: pressing a source that
+                // is only a torrent hash adds that torrent when the cloud does
+                // not hold it, then plays its CDN file. Switched off, only
+                // torrents already in the account are played and every other
+                // hash row keeps doing nothing (see TorBoxResolve).
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "Add missing torrents on play",
+                    description = "A source that is only a torrent hash can be played through " +
+                        "TorBox when your account already holds that torrent. With this on, " +
+                        "pressing one the cloud does not have yet adds it there first, then " +
+                        "plays it - it will appear in your TorBox library, and TorBox may " +
+                        "count it against your download quota. Off, nothing is ever added.",
+                    checked = torboxResolveCreate,
+                    onToggle = {
+                        torboxResolveCreate = it
+                        AppPreferences.setTorboxResolveCreate(context, it)
                     }
                 )
 

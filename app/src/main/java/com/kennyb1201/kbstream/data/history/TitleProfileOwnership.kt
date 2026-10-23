@@ -158,10 +158,37 @@ internal fun titleProfileKey(
     type: String?,
     title: String?
 ): String? {
-    val name = title?.trim()?.lowercase().orEmpty()
-    if (name.isEmpty()) return null
+    val name = titleIdentityName(title) ?: return null
     return "title:${titleProfileMediaType(type)}:$name"
 }
+
+/**
+ * A title reduced to its IDENTITY: lowercased letters, digits and single
+ * spaces, with every other character dropped.
+ *
+ * One normaliser, shared by both title keys - the rail card's
+ * ([com.kennyb1201.kbstream.ui.home.upNextTitleKey]) and the ownership key
+ * above. They must produce the same key or the tracker filter silently stops
+ * matching, which is what the pinning test exists for; they also must not
+ * disagree about what punctuation means, and they did: the ownership key was
+ * never able to see a name the other side had punctuated differently.
+ *
+ * Punctuation is not identity. The reported case: a Continue Watching card
+ * reading "R.J. Decker" and a history row reading "RJ Decker" were one show
+ * that could never be paired - the finished show's card survived every merge.
+ * Letters and digits stay, because an accent, a digit and a space are all how a
+ * title is actually spelled; dropping them would merge different shows.
+ *
+ * Null for a name with nothing left to key on (blank, "!!!").
+ */
+internal fun titleIdentityName(title: String?): String? =
+    title
+        ?.trim()
+        ?.lowercase()
+        ?.filter { character -> character.isLetterOrDigit() || character.isWhitespace() }
+        ?.replace(Regex("\\s+"), " ")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
 
 /**
  * Media type as the ownership key sees it. Mirrors the rail's own collapse

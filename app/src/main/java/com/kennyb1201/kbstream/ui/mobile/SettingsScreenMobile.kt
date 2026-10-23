@@ -688,6 +688,19 @@ private fun IntegrationsPaneMobile(
                 TorBoxLibraryWorker.syncScheduleForPrefs(ctx, runImmediate = enabled)
             }
         )
+        // The one TorBox switch that lets the app WRITE to the account: a
+        // source that is only a torrent hash is added to the cloud when it is
+        // missing, then played. Off by default (see TorBoxResolve).
+        SyncedToggleMobile(
+            label = "Add missing torrents on play",
+            description = "Pressing a source that is only a torrent hash plays it through " +
+                "TorBox when your account already holds it. With this on, one the cloud " +
+                "does not have yet is added there first - it will appear in your TorBox " +
+                "library, and TorBox may count it against your download quota. Off, " +
+                "nothing is ever added.",
+            get = AppPreferences::getTorboxResolveCreate,
+            set = AppPreferences::setTorboxResolveCreate
+        )
 
         // ── Stream badges ────────────────────────────────────────────────
         // The same pack URL field and import/remove calls the TV pane uses; the

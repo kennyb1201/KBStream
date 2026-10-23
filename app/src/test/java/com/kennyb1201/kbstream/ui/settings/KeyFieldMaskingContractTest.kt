@@ -106,8 +106,7 @@ class KeyFieldMaskingContractTest {
         // remote user routinely navigates away instead of pressing Done.
         listOf(
             "AppPreferences.setMdbListApiKey(context, mdbListKeyInput)",
-            "AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)",
-            "AppPreferences.setTorboxApiKey(context, torboxKeyInput)"
+            "AppPreferences.setOpensubtitlesApiKey(context, subsKeyInput)"
         ).forEach { call ->
             assertEquals(
                 "$call must keep its paste, Done and blur paths",
@@ -115,6 +114,28 @@ class KeyFieldMaskingContractTest {
                 Regex(Regex.escape(call)).findAll(settings).count()
             )
         }
+        // TorBox now saves through ONE commit path instead of three identical
+        // calls (it has to arm the library round when the key changes), so the
+        // three routes are pinned on that path and the write on its body.
+        assertEquals(
+            "paste still commits",
+            1,
+            Regex(Regex.escape("commitTorboxKey(pasted)")).findAll(settings).count()
+        )
+        assertEquals(
+            "Done and blur still commit",
+            2,
+            Regex(Regex.escape("commitTorboxKey(torboxKeyInput)"))
+                .findAll(settings)
+                .count()
+        )
+        assertEquals(
+            "and the one path writes the real key, once",
+            1,
+            Regex(Regex.escape("AppPreferences.setTorboxApiKey(context, key)"))
+                .findAll(settings)
+                .count()
+        )
         assertTrue(
             "and the status line still reads off the real key's saved state",
             settings.contains("if (mdbListKeySaved)") &&

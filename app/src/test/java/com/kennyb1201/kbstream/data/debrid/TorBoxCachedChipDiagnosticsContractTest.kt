@@ -160,9 +160,18 @@ class TorBoxCachedChipDiagnosticsContractTest {
         // check), so the picker has to be the one that says it - otherwise the
         // single most likely cause of "never a chip" is the one case with
         // nothing in the report.
-        val guard = source(VIEW_MODEL)
-            .substringAfter("if (hasDebridServiceConfigured()) {")
-            .take(1200)
+        // The window has to START at the guard, not after it: taking the text
+        // after the `if` line and then asserting the `if` is in it can never
+        // pass, and the guard is exactly what this is about.
+        val viewModel = source(VIEW_MODEL)
+        val noteAt = viewModel.indexOf("none carried an infohash")
+        assertTrue("the no-hash line is gone from the picker", noteAt > 0)
+        val guardAt = viewModel.lastIndexOf(
+            "if (hasDebridServiceConfigured()) {",
+            noteAt
+        )
+        assertTrue("the no-hash line is not inside the key guard", guardAt > 0)
+        val guard = viewModel.substring(guardAt, minOf(noteAt + 120, viewModel.length))
 
         assertTrue(
             "the no-hash case is recorded",

@@ -219,7 +219,11 @@ object InnerTubeExtractor {
      * signs, not of the resolve or the identity. Null (every ordinary resolve)
      * selects exactly as before.
      */
-    suspend fun extractPlaybackSourceWithClient(
+    // internal, not public: its answer carries [ResolvedSource], which is an
+    // implementation detail of the extractor (the client that signed the URL).
+    // The module's own caller is TrailerPlayerLauncher; a public signature here
+    // cannot name an internal type, and the compiler correctly refused it.
+    internal suspend fun extractPlaybackSourceWithClient(
         youtubeUrl: String,
         excludeClient: String? = null
     ): ResolvedSource? =

@@ -11225,7 +11225,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             is PlayableSource.Adaptive -> source.videoUrl
         }
         currentAudioUrl = (source as? PlayableSource.Adaptive)?.audioUrl
-        streamHeaders = source.userAgent
+        // [PlayableSource] itself has no userAgent - each of its two shapes
+        // carries its own, and the replacement has to keep the one its URL was
+        // signed for or googlevideo refuses it.
+        val trailerUserAgent = when (source) {
+            is PlayableSource.Muxed -> source.userAgent
+            is PlayableSource.Adaptive -> source.userAgent
+        }
+        streamHeaders = trailerUserAgent
             ?.takeIf { it.isNotBlank() }
             ?.let { ua -> mapOf("User-Agent" to ua) }
             ?: emptyMap()

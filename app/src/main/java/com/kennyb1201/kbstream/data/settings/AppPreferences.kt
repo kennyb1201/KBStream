@@ -122,6 +122,7 @@ object AppPreferences {
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
+    private const val KEY_TORBOX_RESOLVE_CREATE = "torbox_resolve_create"
     // The account-copy stamp of the synced service credentials (see
     // SYNCED_API_KEYS), kept beside them in the encrypted, profile-scoped store.
     private const val KEY_API_KEYS_SYNCED_AT = "__api_keys_synced_at__"
@@ -1724,6 +1725,27 @@ object AppPreferences {
 
     fun setTorboxLibrarySync(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_TORBOX_LIBRARY_SYNC, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Add a missing torrent when a cached hash source is pressed ────
+    // Off by default. A source that is only an infohash cannot be played by
+    // this app without the viewer's debrid account, and the only way to play
+    // one the account does not hold yet is to add it there first
+    // (see data/debrid/TorBoxResolve). That is a write to the viewer's own
+    // TorBox account: it shows up in their cloud, and if TorBox's cached verdict
+    // is stale it is a real download against their quota. Hence opt-in, and
+    // hence the wording of the Settings row rather than a silent default.
+    //
+    // Synced, like the library sync beside it: it is a statement about the
+    // ACCOUNT (what this viewer lets the app put in it), not about one device's
+    // screen or decoder, so the other TV in the house should not have to be told
+    // separately - and a viewer who turns it off wants that everywhere.
+    fun getTorboxResolveCreate(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TORBOX_RESOLVE_CREATE, false)
+
+    fun setTorboxResolveCreate(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TORBOX_RESOLVE_CREATE, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

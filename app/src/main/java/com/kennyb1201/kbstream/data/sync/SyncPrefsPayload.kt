@@ -264,6 +264,9 @@ object PrefsPayloadBuilder {
         // encrypted at rest, and with per-key edit stamps so an empty-handed
         // device cannot blank the account's keys.
         "torbox_library_sync",               // add TorBox cloud files to the Library: a library preference
+        "torbox_resolve_create",             // may pressing a cached hash source add the torrent to
+                                             //   the viewer's TorBox account? A statement about the
+                                             //   account, not the device, so it follows them
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
         "clean_sdh_captions",                // ...and whether captions keep their sound descriptions

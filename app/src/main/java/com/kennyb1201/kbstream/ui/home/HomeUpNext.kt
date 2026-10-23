@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.history.titleIdentityName
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
@@ -264,7 +265,15 @@ internal fun upNextMediaType(type: String?): String =
 
 /**
  * Dedupe id form: "tt..." stays as it is, prefixed ids lose their prefix
- * ("tmdb:123" and "simkl:9" become "123" / "9").
+ * ("tmdb:123", "simkl:9", "tvdb:456" and "trakt:789" become "123" / "9" /
+ * "456" / "789").
+ *
+ * A row filed under a prefix this function did NOT unwrap kept the prefix in its
+ * key, so its "parent" identity never met the bare number another side builds -
+ * ids and title both correct, still unmatchable. The prefix vocabulary is the
+ * one [RAW_ID_PREFIXES] already recognises; the function is shared by every side
+ * of every comparison that uses it, so same-flavor pairs cannot be affected by
+ * it.
  */
 internal fun upNextIdentifier(rawId: String?): String? {
     if (rawId.isNullOrBlank()) return null
@@ -276,8 +285,29 @@ internal fun upNextIdentifier(rawId: String?): String? {
         trimmed.startsWith("tt") -> trimmed
         trimmed.startsWith("tmdb:") -> trimmed.removePrefix("tmdb:")
         trimmed.startsWith("simkl:") -> trimmed.removePrefix("simkl:")
+        trimmed.startsWith("tvdb:") -> trimmed.removePrefix("tvdb:")
+        trimmed.startsWith("trakt:") -> trimmed.removePrefix("trakt:")
         else -> trimmed
     }
+}
+
+/**
+ * A card's title key, built from a raw name rather than from an item - the form
+ * the completion marks need, and the ONE construction both sides route through
+ * ([upNextTitleKey] is this, plus the empty key a blank title has always had).
+ *
+ * The name is reduced by [titleIdentityName], which the ownership key beside it
+ * uses too: two title keys that disagree
+ * about punctuation are two keys that never meet, which is how a finished
+ * show's card survived every merge ("R.J. Decker" vs "RJ Decker").
+ */
+internal fun upNextTitleKeyFor(title: String?, parentType: String?): String? {
+    // The normaliser itself lives beside the ownership key, which builds the
+    // same shape from the other side (see TitleProfileOwnership): sharing it is
+    // what makes "the two keys cannot drift" true by construction rather than
+    // by a test noticing afterwards.
+    val normalized = titleIdentityName(title) ?: return null
+    return "title:${upNextMediaType(parentType)}:$normalized"
 }
 
 /** Id prefixes that are internal lookup keys, never part of a title. */
@@ -541,9 +571,17 @@ internal fun upNextHeroEpisodeLabel(
         ?.let { label -> "$prefix  •  $label" }
         ?: prefix
 
-/** Title key: the fallback identity of a show when its ids disagree. */
+/**
+ * Title key: the fallback identity of a show when its ids disagree.
+ *
+ * Routed through [upNextTitleKeyFor] so a card and a completed row can never
+ * disagree about how a title is spelled - they used to be two constructions, and
+ * only one of them is what the drop's mark builds. A blank title keeps the empty
+ * key it has always had, since [upNextShowKey] falls back to it.
+ */
 internal fun upNextTitleKey(item: UpNextItem): String =
-    "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"
+    upNextTitleKeyFor(item.title, item.parentType)
+        ?: "title:${upNextMediaType(item.parentType)}:"
 
 /**
  * True when this card came from a TRACKER account (Simkl, MDBList, Trakt)
@@ -668,7 +706,23 @@ internal data class CompletedTitleMark(
     val episode: Int?
 )
 
-/** Builds the mark for one completed history row, or null when it can be keyed by nothing. */
+/**
+ * Builds the mark for one completed history row, or null when it can be keyed
+ * by nothing.
+ *
+ * Two things here are not simply "the row's own fields":
+ *
+ *  - [tmdbId] is the row's TMDB id, resolved by the caller (a history row has
+ *    no such column - see `HomeViewModel.dropJustCompletedTrackerCards`). Null
+ *    is fine and is exactly the old behaviour; a number adds the
+ *    `parent:<type>:<n>` key the tracker cards ALREADY carry, which is the one
+ *    identity both sides could always have shared.
+ *  - the type bucket. Every key is bucketed by [upNextMediaType], and an addon's
+ *    own type flavour ("anime", an empty string) collapses to "unknown" - a
+ *    bucket no show card ever visits. A row that names an episode IS a series,
+ *    so it is keyed as one, and its ids and title land where its card is
+ *    looking. A movie (or a row with no episode) keeps its real type.
+ */
 internal fun completedTitleMark(
     parentId: String?,
     parentType: String?,
@@ -677,25 +731,26 @@ internal fun completedTitleMark(
     episode: Int?,
     title: String?
 ): CompletedTitleMark? {
+    val namedSeason = namedEpisodeNumber(season)
+    val namedEpisode = namedEpisodeNumber(episode)
+
+    val bucketType =
+        if (namedSeason != null && namedEpisode != null) "series" else parentType
+
     val keys =
         upNextShowParentKeys(
             parentId,
-            parentType,
+            bucketType,
             tmdbId
         ) +
-            listOfNotNull(
-                title
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { "title:${upNextMediaType(parentType)}:${it.lowercase()}" }
-            )
+            listOfNotNull(upNextTitleKeyFor(title, bucketType))
 
     if (keys.isEmpty()) return null
 
     return CompletedTitleMark(
         keys = keys,
-        season = namedEpisodeNumber(season),
-        episode = namedEpisodeNumber(episode)
+        season = namedSeason,
+        episode = namedEpisode
     )
 }
 
@@ -779,7 +834,14 @@ internal fun trackerCardJustCompletedByProfile(
  */
 internal fun dropTrackerCardsForCompletedTargets(
     items: List<UpNextItem>,
-    completedRows: List<WatchHistoryEntity>
+    completedRows: List<WatchHistoryEntity>,
+    /**
+     * The TMDB id of each completed row's parent, keyed by the identifier form
+     * [upNextIdentifier] produces ("tt123" for an IMDb id). Built by the caller,
+     * which is where the resolver lives; empty = today's behaviour, every mark
+     * built from the row's own fields alone.
+     */
+    tmdbByParentId: Map<String, Int> = emptyMap()
 ): List<UpNextItem> {
     if (items.isEmpty() || completedRows.isEmpty()) return items
     if (items.none { item -> isTrackerSourcedCard(item) }) return items
@@ -789,7 +851,8 @@ internal fun dropTrackerCardsForCompletedTargets(
             completedTitleMark(
                 parentId = row.parentId,
                 parentType = row.type,
-                tmdbId = null,
+                tmdbId = upNextIdentifier(row.parentId)
+                    ?.let { identifier -> tmdbByParentId[identifier] },
                 season = row.season,
                 episode = row.episode,
                 title = row.name

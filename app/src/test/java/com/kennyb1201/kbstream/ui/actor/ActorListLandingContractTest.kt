@@ -116,6 +116,72 @@ class ActorListLandingContractTest {
         )
     }
 
+    @Test
+    fun `a focused poster comes to rest with its caption row on screen`() {
+        // The same fault as the bio, one row down: the rail reports the POSTER
+        // as the focused node, and the title/year/rating are drawn below it. The
+        // page's margin therefore carries the caption block as well, and the
+        // arithmetic shows it scrolling further than a poster-only inset would.
+        val captionSpec = ActorListBringIntoViewSpec(insetPx = INSET_PX + CAPTION_PX)
+        // 900 + 200 = 1100 against a 1000 viewport clearing 32 + 88 of margin:
+        // 220, where a poster-only inset would have answered 132.
+        assertEquals(
+            "the caption room is part of the landing, not left below the fold",
+            220f,
+            captionSpec.calculateScrollDistance(offset = 900f, size = 200f, containerSize = 1000f),
+            0f
+        )
+        assertTrue(
+            "and it is strictly more room than the poster alone needs",
+            captionSpec.calculateScrollDistance(offset = 900f, size = 200f, containerSize = 1000f) >
+                spec.calculateScrollDistance(offset = 900f, size = 200f, containerSize = 1000f)
+        )
+        assertEquals(
+            "a row already on screen still asks for no scroll at all",
+            0f,
+            captionSpec.calculateScrollDistance(offset = 100f, size = 200f, containerSize = 1000f),
+            0f
+        )
+    }
+
+    // ── getting back to the info ─────────────────────────────────────────
+
+    @Test
+    fun `the first rail scrolls the page back to its info`() {
+        // The reported trap: once the rails are in view the bio is a disposed
+        // list item, so focus search had nothing above the first rail to move to
+        // and the page could not be scrolled back up at all.
+        val page = flat()
+        assertTrue(
+            "the page hands its own list state to the rails",
+            page.contains("pageListState = browseListState")
+        )
+        val rail = page.substringAfter("private fun ActorCreditRail(")
+            .substringBefore("private fun ActorCreditCard(")
+        assertTrue(
+            "UP out of the first rail scrolls the page when it is scrolled",
+            rail.contains("event.key == Key.DirectionUp") &&
+                rail.contains("pageListState.animateScrollToItem(0)")
+        )
+        assertTrue(
+            "and it is the first rail that does it, so UP between rails still " +
+                "moves between them",
+            rail.contains("if (isFirstRail) {")
+        )
+    }
+
+    @Test
+    fun `focusing the toggle only snaps the top while the bio is collapsed`() {
+        // Expanded, the bio item is taller than the viewport, so snapping its
+        // top to the viewport's top put the toggle below the bottom edge - the
+        // clipped-on-focus report. Collapsed, the snap is what recovers the
+        // paragraph's first lines.
+        assertTrue(
+            "the snap has to know whether the bio is expanded",
+            flat().contains("if (focusState.hasFocus && !bioExpanded) {")
+        )
+    }
+
     // ── who installs which rule ───────────────────────────────────────────
 
     @Test
@@ -128,8 +194,14 @@ class ActorListLandingContractTest {
             install >= 0
         )
         assertTrue(
-            "and it must be the list's spec, built from the app's focus-row inset",
-            page.contains("ActorListBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })")
+            "and it must be the list's spec",
+            page.contains("ActorListBringIntoViewSpec(")
+        )
+        assertTrue(
+            "built from the app's focus-row inset PLUS the caption row under a" +
+                " poster: a landing that clears only the poster leaves the date," +
+                " title and rating off the bottom edge (the field report)",
+            page.contains("insetPx = with(density) { (KBFocusRowInset + ActorCaptionRoom).toPx() }")
         )
         assertTrue("the list must be inside that provider", list > install)
         // The exact shape of the bug: the rail's line installed over the whole
@@ -175,5 +247,8 @@ class ActorListLandingContractTest {
          * density 2), the number the wiring line above builds the spec with.
          */
         const val INSET_PX = 32f
+
+        /** `ActorCaptionRoom` (44dp) at density 2, for the arithmetic above. */
+        const val CAPTION_PX = 88f
     }
 }

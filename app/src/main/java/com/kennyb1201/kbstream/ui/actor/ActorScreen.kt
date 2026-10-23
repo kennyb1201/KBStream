@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -39,6 +40,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -134,6 +140,19 @@ private class ActorBringIntoViewSpec(
 
 @OptIn(ExperimentalFoundationApi::class)
 private val LocalActorBringIntoViewSpec = ActorBringIntoViewSpec()
+
+/**
+ * The room a focused poster's caption row needs under it.
+ *
+ * The focused node a rail reports to the page's list is the POSTER, not the
+ * card: the title, year and rating are drawn in a [PosterCaptions] column below
+ * it, so a landing that leaves only [KBFocusRowInset] under the poster puts a
+ * row the viewer has switched on below the fold. That is the field report -
+ * "scroll down and the date, title and rating are gone" - and it is arithmetic,
+ * not a guess: this is the height of the caption block at its tallest (one title
+ * line plus the year/rating line, with the 5dp gap the card draws).
+ */
+private val ActorCaptionRoom = 44.dp
 
 /**
  * Focus scrolling for the page's own VERTICAL list - the bio and the rows under
@@ -536,7 +555,12 @@ fun ActorScreen(
             // the biography off the top on open.
             val density = LocalDensity.current
             val listBringIntoViewSpec = remember(density) {
-                ActorListBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+                ActorListBringIntoViewSpec(
+                    // The poster's own clearance plus the caption row that sits
+                    // under it: a landing that clears only the poster leaves the
+                    // date, title and rating off the bottom edge.
+                    insetPx = with(density) { (KBFocusRowInset + ActorCaptionRoom).toPx() }
+                )
             }
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides listBringIntoViewSpec) {
@@ -774,9 +798,20 @@ fun ActorScreen(
                                                 // does exactly this, for exactly this
                                                 // reason - and the bio is the thing
                                                 // the viewer came up to read.
+                                                // ...only while the bio is
+                                                // COLLAPSED. Expanded, the item
+                                                // is taller than a screen, so
+                                                // snapping its top to the
+                                                // viewport's top is what put the
+                                                // toggle itself below the bottom
+                                                // edge - the "View more is
+                                                // clipped when focused" report.
+                                                // Expanded, the standard landing
+                                                // applies and keeps the toggle
+                                                // inside the viewport.
                                                 modifier = Modifier
                                                     .onFocusChanged { focusState ->
-                                                        if (focusState.hasFocus) {
+                                                        if (focusState.hasFocus && !bioExpanded) {
                                                             scope.launch {
                                                                 browseListState.animateScrollToItem(0)
                                                             }
@@ -816,6 +851,7 @@ fun ActorScreen(
                                         normalizedMediaType = "movie",
                                         isFirstRail = true,
                                         bottomPadding = 16.dp,
+                                        pageListState = browseListState,
                                         browseReturnKey = browseReturnKey,
                                         returnTarget = returnTarget?.takeIf { it.railKey == ACTOR_MOVIES_RAIL },
                                         returnFocusRequester = returnFocusRequester,
@@ -854,6 +890,7 @@ fun ActorScreen(
                                         // absent.
                                         isFirstRail = movies.isEmpty(),
                                         bottomPadding = 32.dp,
+                                        pageListState = browseListState,
                                         browseReturnKey = browseReturnKey,
                                         returnTarget = returnTarget?.takeIf { it.railKey == ACTOR_TV_RAIL },
                                         returnFocusRequester = returnFocusRequester,
@@ -1033,6 +1070,8 @@ private fun ActorCreditRail(
     normalizedMediaType: String,
     isFirstRail: Boolean,
     bottomPadding: Dp,
+    /** The page's own vertical list, so the first rail can scroll it back up. */
+    pageListState: LazyListState,
     browseReturnKey: String,
     returnTarget: BrowseReturnTarget?,
     returnFocusRequester: FocusRequester,
@@ -1045,6 +1084,7 @@ private fun ActorCreditRail(
     onOpenPosterMenu: (TmdbPersonCredit, FocusRequester, BrowseReturnTarget) -> Unit
 ) {
     val rowState = rememberLazyListState()
+    val rowScope = rememberCoroutineScope()
 
     // Where this rail's return lands, resolved by the card's OWN key rather
     // than by the recorded position: a rail that has re-ordered under the
@@ -1086,7 +1126,37 @@ private fun ActorCreditRail(
                 top = KBFocusRowInset,
                 bottom = KBFocusRowInset
             ),
-            modifier = Modifier.padding(bottom = bottomPadding).focusGroup().focusRestorer()
+            modifier = Modifier
+                .padding(bottom = bottomPadding)
+                .focusGroup()
+                .focusRestorer()
+                // UP out of the FIRST rail scrolls the page back to the top when
+                // the page is scrolled, instead of asking for a focus target that
+                // is not composed: the bio and its toggle are the list's first
+                // item, so once the rails are in view there is nothing above them
+                // to move to - focus search cannot find an item LazyColumn has
+                // already disposed - and the page could not be scrolled back up
+                // at all. One press brings the bio back on screen; the next one
+                // lands on its toggle, which is by then composed.
+                .then(
+                    if (isFirstRail) {
+                        Modifier.onPreviewKeyEvent { event ->
+                            val scrolled = pageListState.firstVisibleItemIndex > 0 ||
+                                pageListState.firstVisibleItemScrollOffset > 0
+                            if (event.type == KeyEventType.KeyDown &&
+                                event.key == Key.DirectionUp &&
+                                scrolled
+                            ) {
+                                rowScope.launch { pageListState.animateScrollToItem(0) }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
         itemsIndexed(
             items = credits,

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.mobile
 
+import android.widget.Toast
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +40,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
@@ -64,6 +67,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import kotlinx.coroutines.launch
 
 /**
  * The source picker, for a finger.
@@ -128,11 +132,37 @@ fun StreamsScreenMobile(
 
         // A DRM stream cannot play on the MPV engine, so picking one drops the
         // anime verdict published for this request (see the TV picker).
+        //
+        // A row with no URL of its own is a torrent hash, which this app cannot
+        // play by itself (see the TV picker's note): when TorBox holds it, ask
+        // for the CDN link first and play that, else say so instead of doing
+        // nothing when the card is pressed.
+        val resolveScope = rememberCoroutineScope()
+
         fun selectSource(selected: Stream, allSources: List<Stream>, addons: List<String?>) {
             if (selected.drm?.licenseUrl != null) {
                 PlayerEngine.clearLaunchAnime()
             }
-            onStreamSelected(selected, allSources, addons)
+            if (!TorBoxResolve.isUnresolved(selected)) {
+                onStreamSelected(selected, allSources, addons)
+                return
+            }
+            resolveScope.launch {
+                val resolved = TorBoxResolve.playableStream(context, selected)
+                if (resolved == null) {
+                    Toast.makeText(
+                        context,
+                        "TorBox could not prepare this source",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@launch
+                }
+                onStreamSelected(
+                    resolved,
+                    allSources.map { if (it === selected) resolved else it },
+                    addons
+                )
+            }
         }
 
         // "Play Manually" (or an episode long-press) opens THIS picker and must

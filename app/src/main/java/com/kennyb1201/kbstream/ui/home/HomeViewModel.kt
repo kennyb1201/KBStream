@@ -1788,10 +1788,19 @@ Log.d(
 
         if (recentRows.isEmpty() && completedRows.isEmpty()) return items
 
+        // The rows carry no TMDB id (watch_history has no such column), and the
+        // tracker cards' show identity is mostly `parent:<type>:<tmdbId>`. The
+        // one identity both sides can always share is therefore resolved here,
+        // where the resolver is in reach, and handed to the pure predicate -
+        // which is only ever given marks (see completedTitleMark).
+        val completedRowList = recentRows + completedRows
+        val tmdbByParentId = resolveCompletedRowTmdbIds(completedRowList)
+
         val kept =
             dropTrackerCardsForCompletedTargets(
                 items,
-                recentRows + completedRows
+                completedRowList,
+                tmdbByParentId
             )
 
         if (kept.size != items.size) {
@@ -1802,6 +1811,78 @@ Log.d(
         }
 
         return kept
+    }
+
+    /**
+     * The TMDB id of every completed row that is filed under an IMDb id, keyed
+     * by the identifier form the marks use (see [upNextIdentifier]).
+     *
+     * Why it is needed: a completion is filed under whatever id the player had
+     * ("tt…" from an add-on stream, "tmdb:<n>" from a tracker card), while a
+     * tracker card names its show mostly by `parent:<type>:<tmdbId>`. Without
+     * this bridge a perfectly completed show is unmatchable whenever the two
+     * sides picked different flavours - which is the field report: stale cards
+     * surviving every merge and every cold start.
+     *
+     * Bounded on purpose, and only ever an improvement: "tt…" rows are all this
+     * can resolve, a failed lookup answers null (the mark is then built exactly
+     * as it was before this existed), and the resolver's own
+     * memory + table caches make every later merge free. The cap and the small
+     * concurrency window are there so the FIRST merge after an update cannot
+     * spend a minute of /find calls on a library with hundreds of finished
+     * shows: whatever is left over resolves on a later merge, once the earlier
+     * answers are cached.
+     */
+    private suspend fun resolveCompletedRowTmdbIds(
+        rows: List<WatchHistoryEntity>
+    ): Map<String, Int> {
+        val wanted = rows
+            .mapNotNull { row ->
+                val identifier = upNextIdentifier(row.parentId)
+                    ?.takeIf { it.startsWith("tt") }
+                    ?: return@mapNotNull null
+                // The same bucket decision completedTitleMark makes: a row
+                // that names an episode is a series, whatever flavour an addon
+                // filed it under, and /find must be asked for a series or it
+                // answers with a movie result that does not exist.
+                val type =
+                    if (namedEpisodeNumber(row.season) != null &&
+                        namedEpisodeNumber(row.episode) != null
+                    ) {
+                        "series"
+                    } else {
+                        row.type?.takeIf { it.isNotBlank() } ?: "movie"
+                    }
+                identifier to type
+            }
+            .distinct()
+            .take(COMPLETED_ROW_RESOLUTION_CAP)
+
+        if (wanted.isEmpty()) return emptyMap()
+
+        val resolved = mutableMapOf<String, Int>()
+        wanted.chunked(COMPLETED_ROW_RESOLUTION_PARALLELISM).forEach { batch ->
+            val answers = coroutineScope {
+                batch.map { (identifier, type) ->
+                    async {
+                        // A failure here must not fail the drop: a mark without
+                        // the TMDB key is today's behaviour, never worse.
+                        // Cancellable, not bare runCatching: this is a suspend
+                        // call and a profile switch must not be held up by it.
+                        runCatchingCancellable {
+                            tmdbRepository.resolveTmdbId(identifier, type)
+                        }
+                            .getOrNull()
+                            ?.takeIf { it > 0 }
+                            ?.let { tmdbId -> identifier to tmdbId }
+                    }
+                }.awaitAll()
+            }
+            answers.forEach { answer ->
+                answer?.let { (identifier, tmdbId) -> resolved[identifier] = tmdbId }
+            }
+        }
+        return resolved
     }
 
     /**
@@ -9242,6 +9323,21 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5
+
+        /**
+         * How many distinct completed shows one drop may resolve for the TMDB
+         * badge on its mark (see resolveCompletedRowTmdbIds).
+         *
+         * A cap, not an optimisation: the resolver caches both answers and
+         * definitive misses, so a second merge pays nothing - but the FIRST one
+         * on a library with hundreds of finished shows would otherwise run
+         * hundreds of /find calls inline, before the rail can publish. Rows past
+         * the cap keep today's keys exactly.
+         */
+        private const val COMPLETED_ROW_RESOLUTION_CAP = 40
+
+        /** Lookups in flight at once, so the capped pass is a second or two. */
+        private const val COMPLETED_ROW_RESOLUTION_PARALLELISM = 4
 
         /**
          * Concurrent catalog requests a rail build keeps in flight.

@@ -40,6 +40,14 @@ class DebridAddonsTest {
                 SourceAddonPreference.normalize(spelling) in DebridAddons.normalizedIds()
             )
         }
+        // The debrid-first searchers beside AIOStreams, under the manifest
+        // spelling and a punctuated one the normalizer has to absorb.
+        for (spelling in listOf("Comet", "comet", "MediaFusion", "media-fusion", "PeerFlix", "Jackettio")) {
+            assertTrue(
+                "\"$spelling\" must key to a known debrid addon",
+                SourceAddonPreference.normalize(spelling) in DebridAddons.normalizedIds()
+            )
+        }
     }
 
     @Test
@@ -61,6 +69,9 @@ class DebridAddonsTest {
         // An addon goes in only when it is VERIFIED debrid-first: a wrong entry
         // promotes links that may not resolve at all, which is worse than the
         // mis-ordering it was meant to fix.
-        assertEquals(setOf("aiostreams"), DebridAddons.KNOWN_DEBRID_ADDON_IDS)
+        assertEquals(
+            setOf("aiostreams", "comet", "mediafusion", "peerflix", "jackettio"),
+            DebridAddons.KNOWN_DEBRID_ADDON_IDS
+        )
     }
 }

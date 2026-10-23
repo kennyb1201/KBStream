@@ -131,6 +131,13 @@ class TrackerProfileOwnershipTest {
         assertEquals(upNextTitleKey(card), titleProfileKey("tv", "  Bluey  "))
         assertEquals(upNextTitleKey(card), titleProfileKey("series", "Bluey"))
         assertEquals(upNextTitleKey(card), titleProfileKey("show", "bluey"))
+
+        // And they cannot disagree about punctuation either: the normaliser is
+        // shared, so "R.J." on one side and "RJ" on the other are one title.
+        assertEquals(
+            upNextTitleKey(item("simkl:1", title = "R.J. Decker", parentType = "series")),
+            titleProfileKey("series", "RJ Decker")
+        )
     }
 
     @Test
