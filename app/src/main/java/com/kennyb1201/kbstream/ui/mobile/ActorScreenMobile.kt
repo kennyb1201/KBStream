@@ -306,7 +306,13 @@ fun ActorScreenMobile(
                                 items = movies,
                                 key = { _, credit ->
                                     "movie:${credit.id}:${credit.character.orEmpty()}"
-                                }
+                                },
+                                // One reuse pool per section: a film credit and
+                                // a series credit are different cells, and a
+                                // shared pool made the composables swap
+                                // contents across the grid's boundary (the TV
+                                // rail's rule).
+                                contentType = { _, _ -> "actor-movie" }
                             ) { index, credit ->
                                 CreditTile(
                                     // The two credit sections fill in as the
@@ -348,7 +354,8 @@ fun ActorScreenMobile(
                                 items = tvShows,
                                 key = { _, credit ->
                                     "tv:${credit.id}:${credit.character.orEmpty()}"
-                                }
+                                },
+                                contentType = { _, _ -> "actor-series" }
                             ) { index, credit ->
                                 CreditTile(
                                     modifier = Modifier.animateItem(),

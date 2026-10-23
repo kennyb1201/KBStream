@@ -108,6 +108,44 @@ class FireTvSearchContractTest {
         )
     }
 
+    /**
+     * The keyboard's own window must not end the editing session.
+     *
+     * Field report (2026-10-23): on Fire TV, opening the guide's search and
+     * typing produced a blank box until ENTER was pressed on the keyboard, after
+     * which typing worked. The field's session ended on its first blur - and on
+     * Fire OS the leanback keyboard is a separate window, so opening it blurs
+     * the field. Read-only with a live IME connection swallows every letter;
+     * ENTER re-armed the session through the field's key handler, which is why
+     * the second attempt worked.
+     */
+    @Test
+    fun `a blur caused by the keyboard window does not end the session`() {
+        val field = source(FIELD)
+        assertTrue(
+            "the field must know whether this app's window is the focused one",
+            field.contains("val windowInfo = LocalWindowInfo.current")
+        )
+        assertTrue(
+            "and refuse to end the session on a blur that arrived while another " +
+                "window (the keyboard) held the focus",
+            field.contains(
+                "if (!it.isFocused && !editingWhenLeft && windowInfo.isWindowFocused) {"
+            )
+        )
+        assertFalse(
+            "the old unconditional blur rule is what shipped the blank field",
+            field.contains("if (!it.isFocused && !editingWhenLeft) editing = false")
+        )
+        // The Escape hatch stays: an explicit OK/ENTER on a read-only field still
+        // re-arms it, which is the behaviour the report proves was reachable.
+        assertTrue(
+            "and ENTER on a not-yet-editing field still starts the session",
+            field.contains("Key.Enter, Key.NumPadEnter -> {") &&
+                field.contains("if (!editing) {")
+        )
+    }
+
     @Test
     fun `the field reports its session and lets the screen end it`() {
         val field = source(FIELD)

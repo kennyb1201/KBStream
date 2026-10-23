@@ -269,7 +269,8 @@ fun CollectionScreenMobile(
 
                     else -> itemsIndexed(
                         items = parts,
-                        key = { _, part -> "collection_part:${part.id}" }
+                        key = { _, part -> "collection_part:${part.id}" },
+                        contentType = { _, _ -> "collection-part" }
                     ) { index, part ->
                         CollectionPartTile(
                             // The parts land together but not in one frame -

@@ -299,7 +299,11 @@ fun CatalogGridScreenMobile(
                             } else {
                                 "placeholder#$index"
                             }
-                        }
+                        },
+                        // One cell shape per grid: the tile follows the
+                        // grid's own landscape/poster decision, not the row's
+                        // data, so every cell can share a pool.
+                        contentType = { "catalog-tile" }
                     ) { index ->
                         // Null while a placeholder stands in for a not-yet-loaded
                         // item; placeholders are off, so this is only the

@@ -583,7 +583,11 @@ private fun LeagueTabsMobile(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        itemsIndexed(items = leagues, key = { _, league -> league.path }) { _, league ->
+        itemsIndexed(
+            items = leagues,
+            key = { _, league -> league.path },
+            contentType = { _, _ -> "league-chip" }
+        ) { _, league ->
             val selected = league.path == selectedPath
             KBCard(onClick = { onSelect(league.path) }, shape = KBShapePill) {
                 Text(
@@ -763,7 +767,11 @@ private fun LeagueBodyMobile(
                     count = section.tournaments.size
                 )
             }
-            items(items = section.tournaments, key = { it.id }) { event ->
+            items(
+                items = section.tournaments,
+                key = { it.id },
+                contentType = { "tournament-card" }
+            ) { event ->
                 Box(modifier = Modifier.animateItem()) {
                     TournamentCardMobile(
                         event = event,
@@ -827,7 +835,11 @@ private fun LazyListScope.gameItemsMobile(
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit
 ) {
-    items(items = games, key = { it.id }) { game ->
+    items(
+        items = games,
+        key = { it.id },
+        contentType = { "game-card" }
+    ) { game ->
         // The 30-second poll moves a game between LIVE, UPCOMING and FINAL.
         // The card keeps its identity, so it now leaves one section and
         // arrives in another as motion instead of the list re-flowing under
@@ -1360,7 +1372,8 @@ private fun StandingsBodyMobile(
                         key = { _, entry ->
                             "std-" + group.name + "-" + entry.abbreviation + "-" +
                                 entry.displayName
-                        }
+                        },
+                        contentType = { _, _ -> "standing-row" }
                     ) { _, entry ->
                         val team = standingsTeam(league.path, entry)
                         val followed = team.favoriteKey in favoriteKeys

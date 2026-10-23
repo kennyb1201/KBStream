@@ -15,7 +15,6 @@ import androidx.compose.ui.platform.LocalContext
 import coil3.Image
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import coil3.request.allowHardware
 
 /**
  * ONE brand mark drawn for a dark surface, with the treatment
@@ -68,16 +67,21 @@ internal fun BrandMarkImage(
     val request = remember(url) {
         ImageRequest.Builder(context)
             .data(url)
-            // Force a software bitmap so pixels can be sampled for luminance.
-            .allowHardware(false)
-            // ...and decode it at the size it is drawn, which the software
-            // path made matter. A brand mark arrives at its published size
-            // (a network wordmark is routinely 1000px wide) and this decodes
-            // EVERY one of them on the CPU, inside the scroll of every Home
-            // rail and every landscape grid. 256px is four times the widest
-            // slot a mark is drawn in and still leaves [sampleBrandMark]
-            // plenty to sample from, so the verdict is unchanged - the decode
-            // and the retained bitmap are an order of magnitude smaller.
+            // Decoded at the size it is drawn. A brand mark arrives at its
+            // published size (a network wordmark is routinely 1000px wide) and
+            // one of these sits in every landscape card, inside the scroll of
+            // every Home rail and every landscape grid. 256px is four times
+            // the widest slot a mark is drawn in and still leaves
+            // [sampleBrandMark] plenty to sample from, so the verdict is
+            // unchanged - the decode and the retained bitmap are an order of
+            // magnitude smaller.
+            //
+            // Deliberately NOT `.allowHardware(false)` any more: that forced
+            // Coil to decode every one of these on the CPU and keep a software
+            // bitmap per card, which is exactly the scroll cost this decode
+            // cap exists to bound. The luminance sample makes its own readable
+            // copy instead ([sampleBrandMark]), so the drawn bitmap can stay on
+            // the GPU path.
             .size(BRAND_MARK_DECODE_PX)
             .build()
     }
@@ -151,16 +155,31 @@ internal fun BrandMarkLogo(
  * Samples a decoded logo down to one 48x48 tile and hands the pixels to
  * [brandMarkTreatment], which owns the decision (and is unit-tested there).
  *
- * Deliberately coarse because this runs once per logo, and it must stay off
- * the hardware path so the pixels can be read at all.
+ * Deliberately coarse because this runs once per logo. The image Coil hands us
+ * is normally a HARDWARE bitmap now (see the request's own note), and a
+ * hardware bitmap's pixels cannot be read or scaled at all - `getPixels`
+ * throws and `createScaledBitmap` refuses it - so exactly one software copy is
+ * made for the sample and dropped again. The bitmap being DRAWN stays the GPU
+ * one, so the scroll path no longer carries a software bitmap per card just to
+ * decide a tint.
  */
 internal fun sampleBrandMark(image: Image): BrandMark {
+    // Only the two bitmaps this function allocates are ever recycled; the one
+    // Coil decoded belongs to its cache and is drawn.
+    var softwareCopy: Bitmap? = null
+    var scaled: Bitmap? = null
     return try {
         val src = (image as? coil3.BitmapImage)?.bitmap ?: return BrandMark.AS_IS
-        val small = if (src.width <= 48 && src.height <= 48) {
-            src
+        val readable = if (src.config == Bitmap.Config.HARDWARE) {
+            src.copy(Bitmap.Config.ARGB_8888, false)?.also { softwareCopy = it }
+                ?: return BrandMark.AS_IS
         } else {
-            Bitmap.createScaledBitmap(src, 48, 48, true)
+            src
+        }
+        val small = if (readable.width <= 48 && readable.height <= 48) {
+            readable
+        } else {
+            Bitmap.createScaledBitmap(readable, 48, 48, true).also { scaled = it }
         }
         val pixels = IntArray(small.width * small.height)
         small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
@@ -168,5 +187,8 @@ internal fun sampleBrandMark(image: Image): BrandMark {
     } catch (_: Exception) {
         // Undecodable/protected bitmap — leave the logo untouched.
         BrandMark.AS_IS
+    } finally {
+        runCatching { scaled?.recycle() }
+        runCatching { softwareCopy?.recycle() }
     }
 }

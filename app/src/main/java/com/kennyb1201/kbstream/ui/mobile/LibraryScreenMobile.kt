@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
@@ -488,14 +489,26 @@ fun LibraryScreenMobile(
                 } else if (state.filter != LibraryFilter.CALENDAR) {
                     itemsIndexed(
                         items = items,
-                        key = { _, item -> LocalLibraryStore.dedupeKey(item) }
+                        key = { _, item -> LocalLibraryStore.dedupeKey(item) },
+                        // A library tile's shape follows its media type (a film
+                        // and a series draw different captions), so the two are
+                        // never asked to reuse each other's slot.
+                        contentType = { _, item -> item.mediaType }
                     ) { index, item ->
                         LibraryTile(
                             item = item,
                             // Removals and filter/sort changes stop teleporting
                             // the grid: a tile fading out and its neighbours
                             // closing the gap is the phone's whole point here.
-                            modifier = Modifier.animateItem(),
+                            modifier = Modifier
+                                .animateItem()
+                                // The phone's poster -> Detail flight: a press is
+                                // the source signal (a touch has no focus), the
+                                // same hand-off Home's cards make.
+                                .heroSourceOnPress(
+                                    item.mediaType,
+                                    item.navigationId.orEmpty()
+                                ),
                             rating = state.ratings[LocalLibraryStore.dedupeKey(item)],
                             isWatched = item.watchedKeyCandidates()
                                 .any { it in state.watchedKeys },

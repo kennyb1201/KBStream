@@ -42,6 +42,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -162,6 +163,12 @@ fun KBTextField(
     var editing by remember { mutableStateOf(openKeyboardOnFocus) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    // The APP window's focus. False while another window owns it - and on Fire
+    // TV the system keyboard is exactly such a window (see the blur rule
+    // below). The WindowInfo itself is captured, not its value: the blur
+    // callback reads it at press time, so a keyboard that takes the focus in
+    // the same frame the field is blurred is still seen as the keyboard.
+    val windowInfo = LocalWindowInfo.current
 
     // What [editing] goes back to once this field stops being the focused one.
     // True for the usual field: focus (re)opens the IME. False for manual mode
@@ -265,7 +272,20 @@ fun KBTextField(
                 // editing state, so it is inert again the next time the D-pad
                 // lands on it instead of pulling the IME back up over whatever
                 // the user navigated to.
-                if (!it.isFocused && !editingWhenLeft) editing = false
+                //
+                // ...but only when the viewer actually went somewhere else in
+                // THIS app. A blur that arrives while the app window is not the
+                // focused window is the system keyboard taking the focus, not a
+                // navigation: on Fire TV the leanback keyboard is a separate
+                // window, and the field is blurred the moment it opens. Ending
+                // the session there left the field readOnly while the IME was
+                // still connected, so every letter pressed on that keyboard
+                // landed nowhere and the box read blank - until ENTER on the
+                // keyboard re-armed editing through the key handler below,
+                // which is exactly the reported "blank until I hit enter".
+                if (!it.isFocused && !editingWhenLeft && windowInfo.isWindowFocused) {
+                    editing = false
+                }
                 onFocusChanged?.invoke(it.isFocused)
             }
             .onPreviewKeyEvent { event ->

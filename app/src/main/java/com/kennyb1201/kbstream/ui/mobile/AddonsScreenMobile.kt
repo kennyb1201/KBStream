@@ -366,7 +366,11 @@ fun AddonsScreenMobile(
                             .fillMaxWidth()
                             .weight(1f)
                     ) {
-                        items(items = rows, key = { addon -> addon.manifestUrl }) { addon ->
+                        items(
+                            items = rows,
+                            key = { addon -> addon.manifestUrl },
+                            contentType = { "addon-row" }
+                        ) { addon ->
                             // Typing in the filter, or removing an add-on,
                             // re-forms this list; a row now leaves and the rest
                             // close the gap instead of re-rendering in one
@@ -1105,7 +1109,11 @@ private fun CopyAddonsDialogMobile(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.heightIn(max = 240.dp)
                     ) {
-                        items(items = sourceAddons, key = { it.manifestUrl }) { addon ->
+                        items(
+                            items = sourceAddons,
+                            key = { it.manifestUrl },
+                            contentType = { "addon-source-chip" }
+                        ) { addon ->
                             val checked = addon.manifestUrl in selected
                             MobileFilterChip(
                                 label = addon.displayName,

@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.ui.components.touch.TouchGlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -627,7 +628,13 @@ fun SearchScreenMobile(
                         KBSkeletonRail(
                             posterWidth = loadingSize.width,
                             posterHeight = loadingSize.height,
-                            itemCount = 4
+                            itemCount = 4,
+                            // The states are separate items with their own
+                            // keys, so animating the items is what makes
+                            // loading -> results a crossfade rather than two
+                            // structural changes in consecutive frames (the TV
+                            // screen's rule; typing is live here too).
+                            modifier = Modifier.animateItem()
                         )
                     }
                 }
@@ -638,14 +645,18 @@ fun SearchScreenMobile(
                         MobileStatus(
                             message = error,
                             actionLabel = "TRY AGAIN",
-                            onAction = { viewModel.search(query) }
+                            onAction = { viewModel.search(query) },
+                            modifier = Modifier.animateItem()
                         )
                     }
                 }
 
                 if (!isLoading && searchError == null && query.isNotBlank() && totalCount == 0) {
                     item(key = "no_results") {
-                        MobileStatus("No matches found.")
+                        MobileStatus(
+                            message = "No matches found.",
+                            modifier = Modifier.animateItem()
+                        )
                     }
                 }
 
@@ -663,7 +674,13 @@ fun SearchScreenMobile(
                                     // Results land one rail at a time; a tile
                                     // that arrives or leaves fades where it
                                     // was and the rail closes the gap.
-                                    modifier = Modifier.animateItem(),
+                                    modifier = Modifier
+                                        .animateItem()
+                                        // The phone's poster -> Detail flight:
+                                        // a press IS the source signal here (a
+                                        // touch has no D-pad focus), the same
+                                        // hand-off Home's cards already make.
+                                        .heroSourceOnPress(result.type, result.id),
                                     result = result,
                                     watched = watchedTile(
                                         result = result,
