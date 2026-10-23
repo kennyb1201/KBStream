@@ -421,19 +421,29 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             // collecting early (auto-play), and awaitAll cannot express "these
             // answered, those are still out". Every add-on is still STARTED
             // together, so this is not serialising anything.
-            val outcomes = Channel<AddonLoadResult>(Channel.UNLIMITED)
-            val jobs = streamAddons.map { addon ->
+            //
+            // Each answer is tagged with the add-on's position in
+            // [streamAddons] - which IS the settings order, because that list
+            // is [AddonManager.getEnabledAddons] (the manager's own managed
+            // order). Answers land in whatever order the network returns them,
+            // and that used to be the order the picker published: the add-on
+            // chips and the per-add-on slices came out in reply order, so
+            // moving an add-on up in Settings changed nothing on the streams
+            // screen. Tagged here, sorted below.
+            val outcomes = Channel<Pair<Int, AddonLoadResult>>(Channel.UNLIMITED)
+            val jobs = streamAddons.mapIndexed { index, addon ->
                 launch {
                     // trySend, not send: a straggler may finish in the window
                     // between the cancel below and the channel closing, and a
                     // late answer nobody wants must not throw out of the scope.
                     outcomes.trySend(
-                        loadAddon(addon, contentType, streamId, debugLines, onAddonResult)
+                        index to
+                            loadAddon(addon, contentType, streamId, debugLines, onAddonResult)
                     )
                 }
             }
 
-            val collected = mutableListOf<AddonLoadResult>()
+            val collected = mutableListOf<Pair<Int, AddonLoadResult>>()
             while (collected.size < streamAddons.size) {
                 // The wait-all case (the picker) keeps waiting for every
                 // add-on, each of which is already bounded by its own 15 s
@@ -456,7 +466,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 jobs.forEach { it.cancel() }
             }
             outcomes.close()
-            collected
+            // Settings order, not answer order (see the tag above). A partial
+            // collection - auto-play stopped after the first answer - sorts the
+            // same way, so its slices are still the leading add-ons' own.
+            collected.sortedBy { it.first }.map { it.second }
         }
 
         results.forEach { result ->

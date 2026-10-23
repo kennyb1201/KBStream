@@ -644,6 +644,32 @@ fun DetailScreenMobile(
             )
         }
 
+        // ---- a poster menu's "Play Manually" ----
+        // The shared long-press sheet derives that row from the caller's own
+        // "Go to Details" on every poster whose menu has none of its own (the
+        // rails, Search, the browse pages, the catalog grid), so the one thing
+        // it can ask for is THIS page - the TV's shape (see DetailScreen's
+        // `manualPick`). The phone never read the request, so the row landed on
+        // Details and stopped: the picker only opened after a second, Play
+        // press, which is not what the row promised. Read once as this title's
+        // page appears, then delivered once its own target exists (a series'
+        // next episode is resolved here, not by the menu).
+        var manualPick by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(type, id) {
+            manualPick = ManualSourceSelection.consume()
+        }
+        var manualPickDelivered by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(manualPick, isLoading, meta, tmdbDetail, episodesLoading, episodes) {
+            if (!manualPick || manualPickDelivered || isLoading) return@LaunchedEffect
+            if (meta == null && tmdbDetail == null) return@LaunchedEffect
+            // A series needs the listing before it can name an episode; a
+            // listing that settled empty leaves the row where the Play button
+            // would be too - this page's own target is its first file.
+            if (normalizedType == "series" && episodesLoading) return@LaunchedEffect
+            manualPickDelivered = true
+            openCurrentStreams()
+        }
+
         // ---- long-press subjects ----
         var episodeMenu by remember { mutableStateOf<EpisodeMenuTarget?>(null) }
         var seasonMenu by remember { mutableStateOf<SeasonMenuTarget?>(null) }

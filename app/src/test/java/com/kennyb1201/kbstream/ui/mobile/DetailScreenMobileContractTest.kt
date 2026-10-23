@@ -694,4 +694,41 @@ class DetailScreenMobileContractTest {
                 mobile.contains("openEpisode(it, currentSeason)")
         )
     }
+
+    /**
+     * A poster menu's "Play Manually" on any other screen can only reach THIS
+     * page: the shared long-press sheet derives that row from the caller's own
+     * "Go to Details", and the play target (a series' next episode above all)
+     * is resolved here. The TV page has always read that request as it appears
+     * and handed it on to the picker; the phone never did, so the row landed on
+     * Details and stopped - the picker only opened after a second, Play press,
+     * which is the field report this covers.
+     */
+    @Test
+    fun `a poster menu's play manually is delivered, not parked on the page`() {
+        val mobile = mobileDetail()
+        assertTrue(
+            "the page must read the poster menu's request as it appears, once",
+            mobile.contains("manualPick = ManualSourceSelection.consume()")
+        )
+        assertTrue(
+            "and deliver it through the same picker route the Play hold uses, " +
+                "once the page's own target exists - never on a page still loading",
+            mobile.contains(
+                "if (!manualPick || manualPickDelivered || isLoading) " +
+                    "return@LaunchedEffect"
+            ) &&
+                mobile.contains("manualPickDelivered = true") &&
+                mobile.contains("openCurrentStreams()")
+        )
+        assertTrue(
+            "a series waits for its listing before it can name an episode, and " +
+                "must not park on an empty one - the Play button's fallback is " +
+                "the same first file",
+            mobile.contains(
+                "if (normalizedType == \"series\" && episodesLoading) " +
+                    "return@LaunchedEffect"
+            )
+        )
+    }
 }

@@ -159,6 +159,52 @@ class DvCompatCopyMobileContractTest {
         )
     }
 
+    /**
+     * The P5 switch is the TV page's switch, wiring included (2026-10-23).
+     *
+     * `getConvertP5To81` is the EFFECTIVE state: it reads true whenever this
+     * device advertises no Dolby Vision decoder, whatever the stored flag
+     * says. A switch free to move therefore stored `false` and read back on at
+     * the next visit - the "it keeps turning itself back on" report - so the
+     * row is locked wherever the device or the selected mode has already
+     * decided, exactly as the TV page locks it.
+     */
+    @Test
+    fun `the p5 switch is locked where the device has already decided`() {
+        val mobile = mobileSettings()
+        val row = mobile
+            .substringAfter("label = \"Convert Profile 5 to 8.1\",")
+            .substringBefore("SettingsSectionMobile(\"Stream Picks & Auto-play\")")
+        assertTrue(
+            "the row must read the device rule the TV page reads",
+            mobile.contains(
+                "val p5ConversionRequired = " +
+                    "AppPreferences.isP5ConversionRequired(context)"
+            )
+        )
+        assertTrue(
+            "and lock the switch off that requirement and off the modes that " +
+                "ignore it: $row",
+            row.contains(
+                "enabled = dvMode == AppPreferences.DV_COMPAT_AUTO && " +
+                    "!p5ConversionRequired"
+            )
+        )
+        assertTrue(
+            "the row says why it cannot be moved where the conversion is not a " +
+                "choice: $row",
+            row.contains("Always on: this device has no Dolby Vision decoder")
+        )
+        assertTrue(
+            "a locked row must not move: the switch takes input only when enabled",
+            mobile.contains("onCheckedChange = if (enabled) onChange else null")
+        )
+        assertTrue(
+            "and the key it writes is still the same one",
+            mobile.contains("AppPreferences.setConvertP5To81(context, it)")
+        )
+    }
+
     // ── the mode's behaviour and the TV page are untouched ─────────
 
     @Test

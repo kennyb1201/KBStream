@@ -353,6 +353,11 @@ private fun SettingsToggleMobile(
     label: String,
     description: String,
     checked: Boolean,
+    // False for a switch this device's own hardware or the selected mode has
+    // already decided (the TV page's `ToggleRow` has the same argument): the
+    // row still shows the state, it just cannot be moved to one that could not
+    // be honoured.
+    enabled: Boolean = true,
     onChange: (Boolean) -> Unit
 ) {
     Row(
@@ -368,7 +373,7 @@ private fun SettingsToggleMobile(
         ) {
             Text(
                 text = label,
-                color = KBTextHi,
+                color = if (enabled) KBTextHi else KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
@@ -380,7 +385,7 @@ private fun SettingsToggleMobile(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChange,
+            onCheckedChange = if (enabled) onChange else null,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = KBVoid,
                 checkedTrackColor = KBAccent,
@@ -1168,10 +1173,34 @@ private fun PlaybackPaneMobile() {
             // describe some of the three modes, and described Auto wrongly.
             description = dvCompatDescription(dvMode)
         )
+        // The phone's P5 row is the TV page's row, wiring included. The
+        // getter is the EFFECTIVE conversion: it already reports "this session
+        // converts P5" whenever the device has no Dolby Vision decoder to play
+        // Profile 5 for us. With the switch free to move, turning it off stored
+        // `false` and still read back on at the next visit - which read as a
+        // setting that would not stay off. Where the conversion is the only
+        // correct picture the row is locked on and says so; where the selected
+        // mode ignores it entirely it is locked, exactly as on the TV page.
+        val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
         SettingsToggleMobile(
             label = "Convert Profile 5 to 8.1",
-            description = "Best-effort conversion for displays that accept 8.1 but not ICtCp P5.",
+            description = when {
+                p5ConversionRequired ->
+                    "Always on: this device has no Dolby Vision decoder, so " +
+                        "Profile 5 (ICtCp) is stripped to HDR10 and corrected on " +
+                        "the GPU. Passing it through would show green and purple"
+                dvMode == AppPreferences.DV_COMPAT_OFF ->
+                    "Ignored in None mode: files play exactly as provided, so " +
+                        "Profile 5 reaches the display untouched"
+                dvMode != AppPreferences.DV_COMPAT_AUTO ->
+                    "Ignored in Strip All: every Dolby Vision profile is already " +
+                        "stripped, and P5 colors are corrected on the GPU"
+                else ->
+                    "Strips Profile 5 (ICtCp) to HDR10 and converts the colors on " +
+                        "the GPU. Off leaves P5 playing as native Dolby Vision"
+            },
             checked = convertP5,
+            enabled = dvMode == AppPreferences.DV_COMPAT_AUTO && !p5ConversionRequired,
             onChange = {
                 convertP5 = it
                 AppPreferences.setConvertP5To81(context, it)
