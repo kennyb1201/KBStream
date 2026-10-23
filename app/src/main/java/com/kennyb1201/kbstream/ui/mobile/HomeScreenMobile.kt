@@ -925,26 +925,32 @@ private fun CollectionFolderCard(folder: KBFolder, onClick: () -> Unit) {
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, KBVoid.copy(alpha = 0.85f))
+        // Title scrim + label, dropped together when the folder sets hideTitle
+        // in the manifest - the same rule the TV tile draws by, so a collection
+        // whose folders hide titles looks the same on both surfaces (and does
+        // not paint a scrim over artwork it was told to leave bare).
+        if (!folder.hideTitle) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, KBVoid.copy(alpha = 0.85f))
+                        )
                     )
-                )
-        )
-        Text(
-            text = folder.title,
-            color = KBTextHi,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        )
+            )
+            Text(
+                text = folder.title,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+        }
     }
 }
 

@@ -45,6 +45,14 @@ class SettingsScreenMobileContractTest {
     private fun mobileSettings(): String =
         source("com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt")
 
+    /**
+     * How many key cards the caller's (already whitespace-squashed) source
+     * composes. The call form is `KeyCardMobile( title = ...`; the composable's
+     * own definition declares `title: String`, so it is not one of them.
+     */
+    private fun keyCardCalls(source: String): Int =
+        source.split("KeyCardMobile( title =").size - 1
+
     @Test
     fun `settings dispatch on the form factor at the entry point`() {
         val screen = settingsScreen()
@@ -449,13 +457,29 @@ class SettingsScreenMobileContractTest {
     fun `the phone keeps the safety rules the tv pane carries`() {
         val mobile = mobileSettings()
 
-        // Kids profile: the key fields are not composed, and the add-on door is
-        // hidden by the profile's own lock.
+        // Kids profile: the key cards are COMPOSED (a key can be entered or
+        // replaced there) but never revealed - the phone's field has no reveal
+        // chip on any profile - and the add-on door is hidden by the profile's
+        // own lock. They used to be dropped entirely, which left a kids profile
+        // unable to add or correct a key (reported 2026-10-22).
         assertTrue(
-            "keys are hidden for a kids profile",
+            "the kids rule is still read from the profile's ceiling",
             mobile.contains("activeProfile?.kidsMaxAge != null") &&
-                mobile.contains("if (keysHidden)")
+                mobile.contains("val keysHidden = activeProfile?.kidsMaxAge != null")
         )
+        assertTrue(
+            "the key cards are composed, one per credential",
+            4 == keyCardCalls(mobile) // was: Regex("KeyCardMobile\\(\\s*\\n\\s*title =").findAll(mobile).count()
+        )
+        listOf(
+            "API keys are hidden on a kids profile",
+            "The MDBList key is hidden on a kids profile"
+        ).forEach { gone ->
+            assertFalse(
+                "the old caption is gone with the branch: $gone",
+                mobile.contains(gone)
+            )
+        }
         assertTrue(
             "a locked add-on entry stays hidden",
             mobile.contains("activeProfile?.kidsHideAddons == true")

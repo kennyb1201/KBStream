@@ -15,8 +15,10 @@ import org.junit.Test
  * about the four items changed: same rows, same card, same pref.
  *
  * The guardrails are the reason this is a test and not just a move:
- *  - the MDBList key is still a secret, so its FIELD is still hidden on a kids
- *    profile (the card keeps its own `kidsKeysHidden` behaviour);
+ *  - the MDBList key is still a secret, so its FIELD can never be REVEALED on a
+ *    kids profile (the card keeps its own `kidsKeysHidden` behaviour, now as
+ *    `revealable = false` - the field itself stays so a profile holding no key
+ *    can paste one);
  *  - Resume Source is a behaviour preference, not a secret, so it must NOT
  *    inherit that treatment and stays usable on a kids profile;
  *  - the old "Continue Watching" section header is deleted with its only row,
@@ -69,7 +71,14 @@ class TrackersSectionContractTest {
         )
         assertTrue(
             "and the secret field is still gated on a kids profile - the card " +
-                "hides its own field in its new home too",
+                "keeps its own kids rule in its new home: composed so a key can " +
+                "be pasted, but never revealable",
+            card.contains("revealable = !kidsKeysHidden")
+        )
+        assertFalse(
+            "the field itself must not be left out again: a kids profile with no " +
+                "key had no way to enter one, and the card's click raised a focus " +
+                "requester attached to nothing",
             card.contains("if (!kidsKeysHidden) KBSecretField(")
         )
         assertTrue(
@@ -106,8 +115,9 @@ class TrackersSectionContractTest {
             mobileTail.contains("keysHidden")
         )
         assertTrue(
-            "phone: and that branch really is closed by the time the row composes",
-            mobileTail.contains("}")
+            "phone: and the row composes at pane level, right after the MDBList card " +
+                "closes - there is no keys branch left for it to sit in",
+            mobileTail.trimEnd().endsWith(")") && !mobileTail.contains("if (")
         )
     }
 

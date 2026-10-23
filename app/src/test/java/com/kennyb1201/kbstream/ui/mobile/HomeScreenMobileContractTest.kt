@@ -292,6 +292,41 @@ class HomeScreenMobileContractTest {
         )
     }
 
+    /**
+     * A KB folder can set `hideTitle` in the manifest, and the TV rail has
+     * always obeyed it: the scrim and the label both go, so the artwork stands
+     * alone. The phone drew the label unconditionally, so an imported
+     * collection whose folders hide titles still printed every name under the
+     * cover - the phone and the television disagreed about one folder.
+     */
+    @Test
+    fun `a folder that hides its title hides it on the phone too`() {
+        val mobile = mobileHome()
+        val card = mobile.substringAfter("private fun CollectionFolderCard(")
+            .substringBefore("private fun MobileBrowseShortcutSection(")
+        val gate = card.indexOf("if (!folder.hideTitle) {")
+        assertTrue(
+            "the phone's folder card must branch on the manifest's hideTitle flag",
+            gate >= 0
+        )
+        assertTrue(
+            "and the folder title must be drawn inside that branch, not above it",
+            card.indexOf("text = folder.title,") > gate
+        )
+        assertTrue(
+            "the scrim must be dropped with the label - a bare gradient with no " +
+                "name under it just dims the artwork",
+            card.indexOf("Brush.verticalGradient(") > gate
+        )
+        // Parity: the TV tile keeps the same rule, so the two surfaces cannot
+        // drift apart again.
+        val tvTile = source("com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt")
+        assertTrue(
+            "the TV folder tile must still gate its label on hideTitle",
+            tvTile.contains("if (!folder.hideTitle) {")
+        )
+    }
+
     @Test
     fun `the all-hidden card reaches the same manager through the same handoff`() {
         // HD-P2-5 on a phone: every rail hidden used to leave the hero and

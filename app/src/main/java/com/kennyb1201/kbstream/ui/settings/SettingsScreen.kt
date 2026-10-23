@@ -579,8 +579,18 @@ fun SettingsScreen(
         mutableIntStateOf(SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(context)))
     }
     var backupStatus by remember { mutableStateOf<String?>(null) }
+    // Each key's saved state is SEEDED from the profile's own store. The four
+    // flags used to start `false` and only flip when this pane itself saved
+    // something, so every re-entry into Settings said "MDBList — Not connected"
+    // (and the other three never said "Saved") over a key the device still
+    // held - and on a kids profile, whose field was not composed at all, no
+    // press could correct it (reported 2026-10-22). The getters are the same
+    // chain ratings, Verify and the sync blob read, so the card cannot disagree
+    // with what the app actually uses.
     var mdbListKeyInput by remember { mutableStateOf(AppPreferences.getMdbListApiKey(context)) }
-    var mdbListKeySaved by remember { mutableStateOf(false) }
+    var mdbListKeySaved by remember {
+        mutableStateOf(AppPreferences.getMdbListApiKey(context).isNotBlank())
+    }
     // Key-verification posture (SI-P2-3): MDBList is the ONLY tracker with an
     // opt-in VERIFY, so its status line can say "Connected". The other two have
     // no verification endpoint wired, and their feedback says "Saved" rather
@@ -588,14 +598,20 @@ fun SettingsScreen(
     // and honest - the key really was saved - and adding VERIFY for them means
     // specifying a verification call per provider first.
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
-    var subsKeySaved by remember { mutableStateOf(false) }
+    var subsKeySaved by remember {
+        mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context).isNotBlank())
+    }
     var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }
-    var torboxKeySaved by remember { mutableStateOf(false) }
+    var torboxKeySaved by remember {
+        mutableStateOf(AppPreferences.getTorboxApiKey(context).isNotBlank())
+    }
     // OMDb key: awards text on the detail screen. Saved-only feedback like the
     // OpenSubtitles/TorBox fields — OMDb has no cheap verification endpoint, so
     // this does not claim a connection it has not tested.
     var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
-    var omdbKeySaved by remember { mutableStateOf(false) }
+    var omdbKeySaved by remember {
+        mutableStateOf(AppPreferences.getOmdbApiKey(context).isNotBlank())
+    }
     var autoFetchSubtitles by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoFetchSubtitles(context))
     }
@@ -750,11 +766,24 @@ fun SettingsScreen(
             scrollable = selectedPane != SettingsPane.HIDDEN,
             flashing = flashingSetting
         ) {
-                // m11 (audit): an API key is a secret, this pane is on a TV in a
-                // room, and a kids profile could read or copy the parent's key
-                // with the reveal chip in two presses. The key fields are not
-                // composed at all on a kids profile (see each card below), so
-                // there is nothing to reveal, copy, or focus.
+                // m11 (audit), amended 2026-10-22: an API key is a secret and
+                // this pane is on a TV in a room, so a kids profile may not
+                // READ one back - but it has to be able to PASTE one.
+                //
+                // The fields used to be left out of composition entirely on a
+                // kids profile. That made a profile that holds no key (or one a
+                // provider has started rejecting) unfixable on that profile:
+                // the card still raised its own focus requester on click, the
+                // eye was gone, and there was no field to type into - which is
+                // the reported "MDBList isn't connected and there is no way to
+                // enter the key". The field is composed again everywhere, but
+                // with `revealable = false` here: the value stays masked and
+                // the eye chip - the one press that would unmask it - is not
+                // composed, so there is still nothing to read or copy.
+                //
+                // Nothing of a PARENT's is on this screen either way: the key
+                // store is per profile (AppPreferences.apiKeyPrefs), so a kids
+                // profile only ever holds its own key.
                 val kidsKeysHidden = com.kennyb1201.kbstream.data.sync.ProfileManager
                     .activeProfile.collectAsStateWithLifecycle().value
                     ?.kidsMaxAge != null
@@ -870,6 +899,21 @@ fun SettingsScreen(
                             modifier = Modifier.padding(top = 2.dp)
                         )
 
+                        // Why the eye is missing, where the eye would be: a
+                        // kids profile may replace the key but never read it
+                        // back (see kidsKeysHidden). Saying so is the whole
+                        // difference between "this is protected" and "this
+                        // screen is broken".
+                        if (kidsKeysHidden) {
+                            Text(
+                                text = "Masked on a kids profile: the key can be replaced " +
+                                    "here, but not revealed.",
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+
                         // Shared KB field: same look/behavior everywhere. Card OK
                         // requests focus (raises the IME); PASTE chip reads the
                         // clipboard; blur and Done both save.
@@ -886,9 +930,13 @@ fun SettingsScreen(
                         ) {
                             // Masked by default with a reveal chip: the key is a
                             // secret, and this screen is on a TV in a room. The
-                            // value itself is unchanged - see KBSecretField.
-                            if (!kidsKeysHidden) KBSecretField(
+                            // value itself is unchanged - see KBSecretField. A
+                            // kids profile keeps the field (so a key can still be
+                            // pasted or replaced) but loses the reveal chip - see
+                            // kidsKeysHidden.
+                            KBSecretField(
                                 value = mdbListKeyInput,
+                                revealable = !kidsKeysHidden,
                                 onValueChange = {
                                     mdbListKeyInput = it.trim()
                                     mdbListKeySaved = false
@@ -910,7 +958,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            if (!kidsKeysHidden) KBPasteChip(onPaste = mdbListPaste)
+                            KBPasteChip(onPaste = mdbListPaste)
                         }
 
                         if (mdbListKeySaved) {
@@ -989,8 +1037,8 @@ fun SettingsScreen(
                 SettingsSectionHeader("API Keys")
                 if (kidsKeysHidden) {
                     Text(
-                        text = "API keys are hidden on a kids profile. Switch to a parent " +
-                            "profile to view or change them.",
+                        text = "Keys are masked on a kids profile and can't be revealed: a " +
+                            "saved key still works, and a new one can be pasted here.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(bottom = 8.dp)
@@ -1042,9 +1090,11 @@ fun SettingsScreen(
                         ) {
                             // Masked by default with a reveal chip: the key is a
                             // secret, and this screen is on a TV in a room. The
-                            // value itself is unchanged - see KBSecretField.
-                            if (!kidsKeysHidden) KBSecretField(
+                            // value itself is unchanged - see KBSecretField, and
+                            // kidsKeysHidden for the chip's kids-profile rule.
+                            KBSecretField(
                                 value = omdbKeyInput,
+                                revealable = !kidsKeysHidden,
                                 onValueChange = {
                                     omdbKeyInput = it.trim()
                                     omdbKeySaved = false
@@ -1066,7 +1116,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            if (!kidsKeysHidden) KBPasteChip(onPaste = omdbPaste)
+                            KBPasteChip(onPaste = omdbPaste)
                         }
                         if (omdbKeySaved) {
                             Text(
@@ -1120,9 +1170,11 @@ fun SettingsScreen(
                         ) {
                             // Masked by default, reveal chip beside it - see
                             // KBSecretField; the saved/verify paths still read
-                            // the real key string.
-                            if (!kidsKeysHidden) KBSecretField(
+                            // the real key string, and kidsKeysHidden drops the
+                            // chip on a kids profile.
+                            KBSecretField(
                                 value = subsKeyInput,
+                                revealable = !kidsKeysHidden,
                                 onValueChange = {
                                     subsKeyInput = it.trim()
                                     subsKeySaved = false
@@ -1142,7 +1194,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            if (!kidsKeysHidden) KBPasteChip(onPaste = subsPaste)
+                            KBPasteChip(onPaste = subsPaste)
                         }
                         if (subsKeySaved) {
                             Text(
@@ -1208,9 +1260,11 @@ fun SettingsScreen(
                                 .fillMaxWidth()
                         ) {
                             // Masked by default, reveal chip beside it - see
-                            // KBSecretField.
-                            if (!kidsKeysHidden) KBSecretField(
+                            // KBSecretField; kidsKeysHidden drops the chip on a
+                            // kids profile.
+                            KBSecretField(
                                 value = torboxKeyInput,
+                                revealable = !kidsKeysHidden,
                                 onValueChange = {
                                     torboxKeyInput = it.trim()
                                     torboxKeySaved = false
@@ -1230,7 +1284,7 @@ fun SettingsScreen(
                                 }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            if (!kidsKeysHidden) KBPasteChip(onPaste = torboxPaste)
+                            KBPasteChip(onPaste = torboxPaste)
                         }
                         if (torboxKeySaved) {
                             Text(

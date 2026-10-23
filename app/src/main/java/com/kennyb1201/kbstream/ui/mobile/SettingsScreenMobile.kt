@@ -571,26 +571,32 @@ private fun IntegrationsPaneMobile(
             description = "Connect your Trakt account to scrobble playback and sync watched state",
             onClick = onOpenTrakt
         )
-        // The card hides its own field on a kids profile, exactly as it did in
-        // API Keys: the key is a secret, the row is not.
+        // m11 as amended (2026-10-22): the card is COMPOSED on a kids profile
+        // so a key can be entered or replaced there. Nothing on it can be read:
+        // the phone's field is masked on every profile - there is no reveal
+        // chip here, unlike the TV pane's - and the value only ever draws as
+        // dots. The card used to be dropped entirely, and because that branch
+        // ran on to the end of the pane it took the Subtitles & Debrid and
+        // Badges sections with it (they are outside it now; see their own
+        // note below). The caption says why the field arrives prefilled: a
+        // saved key still works, and a new one can be pasted over it.
         if (keysHidden) {
             SettingsCaptionMobile(
-                "The MDBList key is hidden on a kids profile. Switch to a parent " +
-                    "profile to view or change it."
-            )
-        } else {
-            KeyCardMobile(
-                title = "MDBList API Key",
-                description = "mdblist.com key: critic ratings, watched-history badges, " +
-                    "resume-from-pause, scrobbling, and your lists in the Library tab.",
-                placeholder = "Paste key (e.g. 12345)",
-                loadedValue = AppPreferences.getMdbListApiKey(context),
-                onSave = { key -> AppPreferences.setMdbListApiKey(context, key) },
-                verify = { MdbListClient.verifyKey(context) },
-                savedHint = "Connected as",
-                savedDescription = "Key saved — ratings appear on the next title you open."
+                "Keys are masked on a kids profile: a saved key still works, and " +
+                    "a new one can be pasted here."
             )
         }
+        KeyCardMobile(
+            title = "MDBList API Key",
+            description = "mdblist.com key: critic ratings, watched-history badges, " +
+                "resume-from-pause, scrobbling, and your lists in the Library tab.",
+            placeholder = "Paste key (e.g. 12345)",
+            loadedValue = AppPreferences.getMdbListApiKey(context),
+            onSave = { key -> AppPreferences.setMdbListApiKey(context, key) },
+            verify = { MdbListClient.verifyKey(context) },
+            savedHint = "Connected as",
+            savedDescription = "Key saved — ratings appear on the next title you open."
+        )
         ResumeAuthorityMobile(
             selected = resumeAuthority,
             onPick = { authority ->
@@ -600,45 +606,53 @@ private fun IntegrationsPaneMobile(
         )
 
         SettingsSectionMobile("API Keys")
+        // The same rule as the MDBList card above: composed everywhere, read
+        // nowhere. These three fields were inside the keys-hidden branch, so a
+        // kids profile could not add or correct any of them.
         if (keysHidden) {
             SettingsCaptionMobile(
-                "API keys are hidden on a kids profile. Switch to a parent profile " +
-                    "to view or change them."
+                "Keys are masked on a kids profile: a saved key still works, and " +
+                    "a new one can be pasted here."
             )
-        } else {
-            KeyCardMobile(
-                title = "OMDb API Key",
-                description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +
-                    "pages. The free tier allows 1,000 lookups a day.",
-                placeholder = "Paste key",
-                loadedValue = AppPreferences.getOmdbApiKey(context),
-                onSave = { key -> AppPreferences.setOmdbApiKey(context, key) },
-                savedDescription = "Saved — the AWARDS fact appears on the next title you open."
-            )
-            KeyCardMobile(
-                title = "OpenSubtitles API Key",
-                description = "Enables subtitle search in the player.",
-                placeholder = "Paste key",
-                loadedValue = AppPreferences.getOpensubtitlesApiKey(context),
-                onSave = { key -> AppPreferences.setOpensubtitlesApiKey(context, key) },
-                savedDescription = "Saved — subtitle search is available in the player."
-            )
-            KeyCardMobile(
-                title = "TorBox API Key",
-                description = "Adds your TorBox cloud library to the Debrid rows.",
-                placeholder = "Paste key",
-                loadedValue = AppPreferences.getTorboxApiKey(context),
-                onSave = { key -> AppPreferences.setTorboxApiKey(context, key) },
-                savedDescription = "Saved — the TorBox library syncs with the active profile."
-            )
+        }
+        KeyCardMobile(
+            title = "OMDb API Key",
+            description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +
+                "pages. The free tier allows 1,000 lookups a day.",
+            placeholder = "Paste key",
+            loadedValue = AppPreferences.getOmdbApiKey(context),
+            onSave = { key -> AppPreferences.setOmdbApiKey(context, key) },
+            savedDescription = "Saved — the AWARDS fact appears on the next title you open."
+        )
+        KeyCardMobile(
+            title = "OpenSubtitles API Key",
+            description = "Enables subtitle search in the player.",
+            placeholder = "Paste key",
+            loadedValue = AppPreferences.getOpensubtitlesApiKey(context),
+            onSave = { key -> AppPreferences.setOpensubtitlesApiKey(context, key) },
+            savedDescription = "Saved — subtitle search is available in the player."
+        )
+        KeyCardMobile(
+            title = "TorBox API Key",
+            description = "Adds your TorBox cloud library to the Debrid rows.",
+            placeholder = "Paste key",
+            loadedValue = AppPreferences.getTorboxApiKey(context),
+            onSave = { key -> AppPreferences.setTorboxApiKey(context, key) },
+            savedDescription = "Saved — the TorBox library syncs with the active profile."
+        )
 
-            SettingsSectionMobile("Subtitles & Debrid")
-            SyncedToggleMobile(
-                label = "Auto-fetch subtitles",
-                description = "Look for a matching subtitle when a title starts without one.",
-                get = AppPreferences::getAutoFetchSubtitles,
-                set = AppPreferences::setAutoFetchSubtitles
-            )
+        // ── Subtitles & Debrid ──────────────────────────────────────────
+        // Behaviour preferences, not credentials: they were inside the
+        // keys-hidden branch, so a kids profile had neither the auto-fetch
+        // subtitle toggle nor the TorBox library toggle - and no badge-pack
+        // section under it either. Unconditional now, matching the TV pane.
+        SettingsSectionMobile("Subtitles & Debrid")
+        SyncedToggleMobile(
+            label = "Auto-fetch subtitles",
+            description = "Look for a matching subtitle when a title starts without one.",
+            get = AppPreferences::getAutoFetchSubtitles,
+            set = AppPreferences::setAutoFetchSubtitles
+        )
         SyncedToggleMobile(
             label = "TorBox library sync",
             description = "Keep the TorBox cloud library in step with the active profile.",
@@ -736,7 +750,6 @@ private fun IntegrationsPaneMobile(
             set = AppPreferences::setBadgesAboveFile
         )
     }
-}
 }
 
 @Composable

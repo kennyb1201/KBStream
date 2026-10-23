@@ -125,6 +125,51 @@ class KeyFieldMaskingContractTest {
     }
 
     @Test
+    fun `a saved key reads as saved before anything is retyped`() {
+        // Reported 2026-10-22: a kids profile said "MDBList — Not connected" and
+        // "doesn't show the TorBox key or say if it's connected" over keys the
+        // device still held. Every one of these flags used to start `false` and
+        // only flip when the pane itself saved something in that session, so a
+        // revisit - on any profile - reported a saved key as absent.
+        listOf(
+            "mdbListKeySaved" to "AppPreferences.getMdbListApiKey(context)",
+            "subsKeySaved" to "AppPreferences.getOpensubtitlesApiKey(context)",
+            "torboxKeySaved" to "AppPreferences.getTorboxApiKey(context)",
+            "omdbKeySaved" to "AppPreferences.getOmdbApiKey(context)"
+        ).forEach { (flag, getter) ->
+            assertFalse(
+                "$flag must not start false: a stored key has to read as stored",
+                settings.contains("var $flag by remember { mutableStateOf(false) }")
+            )
+            assertTrue(
+                "$flag must be seeded from the store the app actually reads",
+                settings.contains("var $flag by remember { mutableStateOf($getter.isNotBlank()) }")
+            )
+        }
+    }
+
+    @Test
+    fun `a kids profile can enter a key but never reveal one`() {
+        // m11 as amended: the field stays composed (a profile holding no key had
+        // no way to paste one, and the card's click raised a focus requester
+        // attached to nothing), while the eye chip - the only press that would
+        // unmask a stored value - is suppressed for the same profiles.
+        assertEquals(
+            "all four secret fields keep the kids rule",
+            4,
+            Regex("revealable = !kidsKeysHidden").findAll(settings).count()
+        )
+        assertFalse(
+            "and none is left out of composition again",
+            settings.contains("if (!kidsKeysHidden) KBSecretField(")
+        )
+        assertTrue(
+            "the paste chip is reachable there too - entering a key is the point",
+            !settings.contains("if (!kidsKeysHidden) KBPasteChip(")
+        )
+    }
+
+    @Test
     fun `no key material can reach a log`() {
         listOf(settings to "SettingsScreen.kt", field to "KBTextField.kt").forEach { (src, name) ->
             assertFalse("$name must not log", src.contains("Log."))
