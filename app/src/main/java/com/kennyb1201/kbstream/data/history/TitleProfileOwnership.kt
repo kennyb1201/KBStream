@@ -146,6 +146,32 @@ internal object TitleProfileOwnership {
 }
 
 /**
+ * Whether [title] is positively owned by a profile OTHER than [activeProfileId].
+ *
+ * The rule Continue Watching's tracker filter applies
+ * ([com.kennyb1201.kbstream.ui.home.trackerCardOwnedByAnotherProfile]), stated
+ * once over the pieces any caller has: the ownership map, a type and a name.
+ * The TorBox cloud→Library sync is the second consumer - one shared household
+ * TorBox account holds the kids' titles as well, and a round used to mirror all
+ * of it into whichever profile was ambient.
+ *
+ * Dropping only on POSITIVE evidence is the whole rule: no live profile, no key
+ * for this title, or no recorded owner all answer false, because an unattributed
+ * title is not somebody else's.
+ */
+internal fun titleOwnedByAnotherProfile(
+    ownerByTitleKey: Map<String, String>,
+    type: String?,
+    title: String?,
+    activeProfileId: String?
+): Boolean {
+    val active = activeProfileId?.takeIf { it.isNotBlank() } ?: return false
+    val key = titleProfileKey(type, title) ?: return false
+    val owner = ownerByTitleKey[key] ?: return false
+    return owner != active
+}
+
+/**
  * The ownership key of a title, from the type and name a stored history row
  * carries. Deliberately the same shape the rail's card key uses
  * ([com.kennyb1201.kbstream.ui.home.upNextTitleKey]) - the two are pinned

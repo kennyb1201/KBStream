@@ -7,6 +7,29 @@ import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Who put a row in this profile's LOCAL My List.
+ *
+ * Every local row used to be anonymous, which made the TorBox cloud→Library
+ * sync's writes indistinguishable from the viewer's own: turning the sync off
+ * could not offer to take them back, and the one-time cleanup of an older
+ * build's contamination had no way to name what it was cleaning. The marker is
+ * additive on the stored JSON and stored only when it is NOT manual, so every
+ * library written before this existed parses exactly as before and means
+ * "manual".
+ *
+ * It is deliberately not part of the de-dupe identity: a title that is already
+ * on the list by hand keeps its manual mark when a sync round matches it, which
+ * is what makes "manual adds are never touched" true.
+ */
+enum class LibraryOrigin(val wire: String) {
+    /** The viewer added it (or it came from a pre-marker build). */
+    MANUAL("manual"),
+
+    /** The TorBox cloud library sync added it (see TorBoxLibrarySync). */
+    TORBOX_SYNC("torbox-sync")
+}
+
 /** Which tracker a Library row came from. */
 enum class LibrarySource(val label: String) {
     LOCAL("This device"),
@@ -58,7 +81,14 @@ data class LibraryItem(
      * The remote list's own id, for the lists that are not addressed by
      * [listId] (Trakt's slugs/ids are strings). Null on every other row.
      */
-    val listRemoteId: String? = null
+    val listRemoteId: String? = null,
+    /**
+     * Who put this row on the profile's local list. [LibraryOrigin.MANUAL] for
+     * everything the viewer did and for every row written before the marker
+     * existed (see [LibraryOrigin]); the TorBox sync's own adds are the only
+     * other value.
+     */
+    val origin: LibraryOrigin = LibraryOrigin.MANUAL
 ) {
     val navigationId: String?
         get() = imdbId ?: tmdbId?.let { "tmdb:$it" }
@@ -168,6 +198,13 @@ object LocalLibraryStore {
         .put("posterUrl", cleanLibraryPoster(item.posterUrl) ?: "")
         .put("imdbId", item.imdbId ?: "")
         .put("tmdbId", item.tmdbId ?: -1)
+        // ADDITIVE: only the non-default marker is written. An absent key is
+        // what every library written before this existed holds, and it means
+        // manual - so an older build reading a newer blob still parses it, and
+        // this build reads an older one unchanged.
+        .apply {
+            if (item.origin != LibraryOrigin.MANUAL) put("origin", item.origin.wire)
+        }
 
     private fun entryFromJson(obj: JSONObject): LibraryItem? {
         val mediaType = obj.optString("mediaType", "movie")
@@ -175,6 +212,13 @@ object LocalLibraryStore {
         val imdbId = obj.optString("imdbId", "").ifBlank { null }
         val tmdbId = obj.optInt("tmdbId", -1).takeIf { it > 0 }
         if (imdbId == null && tmdbId == null) return null
+        // An unknown marker (a newer build's origin, or a half-written blob) is
+        // read as MANUAL: the safe direction, because the only thing a marker
+        // unlocks is removal.
+        val origin = when (obj.optString("origin", "")) {
+            LibraryOrigin.TORBOX_SYNC.wire -> LibraryOrigin.TORBOX_SYNC
+            else -> LibraryOrigin.MANUAL
+        }
         return LibraryItem(
             source = LibrarySource.LOCAL,
             mediaType = mediaType,
@@ -182,7 +226,8 @@ object LocalLibraryStore {
             year = obj.optInt("year", -1).takeIf { it > 0 },
             posterUrl = cleanLibraryPoster(obj.optString("posterUrl", "")),
             imdbId = imdbId,
-            tmdbId = tmdbId
+            tmdbId = tmdbId,
+            origin = origin
         )
     }
 
@@ -339,7 +384,8 @@ object LocalLibraryStore {
         tmdbId: Int?,
         title: String,
         year: Int?,
-        posterUrl: String?
+        posterUrl: String?,
+        origin: LibraryOrigin = LibraryOrigin.MANUAL
     ): Boolean {
         return addToListInternal(
             context = context,
@@ -350,8 +396,49 @@ object LocalLibraryStore {
             title = title,
             year = year,
             posterUrl = posterUrl,
-            source = LibrarySource.LOCAL
+            source = LibrarySource.LOCAL,
+            origin = origin
         )
+    }
+
+    /**
+     * How many rows on THIS profile's My List the TorBox sync put there.
+     *
+     * What the untoggle question counts. Manual adds are never included, and
+     * neither is anything a pre-marker build wrote - which is the honest answer
+     * (the app cannot attribute those), and the reason the one-time remediation
+     * exists instead of making this number guess.
+     */
+    fun torboxSyncedCount(context: Context): Int =
+        myList(context).count { it.origin == LibraryOrigin.TORBOX_SYNC }
+
+    /**
+     * Removes every torbox-sync row from this profile's My List in ONE write,
+     * and reports how many that was. The untoggle question's "yes".
+     */
+    @Synchronized
+    fun removeTorboxSynced(context: Context): Int {
+        val items = readListForWrite(context, KEY_MY_LIST) ?: return 0
+        val kept = items.filterNot { it.origin == LibraryOrigin.TORBOX_SYNC }
+        val removed = items.size - kept.size
+        if (removed > 0) writeList(context, KEY_MY_LIST, kept)
+        return removed
+    }
+
+    /**
+     * Removes exactly [entries] from this profile's My List, matching on the
+     * store's own de-dupe key so the caller can name rows it read (the one-time
+     * remediation) without guessing indices.
+     */
+    @Synchronized
+    fun removeMyListEntries(context: Context, entries: List<LibraryItem>): Int {
+        if (entries.isEmpty()) return 0
+        val doomed = entries.map { dedupeKey(it) }.toSet()
+        val items = readListForWrite(context, KEY_MY_LIST) ?: return 0
+        val kept = items.filterNot { dedupeKey(it) in doomed }
+        val removed = items.size - kept.size
+        if (removed > 0) writeList(context, KEY_MY_LIST, kept)
+        return removed
     }
 
     @Synchronized
@@ -570,7 +657,8 @@ object LocalLibraryStore {
         title: String,
         year: Int?,
         posterUrl: String?,
-        source: LibrarySource
+        source: LibrarySource,
+        origin: LibraryOrigin = LibraryOrigin.MANUAL
     ): Boolean {
         val entry = LibraryItem(
             source = source,
@@ -579,7 +667,8 @@ object LocalLibraryStore {
             year = year,
             posterUrl = posterUrl,
             imdbId = imdbId,
-            tmdbId = tmdbId
+            tmdbId = tmdbId,
+            origin = origin
         )
         if (entry.imdbId == null && entry.tmdbId == null) return false
 

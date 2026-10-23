@@ -121,7 +121,14 @@ object LibraryMirror {
         tmdbId: Int?,
         title: String,
         year: Int? = null,
-        posterUrl: String? = null
+        posterUrl: String? = null,
+        /**
+         * Who is adding it. MANUAL for every menu entry point in the app; the
+         * TorBox cloud→Library sync passes [LibraryOrigin.TORBOX_SYNC] so the
+         * row can be named - and, at the viewer's request, taken back - by the
+         * surfaces that own that sync (see LocalLibraryStore).
+         */
+        origin: LibraryOrigin = LibraryOrigin.MANUAL
     ): Boolean {
         val r = ref(mediaType, imdbId, tmdbId, title, year, posterUrl) ?: return false
 
@@ -132,7 +139,8 @@ object LibraryMirror {
             tmdbId = r.tmdbId,
             title = r.title,
             year = r.year,
-            posterUrl = r.posterUrl
+            posterUrl = r.posterUrl,
+            origin = origin
         )
 
         launchMirrors(context, r)

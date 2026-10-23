@@ -1207,6 +1207,24 @@ fun AppRoot(
         mutableStateOf<Screen>(launchScreen(profilesExist, showProfilePicker))
     }
 
+    // Which profile this run of the app may attribute a BACKGROUND write to
+    // (see ProfileSession). The picker means "not chosen yet" - a cold launch
+    // left sitting there has no session - while a launch that skips it means
+    // the active profile IS the session, because that is the door the app was
+    // configured to open. The persisted active id is never enough on its own:
+    // it survives a cold launch, and it is what a headless worker reads.
+    val profilePickerOnScreen = screen is Screen.ProfilePicker
+    LaunchedEffect(profilePickerOnScreen, profilesExist, showProfilePicker) {
+        com.kennyb1201.kbstream.data.sync.ProfileSession.enter(
+            when {
+                !profilesExist -> null
+                profilePickerOnScreen -> null
+                else -> com.kennyb1201.kbstream.data.sync.ProfileManager
+                    .activeProfile.value?.id
+            }
+        )
+    }
+
     // Re-mirror the theme toggles on every active-profile change: AMOLED /
     // pure-black are profile-scoped prefs backing live theme state, and the
     // switch path (picker / profile editor) never touched the mirrors — the
@@ -2103,6 +2121,13 @@ fun AppRoot(
         is Screen.ProfilePicker -> {
             ProfilePickerScreen(
                 onSelect = {
+                    // The choice this session runs under, recorded the moment
+                    // it is made: a sync round may write to a profile only
+                    // when one is LIVE (see ProfileSession).
+                    com.kennyb1201.kbstream.data.sync.ProfileSession.enter(
+                        com.kennyb1201.kbstream.data.sync.ProfileManager
+                            .activeProfile.value?.id
+                    )
                     // Choosing a profile ALWAYS starts it on Home, whichever
                     // door the picker was opened from - the bottom bar's
                     // avatar, Home's top-bar chip, Settings' Profiles row or

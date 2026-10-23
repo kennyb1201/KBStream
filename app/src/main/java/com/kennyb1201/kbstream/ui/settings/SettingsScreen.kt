@@ -66,6 +66,7 @@ import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import androidx.compose.ui.Alignment
@@ -97,6 +98,8 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
+import com.kennyb1201.kbstream.data.debrid.torboxSyncStatusLine
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -1402,19 +1405,104 @@ fun SettingsScreen(
 
                 // ── TORBOX CLOUD → LIBRARY ────────────────────────────
                 Spacer(modifier = Modifier.height(12.dp))
+                // Turning the sync OFF is the only moment its own writes can
+                // honestly be taken back - it adds titles to THIS profile's My
+                // List, and untoggling used to leave every one of them behind
+                // with nothing anywhere saying where they came from. The
+                // question is asked BEFORE the switch moves, defaults to
+                // keeping them, and counts only rows the sync itself wrote
+                // (see LocalLibraryStore.torboxSyncedCount).
+                var torboxRemoveCount by remember { mutableStateOf(0) }
+                fun applyTorboxLibrarySync(enabled: Boolean) {
+                    torboxLibrarySync = enabled
+                    AppPreferences.setTorboxLibrarySync(context, enabled)
+                    com.kennyb1201.kbstream.work.TorBoxLibraryWorker
+                        .syncScheduleForPrefs(context, runImmediate = enabled)
+                }
                 ToggleRow(
                     label = "Add TorBox Cloud to Library",
                     description = "With a TorBox key above, add the torrents in your " +
                         "TorBox library to My List. Each is matched to a title on TMDB; " +
                         "anything that can't be matched confidently is left out.",
                     checked = torboxLibrarySync,
-                    onToggle = {
-                        torboxLibrarySync = it
-                        AppPreferences.setTorboxLibrarySync(context, it)
-                        com.kennyb1201.kbstream.work.TorBoxLibraryWorker
-                            .syncScheduleForPrefs(context, runImmediate = it)
+                    onToggle = { enabled ->
+                        val synced = if (enabled) 0 else {
+                            LocalLibraryStore.torboxSyncedCount(context)
+                        }
+                        if (synced > 0) {
+                            torboxRemoveCount = synced
+                        } else {
+                            applyTorboxLibrarySync(enabled)
+                        }
                     }
                 )
+                if (torboxRemoveCount > 0) {
+                    TorBoxRemoveSyncedDialog(
+                        count = torboxRemoveCount,
+                        onKeep = { torboxRemoveCount = 0 },
+                        onRemove = {
+                            LocalLibraryStore.removeTorboxSynced(context)
+                            torboxRemoveCount = 0
+                            applyTorboxLibrarySync(false)
+                        }
+                    )
+                }
+
+                // What the last round actually did, and the manual escape for
+                // marks this device should never have written. Both read the
+                // round's own record, because "nothing appeared in the Library"
+                // used to be the same absence whether the round was off,
+                // keyless, empty, all-handled or simply not matching - and the
+                // one thing that can tell them apart is a round that says so.
+                val torboxLastRound = remember(syncedRevision) {
+                    TorBoxCloudStore(context).lastRound()
+                }
+                // The row's gate is the WORKER's gate (switch on AND a key
+                // present), so a press can never fire a round the worker would
+                // refuse - and a disabled row cannot look like a broken one.
+                val torboxResyncReady = remember(syncedRevision) {
+                    AppPreferences.getTorboxLibrarySync(context) &&
+                        AppPreferences.getTorboxApiKey(context).isNotBlank()
+                }
+                Text(
+                    text = torboxSyncStatusLine(torboxLastRound),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 4.dp, top = 6.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                KBCard(
+                    onClick = {
+                        if (torboxResyncReady) {
+                            com.kennyb1201.kbstream.work.TorBoxLibraryWorker.resyncNow(context)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (torboxResyncReady) KBSurfaceRaised else KBSurface,
+                                KBShapeSmall
+                            )
+                            .alpha(if (torboxResyncReady) 1f else 0.45f)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "Resync TorBox cloud",
+                            color = if (torboxResyncReady) KBTextHi else KBTextLo,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Forgets what this device has already checked and " +
+                                "looks at the whole TorBox cloud again. Titles already " +
+                                "in My List are not added twice.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
 
                 // ── TORBOX: ADD A MISSING TORRENT ON PLAY ──────────────
                 // Off by default, and the one switch here that lets the app
@@ -4300,6 +4388,61 @@ private fun SettingsClearHistoryDialog(
                     label = "CANCEL",
                     modifier = Modifier.focusRequester(cancelFocusRequester),
                     onClick = onDismiss
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The question turning the TorBox library sync off has to ask.
+ *
+ * Its default is KEEP - focus lands there, and the destructive row says what it
+ * is about to remove - because the titles are already the viewer's list: the
+ * sync put them there, the Library draws them like any other row, and removing
+ * them is the destructive direction, not the safe one. Only rows the sync wrote
+ * are ever counted or removed; a manual add is never in the number.
+ */
+@Composable
+private fun TorBoxRemoveSyncedDialog(
+    count: Int,
+    onKeep: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val keepFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < 12) {
+            awaitFrame()
+            landed = runCatching { keepFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onKeep) {
+        KBDialogPanel(title = "Remove the synced titles?") {
+            Text(
+                text = "The TorBox library sync added $count " +
+                    (if (count == 1) "title" else "titles") +
+                    " to this profile's list. Remove them as well? Titles you added " +
+                    "yourself stay exactly where they are.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBButton(
+                    label = "KEEP",
+                    modifier = Modifier.focusRequester(keepFocusRequester),
+                    onClick = onKeep
+                )
+                KBButton(
+                    label = if (count == 1) "REMOVE IT" else "REMOVE $count",
+                    danger = true,
+                    onClick = onRemove
                 )
             }
         }

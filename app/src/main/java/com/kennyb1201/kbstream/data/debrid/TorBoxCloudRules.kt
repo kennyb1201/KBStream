@@ -139,6 +139,18 @@ internal object TorBoxCloudRules {
      */
     fun retriesEmptySearch(attempts: Int): Boolean = attempts < EMPTY_SEARCH_ATTEMPTS
 
+    /**
+     * Whether a torrent that searched FINE but produced no confident match
+     * [attempts] rounds running is still worth another look.
+     *
+     * The same budget as [retriesEmptySearch], because it is the same
+     * uncertainty: "TMDB did not match this" is a statement about one search
+     * result, not about the title, and TMDB's coverage moves. Marked handled on
+     * the first no-match, a title TMDB indexed a week later could never be
+     * added without the viewer finding a button.
+     */
+    fun retriesNoMatch(attempts: Int): Boolean = attempts < EMPTY_SEARCH_ATTEMPTS
+
     private fun score(candidate: Candidate, target: String, year: Int?): Double? {
         if (candidate.tmdbId <= 0) return null
         if (normalizedTitle(candidate.title) != target) return null

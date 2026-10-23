@@ -130,8 +130,12 @@ class TorBoxLibraryContractTest {
         // was up to a schedule window away, and only if the app was launched
         // again. The library stayed exactly as it was, with no error anywhere.
         assertTrue(
-            "the TV switch arms the round as it is turned on",
-            source(SETTINGS).contains("syncScheduleForPrefs(context, runImmediate = it)")
+            "the TV switch arms the round as it is turned on (through the one " +
+                "apply path the untoggle question also uses, so a switch that " +
+                "asked first still arms or disarms exactly once)",
+            source(SETTINGS).contains("syncScheduleForPrefs(context, runImmediate = enabled)") &&
+                source(SETTINGS).contains("fun applyTorboxLibrarySync(enabled: Boolean)") &&
+                source(SETTINGS).contains("applyTorboxLibrarySync(enabled)")
         )
         assertTrue(
             "and the phone switch must arm it too",

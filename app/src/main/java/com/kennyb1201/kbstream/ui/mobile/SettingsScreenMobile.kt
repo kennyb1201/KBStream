@@ -57,9 +57,12 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
+import com.kennyb1201.kbstream.data.debrid.torboxSyncStatusLine
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
@@ -674,6 +677,13 @@ private fun IntegrationsPaneMobile(
             get = AppPreferences::getAutoFetchSubtitles,
             set = AppPreferences::setAutoFetchSubtitles
         )
+        // Turning the sync OFF is the only moment its own writes can honestly
+        // be taken back: it adds titles to THIS profile's My List, and
+        // untoggling used to leave every one of them behind with nothing saying
+        // where they came from. The question is asked BEFORE the switch moves,
+        // defaults to keeping them, and counts only rows the sync wrote.
+        var torboxRemoveCount by remember { mutableStateOf(0) }
+        var torboxDisableProceed by remember { mutableStateOf<(() -> Unit)?>(null) }
         SyncedToggleMobile(
             label = "TorBox library sync",
             description = "Add the torrents in your TorBox cloud to My List. Needs the " +
@@ -686,7 +696,82 @@ private fun IntegrationsPaneMobile(
             // to a schedule window (or until the next launch re-armed it).
             onChanged = { ctx, enabled ->
                 TorBoxLibraryWorker.syncScheduleForPrefs(ctx, runImmediate = enabled)
+            },
+            beforeDisable = { proceed ->
+                val synced = LocalLibraryStore.torboxSyncedCount(context)
+                if (synced > 0) {
+                    torboxRemoveCount = synced
+                    torboxDisableProceed = proceed
+                } else {
+                    proceed()
+                }
             }
+        )
+        if (torboxRemoveCount > 0) {
+            Dialog(onDismissRequest = { torboxRemoveCount = 0 }) {
+                KBDialogPanel(title = "Remove the synced titles?") {
+                    Text(
+                        text = "The TorBox library sync added $torboxRemoveCount " +
+                            (if (torboxRemoveCount == 1) "title" else "titles") +
+                            " to this profile's list. Remove them as well? Titles you " +
+                            "added yourself stay exactly where they are.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        // KEEP is the default, so it is the wider, calmer row and
+                        // the destructive one says exactly what it removes.
+                        KBButton(
+                            label = "KEEP",
+                            modifier = Modifier.weight(1f),
+                            onClick = { torboxRemoveCount = 0 }
+                        )
+                        KBButton(
+                            label = if (torboxRemoveCount == 1) {
+                                "REMOVE IT"
+                            } else {
+                                "REMOVE $torboxRemoveCount"
+                            },
+                            danger = true,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                LocalLibraryStore.removeTorboxSynced(context)
+                                torboxRemoveCount = 0
+                                torboxDisableProceed?.invoke()
+                                torboxDisableProceed = null
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        // What the last round actually did, and the manual escape for marks this
+        // device should never have written. The TV pane draws the same two from
+        // the same record (see torboxSyncStatusLine), because "nothing appeared
+        // in My List" used to be the same absence whether the round was off,
+        // keyless, empty, all-handled or simply not matching.
+        val torboxLastRound = remember(syncedRevision) {
+            TorBoxCloudStore(context).lastRound()
+        }
+        // The row's gate is the WORKER's gate (switch on AND a key present), so
+        // a press can never fire a round the worker would refuse.
+        val torboxResyncReady = remember(syncedRevision) {
+            AppPreferences.getTorboxLibrarySync(context) &&
+                AppPreferences.getTorboxApiKey(context).isNotBlank()
+        }
+        SettingsCaptionMobile(torboxSyncStatusLine(torboxLastRound))
+        KBButton(
+            label = "RESYNC TORBOX CLOUD",
+            enabled = torboxResyncReady,
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { TorBoxLibraryWorker.resyncNow(context) }
+        )
+        SettingsCaptionMobile(
+            "Forgets what this device has already checked and looks at the whole " +
+                "TorBox cloud again. Titles already in My List are not added twice."
         )
         // The one TorBox switch that lets the app WRITE to the account: a
         // source that is only a torrent hash is added to the cloud when it is
@@ -3007,7 +3092,15 @@ private fun SyncedToggleMobile(
      * arm (the TorBox library sync). Kept off [set] so the pref write stays the
      * same method reference the TV pane's own key contract compares against.
      */
-    onChanged: ((android.content.Context, Boolean) -> Unit)? = null
+    onChanged: ((android.content.Context, Boolean) -> Unit)? = null,
+    /**
+     * Runs INSTEAD of turning the switch off, handed the `proceed` that really
+     * disables it. A switch that gives the viewer something to decide first
+     * (the TorBox sync's "also remove the titles it added?") must not move
+     * before that answer: flipping it and then asking is a state they cannot
+     * undo from the question itself.
+     */
+    beforeDisable: ((proceed: () -> Unit) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val revision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
@@ -3016,10 +3109,18 @@ private fun SyncedToggleMobile(
         label = label,
         description = description,
         checked = checked,
-        onChange = {
-            checked = it
-            set(context, it)
-            onChanged?.invoke(context, it)
+        onChange = { enabled ->
+            if (!enabled && beforeDisable != null) {
+                beforeDisable.invoke {
+                    checked = false
+                    set(context, false)
+                    onChanged?.invoke(context, false)
+                }
+            } else {
+                checked = enabled
+                set(context, enabled)
+                onChanged?.invoke(context, enabled)
+            }
         }
     )
 }

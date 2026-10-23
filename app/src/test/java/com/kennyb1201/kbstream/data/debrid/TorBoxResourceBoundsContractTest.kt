@@ -72,19 +72,30 @@ class TorBoxResourceBoundsContractTest {
 
     @Test
     fun `every read-modify-write on the store's sets is locked`() {
-        // Launch, the schedule and a manual "sync now" can all reach this, and
-        // the read-then-write each of these does is the shape that loses a
-        // whole round's ids when two overlap. Both stored sets are kept that
-        // way: the processed ids, and the empty-search streak that decides when
-        // a torrent stops being looked up (see
-        // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS]). Every member that reads
-        // and writes a set is listed here, so a new one cannot arrive unlocked.
+        // Launch, the schedule and a manual "sync now" (or a Resync) can all
+        // reach this, and the read-then-write each of these does is the shape
+        // that loses a whole round's ids when two overlap. The stored sets are
+        // the processed ids, the empty-search streak and the no-match streak
+        // that decide when a torrent stops being looked up (see
+        // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS]), plus the last round's
+        // record - and the migration that clears all of it. Every member that
+        // reads or writes them is listed here, so a new one cannot arrive
+        // unlocked.
         listOf(
             "@Synchronized\\s+fun processed\\(\\)",
             "@Synchronized\\s+fun markProcessed\\(",
+            "@Synchronized\\s+fun clearAllMarks\\(",
+            "@Synchronized\\s+fun forgetPreCountingFixMarksOnce\\(",
             "@Synchronized\\s+fun emptySearchAttempts\\(",
             "@Synchronized\\s+fun noteEmptySearch\\(",
-            "@Synchronized\\s+fun clearEmptySearch\\("
+            "@Synchronized\\s+fun clearEmptySearch\\(",
+            "@Synchronized\\s+fun noMatchAttempts\\(",
+            "@Synchronized\\s+fun noteNoMatch\\(",
+            "@Synchronized\\s+fun clearNoMatch\\(",
+            "@Synchronized\\s+fun lastRound\\(\\)",
+            "@Synchronized\\s+fun recordRound\\(",
+            "@Synchronized\\s+fun ownershipRemediationPending\\(\\)",
+            "@Synchronized\\s+fun markOwnershipRemediated\\(\\)"
         ).forEach { signature ->
             assertTrue(
                 "missing lock: $signature",
@@ -93,7 +104,7 @@ class TorBoxResourceBoundsContractTest {
         }
         assertEquals(
             "no member that does not touch the stored sets should be locked",
-            5,
+            14,
             Regex("@Synchronized[\\s\\S]{0,40}?fun ").findAll(store).count()
         )
     }

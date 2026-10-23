@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
 import com.kennyb1201.kbstream.data.debrid.TorBoxLibrarySync
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.util.concurrent.TimeUnit
@@ -68,6 +69,26 @@ class TorBoxLibraryWorker(
          * the settings toggle, so flipping it on produces rows without waiting
          * for the first periodic window.
          */
+        /**
+         * The Settings "Resync TorBox cloud" row's whole job: forget every mark
+         * this device holds, then run a round now.
+         *
+         * Both panes call this rather than the two halves, so the TV and the
+         * phone cannot end up clearing without firing (or firing without
+         * clearing). REPLACE policy comes from [syncScheduleForPrefs], so
+         * pressing it twice runs one round, not two racing ones.
+         *
+         * The clear is the point on a device that shows the field symptom: the
+         * marks it holds were written by a build whose counting was wrong, and
+         * only the one-time migration above is allowed to assume a mark is
+         * trustworthy. It is also the escape for a parse-failure mark - if the
+         * name parser learns a shape it refused, a Resync revisits that name.
+         */
+        fun resyncNow(context: Context) {
+            TorBoxCloudStore(context).clearAllMarks()
+            syncScheduleForPrefs(context, runImmediate = true)
+        }
+
         fun syncScheduleForPrefs(context: Context, runImmediate: Boolean = false) {
             syncSchedule(
                 context,
