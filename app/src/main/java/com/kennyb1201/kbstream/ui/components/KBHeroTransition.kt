@@ -212,6 +212,34 @@ private val heroSourceKey = mutableStateOf<String?>(null)
  * card to the next re-runs exactly two of them — not every card that happens to
  * be composed, which is what a plain read of [heroSourceKey] would do.
  */
+/**
+ * Records the card a touch opens as the flight's source.
+ *
+ * The television's source is armed by D-pad focus (see [heroSourceElement]),
+ * which a finger never gives a card. A press is the equivalent signal, and it
+ * happens before the navigation, so the source is already recorded by the time
+ * the shell starts the transition.
+ */
+fun armHeroSource(type: String, id: String) {
+    heroSourceKey.value = KBHeroTransition.keyOf(type, id)
+}
+
+/**
+ * The touch twin of [heroSourceElement]: joins the flight when this card is the
+ * one most recently pressed.
+ *
+ * Same cheapness rule - a `derivedStateOf` per card so only the two cards losing
+ * and gaining the role recompose - but no focus listener, because a phone card
+ * is never focused. Call [armHeroSource] from the card's press handler.
+ */
+@Composable
+fun Modifier.heroSourceOnPress(type: String, id: String): Modifier {
+    val transition = LocalKBHeroTransition.current ?: return Modifier
+    val key = KBHeroTransition.keyOf(type, id)
+    val isSource = remember(key) { derivedStateOf { heroSourceKey.value == key } }
+    return if (isSource.value) transition.sourceModifierFor(key) else Modifier
+}
+
 @Composable
 fun Modifier.heroSourceElement(type: String, id: String): Modifier {
 

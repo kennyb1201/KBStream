@@ -16,13 +16,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +36,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -497,6 +502,40 @@ fun PosterContextMenu(
     // The list is then put in the app's canonical section order (see
     // [contextMenuSectionRank]) so every menu reads the same way; the sort is
     // stable, so a caller's own rows keep their relative order inside a section.
+    /*
+     * ...and the way out.
+     *
+     * Dismissal used to unmount the panel and its scrim in the frame the press
+     * landed - the entrance was animated, the exit was a cut. The menu now fades
+     * and shrinks over [KB_PANEL_EXIT_MS] and only then calls the caller's
+     * [onDismiss], which is what actually unmounts it.
+     *
+     * The focus hand-back is untouched in ORDER and only shifted in TIME: the
+     * caller captures its target and hands focus back in the same code it always
+     * ran, after this. Nothing is asked for focus while the menu is fading, and
+     * the menu stops taking input the moment the fade starts, so the 120ms
+     * cannot swallow a press or re-trigger a row.
+     *
+     * Declared HERE, above the rows, because every row that closes the menu
+     * calls it: a local declared after the list would not be in scope inside
+     * the row lambdas that build it.
+     */
+    val exitScope = rememberCoroutineScope()
+    var dismissing by remember { mutableStateOf(false) }
+    val exit = remember { Animatable(1f) }
+    val dismiss: () -> Unit = {
+        if (!dismissing) {
+            dismissing = true
+            exitScope.launch {
+                exit.animateTo(
+                    0f,
+                    tween(durationMillis = KB_PANEL_EXIT_MS, easing = KB_EASE)
+                )
+                onDismiss()
+            }
+        }
+    }
+
     val rows = buildList {
         // The library rows are added here, but their PLACE in the menu is
         // decided by [contextMenuSectionRank] (the library section), not by
@@ -530,7 +569,7 @@ fun PosterContextMenu(
                             isError = !added
                         )
                     }
-                    onDismiss()
+                    dismiss()
                 }
             )
             add(
@@ -661,7 +700,7 @@ fun PosterContextMenu(
                     // was long-pressed; that card is on its way out of the
                     // composition, so Compose moves focus on to the nearest
                     // poster that is still there.
-                    onDismiss()
+                    dismiss()
                 }
             )
         }
@@ -673,7 +712,7 @@ fun PosterContextMenu(
     // intercepts because the Activity back dispatcher consumes the Back key
     // before it ever reaches compose key handlers.
     BackHandler {
-        onDismiss()
+        dismiss()
     }
 
     LaunchedEffect(Unit) {
@@ -713,9 +752,25 @@ fun PosterContextMenu(
         }
     }
 
+    /*
+     * The menu fades up instead of appearing in one frame.
+     *
+     * Every poster menu in the app is this component - Home's title menu, the
+     * Detail page's poster/backdrop/media menus, the browse grids - and every
+     * one of them used to compose the scrim and the panel in the same frame. The
+     * recent focus work made DISMISSAL graceful (the hand-back lands before the
+     * node leaves); this is the same courtesy on the way in.
+     *
+     * Read in graphicsLayer so the fade costs no recomposition, and applied to
+     * the scrim container as well as the panel so the dim arrives with the menu
+     * rather than cutting to 60% black under it.
+     */
+    val menuEnter = rememberEntranceProgress()
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer { alpha = menuEnter.value * exit.value }
             // The picker is this menu's own second stage, and while it is open
             // the menu and its scrim step out of the way rather than sitting
             // dimmed behind it. The picker is a dialog window of its own, so
@@ -726,6 +781,11 @@ fun PosterContextMenu(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) {
                     false
+                } else if (dismissing) {
+                    // The fade is already running; the menu has stopped being
+                    // the thing the remote is driving, so swallow the press
+                    // rather than letting it reach a row that is on its way out.
+                    true
                 } else {
                     when (event.key) {
                         // No horizontal focus target exists inside a vertical
@@ -758,7 +818,7 @@ fun PosterContextMenu(
                             // single press always closes the menu; the
                             // BackHandler above remains the primary path and
                             // simply no-ops when this already dismissed it.
-                            onDismiss()
+                            dismiss()
                             true
                         }
 
@@ -795,7 +855,7 @@ fun PosterContextMenu(
         )
 
         Surface(
-            onClick = onDismiss,
+            onClick = dismiss,
             shape = ClickableSurfaceDefaults.shape(
                 shape = dialogShape
             ),
@@ -830,6 +890,11 @@ fun PosterContextMenu(
             modifier = Modifier
                 .width(380.dp)
                 .heightIn(max = maxPanelHeight)
+                .graphicsLayer {
+                    val scale = 0.96f + 0.04f * menuEnter.value
+                    scaleX = scale * exit.value
+                    scaleY = scale * exit.value
+                }
                 // The dialog container is click-to-dismiss for pointer users
                 // only; keeping it out of the focus search means pressing
                 // Down/Up past the last/first action can never land D-pad
@@ -932,7 +997,7 @@ fun PosterContextMenu(
             posterUrl = target.posterUrl,
             onDismiss = {
                 libraryPickTarget = null
-                onDismiss()
+                dismiss()
             }
         )
     }

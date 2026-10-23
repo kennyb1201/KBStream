@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
@@ -79,6 +80,21 @@ fun KBStatusMessage(
     val retryRequester = remember { FocusRequester() }
 
     /*
+     * The card fades up where it will sit, once, on first composition.
+     *
+     * Every loading/empty/error boundary in the app is this one component, and
+     * every one of them used to be a hard cut: the skeleton unmounted and the
+     * plate was just there (or the plate vanished and a grid was just there).
+     * A short fade is the cheapest way to say "this replaced something" without
+     * pretending the wait was shorter.
+     *
+     * Read in graphicsLayer, not in composition: the progress ticks every frame
+     * and a composition-phase read would recompose the whole plate (icon, text,
+     * retry card and its focus effect) for the length of the fade.
+     */
+    val enterProgress = rememberEntranceProgress()
+
+    /*
      * Grab focus for the retry card, retrying across frames: the request can
      * land before the card has attached (this whole branch enters the tree in
      * the frame the load fails), and the request is then silently missed.
@@ -107,7 +123,17 @@ fun KBStatusMessage(
     }
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.graphicsLayer {
+                alpha = enterProgress.value
+                // A hair of scale, so the plate reads as arriving rather than
+                // as a crossfade of two static screens.
+                val scale = 0.97f + 0.03f * enterProgress.value
+                scaleX = scale
+                scaleY = scale
+            }
+        ) {
             title?.takeIf { it.isNotBlank() }?.let { heading ->
                 Text(
                     text = heading,

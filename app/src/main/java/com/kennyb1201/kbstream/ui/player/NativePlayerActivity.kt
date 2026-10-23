@@ -724,6 +724,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private lateinit var btnNextDismiss: TextView
     private lateinit var nextUpCountdown: TextView
 
+    /** The countdown's progress bar, driven by [nextUpCountdownRunnable]. */
+    private lateinit var nextUpCountdownBar: ProgressBar
+
     /**
      * Turns the end-of-episode Up Next card into a small one in the bottom-right
      * corner.
@@ -798,6 +801,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         nextUpCountdown.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
         nextUpPanel.findViewById<TextView>(R.id.next_up_kicker)
             ?.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        // The countdown's bar: same one-second runnable that writes the number
+        // above it, so the two can never disagree.
+        nextUpCountdownBar.max = NEXT_UP_COUNTDOWN_SECONDS
         // The two title lines are what the card's width comes from now, so they
         // are hugged but capped: a long show or episode name wraps or
         // ellipsizes (the episode title has two lines to do it in) instead of
@@ -1671,7 +1677,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // Defensive: after onDestroy the callback can still sit in the
         // looper queue for a few seconds; touching the detached view is
         // harmless but pointless, so skip it once the activity is gone.
-        if (!isDestroyed) zapBanner?.visibility = View.GONE
+        if (!isDestroyed) KbViewMotion.fadeOut(zapBanner)
     }
 
     /**
@@ -1934,7 +1940,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         // Synchronous paint with whatever we already know.
         applyZapEpg(cached)
-        banner.visibility = View.VISIBLE
+        // Rises and fades on every zap: channel-surfing is the surface this
+        // shows up on, and each hop used to hard-cut the banner in.
+        KbViewMotion.fadeIn(banner)
 
         // Reset the auto-hide timer so rapid zapping never hides the banner
         // mid-press.
@@ -2666,6 +2674,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 )
             } else {
                 nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
+                // Drains as the wait shrinks; max is the full countdown.
+                nextUpCountdownBar.progress = nextUpCountdownRemaining
                 nextUpCountdownHandler.postDelayed(this, 1_000L)
             }
         }
@@ -4221,6 +4231,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         btnNextPlay = findViewById(R.id.btn_next_play)
         btnNextDismiss = findViewById(R.id.btn_next_dismiss)
         nextUpCountdown = findViewById(R.id.next_up_countdown)
+        nextUpCountdownBar = findViewById(R.id.next_up_countdown_bar)
 
         applyPillState(btnNextPlay, true)
         applyPillState(btnNextDismiss, false)
@@ -7214,7 +7225,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     private fun hideSplash() {
         splashClearLogo.clearAnimation()
-        splashContainer.visibility = View.GONE
+        // The splash hands over to the first frame with a fade instead of a
+        // cut. MainActivity paints the identical splash underneath, so the
+        // only thing this fade can reveal is the video itself - which is the
+        // whole point: the app went to the trouble of having no black flash on
+        // the way IN and then removed this one in a single frame on the way
+        // out. 200ms is longer than the chrome's because it happens once per
+        // playback and is the hand-off into the content.
+        KbViewMotion.fadeOut(splashContainer, 200L)
     }
 
     private fun updateUIBuffering() {
@@ -8188,17 +8206,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             dismissPicker()
             dismissSettingsPanel()
             buildInfoPanel()
-            infoPanel.visibility = View.VISIBLE
-            scrim.visibility = View.VISIBLE
+            KbViewMotion.slideFadeIn(
+                infoPanel,
+                24f * resources.displayMetrics.density
+            )
+            KbViewMotion.fadeIn(scrim)
             removeAutoHide()
             infoPanel.requestFocus()
         }
     }
 
     private fun hideInfoPanel() {
-        infoPanel.visibility = View.GONE
+        KbViewMotion.slideFadeOut(infoPanel)
         if (!showSettingsPanel && !isPickerShowing) {
-            scrim.visibility = View.GONE
+            KbViewMotion.fadeOut(scrim)
         }
     }
 
@@ -10366,8 +10387,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pickerMode = mode
         isPickerShowing = true
         dismissSettingsPanel()
+        // Scrim and panel arrive together, and the panel rises into place from
+        // the edge it is docked to. The container is VISIBLE in this frame (the
+        // panel is only up once its rows exist - that ordering is the contract
+        // this function has always kept); the fade and the slide are drawn on
+        // top of it, so neither moves a row's focusable bounds and the focus
+        // request below is posted exactly as before.
         pickerContainer.visibility = View.VISIBLE
-        scrim.visibility = View.VISIBLE
+        KbViewMotion.fadeIn(scrim)
+        KbViewMotion.slideFadeIn(
+            pickerContainer,
+            24f * resources.displayMetrics.density
+        )
         pickerList.adapter = PickerAdapter(items)
         pickerLastFocus = null
         pickerList.post {
@@ -10471,8 +10502,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // D-pad alone - the panel parks it on its own first row below.
         showSettingsPanel = true
         dismissPicker()
-        settingsContainer.visibility = View.VISIBLE
-        scrim.visibility = View.VISIBLE
+        KbViewMotion.fadeIn(scrim)
+        KbViewMotion.slideFadeIn(
+            settingsContainer,
+            24f * resources.displayMetrics.density
+        )
         settingsContainer.isFocusable = true
         settingsContainer.isFocusableInTouchMode = true
         updateSettingsPanelState()
@@ -10486,8 +10520,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     private fun dismissSettingsPanel() {
         showSettingsPanel = false
-        settingsContainer.visibility = View.GONE
-        if (!isPickerShowing) scrim.visibility = View.GONE
+        // Focus is handed back synchronously, exactly as before - the panel
+        // fading out is already unfocused, so the hand-back cannot race it.
+        KbViewMotion.slideFadeOut(settingsContainer)
+        if (!isPickerShowing) KbViewMotion.fadeOut(scrim)
         restoreControlsFocus()
     }
 
@@ -10509,8 +10545,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun dismissPicker() {
         isPickerShowing = false
         pickerLastFocus = null
-        pickerContainer.visibility = View.GONE
-        if (!showSettingsPanel) scrim.visibility = View.GONE
+        KbViewMotion.slideFadeOut(pickerContainer)
+        if (!showSettingsPanel) KbViewMotion.fadeOut(scrim)
         restoreControlsFocus()
     }
 
@@ -10556,8 +10592,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // the same as they are created) - the outline and the title then track
         // the theme together.
         channelGuideContainer?.let { retintAccentChrome(it, this) }
-        channelGuideContainer?.visibility = View.VISIBLE
-        scrim.visibility = View.VISIBLE
+        KbViewMotion.fadeIn(scrim)
+        KbViewMotion.slideFadeIn(
+            channelGuideContainer,
+            24f * resources.displayMetrics.density
+        )
         removeAutoHide()
         publishChannelGuideRows(programs = emptyMap(), loading = true)
         focusChannelGuideCurrent()
@@ -10622,8 +10661,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         channelGuideJob = null
         channelGuideWatchJob?.cancel()
         channelGuideWatchJob = null
-        channelGuideContainer?.visibility = View.GONE
-        if (!isPickerShowing && !showSettingsPanel) scrim.visibility = View.GONE
+        KbViewMotion.slideFadeOut(channelGuideContainer)
+        if (!isPickerShowing && !showSettingsPanel) KbViewMotion.fadeOut(scrim)
         restoreControlsFocus()
     }
 
@@ -12042,7 +12081,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         applyPlayerPanelTheme()
-        nextUpPanel.visibility = View.VISIBLE
+        // The end of every episode: the panel used to appear in one frame and
+        // snatch focus in the same one. It now fades up where it is, with the
+        // focus request left exactly where it was - it is the last thing the
+        // viewer sees of the episode, and it was the app's most abrupt.
+        KbViewMotion.fadeIn(nextUpPanel)
         btnNextPlay.requestFocus()
 
         if (autoPlayNext) {
@@ -12174,12 +12217,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             nextUpCountdownHeld = true
             nextUpCountdown.text = "Playing next when this episode ends"
             nextUpCountdown.setTextColor(ContextCompat.getColor(this, R.color.kb_text_lo))
+            // No countdown yet, so the bar has nothing to show: an empty track
+            // reads as "waiting", a full one would read as "about to play".
+            nextUpCountdownBar.progress = 0
             return
         }
         nextUpCountdownHeld = false
         nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
         nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
         nextUpCountdown.setTextColor(ContextCompat.getColor(this, R.color.kb_text_lo))
+        nextUpCountdownBar.max = NEXT_UP_COUNTDOWN_SECONDS
+        nextUpCountdownBar.progress = NEXT_UP_COUNTDOWN_SECONDS
         nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
     }
 
@@ -12488,10 +12536,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 activeIntroStamp = matching
                 if (matching != null) {
                     btnSkipIntro.text = matching.type.buttonLabel
-                    btnSkipIntro.visibility = View.VISIBLE
+                    // Same entrance the shared chrome uses, so the legacy
+                    // native path and PlayerChrome's setSkipIntro agree.
+                    KbViewMotion.slideFadeIn(
+                        btnSkipIntro,
+                        16f * resources.displayMetrics.density
+                    )
                 } else {
                     val wasFocused = btnSkipIntro.isFocused
-                    btnSkipIntro.visibility = View.GONE
+                    KbViewMotion.fadeOut(btnSkipIntro)
                     // If focus was parked on the button when it hid (e.g.
                     // the user paused mid-intro), pull it back to the
                     // surface so no ghost focus target remains.

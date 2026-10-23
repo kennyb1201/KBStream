@@ -4,8 +4,12 @@ import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -60,6 +64,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -130,7 +135,10 @@ import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_EASE
+import com.kennyb1201.kbstream.ui.components.KB_PANEL_ENTER_MS
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_SCREEN_TRANSITION_MS
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.mobile.HomeScreenMobile
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -139,7 +147,9 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
@@ -1934,9 +1944,48 @@ private fun HomeHero(
             )
         }
 
+        //
+        // The copy moves on the same clock as the art behind it.
+        //
+        // The backdrop and the clearlogo cross-fade through Coil, but every word
+        // over them - the fallback title, the metadata line, the episode title,
+        // the resume label and its bar - was a plain recomposition keyed on the
+        // focused item, so the words cut instantly on top of a picture that was
+        // still fading. That is the most-visible incongruity on the screen
+        // every session opens on: one element on a 200ms clock, the rest on
+        // none.
+        //
+        // A single progress value drives the incoming copy rather than an
+        // AnimatedContent crossing two copies of this column: the column is
+        // bottom-anchored and as tall as its longest description, so two of
+        // them alive at once would double the block's height for the length of
+        // the fade and shove the buttons beneath it. One copy, fading up where
+        // it sits, is the same read with no layout consequence - and it cannot
+        // duplicate a focus target.
+        val heroCopyKey = "${tmdbDetail?.id ?: meta?.id ?: preview.id}:${preview.type}"
+        val heroCopyReducedMotion = rememberReducedMotion()
+        val heroCopyProgress = remember { Animatable(1f) }
+        LaunchedEffect(heroCopyKey) {
+            if (heroCopyReducedMotion) {
+                heroCopyProgress.snapTo(1f)
+                return@LaunchedEffect
+            }
+            heroCopyProgress.snapTo(0f)
+            heroCopyProgress.animateTo(
+                1f,
+                tween(durationMillis = KB_PANEL_ENTER_MS, easing = KB_EASE)
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxHeight()
+                .graphicsLayer {
+                    alpha = heroCopyProgress.value
+                    // A short rise: the words arrive from just below where
+                    // they land, the way the art fades up behind them.
+                    translationY = (1f - heroCopyProgress.value) * 10.dp.toPx()
+                }
                 // 0.46f (was 0.4f): gives the hero logo/wordmark box room —
                 // the logo's Modifier.width() coerces to this column, so a
                 // bigger logo box without a wider column would clamp back.
@@ -2926,7 +2975,12 @@ private fun BuiltinContinueWatchingRail(
                 // is the viewer walking the rail.
                 itemsIndexed(
                     items = cards,
-                    key = { _, item -> item.id }
+                    key = { _, item -> item.id },
+                    // One reuse pool for this row's own card shape. The rails'
+                    // cells are different composables, so sharing a pool across
+                    // them would swap contents on every scroll that crossed a
+                    // boundary.
+                    contentType = { _, _ -> "continue-watching" }
                 ) { index, item ->
                     val ownRequester = remember { FocusRequester() }
                     val requester = if (index == CONTINUE_WATCHING_HEAD_INDEX) {
@@ -2961,6 +3015,10 @@ private fun BuiltinContinueWatchingRail(
 
                     CompactUpNextCard(
                         item = item,
+                        // A card that leaves this rail (marked watched, or
+                        // removed) fades where it was and the rest close the
+                        // gap instead of the rail teleporting under the D-pad.
+                        modifier = Modifier.animateItem(),
                         onClick = { onOpenUpNext(item) },
                         onLongClick = {
                             // Remember this card's requester so dismissing the
@@ -3041,7 +3099,12 @@ private fun BuiltinUpcomingRail(
     landOnHeadSignal: Int = 0,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    /**
+     * The header's press: open Library's Calendar pane (see [SectionTitle]).
+     * Every show's whole year lives there; this rail is one episode per show.
+     */
+    onOpenCalendar: (() -> Unit)? = null
 ) {
     // Same landing machinery as BuiltinContinueWatchingRail, for the same
     // reason: a Hide on a card deletes the card (and can empty the whole row),
@@ -3084,7 +3147,7 @@ private fun BuiltinUpcomingRail(
             bottom = 0.dp
         )
     ) {
-        SectionTitle(title, onHeight = onTitleHeight)
+        SectionTitle(title, onHeight = onTitleHeight, onClick = onOpenCalendar)
 
         CompositionLocalProvider(
             LocalBringIntoViewSpec provides bringIntoViewSpec
@@ -3106,7 +3169,8 @@ private fun BuiltinUpcomingRail(
             ) {
                 itemsIndexed(
                     items = episodes,
-                    key = { _, item -> item.id }
+                    key = { _, item -> item.id },
+                    contentType = { _, _ -> "upcoming" }
                 ) { index, upcoming ->
                     val ownRequester = remember { FocusRequester() }
                     val requester = if (index == CONTINUE_WATCHING_HEAD_INDEX) {
@@ -3141,6 +3205,11 @@ private fun BuiltinUpcomingRail(
 
                     Box(
                         modifier = Modifier
+                            // The schedule reorders as episodes air and as the
+                            // watched flags land; a card that moves now takes
+                            // its neighbours with it instead of the row
+                            // jumping.
+                            .animateItem()
                             .width(224.dp)
                             .height(146.dp + PosterFocusHeadroom)
                             .padding(end = HomeRailGap),
@@ -3178,7 +3247,17 @@ private fun BuiltinUpcomingRail(
 @Composable
 private fun SectionTitle(
     text: String,
-    onHeight: ((Int) -> Unit)? = null
+    onHeight: ((Int) -> Unit)? = null,
+    /**
+     * When set, the title is a control rather than a caption.
+     *
+     * Only the Upcoming rail passes it: that rail is one next episode per show,
+     * while the whole year of every tracked show lives in Library's Calendar
+     * pane, and the heading is where a viewer who wants more than the next card
+     * would press. Every other rail's title stays a plain heading, so nothing
+     * else on Home gains a focus stop.
+     */
+    onClick: (() -> Unit)? = null
 ) {
     // Home's rail titles are the app's section heading (KBSectionHeader), not a
     // style of their own: they were the one place that drew titleMedium at 94%
@@ -3187,19 +3266,44 @@ private fun SectionTitle(
     // band reserved under a focused rail for the NEXT rail's title is built
     // from the heading's real line box, so it stays right at any type scale
     // (see [RailLanding]) - and it wraps the whole thing, padding included.
-    KBSectionHeader(
-        title = text,
-        modifier = Modifier.then(
-            if (onHeight == null) Modifier
-            else Modifier.onSizeChanged { onHeight(it.height) }
-        )
+    val measured = Modifier.then(
+        if (onHeight == null) Modifier
+        else Modifier.onSizeChanged { onHeight(it.height) }
     )
+
+    if (onClick == null) {
+        KBSectionHeader(
+            title = text,
+            modifier = measured
+        )
+    } else {
+        // A Surface, not a hand-rolled clickable: it carries focus, activation
+        // and the pressed state as one target, so a D-pad OK and a tap both
+        // open the calendar and the title takes focus when the rail is walked
+        // up to.
+        Surface(
+            onClick = onClick,
+            shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            ),
+            colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+                containerColor = Color.Transparent,
+                contentColor = KBTextHi
+            ),
+            modifier = measured
+        ) {
+            KBSectionHeader(
+                title = text
+            )
+        }
+    }
 }
 
 @Composable
 private fun CompactUpNextCard(
     item: UpNextItem,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     onFocus: () -> Unit = {},
     // Non-null only for the card whose rail is the one Home draws first (see
     // [homeTopRailUpHook]).
@@ -3285,7 +3389,7 @@ private fun CompactUpNextCard(
         isWatched = false,
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = Modifier
+        modifier = modifier
             .width(224.dp)
             .height(146.dp)
             .padding(end = HomeRailGap)
@@ -3524,6 +3628,13 @@ fun HomeScreen(
     onSearch: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onOpenLibrary: () -> Unit = {},
+    // The Upcoming rail's header: Library, on the Calendar pane. Separate from
+    // [onOpenLibrary] because it also selects that pane and hands the pane the
+    // D-pad (see [BuiltinUpcomingRail.onOpenCalendar]).
+    //
+    // Nullable so a host that cannot navigate leaves the heading a plain
+    // caption instead of drawing a control that does nothing.
+    onOpenCalendar: (() -> Unit)? = null,
     onOpenSettings: () -> Unit = {},
     onSwitchProfile: () -> Unit = {},
     onOpenKBFolder: (String) -> Unit = {},
@@ -3972,6 +4083,10 @@ fun HomeScreen(
     // The band left below a focused rail is built from this rather than from a
     // number guessed at the default type scale — see [RailLanding].
     var railTitleHeightPx by remember { mutableStateOf(0f) }
+
+    // The top bar's own motion length: the shell's transition, or a hard cut
+    // for a viewer who asked the platform to stop animating.
+    val topBarMotionMs = rememberMotionMs(KB_SCREEN_TRANSITION_MS)
 
     fun openTopBar(
         requester: FocusRequester
@@ -4568,7 +4683,8 @@ fun HomeScreen(
                         upcomingMenu = episode
                     },
                     landOnHeadSignal = upcomingLandOnHeadSignal,
-                    onUpPressed = upHook
+                    onUpPressed = upHook,
+                    onOpenCalendar = onOpenCalendar
                 )
             }
             // No catch-all: a built-in key this build does not know draws
@@ -4999,7 +5115,15 @@ fun HomeScreen(
                                                 items = rail.items,
                                                 key = { _, meta ->
                                                     "${meta.type}:${meta.id}"
-                                                }
+                                                },
+                                                // One reuse pool per media type:
+                                                // a movie cell and a series cell
+                                                // draw different art and caption
+                                                // shapes, so sharing a pool made
+                                                // the composables swap contents
+                                                // on every scroll that crossed a
+                                                // boundary.
+                                                contentType = { _, meta -> meta.type }
                                             ) { index, meta ->
 
                                                 val requester = remember {
@@ -5259,10 +5383,16 @@ fun HomeScreen(
             dismissTopBar()
         }
 
+        // The bar drops from the top edge, so the motion should say so - and
+        // it takes the shell's transition length, gated on the same reduced-
+        // motion flag. It was the one ungated animation on this screen: a
+        // default-duration fade with no `rememberReducedMotion()` anywhere near
+        // it, on the flagship page, for a viewer who had asked the platform to
+        // stop animating.
         AnimatedVisibility(
             visible = showTopBar,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(topBarMotionMs)) + slideInVertically(tween(topBarMotionMs)) { -it / 2 },
+            exit = fadeOut(tween(topBarMotionMs)) + slideOutVertically(tween(topBarMotionMs)) { -it / 2 },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()

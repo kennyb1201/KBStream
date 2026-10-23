@@ -2429,20 +2429,46 @@ Log.d(
                 emptyList()
             }
 
-        if (mdbList.isEmpty()) return local
+        // Trakt: the same account-wide record the watched union already reads,
+        // from its cache - so a show tracked ONLY on Trakt can now earn a rail
+        // card. Guarded and failing soft exactly like the MDBList half above:
+        // no token, no snapshot, a thrown read - the rail simply has fewer
+        // cards, never an empty one.
+        val trakt =
+            if (
+                traktRepository.isConfigured() &&
+                traktRepository.hasToken()
+            ) {
+                runCatchingCancellable {
+                    traktRepository.watchedSnapshot()
+                }.getOrNull()
+                    ?.let { snapshot ->
+                        traktCaughtUpCandidates(
+                            snapshot = snapshot,
+                            max = MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
+                        )
+                    }
+                    .orEmpty()
+            } else {
+                emptyList()
+            }
 
-        // A show both halves know is one card, and the local one carries this
-        // profile's own name and artwork, so it wins.
+        if (mdbList.isEmpty() && trakt.isEmpty()) return local
+
+        // A show any two halves know is one card, and the local one carries
+        // this profile's own name and artwork, so it wins.
         val known =
             local
                 .map { upNextIdentifier(it.parentId) ?: it.parentId }
                 .toMutableSet()
 
-        return local + mdbList.filter { candidate ->
+        val trackers = (mdbList + trakt).filter { candidate ->
             known.add(
                 upNextIdentifier(candidate.parentId) ?: candidate.parentId
             )
         }
+
+        return local + trackers
     }
 
     /**

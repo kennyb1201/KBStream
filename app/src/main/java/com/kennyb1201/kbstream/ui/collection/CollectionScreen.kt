@@ -105,6 +105,9 @@ fun CollectionScreen(
 
     val collectionRaw by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // The header's text-free ranking (see fetchCollectionHeaderBackdropCached),
+    // null until it resolves or when TMDB has nothing better than the primary.
+    val headerBackdropUrl by viewModel.headerBackdropUrl.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
@@ -292,18 +295,26 @@ fun CollectionScreen(
                     // The header's still, through the same chain every other
                     // backdrop surface walks (see
                     // ImageOverrides.backdropPathFor): the still chosen for
-                    // this screen, then the all-screens one, then TMDB's own
-                    // for the collection. A collection offers no Media row of
-                    // its own, so for it the chain is what reaches the header
-                    // at all - and the all-screens key is the one a viewer can
-                    // reach for a title the collection holds.
+                    // this screen, then the all-screens one, then the
+                    // collection's ranked TEXT-FREE backdrop (see
+                    // fetchCollectionHeaderBackdropCached - the primary key art
+                    // carries the collection's own title, which the header
+                    // already draws beside it), then TMDB's primary. A
+                    // collection offers no Media row of its own, so for it the
+                    // chain is what reaches the header at all - and the
+                    // all-screens key is the one a viewer can reach for a title
+                    // the collection holds.
                     backdropUrl = imageOverrideBackdropUrl(
                         paths = overridePaths,
                         tmdbId = collectionId,
                         screen = ImageOverrides.SCREEN_ALL,
-                        fallbackUrl = detail?.backdropPath
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.fullResBackdropUrl(it) }
+                        // Both candidates go through the same size treatment:
+                        // the ranked pick is at card size, the primary is a
+                        // bare TMDB path, and the header draws at full res.
+                        fallbackUrl = TmdbRepository.fullResBackdropUrl(
+                            headerBackdropUrl
+                                ?: detail?.backdropPath?.takeIf { it.isNotBlank() }
+                        )
                     ),
                     partCount = detail?.parts?.size
                 )

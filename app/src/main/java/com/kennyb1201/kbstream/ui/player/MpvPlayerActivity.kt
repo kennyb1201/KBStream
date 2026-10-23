@@ -19,6 +19,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -596,6 +597,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var nextUpEpisodeLabel: TextView? = null
     private var nextUpEpisodeTitle: TextView? = null
     private var nextUpCountdown: TextView? = null
+
+    /** The countdown's progress bar, driven by [nextUpCountdownRunnable]. */
+    private var nextUpCountdownBar: ProgressBar? = null
     private var btnNextPlay: TextView? = null
     private var btnNextDismiss: TextView? = null
 
@@ -645,6 +649,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 return
             }
             nextUpCountdown?.text = "Playing next in $nextUpCountdownRemaining"
+            // Drains with the number above it (see the Exo engine's twin).
+            nextUpCountdownBar?.progress = nextUpCountdownRemaining
             nextUpCountdownHandler.postDelayed(this, 1_000L)
         }
     }
@@ -1676,6 +1682,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         nextUpEpisodeLabel = findViewById(R.id.mpv_next_up_episode_label)
         nextUpEpisodeTitle = findViewById(R.id.mpv_next_up_episode_title)
         nextUpCountdown = findViewById(R.id.mpv_next_up_countdown)
+        nextUpCountdownBar = findViewById(R.id.mpv_next_up_countdown_bar)
         btnNextPlay = findViewById(R.id.mpv_next_play)
         btnNextDismiss = findViewById(R.id.mpv_next_dismiss)
 
@@ -2417,12 +2424,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         hideInfoPanel()
         settingsOpen = true
         pickerOpen = true
-        settingsContainer?.visibility = View.GONE
+        KbViewMotion.slideFadeOut(settingsContainer)
         setControlsVisible(View.VISIBLE)
         // The panel owns the remote while it is up: no auto-hide, and the
         // D-pad goes to the rows.
         removeAutoHide()
-        pickerContainer?.visibility = View.VISIBLE
+        // The same entrance the Exo player's picker takes: the panel rises and
+        // fades where it is docked, and the rows' focusable bounds never move.
+        KbViewMotion.slideFadeIn(
+            pickerContainer,
+            24f * resources.displayMetrics.density
+        )
         pickerList?.adapter = PickerAdapter(items)
         pickerLastFocus = null
         pickerList?.post {
@@ -2547,7 +2559,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         currentPickerMode = null
         settingsOpen = false
         pickerLastFocus = null
-        pickerContainer?.visibility = View.GONE
+        KbViewMotion.slideFadeOut(pickerContainer)
         if (controlsVisible) {
             playPauseButton?.requestFocus()
             keepControlsVisible()
@@ -3172,6 +3184,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // are right the moment the panel appears instead of on the next tick.
         sleepTimerSection?.refresh()
         container.visibility = View.VISIBLE
+        // The same entrance the Exo engine's panels use (see KbViewMotion):
+        // visible in this frame, so every `settingsOpen`/visibility rule and
+        // the focus grab below are unchanged, with the rise drawn on top.
+        KbViewMotion.slideFadeIn(container, 24f * resources.displayMetrics.density)
         focusFirstPill(container)
     }
 
@@ -3183,8 +3199,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         settingsOpen = false
         pickerOpen = false
         pickerLastFocus = null
-        settingsContainer?.visibility = View.GONE
-        pickerContainer?.visibility = View.GONE
+        KbViewMotion.slideFadeOut(settingsContainer)
+        KbViewMotion.slideFadeOut(pickerContainer)
         setControlsVisible(View.VISIBLE)
         playPauseButton?.requestFocus()
         keepControlsVisible()
@@ -3225,6 +3241,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (settingsOpen) hideSettingsPanel()
         buildInfoPanel()
         panel.visibility = View.VISIBLE
+        KbViewMotion.slideFadeIn(panel, 24f * resources.displayMetrics.density)
         setControlsVisible(View.GONE)
         removeAutoHide()
         panel.requestFocus()
@@ -3237,7 +3254,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun hideInfoPanel() {
         if (!infoPanelVisible) return
-        infoPanel?.visibility = View.GONE
+        KbViewMotion.slideFadeOut(infoPanel)
         setControlsVisible(View.VISIBLE)
         playPauseButton?.requestFocus()
         keepControlsVisible()
@@ -4038,12 +4055,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             nextUpCountdownHeld = true
             nextUpCountdown?.text = "Playing next when this episode ends"
             nextUpCountdown?.setTextColor(getColor(R.color.kb_text_lo))
+            nextUpCountdownBar?.progress = 0
             return
         }
         nextUpCountdownHeld = false
         nextUpCountdownRemaining = NEXT_UP_COUNTDOWN_SECONDS
         nextUpCountdown?.text = "Playing next in $nextUpCountdownRemaining"
         nextUpCountdown?.setTextColor(getColor(R.color.kb_text_lo))
+        nextUpCountdownBar?.max = NEXT_UP_COUNTDOWN_SECONDS
+        nextUpCountdownBar?.progress = NEXT_UP_COUNTDOWN_SECONDS
         nextUpCountdownHandler.postDelayed(nextUpCountdownRunnable, 1_000L)
     }
 

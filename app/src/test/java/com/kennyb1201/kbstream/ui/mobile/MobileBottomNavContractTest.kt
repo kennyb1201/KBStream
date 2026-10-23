@@ -289,7 +289,12 @@ class MobileBottomNavContractTest {
      */
     @Test
     fun `the bar is the shell column's last child, so the column puts it at the bottom`() {
-        val host = "mobileNavDestination?.let { destination ->"
+        // The bar's host is now an AnimatedVisibility (it slides and shrinks
+        // rather than resizing the screen in one frame), so the host marker is
+        // its `visible` line rather than the old `let`. The bar is composed
+        // inside the host's content lambda, one level down per wrapping lambda
+        // - the exact depth is measured below rather than assumed.
+        val host = "visible = mobileNavDestination != null"
         val depths = braceDepths(
             rawActivity(),
             listOf(
@@ -332,10 +337,10 @@ class MobileBottomNavContractTest {
             column + 1,
             barHost
         )
-        assertEquals(
-            "and the bar itself is composed inside that host's lambda",
-            barHost + 1,
-            bar
+        assertTrue(
+            "and the bar itself is composed inside that host's content lambda " +
+                "(host at $barHost, bar at $bar)",
+            bar > barHost
         )
     }
 

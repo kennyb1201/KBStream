@@ -361,6 +361,19 @@
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="10sp" />
+
+            <!-- Same progress affordance as the Exo player's panel: the
+                 countdown as a moving bar, driven by the runnable that already
+                 writes the number above it. -->
+            <ProgressBar
+                android:id="@+id/mpv_next_up_countdown_bar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:layout_marginTop="5dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="@color/kb_accent" />
         </LinearLayout>
     </LinearLayout>
 

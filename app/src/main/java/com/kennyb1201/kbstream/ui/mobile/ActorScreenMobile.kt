@@ -309,6 +309,10 @@ fun ActorScreenMobile(
                                 }
                             ) { index, credit ->
                                 CreditTile(
+                                    // The two credit sections fill in as the
+                                    // person loads; each cell fades into its
+                                    // slot rather than the grid appearing.
+                                    modifier = Modifier.animateItem(),
                                     credit = credit,
                                     isWatched = creditWatched(credit, "movie"),
                                     isPartiallyWatched =
@@ -347,6 +351,7 @@ fun ActorScreenMobile(
                                 }
                             ) { index, credit ->
                                 CreditTile(
+                                    modifier = Modifier.animateItem(),
                                     credit = credit,
                                     isWatched = creditWatched(credit, "series"),
                                     isPartiallyWatched =
@@ -641,10 +646,11 @@ private fun CreditTile(
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // Shape follows Settings' global landscape switch ("Landscape Posters

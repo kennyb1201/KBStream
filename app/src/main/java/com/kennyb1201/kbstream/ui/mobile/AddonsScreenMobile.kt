@@ -367,11 +367,17 @@ fun AddonsScreenMobile(
                             .weight(1f)
                     ) {
                         items(items = rows, key = { addon -> addon.manifestUrl }) { addon ->
-                            AddonRowMobile(
-                                addon = addon,
-                                health = health[addon.id],
-                                onClick = { selectedUrl = addon.manifestUrl }
-                            )
+                            // Typing in the filter, or removing an add-on,
+                            // re-forms this list; a row now leaves and the rest
+                            // close the gap instead of re-rendering in one
+                            // frame.
+                            Box(modifier = Modifier.animateItem()) {
+                                AddonRowMobile(
+                                    addon = addon,
+                                    health = health[addon.id],
+                                    onClick = { selectedUrl = addon.manifestUrl }
+                                )
+                            }
                         }
                     }
                 }

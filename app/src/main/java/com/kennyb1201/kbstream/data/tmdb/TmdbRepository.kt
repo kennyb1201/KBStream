@@ -525,6 +525,23 @@ class TmdbRepository private constructor(context: Context) :
     /** Bound for the same reason as [collectionCacheMaxEntries]. */
     private val collectionArtCacheMaxEntries = 64
 
+    /**
+     * Memory cache for a collection's RANKED HEADER backdrop, keyed by
+     * collection id.
+     *
+     * Separate from [collectionArtCache] on purpose: the two answer DIFFERENTLY
+     * for the same collection. A card excludes the primary key art (it must not
+     * repeat the surface behind it); a header IS the primary surface, so there
+     * the primary simply competes on the ranking (see
+     * [fetchCollectionHeaderBackdropCached]). Sharing one entry would hand one
+     * surface the other's answer. Same TTL and size discipline as the card
+     * pick's.
+     */
+    private val collectionHeaderArtCache = ConcurrentHashMap<Int, Pair<Long, String>>()
+
+    /** Bound for the same reason as [collectionCacheMaxEntries]. */
+    private val collectionHeaderArtCacheMaxEntries = 64
+
     private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {
         moshi.adapter(TmdbDetail::class.java)
     }
@@ -1375,6 +1392,56 @@ class TmdbRepository private constructor(context: Context) :
             collectionArtCache.clear()
         }
         collectionArtCache[collectionId] = now to ranked
+
+        return BACKDROP_BASE + ranked
+    }
+
+    /**
+     * The backdrop a collection's HEADER should draw: TMDB's best text-free (or
+     * English) `/collection/{id}/images` entry, at [BACKDROP_BASE].
+     *
+     * Same fetch and same ranking as [fetchCollectionBackdropCached]
+     * ([bestCardBackdropPath]), with the one difference that matters: the card
+     * pick is handed the primary path so a CARD never repeats the key art of the
+     * surface it sits on, while a HEADER is that primary surface - so the primary
+     * competes on the ranking alone and a text-free primary wins outright. That
+     * is what keeps a collection whose TMDB key art has its own title burned in
+     * (Moana's says "Moana Collection" in the corner) from drawing that title
+     * beside the header's own name, while a collection whose key art is already
+     * text-free renders exactly as it does today.
+     *
+     * Only non-null answers are filed, for [collectionArtCache]'s reason: a
+     * failed request is a miss, not a verdict, and filing it would park the
+     * baked-in art on the header for half a day after one bad round-trip. The
+     * caller keeps its own primary art as the fallback either way.
+     *
+     * A collection whose ENTIRE backdrop set is text-baked still gets its art
+     * back (the ranking has nothing better to offer) - the long-press image
+     * override is the viewer's escape for those, as before.
+     */
+    suspend fun fetchCollectionHeaderBackdropCached(collectionId: Int): String? {
+        if (apiKey.isBlank()) return null
+
+        val now = System.currentTimeMillis()
+        collectionHeaderArtCache[collectionId]
+            ?.takeIf { (storedAt, _) -> now - storedAt < detailCacheTtlMs }
+            ?.let { return it.second }
+
+        val images = runCatchingCancellable {
+            api.getCollectionImages(collectionId, apiKey)
+        }.getOrNull() ?: return null
+
+        // No exclusion: this IS the primary surface, so the collection's own key
+        // art is a legitimate answer as long as it wins the ranking.
+        val ranked = bestCardBackdropPath(
+            backdrops = images.backdrops,
+            primaryPath = null
+        ) ?: return null
+
+        if (collectionHeaderArtCache.size > collectionHeaderArtCacheMaxEntries) {
+            collectionHeaderArtCache.clear()
+        }
+        collectionHeaderArtCache[collectionId] = now to ranked
 
         return BACKDROP_BASE + ranked
     }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -215,25 +216,43 @@ fun PulsingClearLogo(
 ) {
     var artState by remember(url) { mutableStateOf(ClearLogoState.LOADING) }
 
-    val pulse = rememberInfiniteTransition(label = "clearLogoPulse")
-    val scale by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "clearLogoScale"
-    )
-    val alpha by pulse.animateFloat(
-        initialValue = 0.7f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "clearLogoAlpha"
-    )
+    /*
+     * Reduced motion: hold the art still, at full opacity, instead of breathing.
+     * The pulse is the app's own idea of "still loading" and it was one of the
+     * handful of animations that ignored the platform's animator-duration scale
+     * entirely - a reduced-motion viewer got motion on both pre-playback
+     * splashes, which are the first thing every session shows them.
+     *
+     * The values stay State so the caller's graphicsLayer reads them at draw
+     * time; reading them into plain Floats here would recompose the splash for
+     * every frame of the pulse.
+     */
+    val scale: State<Float>
+    val alpha: State<Float>
+    if (rememberReducedMotion()) {
+        scale = remember { mutableStateOf(1f) }
+        alpha = remember { mutableStateOf(1f) }
+    } else {
+        val pulse = rememberInfiniteTransition(label = "clearLogoPulse")
+        scale = pulse.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "clearLogoScale"
+        )
+        alpha = pulse.animateFloat(
+            initialValue = 0.7f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "clearLogoAlpha"
+        )
+    }
 
     // One slot at the logo's standing size, so none of the three states can
     // move the subtitle underneath it. The ART is composed while loading too -
@@ -268,9 +287,9 @@ fun PulsingClearLogo(
                 .width(LOGO_WIDTH)
                 .height(LOGO_HEIGHT)
                 .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    this.alpha = alpha
+                    scaleX = scale.value
+                    scaleY = scale.value
+                    this.alpha = alpha.value
                 }
         )
     }

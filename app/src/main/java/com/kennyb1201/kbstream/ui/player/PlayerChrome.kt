@@ -231,9 +231,20 @@ class PlayerChrome(
         seekBar?.max = SEEKBAR_MAX
     }
 
+    /**
+     * True while the bar is up.
+     *
+     * A bar that is fading out is NOT up: the fade changes only what is drawn,
+     * and every press during it must behave exactly as it did when the bar left
+     * in one frame (the caller has already moved focus off it). Without this
+     * flag the 160ms of [hide] would report `true` and swallow the presses that
+     * hide the bar.
+     */
+    private var hiding = false
+
     /** True while the overlay is on screen. */
     val isVisible: Boolean
-        get() = overlay?.visibility == View.VISIBLE
+        get() = !hiding && overlay?.visibility == View.VISIBLE
 
     /** True while the skip prompt is on screen. */
     val isSkipIntroVisible: Boolean
@@ -243,27 +254,44 @@ class PlayerChrome(
     val isScrubbing: Boolean
         get() = scrubbing
 
-    /** Brings the bar up, focuses it, and starts its auto-hide countdown. */
+    /**
+     * Brings the bar up, focuses it, and starts its auto-hide countdown.
+     *
+     * The views become visible in the same frame they always did - every
+     * caller's `isVisible` and every focus request sees the old contract - and
+     * then fade in over [com.kennyb1201.kbstream.ui.components.KB_CHROME_FADE_MS].
+     * This is the app's most frequent transition: the bar rises and falls on
+     * every D-pad press, on both engines, and it used to arrive as a cut.
+     */
     fun show() {
-        overlay?.visibility = View.VISIBLE
+        hiding = false
+        KbViewMotion.fadeIn(overlay)
         // The seek row rides the overlay: it carries the bar both engines land
         // the D-pad on, so it is up exactly while the bar is.
-        seekRow?.visibility = View.VISIBLE
+        KbViewMotion.fadeIn(seekRow)
         // The clock rides the overlay's visibility, the way both activities kept
         // it: shown and ticking exactly while the bar is, gone otherwise.
-        clock?.visibility = View.VISIBLE
-        endsAt?.visibility = View.VISIBLE
+        KbViewMotion.fadeIn(clock)
+        KbViewMotion.fadeIn(endsAt)
         focusControls()
         keepVisible()
     }
 
-    /** Takes the bar down and stops the countdown. */
+    /**
+     * Takes the bar down and stops the countdown.
+     *
+     * Focus has already been handed back by the callers (that is what
+     * [focusControls]' inverse does in both activities), so the fade cannot
+     * swallow a press: [isVisible] reads false from this line on, and the bar is
+     * GONE at the end of it.
+     */
     fun hide() {
         handler.removeCallbacks(hideRunnable)
-        overlay?.visibility = View.GONE
-        seekRow?.visibility = View.GONE
-        clock?.visibility = View.GONE
-        endsAt?.visibility = View.GONE
+        hiding = true
+        KbViewMotion.fadeOut(overlay) { hiding = false }
+        KbViewMotion.fadeOut(seekRow)
+        KbViewMotion.fadeOut(clock)
+        KbViewMotion.fadeOut(endsAt)
     }
 
     /** Restarts the auto-hide countdown (a press that expects the bar to linger). */
@@ -357,12 +385,21 @@ class PlayerChrome(
         if (label.isNullOrBlank()) {
             // A hidden view cannot keep focus: without a new target the next
             // D-pad press would go nowhere, so hand it back to the bar.
+            // The hand-back stays synchronous; only the disappearance fades.
             val wasFocused = button.isFocused
+            // GONE in this frame, not faded: `isSkipIntroVisible` and both
+            // activities' key rules read `visibility`, and a prompt that is
+            // still VISIBLE for the length of a fade would keep taking presses
+            // for a segment that has ended. The entrance is the animation;
+            // the exit is the contract.
             button.visibility = View.GONE
             if (wasFocused && isVisible) playPauseButton?.requestFocus()
         } else {
             button.text = label
-            button.visibility = View.VISIBLE
+            // Fades and rises from the trailing edge: the prompt appears on
+            // nearly every television episode, and it used to pop into a
+            // focused-looking button mid-frame.
+            KbViewMotion.slideFadeIn(button, 16f * button.resources.displayMetrics.density)
         }
     }
 

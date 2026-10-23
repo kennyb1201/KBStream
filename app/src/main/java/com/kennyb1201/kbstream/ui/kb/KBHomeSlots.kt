@@ -65,10 +65,12 @@ import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
+import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
@@ -865,7 +867,7 @@ private fun CollectionFolderTile(
                 var gifLoaded by remember(focusGifUrl) { mutableStateOf(false) }
                 val gifAlpha by animateFloatAsState(
                     targetValue = if (gifLoaded) 1f else 0f,
-                    animationSpec = tween(durationMillis = 200),
+                    animationSpec = tween(durationMillis = rememberMotionMs(KB_ART_FADE_MS)),
                     label = "folderGifFadeIn"
                 )
                 AsyncImage(

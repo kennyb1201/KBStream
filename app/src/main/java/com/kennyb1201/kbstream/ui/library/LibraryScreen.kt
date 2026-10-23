@@ -142,6 +142,11 @@ fun LibraryScreen(
             item.imdbId,
             item.tmdbId?.toString()
         )
+    // Set only by the Home Upcoming header's shortcut (see
+    // [LibraryCalendarEntry]): the Calendar pane then takes the D-pad instead of
+    // the chip. Any chip press clears it, so an ordinary visit never does.
+    var calendarTakeFocus by remember { mutableStateOf(false) }
+
     val state = remember(stateRaw, hiddenTitleKeys) {
         stateRaw.copy(
             localItems = stateRaw.localItems.filterNot(::hiddenItem),
@@ -251,6 +256,15 @@ fun LibraryScreen(
     var listPendingDelete by remember { mutableStateOf<LibraryList?>(null) }
 
     LaunchedEffect(Unit) {
+        // The Home Upcoming header's shortcut: arrive on the Calendar pane with
+        // focus in its grid, not on the chip. Consumed once, so a later visit
+        // through the Library tab is the ordinary chip landing.
+        if (LibraryCalendarEntry.consume()) {
+            calendarTakeFocus = true
+            viewModel.setFilter(LibraryFilter.CALENDAR)
+            return@LaunchedEffect
+        }
+
         // Re-read the list every time this tab is opened. The ViewModel is
         // activity-scoped, so without this the tab kept showing whatever
         // snapshot it took the first time it was visited — a title added from
@@ -330,7 +344,13 @@ fun LibraryScreen(
                 LibraryFilterChip(
                     label = filter.label,
                     selected = state.filter == filter,
-                    onClick = { viewModel.setFilter(filter) },
+                    onClick = {
+                        // The calendar's D-pad landing belongs to the Home
+                        // shortcut only; a chip press is the ordinary
+                        // entry-focus landing.
+                        calendarTakeFocus = false
+                        viewModel.setFilter(filter)
+                    },
                     // The entry focus goes on the SELECTED chip, not always on
                     // ALL: the filter lives in the activity-scoped ViewModel, so
                     // re-entering Library on WATCHLIST or LISTS with focus on the
@@ -474,6 +494,15 @@ fun LibraryScreen(
                     returnTarget = returnTarget,
                     returnFocusRequester = returnFocusRequester,
                     onReturnHandled = onReturnHandled
+                )
+            }
+
+            LibraryFilter.CALENDAR -> {
+                LibraryCalendarPane(
+                    onOpenDetails = { navigationId ->
+                        onItemClick("series", navigationId)
+                    },
+                    takeInitialFocus = calendarTakeFocus
                 )
             }
 
@@ -954,7 +983,8 @@ private fun ItemGrid(
             // The same key [BrowseReturnFocus] records a card under, so a grid
             // that has re-ordered under the viewer comes back on the poster
             // that is still there rather than on whatever took its place.
-            key = { _, item -> LocalLibraryStore.dedupeKey(item) }
+            key = { _, item -> LocalLibraryStore.dedupeKey(item) },
+            contentType = { _, _ -> "library" }
         ) { index, item ->
             val cardKey = LocalLibraryStore.dedupeKey(item)
             // This cell's own node, published so the screen's menu can ask for
@@ -1010,6 +1040,12 @@ private fun ItemGrid(
                     { handler(item, successorKey) }
                 },
                 modifier = Modifier
+                    // A removal or a sort no longer teleports the grid: the
+                    // cell fades out where it was and its neighbours close the
+                    // gap by placement. The focus requester stays OUTSIDE this
+                    // - the hand-back asks a node by key, and an item that is
+                    // mid-placement is still the same node.
+                    .animateItem()
                     .focusRequester(cardRequester)
                     .then(
                         if (isReturnItem) {

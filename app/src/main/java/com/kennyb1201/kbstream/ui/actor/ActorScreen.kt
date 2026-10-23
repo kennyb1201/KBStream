@@ -46,6 +46,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,7 +74,10 @@ import com.kennyb1201.kbstream.ui.mobile.ActorScreenMobile
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.components.GlobalLandscapeArtCache
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -117,6 +121,14 @@ import kotlinx.coroutines.launch
  */
 internal const val ACTOR_MOVIES_RAIL = "moviesrow"
 internal const val ACTOR_TV_RAIL = "tvrow"
+
+/**
+ * How many credits a rail warms before it is ever scrolled.
+ *
+ * One television screenful. More would spend TMDB requests on cards the viewer
+ * may never reach; fewer would leave the first swipe still resolving.
+ */
+private const val ACTOR_ART_PREWARM_COUNT = 12
 
 /**
  * The Actor page's own key, the only place it is spelled out (see
@@ -570,8 +582,17 @@ fun ActorScreen(
                             model = remember(backdropUrl) {
                                 // Full-screen hero backdrop behind the
                                 // filmography rails; one image, so it keeps
-                                // the fade.
-                                ImageRequest.Builder(context).data(backdropUrl).crossfade(true).build()
+                                // the fade. Decoded at the hero's size rather
+                                // than at whatever the source publishes: the
+                                // app caps this same surface on Home and
+                                // Detail, and this one was left pulling an
+                                // unbounded original into a screen the actor
+                                // page is not even scrolled to yet.
+                                ImageRequest.Builder(context)
+                                    .data(backdropUrl)
+                                    .size(1280, 720)
+                                    .crossfade(true)
+                                    .build()
                             },
                             contentDescription = topWorkCredit?.title ?: topWorkCredit?.name ?: p.name,
                             contentScale = ContentScale.Crop,
@@ -1085,6 +1106,31 @@ private fun ActorCreditRail(
 ) {
     val rowState = rememberLazyListState()
     val rowScope = rememberCoroutineScope()
+
+    /*
+     * Prewarm the first screenful of this rail's landscape art.
+     *
+     * In landscape mode every card on this page resolves its own backdrop and
+     * clearlogo through a TMDB lookup on first composition, so a first visit
+     * paid a network round-trip plus a decode inside the scroll - the one place
+     * the app still did that. Resolving the head of the rail up front, through
+     * the same cache and the same semaphore the cards use, turns that scroll
+     * into cache hits. It is deliberately bounded and off the main thread: the
+     * cache caps concurrency at six and files every answer, so a card that is
+     * never scrolled to costs nothing and one that is costs nothing twice.
+     */
+    val prewarmContext = LocalContext.current
+    LaunchedEffect(credits, normalizedMediaType) {
+        if (credits.isEmpty()) return@LaunchedEffect
+        if (!AppPreferences.landscapePostersActive(prewarmContext)) return@LaunchedEffect
+        credits.take(ACTOR_ART_PREWARM_COUNT).forEach { credit ->
+            val type = credit.mediaType ?: return@forEach
+            GlobalLandscapeArtCache.resolve(
+                prewarmContext,
+                LandscapeArtRequest(id = credit.id.toString(), type = type)
+            )
+        }
+    }
 
     // Where this rail's return lands, resolved by the card's OWN key rather
     // than by the recorded position: a rail that has re-ordered under the

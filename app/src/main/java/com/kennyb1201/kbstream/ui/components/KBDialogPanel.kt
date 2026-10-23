@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -36,6 +37,14 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
  * [subtitle] is the one line of content that belongs beside it (a channel name,
  * a profile name); anything else the dialog shows goes in [content], which is
  * laid out on the 10dp beat every one of these panels already used.
+ *
+ * The plate scales and fades up on first composition. Every dialog in the app
+ * draws through here, so this is where the app's ~115 `Dialog(` call sites get
+ * an entrance at all - they had none, while the feedback toast had fade+slide.
+ * The animation lives inside the panel rather than in an `AnimatedVisibility`
+ * around it because a Dialog window does not reliably run that exit: the plate
+ * mounts, then animates where it is drawn. [enterFromBottom] adds the small
+ * upward rise a bottom-docked sheet needs to read as rising off the edge.
  */
 @Composable
 fun KBDialogPanel(
@@ -43,11 +52,22 @@ fun KBDialogPanel(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     width: Dp = 560.dp,
+    enterFromBottom: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val enter = rememberEntranceProgress()
     Column(
         modifier = modifier
             .width(width)
+            .graphicsLayer {
+                alpha = enter.value
+                val scale = 0.96f + 0.04f * enter.value
+                scaleX = scale
+                scaleY = scale
+                if (enterFromBottom) {
+                    translationY = (1f - enter.value) * 24.dp.toPx()
+                }
+            }
             // Every panel is a focus group, the way PosterContextMenu's is:
             // focus SEARCH stays inside the dialog before it can walk out into
             // the screen behind the scrim. This is the bounded half of that

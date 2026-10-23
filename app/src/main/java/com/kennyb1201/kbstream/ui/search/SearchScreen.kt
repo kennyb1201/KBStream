@@ -479,7 +479,14 @@ fun SearchScreen(
                     KBSkeletonRailStack(
                         posterWidth = skeletonSize.width,
                         posterHeight = skeletonSize.height,
-                        modifier = Modifier.padding(vertical = 8.dp),
+                        // The states are separate LazyColumn items with their own
+                        // keys, so animating the items themselves is what makes
+                        // loading -> results a crossfade rather than two
+                        // structural changes in consecutive frames. Search is
+                        // typed live: every keystroke restructured this screen.
+                        modifier = Modifier
+                            .animateItem()
+                            .padding(vertical = 8.dp),
                         railCount = 2,
                         horizontalPadding = 0.dp,
                         shape = posterEdgeShape()
@@ -496,6 +503,7 @@ fun SearchScreen(
                         // here.", "All rails are hidden.").
                         message = "No matches found.",
                         modifier = Modifier
+                            .animateItem()
                             .fillMaxWidth()
                             .padding(vertical = 8.dp)
                     )
@@ -504,7 +512,7 @@ fun SearchScreen(
 
             if (!isLoading && results.isNotEmpty()) {
                 item(key = "titles_section") {
-                    Column {
+                    Column(modifier = Modifier.animateItem()) {
                         KBSectionHeader(title = "Titles")
                         // Back from a Detail opened here puts this rail back on
                         // the tile that was pressed (see SearchReturnFocus).

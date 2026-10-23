@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -70,6 +71,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -115,6 +117,7 @@ import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.KB_EASE
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.mobile.SportsHubScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -1568,6 +1571,10 @@ private fun LazyGridScope.gameItems(
     items(
         items = games,
         key = { it.id },
+        // Every cell here is a GameCard, so one pool is correct - but it is
+        // now explicit, which is what stops a future non-card row from being
+        // pooled with them.
+        contentType = { "game" },
         span = if (fullWidth) {
             { GridItemSpan(maxLineSpan) }
         } else {
@@ -1584,9 +1591,17 @@ private fun LazyGridScope.gameItems(
             onOpenDetail = onOpenDetail,
             onEditFavorites = { onEditFavorites(game) },
             modifier = if (focusRequester != null && game.id == firstId) {
-                Modifier.fillMaxWidth().focusRequester(focusRequester)
-            } else {
                 Modifier.fillMaxWidth()
+                    // A game that changes section (upcoming -> live -> final) or
+                    // a poll that reorders the grid now moves its cards rather
+                    // than dropping them in new cells. Placement only: the
+                    // card's own scale animation is still pinned for LIVE
+                    // games, and this must not restart it (see the poll-stable
+                    // note on the card's focusedScale).
+                    .animateItem()
+                    .focusRequester(focusRequester)
+            } else {
+                Modifier.fillMaxWidth().animateItem()
             }
         )
     }
@@ -2035,6 +2050,18 @@ private fun SituationLine(game: SportsGame, reserveSlot: Boolean = false) {
     )
 }
 
+/**
+ * A live score, with one pulse when it changes.
+ *
+ * The hub polls while a game is live, so a goal arrives as a plain recomposition:
+ * the number silently becomes a different number under the viewer's eyes, with
+ * no acknowledgement at all. The pulse is deliberately on the score COMPOSABLE
+ * only - not on the card around it - because the shared-clock comment further
+ * up this file records what recomposing these cards on every poll costs.
+ *
+ * Keyed on the score string, so it fires once per actual change and not on the
+ * poll: a recomposition with the same score touches nothing.
+ */
 @Composable
 private fun ScoreText(
     score: String?,
@@ -2043,12 +2070,23 @@ private fun ScoreText(
     modifier: Modifier = Modifier,
     alignEnd: Boolean = false,
 ) {
+    val flash = remember { Animatable(0f) }
+    val reducedMotion = rememberReducedMotion()
+    val text = score.orEmpty()
+    LaunchedEffect(text) {
+        if (!live || text.isBlank() || reducedMotion) return@LaunchedEffect
+        flash.snapTo(1f)
+        flash.animateTo(0f, tween(durationMillis = 700, easing = KB_EASE))
+    }
     Text(
         text = score.orEmpty(),
         style = MaterialTheme.typography.headlineLarge,
         fontFamily = OswaldFamily,
         fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold,
-        color = color,
+        // A colour flash, not a size one: the number swells in accent and
+        // settles back to its own colour. Scaling text in a fixed row would
+        // push it into the crest beside it; the colour needs no room.
+        color = lerp(color, KBAccent, flash.value),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,

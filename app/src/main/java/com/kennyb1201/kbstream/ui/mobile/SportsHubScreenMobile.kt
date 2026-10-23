@@ -764,15 +764,17 @@ private fun LeagueBodyMobile(
                 )
             }
             items(items = section.tournaments, key = { it.id }) { event ->
-                TournamentCardMobile(
-                    event = event,
-                    channels = matches[event.id].orEmpty(),
-                    livePulse = livePulse,
-                    lineupMissing = lineupMissing,
-                    matchingDone = matchingDone,
-                    onPlayChannels = onPlayChannels,
-                    onOpenDetail = onOpenTournamentDetail
-                )
+                Box(modifier = Modifier.animateItem()) {
+                    TournamentCardMobile(
+                        event = event,
+                        channels = matches[event.id].orEmpty(),
+                        livePulse = livePulse,
+                        lineupMissing = lineupMissing,
+                        matchingDone = matchingDone,
+                        onPlayChannels = onPlayChannels,
+                        onOpenDetail = onOpenTournamentDetail
+                    )
+                }
             }
         }
 
@@ -826,16 +828,22 @@ private fun LazyListScope.gameItemsMobile(
     onEditFavorites: (SportsGame) -> Unit
 ) {
     items(items = games, key = { it.id }) { game ->
-        GameCardMobile(
-            game = game,
-            channel = matches[game.id]?.firstOrNull(),
-            livePulse = livePulse,
-            favoriteKeys = favoriteKeys,
-            lineupMissing = lineupMissing,
-            matchingDone = matchingDone,
-            onOpenDetail = { onOpenDetail(game) },
-            onEditFavorites = { onEditFavorites(game) }
-        )
+        // The 30-second poll moves a game between LIVE, UPCOMING and FINAL.
+        // The card keeps its identity, so it now leaves one section and
+        // arrives in another as motion instead of the list re-flowing under
+        // the thumb.
+        Box(modifier = Modifier.animateItem()) {
+            GameCardMobile(
+                game = game,
+                channel = matches[game.id]?.firstOrNull(),
+                livePulse = livePulse,
+                favoriteKeys = favoriteKeys,
+                lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
+                onOpenDetail = { onOpenDetail(game) },
+                onEditFavorites = { onEditFavorites(game) }
+            )
+        }
     }
 }
 
@@ -1356,11 +1364,13 @@ private fun StandingsBodyMobile(
                     ) { _, entry ->
                         val team = standingsTeam(league.path, entry)
                         val followed = team.favoriteKey in favoriteKeys
-                        StandingRowMobile(
-                            entry = entry,
-                            followed = followed,
-                            onToggleFollow = { onToggleTeam(team, !followed) }
-                        )
+                        Box(modifier = Modifier.animateItem()) {
+                            StandingRowMobile(
+                                entry = entry,
+                                followed = followed,
+                                onToggleFollow = { onToggleTeam(team, !followed) }
+                            )
+                        }
                     }
                 }
             }

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import java.time.LocalDate
 
@@ -39,6 +40,17 @@ internal const val MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS =
  * the schedule builder.
  */
 internal const val MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS =
+    25
+
+/**
+ * Ceiling on the Trakt half, mirroring [MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS].
+ *
+ * Trakt's snapshot IS ordered (most recently watched first), so unlike MDBList
+ * this cap also trims the least recently active shows rather than an arbitrary
+ * slice - but it is still only a work bound, and the schedule builder collapses
+ * the per-show duplicates that survive it.
+ */
+internal const val MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS =
     25
 
 /** Parallel TMDB resolutions while building the caught-up Upcoming cards. */
@@ -226,6 +238,58 @@ internal fun mdbListCaughtUpCandidates(
         out += CaughtUpShowCandidate(
             parentId = key,
             watchedEpisodes = watched,
+            fromTracker = true
+        )
+
+        if (out.size >= max) break
+    }
+
+    return out
+}
+
+/**
+ * Trakt's caught-up candidates: the shows its watched snapshot holds a play
+ * for, with the episodes that snapshot lists watched.
+ *
+ * Trakt was evidence rather than a source: its watched episodes were already
+ * unioned into the per-show watched set, so a show tracked on Trakt alone was
+ * provably caught up and still had nowhere to announce its next episode. This
+ * is that half, built the way the MDBList one is - from the snapshot the app
+ * already fetches and caches (`TraktRepository.watchedSnapshot()`), so
+ * contributing it costs a lookup, never a request.
+ *
+ * Order is the snapshot's own: `/sync/watched/shows` answers most recently
+ * watched first, so [max] trims the shows this account has not touched in the
+ * longest time. That is the only ordering Trakt gives us and the one the rail
+ * wants, so it is kept rather than re-sorted.
+ *
+ * Identity: every row carries all of its id forms, and the IMDb flavour is
+ * preferred because that is how the other halves key (local history parents are
+ * IMDb ids, and MDBList prefers its `tt…` key) - so the same show arriving from
+ * two sources collapses in the schedule builder instead of becoming two cards.
+ * A `tmdb:<n>` key is the fallback, and any other canonical form after it. A
+ * row with no watched episode is skipped for the MDBList half's reason:
+ * "started" is not "watched the aired run".
+ */
+internal fun traktCaughtUpCandidates(
+    snapshot: TraktWatchedSnapshot,
+    max: Int
+): List<CaughtUpShowCandidate> {
+    if (max <= 0) return emptyList()
+
+    val out = ArrayList<CaughtUpShowCandidate>()
+
+    for (row in snapshot.shows) {
+        if (row.episodes.isEmpty()) continue
+
+        val parentId = row.idKeys.firstOrNull { it.startsWith("tt") }
+            ?: row.idKeys.firstOrNull { it.startsWith("tmdb:") }
+            ?: row.idKeys.firstOrNull()
+            ?: continue
+
+        out += CaughtUpShowCandidate(
+            parentId = parentId,
+            watchedEpisodes = row.episodes,
             fromTracker = true
         )
 

@@ -66,6 +66,8 @@ import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.armHeroSource
+import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -573,12 +575,20 @@ fun HomeScreenMobile(
                                                         rail.ranked,
                                                         index
                                                     ),
-                                                    onClick = { onItemClick(meta) },
+                                                    onClick = {
+                                                        // The phone's hero flight:
+                                                        // a press IS the source
+                                                        // signal (no D-pad focus
+                                                        // to arm it with).
+                                                        armHeroSource(meta.type, meta.id)
+                                                        onItemClick(meta)
+                                                    },
                                                     onLongClick = {
                                                         menuTarget =
                                                             RailMenuTarget(meta, rail)
                                                     },
                                                     modifier = Modifier
+                                                        .heroSourceOnPress(meta.type, meta.id)
                                                         .width(railLandscapeWidth)
                                                         .height(railLandscapeHeight)
                                                 )
@@ -593,12 +603,16 @@ fun HomeScreenMobile(
                                                     isWatched = watched,
                                                     isPartiallyWatched =
                                                         partiallyWatched,
-                                                    onClick = { onItemClick(meta) },
+                                                    onClick = {
+                                                        armHeroSource(meta.type, meta.id)
+                                                        onItemClick(meta)
+                                                    },
                                                     onLongClick = {
                                                         menuTarget =
                                                             RailMenuTarget(meta, rail)
                                                     },
                                                     modifier = Modifier
+                                                        .heroSourceOnPress(meta.type, meta.id)
                                                         .width(railPosterSize.width)
                                                         .height(railPosterSize.height)
                                                 )

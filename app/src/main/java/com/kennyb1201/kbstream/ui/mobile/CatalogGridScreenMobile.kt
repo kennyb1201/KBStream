@@ -53,6 +53,9 @@ import com.kennyb1201.kbstream.ui.components.touch.TouchPosterCaptions
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
+import androidx.compose.animation.core.tween
+import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -310,6 +313,12 @@ fun CatalogGridScreenMobile(
 
                         CatalogTile(
                             meta = meta,
+                            // Paging grids only fade: the cells already re-flow
+                            // as pages land, and a placement animation on top
+                            // of that reads as the grid fighting itself.
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = tween(rememberMotionMs(KB_ART_FADE_MS))
+                            ),
                             landscape = landscape,
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
@@ -436,9 +445,10 @@ private fun CatalogTile(
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth()) {
         // The shared touch tile: it takes the grid cell's width and sets the
         // height, so a landscape cell is a real 16:9 card rather than a poster
         // box with a backdrop cropped into it - and it resolves the same

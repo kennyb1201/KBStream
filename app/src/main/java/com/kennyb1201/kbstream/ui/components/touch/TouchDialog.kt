@@ -15,10 +15,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.kennyb1201.kbstream.ui.components.rememberEntranceProgress
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
@@ -42,6 +44,10 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * that scrim belongs to the screen raising the dialog (see the touch context
  * menu, which is the one that needs it). So nothing here consumes input; this
  * composes the plate only, exactly as the TV twin does.
+ *
+ * It does, however, take the same entrance: a phone dialog used to appear as a
+ * hard cut while every M3 sheet around it slid in, which made the app's own
+ * dialogs feel like the unpolished ones.
  */
 @Composable
 fun KBDialogPanel(
@@ -51,10 +57,17 @@ fun KBDialogPanel(
     width: Dp = 560.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val enter = rememberEntranceProgress()
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .widthIn(max = width),
+            .widthIn(max = width)
+            .graphicsLayer {
+                alpha = enter.value
+                val scale = 0.96f + 0.04f * enter.value
+                scaleX = scale
+                scaleY = scale
+            },
         shape = KBShapePanel,
         color = KBSurface,
         contentColor = KBTextHi,

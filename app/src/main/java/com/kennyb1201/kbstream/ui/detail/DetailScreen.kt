@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -129,6 +130,7 @@ import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
+import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
@@ -147,7 +149,9 @@ import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -6692,9 +6696,14 @@ private fun CastCard(
         mutableStateOf(false)
     }
 
+    // Reduced motion: the portrait does not zoom. It also took the default
+    // spring where every sibling focus cue in the app uses a short tween, so
+    // the same press eased differently here than on the poster beside it.
+    val reducedMotion = rememberReducedMotion()
     val imageScale by animateFloatAsState(
         targetValue =
-            if (isFocused) 1.08f else 1f,
+            if (isFocused && !reducedMotion) 1.08f else 1f,
+        animationSpec = tween(rememberMotionMs(KB_ALPHA_FADE_MS)),
         label = "castImageScale"
     )
 

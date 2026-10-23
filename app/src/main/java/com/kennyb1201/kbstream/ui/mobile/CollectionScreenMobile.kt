@@ -97,6 +97,9 @@ fun CollectionScreenMobile(
 ) {
     val collectionRaw by viewModel.collection.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // The header's text-free ranking (see fetchCollectionHeaderBackdropCached),
+    // null until it resolves or when TMDB has nothing better than the primary.
+    val headerBackdropUrl by viewModel.headerBackdropUrl.collectAsStateWithLifecycle()
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
@@ -218,13 +221,20 @@ fun CollectionScreenMobile(
                                 fallbackUrl = collection?.posterPath
                                     ?.let { "${TmdbRepository.POSTER_BASE}$it" }
                             ),
+                            // The override chain, unchanged, over the
+                            // collection's ranked TEXT-FREE backdrop (the
+                            // primary key art carries the collection's own
+                            // title, which this header already draws), falling
+                            // back to TMDB's primary while the ranking is
+                            // unresolved or answers nothing.
                             backdropUrl = imageOverrideBackdropUrl(
                                 paths = overridePaths,
                                 tmdbId = collectionId,
                                 screen = ImageOverrides.SCREEN_ALL,
-                                fallbackUrl = collection?.backdropPath
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.fullResBackdropUrl(it) }
+                                fallbackUrl = TmdbRepository.fullResBackdropUrl(
+                                    headerBackdropUrl
+                                        ?: collection?.backdropPath?.takeIf { it.isNotBlank() }
+                                )
                             ),
                             partCount = collection?.parts?.size
                         )
@@ -262,6 +272,10 @@ fun CollectionScreenMobile(
                         key = { _, part -> "collection_part:${part.id}" }
                     ) { index, part ->
                         CollectionPartTile(
+                            // The parts land together but not in one frame -
+                            // watched marks resolve against history, so a cell
+                            // can arrive late. It fades in where it belongs.
+                            modifier = Modifier.animateItem(),
                             part = part,
                             isWatched = isWatched(part),
                             isPartiallyWatched = isPartiallyWatched(part),
@@ -445,10 +459,11 @@ private fun CollectionPartTile(
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // A collection PART is a real title (always a movie), so it follows the

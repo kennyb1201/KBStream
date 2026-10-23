@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,6 +66,8 @@ import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.library.LIBRARY_BROWSE_SCREEN_KEY
+import com.kennyb1201.kbstream.ui.library.LibraryCalendarEntry
+import com.kennyb1201.kbstream.ui.library.LibraryCalendarPane
 import com.kennyb1201.kbstream.ui.library.LibraryFilter
 import com.kennyb1201.kbstream.ui.library.LibrarySort
 import com.kennyb1201.kbstream.ui.library.LibraryViewModel
@@ -163,6 +167,13 @@ fun LibraryScreenMobile(
         }
 
         LaunchedEffect(Unit) {
+            // The Home Upcoming header's shortcut (see LibraryCalendarEntry):
+            // arriving on the Calendar pane rather than on a poster grid.
+            if (LibraryCalendarEntry.consume()) {
+                viewModel.setFilter(LibraryFilter.CALENDAR)
+                return@LaunchedEffect
+            }
+
             // Re-read the list on every visit: the ViewModel is activity-scoped,
             // and without this a title added from a Detail page (or removed
             // here) never appeared.
@@ -178,6 +189,9 @@ fun LibraryScreenMobile(
                 LibraryFilter.MY_LIST -> state.localItems
                 LibraryFilter.WATCHLIST -> state.watchlistItems
                 LibraryFilter.LISTS -> state.selectedListItems
+                // The calendar draws itself in one full-span cell below; it
+                // has no poster rows to feed this grid.
+                LibraryFilter.CALENDAR -> emptyList()
             }
         }
 
@@ -256,6 +270,8 @@ fun LibraryScreenMobile(
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             }
+
+            LibraryFilter.CALENDAR -> "The calendar loads itself."
         }
 
         // Landscape cards are wider than posters, so the columns widen with
@@ -379,6 +395,30 @@ fun LibraryScreenMobile(
                     }
                 }
 
+                if (state.filter == LibraryFilter.CALENDAR) {
+                    item(key = "calendar", span = { GridItemSpan(maxLineSpan) }) {
+                        // The pane owns the rest of the viewport: its day list
+                        // scrolls inside itself, and the grid only ever scrolls
+                        // this one cell. `fillParentMaxHeight` is the grid's own
+                        // measure of that viewport, so no device height is
+                        // guessed at here.
+                        // A bounded height is what the pane needs: its day
+                        // list is the only scroller on the phone, so the cell
+                        // holding it is sized off the window rather than left
+                        // to the grid's own measurement.
+                        val viewportHeight = LocalConfiguration.current.screenHeightDp.dp
+                        LibraryCalendarPane(
+                            onOpenDetails = { navigationId ->
+                                onItemClick("series", navigationId)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(viewportHeight * 0.78f),
+                            takeInitialFocus = false
+                        )
+                    }
+                }
+
                 if (state.filter == LibraryFilter.LISTS) {
                     item(key = "lists", span = { GridItemSpan(maxLineSpan) }) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -436,7 +476,7 @@ fun LibraryScreenMobile(
                     }
                 }
 
-                if (items.isEmpty()) {
+                if (state.filter != LibraryFilter.CALENDAR && items.isEmpty()) {
                     item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                         Text(
                             text = emptyText,
@@ -445,13 +485,17 @@ fun LibraryScreenMobile(
                             modifier = Modifier.padding(vertical = 10.dp)
                         )
                     }
-                } else {
+                } else if (state.filter != LibraryFilter.CALENDAR) {
                     itemsIndexed(
                         items = items,
                         key = { _, item -> LocalLibraryStore.dedupeKey(item) }
                     ) { index, item ->
                         LibraryTile(
                             item = item,
+                            // Removals and filter/sort changes stop teleporting
+                            // the grid: a tile fading out and its neighbours
+                            // closing the gap is the phone's whole point here.
+                            modifier = Modifier.animateItem(),
                             rating = state.ratings[LocalLibraryStore.dedupeKey(item)],
                             isWatched = item.watchedKeyCandidates()
                                 .any { it in state.watchedKeys },
@@ -676,10 +720,11 @@ private fun LibraryTile(
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // A library row is a title tile, so it follows Settings' global

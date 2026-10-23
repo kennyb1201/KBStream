@@ -338,9 +338,17 @@ class LaunchSplashWiringContractTest {
         val transitionClose = activity.indexOf(
             "} // closes AnimatedContent( targetState = screen ) { current -> ... }"
         )
-        val emit = activity.indexOf("if (splashVisible) {")
+        // The splash is emitted through an AnimatedVisibility now (it fades out
+        // into the screen instead of being cut), so its `visible` line is what
+        // locates the emission. Ordering in the Box is what this test is for,
+        // and that is unchanged.
+        val emit = activity.indexOf("visible = splashVisible,")
         assertTrue("the transition container must still be identifiable", transitionClose >= 0)
         assertTrue("the splash must be emitted from the shell", emit >= 0)
+        assertTrue(
+            "and its exit fades, so the handover is not a rectangle being removed",
+            activity.contains("exit = fadeOut(tween(splashExitMs))")
+        )
         assertTrue(
             "the overlay has to be emitted AFTER the transition container, because " +
                 "drawing order in a Box is emission order - before it, every screen " +

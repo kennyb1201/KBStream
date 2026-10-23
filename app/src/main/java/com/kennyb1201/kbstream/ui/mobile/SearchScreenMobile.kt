@@ -582,6 +582,10 @@ fun SearchScreenMobile(
                                 ) { _, row ->
                                     Row(
                                         modifier = Modifier
+                                            // Filtering as you type removes
+                                            // rows; the survivors step up
+                                            // instead of jumping.
+                                            .animateItem()
                                             .fillMaxWidth()
                                             .padding(horizontal = 16.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -656,6 +660,10 @@ fun SearchScreenMobile(
                                 contentType = { "title" }
                             ) { result ->
                                 SearchTile(
+                                    // Results land one rail at a time; a tile
+                                    // that arrives or leaves fades where it
+                                    // was and the rail closes the gap.
+                                    modifier = Modifier.animateItem(),
                                     result = result,
                                     watched = watchedTile(
                                         result = result,
@@ -706,6 +714,7 @@ fun SearchScreenMobile(
                                     contentType = { "addon-title" }
                                 ) { result ->
                                     SearchTile(
+                                        modifier = Modifier.animateItem(),
                                         result = result,
                                         watched = watchedTile(
                                             result = result,
@@ -740,6 +749,7 @@ fun SearchScreenMobile(
                                 contentType = { "actor" }
                             ) { person ->
                                 PersonTile(
+                                    modifier = Modifier.animateItem(),
                                     person = person,
                                     onClick = {
                                         viewModel.onActorOpened(person)
@@ -762,6 +772,7 @@ fun SearchScreenMobile(
                                 contentType = { "studio" }
                             ) { studio ->
                                 StudioTile(
+                                    modifier = Modifier.animateItem(),
                                     studio = studio,
                                     onClick = {
                                         viewModel.onStudioOpened(studio)
@@ -784,6 +795,7 @@ fun SearchScreenMobile(
                                 contentType = { "collection" }
                             ) { collection ->
                                 CollectionTile(
+                                    modifier = Modifier.animateItem(),
                                     collection = collection,
                                     onClick = {
                                         viewModel.onCollectionOpened(collection)
@@ -992,7 +1004,8 @@ private fun SearchTile(
     watched: Boolean,
     partiallyWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // The column tracks the card's own width: a landscape tile is wider than
     // the poster it replaces, and a column pinned to the poster width would clip
@@ -1001,7 +1014,7 @@ private fun SearchTile(
     val landscape = rememberGlobalLandscape()
     val posterSize = rememberTouchPosterSize()
     Column(
-        modifier = Modifier.width(
+        modifier = modifier.width(
             if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
         ),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1034,10 +1047,11 @@ private fun SearchTile(
 @Composable
 private fun PersonTile(
     person: TmdbSearchPersonResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(112.dp)
             .clip(KBShapeCard)
             .clickable(onClick = onClick)
@@ -1086,10 +1100,11 @@ private fun PersonTile(
 @Composable
 private fun StudioTile(
     studio: TmdbSearchStudioResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(160.dp)
             .clip(KBShapeCard)
             .clickable(onClick = onClick)
@@ -1140,22 +1155,25 @@ private fun StudioTile(
 @Composable
 private fun CollectionTile(
     collection: TmdbSearchCollectionResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val posterSize = rememberTouchPosterSize()
-    TouchGlobalPosterCard(
-        posterUrl = collection.posterPath
-            ?.let { TmdbRepository.POSTER_BASE + it },
-        contentDescription = collection.name,
-        isWatched = false,
-        onClick = onClick,
-        artId = collection.id.toString(),
-        // A collection is its own id space: the card must not read a title's
-        // overrides for it, and resolves the collection's own art.
-        artType = "collection",
-        posterWidth = posterSize.width,
-        posterHeight = posterSize.height
-    )
+    Box(modifier = modifier) {
+        TouchGlobalPosterCard(
+            posterUrl = collection.posterPath
+                ?.let { TmdbRepository.POSTER_BASE + it },
+            contentDescription = collection.name,
+            isWatched = false,
+            onClick = onClick,
+            artId = collection.id.toString(),
+            // A collection is its own id space: the card must not read a
+            // title's overrides for it, and resolves the collection's own art.
+            artType = "collection",
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height
+        )
+    }
 }
 
 /**

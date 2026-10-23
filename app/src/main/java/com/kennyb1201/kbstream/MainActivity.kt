@@ -168,6 +168,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
@@ -176,10 +177,16 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.ui.components.KB_SCREEN_TRANSITION_MS
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
@@ -2042,6 +2049,19 @@ fun AppRoot(
                 initialState is Screen.Player || targetState is Screen.Player ->
                     EnterTransition.None togetherWith ExitTransition.None
 
+                // Two top-level tabs on a phone are siblings, not a stack: a
+                // lateral move used to reuse the depth slide, so Home→Search
+                // slid "forward" and Search→Home slid "back" for two screens
+                // that sit next to each other in the bar. A crossfade is the
+                // one motion that says "same level". Television keeps the
+                // depth slide - it has no bar, so those moves arrive from the
+                // rail the viewer was on, which really is a push.
+                !FormFactor.isTv &&
+                    initialState.topLevelTab() != null &&
+                    targetState.topLevelTab() != null &&
+                    initialState.topLevelTab() != targetState.topLevelTab() ->
+                    fadeIn(tween(transitionMs)) togetherWith fadeOut(tween(transitionMs))
+
                 // Forward (deeper): the new screen drifts in from the trailing
                 // edge while the old one fades.
                 targetState.navDepth >= initialState.navDepth ->
@@ -2138,6 +2158,14 @@ fun AppRoot(
         is Screen.Home -> {
 
             HomeScreen(
+                // The Upcoming rail's header: Library, on the Calendar pane,
+                // with the pane (not the chip) taking the D-pad. The request
+                // is a one-shot hand-off, so a later ordinary visit to
+                // Library still lands on its own selected chip.
+                onOpenCalendar = {
+                    com.kennyb1201.kbstream.ui.library.LibraryCalendarEntry.request()
+                    screen = Screen.Library
+                },
                 onItemClick = { meta: MetaPreview ->
                     screen = Screen.Detail(
                         meta.type,
@@ -3639,12 +3667,35 @@ fun AppRoot(
     } // closes the splash picker's `when`
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
 
+    val splashExitMs = rememberMotionMs(200)
+
     // Emitted LAST - after the screen-transition container, so it is the
     // topmost child of the shell's Box and a screen can never be seen
     // composing underneath it. Purely visual: no focus, no D-pad keys and no
     // Back interception (see LaunchSplash), so the screen below keeps the
     // input and every press survives the handover.
-    if (splashVisible) {
+    //
+    // The splash fades OUT rather than being cut.
+    //
+    // LaunchSplash is a carefully built screen - a pulsing mark, a ring, a
+    // progress line - and it used to vanish in one frame when the gate opened,
+    // onto Home or the profile picker. The handover is the one moment the app
+    // has a captive, attentive viewer; a 200ms fade is the difference between
+    // "this app is finished" and "a rectangle was removed". Nothing about it is
+    // interactive (the splash takes no focus, no D-pad keys and no Back - see
+    // its own note), so keeping it composed for the length of the fade cannot
+    // swallow a press, and the screen beneath is already live.
+    // The block form, not the ColumnScope/RowScope extension: this sits in the
+    // shell's stacking Box, where a scope-specific overload does not apply.
+    androidx.compose.animation.AnimatedVisibility(
+        visible = splashVisible,
+        modifier = Modifier.fillMaxSize(),
+        // No entrance: the splash is the first thing painted, by the platform
+        // splash theme, and fading it IN would be a flash of what is already
+        // on screen.
+        enter = EnterTransition.None,
+        exit = fadeOut(tween(splashExitMs))
+    ) {
         LaunchSplash()
     }
     // The Box closes AFTER the splash, because the splash is its last child.
@@ -3660,17 +3711,54 @@ fun AppRoot(
     // holds `weight(1f)`, so the bar takes its own height off the bottom of
     // the window instead of being stacked over the screen. Emitting it outside
     // this column is what drew the five items along the top of the display.
-    mobileNavDestination?.let { destination ->
-        MobileBottomNav(
-            selected = destination,
-            onSelect = onMobileNavSelect,
-            onSwitchProfile = onMobileSwitchProfile
-        )
+    //
+    // The bar slides and shrinks rather than vanishing by layout cut. It lives
+    // inside the shell column and the screen above it holds `weight(1f)`, so
+    // before this the bar's removal resized the entire screen in the same frame
+    // it disappeared from - a jump with two causes at once. Animating the
+    // bar's own height keeps the content box following it smoothly.
+    //
+    // The destination is remembered because during the exit the bar is no
+    // longer `visible`, and `mobileNavDestination` is already null then; drawn
+    // from that value the bar would blink out and animate an empty box. Held in
+    // a MutableState and updated during composition so the exit still has the
+    // last destination to paint.
+    val barDestination = remember { mutableStateOf<MobileNavDestination?>(null) }
+    if (mobileNavDestination != null) barDestination.value = mobileNavDestination
+    val barMotionMs = rememberMotionMs(KB_SCREEN_TRANSITION_MS)
+    AnimatedVisibility(
+        visible = mobileNavDestination != null,
+        enter = fadeIn(tween(barMotionMs)) +
+            slideInVertically(tween(barMotionMs)) { it / 2 } +
+            expandVertically(tween(barMotionMs)),
+        exit = fadeOut(tween(barMotionMs)) +
+            slideOutVertically(tween(barMotionMs)) { it / 2 } +
+            shrinkVertically(tween(barMotionMs))
+    ) {
+        barDestination.value?.let { destination ->
+            MobileBottomNav(
+                selected = destination,
+                onSelect = onMobileNavSelect,
+                onSwitchProfile = onMobileSwitchProfile
+            )
+        }
     }
     } // closes the shell Column - after the bar, so the bar is inside it
     } // closes HeroTransitionHost
     } // closes AppRoot
 }
+
+/**
+ * The bottom-bar tab a screen belongs to, or null for anything reached from a
+ * tab (Detail, a catalog grid, a folder, the guide's channel view).
+ *
+ * The shell's transition spec uses it to tell a lateral tab move from a push:
+ * both directions between two of these are siblings, and a crossfade is what
+ * says so. Television returns null throughout - it has no bar, and its moves
+ * between these same screens arrive from a rail, which is a real push.
+ */
+private fun Screen.topLevelTab(): MobileNavDestination? =
+    if (FormFactor.isTv) null else mobileNavSelection(this)
 
 @Composable
 private fun KidsTimeLockOverlay() {

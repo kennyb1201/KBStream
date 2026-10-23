@@ -40,7 +40,9 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import androidx.compose.animation.core.tween
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -48,6 +50,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.rememberHomeLandscape
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
@@ -371,6 +374,13 @@ fun CatalogGridScreen(
                         Column(
                             modifier = Modifier
                                 .width(tileWidth)
+                                // The tile fades in as its page lands, and
+                                // nothing else: a paging grid re-flows enough
+                                // on its own without every arriving cell also
+                                // sliding to a new slot.
+                                .animateItem(
+                                    fadeInSpec = tween(rememberMotionMs(KB_ART_FADE_MS))
+                                )
                                 .onFocusChanged { focused = it.hasFocus }
                         ) {
                             GlobalPosterCard(

@@ -1250,6 +1250,24 @@
                 android:fontFamily="@font/oswald_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
+
+            <!-- The countdown's progress affordance.
+
+                 "Playing next in 12" used to be a number that silently became
+                 11, 10, 9 - the only sign the app was about to change what was
+                 on screen. A determinate bar driven by the same one-second
+                 runnable makes the wait legible without adding another timer,
+                 and it is the last thing the viewer sees before an episode
+                 ends. -->
+            <ProgressBar
+                android:id="@+id/next_up_countdown_bar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:layout_marginTop="6dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="@color/kb_accent" />
         </LinearLayout>
     </LinearLayout>
 

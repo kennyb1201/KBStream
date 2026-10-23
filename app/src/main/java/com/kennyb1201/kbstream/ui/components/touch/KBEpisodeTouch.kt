@@ -77,7 +77,14 @@ fun KBEpisodeRailTouch(
         contentPadding = contentPadding,
         horizontalArrangement = horizontalArrangement
     ) {
-        items(episodes, key = key) { episode -> card(episode) }
+        // A season switch replaces the whole rail. The arriving cards fade
+        // where their slot is instead of the row cutting to a new set of
+        // stills; the card itself is unchanged, this is only its cell.
+        items(episodes, key = key) { episode ->
+            Box(modifier = Modifier.animateItem()) {
+                card(episode)
+            }
+        }
     }
 }
 

@@ -47,6 +47,13 @@ import coil3.request.allowHardware
  * card's corner title, under the clearlogo) needs that moment; the verdict only
  * decides whether what painted is the mark or the caller's stand-in.
  */
+/**
+ * The decode cap for a brand mark. Four times the widest slot one is drawn in,
+ * so a 2x-density ten-foot render is still sharp, while a published 1000px
+ * wordmark no longer becomes a 1000px software bitmap per card.
+ */
+private const val BRAND_MARK_DECODE_PX = 256
+
 @Composable
 internal fun BrandMarkImage(
     url: String,
@@ -63,6 +70,15 @@ internal fun BrandMarkImage(
             .data(url)
             // Force a software bitmap so pixels can be sampled for luminance.
             .allowHardware(false)
+            // ...and decode it at the size it is drawn, which the software
+            // path made matter. A brand mark arrives at its published size
+            // (a network wordmark is routinely 1000px wide) and this decodes
+            // EVERY one of them on the CPU, inside the scroll of every Home
+            // rail and every landscape grid. 256px is four times the widest
+            // slot a mark is drawn in and still leaves [sampleBrandMark]
+            // plenty to sample from, so the verdict is unchanged - the decode
+            // and the retained bitmap are an order of magnitude smaller.
+            .size(BRAND_MARK_DECODE_PX)
             .build()
     }
 

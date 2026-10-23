@@ -36,7 +36,17 @@ enum class LibraryFilter(val label: String) {
     ALL("ALL"),
     MY_LIST("MY LIST"),
     WATCHLIST("WATCHLIST"),
-    LISTS("PERSONAL LISTS")
+    LISTS("PERSONAL LISTS"),
+
+    /**
+     * The year's episodes of every tracked show (see [LibraryCalendarPane]).
+     *
+     * Last, so it sits after PERSONAL LISTS in the strip the way the other
+     * panes sit in it, and it is a PANE like LISTS rather than a grid: the
+     * screen swaps to it, it owns its own ViewModel, and nothing in this one's
+     * saved-title state changes when it is shown.
+     */
+    CALENDAR("CALENDAR")
 }
 
 /**
@@ -217,6 +227,12 @@ class LibraryViewModel(
                 // Keep cached lists/items; refresh lists in background.
                 refresh()
             }
+
+            // The calendar pane reads its own sources (see
+            // LibraryCalendarViewModel) and is composed only while it is on
+            // screen, so there is nothing here to kick off: a refresh() against
+            // the saved-title stores would be work the pane never reads.
+            LibraryFilter.CALENDAR -> Unit
         }
     }
 

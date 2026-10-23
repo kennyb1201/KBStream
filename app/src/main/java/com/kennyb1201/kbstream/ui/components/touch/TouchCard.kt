@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components.touch
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,6 +17,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import com.kennyb1201.kbstream.ui.components.KB_PRESS_SPRING
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -64,8 +67,17 @@ fun KBCard(
     // covers the ripple, so the same idea (the plate gives way) is what makes
     // the tap feel physical - a shallower scale, because a phone card is
     // already the whole width of the item.
+    // Reduced motion: the plate does not move under the finger. The spring is
+    // the app's one press spec rather than the animateFloatAsState default, so
+    // a phone card and the TV card it twins give way at the same rate.
+    val reducedMotion = rememberReducedMotion()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.98f else 1f,
+        targetValue = if (pressed && !reducedMotion) 0.98f else 1f,
+        animationSpec = if (reducedMotion) {
+            tween(durationMillis = 0)
+        } else {
+            KB_PRESS_SPRING
+        },
         label = "touchCardPress"
     )
 

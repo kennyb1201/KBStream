@@ -104,11 +104,17 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.simkl.SIMKL_DATA_CREDIT
 import com.kennyb1201.kbstream.data.tmdb.TMDB_ATTRIBUTION_NOTICE
 import com.kennyb1201.kbstream.R
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBSecretField
+import com.kennyb1201.kbstream.ui.components.KB_EASE
+import com.kennyb1201.kbstream.ui.components.KB_PANEL_ENTER_MS
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
@@ -768,11 +774,37 @@ fun SettingsScreen(
                 onPickResult = jumpToSetting
             )
         }
+        //
+        // A pane change fades its content up and in from the rail.
+        //
+        // Pane-hopping is Settings' main loop and it was the app's most
+        // abrupt one: the rail's selection moved, and the whole right-hand
+        // pane - title, blurb, every row - was replaced in one frame. The
+        // focus deliberately stays on the rail throughout (see the host), so
+        // nothing about that contract changes; only what the eye sees on the
+        // way in.
+        val paneReducedMotion = rememberReducedMotion()
+        val paneProgress = remember { Animatable(1f) }
+        LaunchedEffect(selectedPane) {
+            if (paneReducedMotion) {
+                paneProgress.snapTo(1f)
+            } else {
+                paneProgress.snapTo(0f)
+                paneProgress.animateTo(
+                    1f,
+                    tween(durationMillis = KB_PANEL_ENTER_MS, easing = KB_EASE)
+                )
+            }
+        }
         SettingsContentHost(
             title = selectedPane.label,
             blurb = selectedPane.blurb,
             scrollable = selectedPane != SettingsPane.HIDDEN,
-            flashing = flashingSetting
+            flashing = flashingSetting,
+            modifier = Modifier.graphicsLayer {
+                alpha = paneProgress.value
+                translationX = (1f - paneProgress.value) * 12.dp.toPx()
+            }
         ) {
                 // m11 (audit), amended 2026-10-22: an API key is a secret and
                 // this pane is on a TV in a room, so a kids profile may not
@@ -3453,6 +3485,7 @@ private fun SettingsNavRail(
 @Composable
 private fun SettingsContentHost(
     title: String,
+    modifier: Modifier = Modifier,
     // What the pane holds, in the same words the rail used to sell it: the
     // pane then reads as a continuation of the rail rather than a new page.
     blurb: String,
@@ -3472,7 +3505,7 @@ private fun SettingsContentHost(
         scroll.scrollTo(0)
     }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .then(if (scrollable) Modifier.verticalScroll(scroll) else Modifier)
             .padding(start = 40.dp, end = 64.dp, top = 32.dp, bottom = 40.dp),

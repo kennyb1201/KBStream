@@ -62,6 +62,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -81,6 +83,7 @@ import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.RatingChipSource
@@ -937,6 +940,10 @@ fun DetailScreenMobile(
             ) {
                 item(key = "header") {
                     MobileDetailHeader(
+                        // The other end of the phone's poster -> Detail flight:
+                        // the same type/id the card armed on press.
+                        type = type,
+                        id = id,
                         title = displayName,
                         backdropUrl = heroBackdropUrl,
                         logoUrl = clearLogoUrl,
@@ -1178,6 +1185,9 @@ fun DetailScreenMobile(
                             contentType = { "episode" }
                         ) { episode ->
                             val visual = episodeVisual(episode)
+                            // A season switch replaces the list; the
+                            // survivor rows fade in and step where they
+                            // belong instead of the page cutting.
                             EpisodeRow(
                                 episode = episode,
                                 hiddenTitle = visual.hiddenTitle,
@@ -1187,7 +1197,8 @@ fun DetailScreenMobile(
                                 onClick = { openEpisode(episode, currentSeason) },
                                 onLongClick = {
                                     episodeMenu = EpisodeMenuTarget(episode, currentSeason)
-                                }
+                                },
+                                modifier = Modifier.animateItem()
                             )
                         }
                     }
@@ -1374,6 +1385,7 @@ fun DetailScreenMobile(
                                     contentType = { "recommendation" }
                                 ) { item ->
                                     RecommendationTile(
+                                        modifier = Modifier.animateItem(),
                                         item = item,
                                         mediaType = type,
                                         isWatched = isPosterWatched(item.id, type),
@@ -1874,6 +1886,8 @@ fun DetailScreenMobile(
 /** The header: backdrop, clearlogo or title, and the meta line. */
 @Composable
 private fun MobileDetailHeader(
+    type: String,
+    id: String,
     title: String,
     backdropUrl: String?,
     logoUrl: String?,
@@ -1893,11 +1907,32 @@ private fun MobileDetailHeader(
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
     ) {
+        //
+        // The backdrop fades in, like every other hero in the app.
+        //
+        // A bare `AsyncImage(model = url)` inherits the loader's global
+        // `.crossfade(false)` - the rule for rail and grid TILES, which is
+        // right there and wrong here. So the phone's Detail header popped in
+        // while the television's Detail hero, Home's phone hero and every
+        // desktop backdrop crossfaded: the worst single pop on the biggest
+        // surface the phone has, and a one-line difference from parity.
+        val context = LocalContext.current
+        val backdropRequest = remember(context, backdropUrl) {
+            ImageRequest.Builder(context)
+                .data(backdropUrl)
+                .crossfade(true)
+                .build()
+        }
         AsyncImage(
-            model = backdropUrl,
+            model = backdropRequest,
             contentDescription = title,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
+            // The destination end of the flight. One-way by the same rule the
+            // television uses (see KBHeroTransition): the hero drops out on the
+            // way back rather than zooming a Crop image into a poster rect.
+            modifier = Modifier
+                .fillMaxSize()
+                .heroSharedElement(type, id)
         )
         // The shared hero player, over the still: its shutter is transparent,
         // so until the first frame lands the backdrop above is exactly what a
@@ -2005,10 +2040,11 @@ private fun EpisodeRow(
     unavailable: Boolean,
     progress: Float?,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .clip(KBShapeCard)
@@ -2196,12 +2232,13 @@ private fun RecommendationTile(
     mediaType: String,
     isWatched: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val posterSize = rememberTouchPosterSize()
     val tileWidth = rememberPosterTileWidth(posterSize.width)
     Column(
-        modifier = Modifier.width(tileWidth),
+        modifier = modifier.width(tileWidth),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         TouchGlobalPosterCard(

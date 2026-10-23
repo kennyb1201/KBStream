@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -48,6 +50,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,10 +62,13 @@ import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
+import com.kennyb1201.kbstream.ui.components.KB_EASE
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -381,60 +387,95 @@ internal fun SearchBrowseBrowser(
             }
         }
 
-        when {
-            submenuLoading && category.entries.isEmpty() -> {
-                Text(
-                    text = "Resolving ${category.label.lowercase()}…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = KBTextLo,
-                    modifier = Modifier.padding(
-                        top = 12.dp,
-                        start = SEARCH_RAIL_EDGE_PADDING
-                    )
+        /*
+         * The submenu's four states - resolving, nothing here, nothing matching
+         * the filter, chips - used to replace each other in a single frame,
+         * including while the viewer filters as they type. The branch is
+         * identified once and the new one fades and rises into place; the state
+         * itself is still read live, so nothing about what each branch renders
+         * changes.
+         */
+        val branchKey = when {
+            submenuLoading && category.entries.isEmpty() -> "resolving:" + category.key
+            category.entries.isEmpty() -> "empty:" + category.key
+            visibleEntries.isEmpty() -> "filtered:" + category.key
+            else -> "chips:" + category.key
+        }
+        val branchReducedMotion = rememberReducedMotion()
+        val branchProgress = remember { Animatable(1f) }
+        LaunchedEffect(branchKey) {
+            if (branchReducedMotion) {
+                branchProgress.snapTo(1f)
+            } else {
+                branchProgress.snapTo(0f)
+                branchProgress.animateTo(
+                    1f,
+                    tween(durationMillis = KB_ALPHA_FADE_MS, easing = KB_EASE)
                 )
             }
+        }
 
-            category.entries.isEmpty() -> {
-                Text(
-                    text = "Nothing to browse here yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = KBTextLo,
-                    modifier = Modifier.padding(
-                        top = 12.dp,
-                        start = SEARCH_RAIL_EDGE_PADDING
-                    )
-                )
+        Box(
+            modifier = Modifier.graphicsLayer {
+                alpha = branchProgress.value
+                translationY = (1f - branchProgress.value) * 8.dp.toPx()
             }
-
-            visibleEntries.isEmpty() -> {
-                KBStatusMessage(
-                    icon = KB_STATUS_ICON_EMPTY,
-                    message = "No ${browseCategoryNounPlural(category.key)} match " +
-                        "\"${filterQuery.trim()}\"",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 18.dp)
-                )
-            }
-
-            else -> {
-                // The grid owns its focus reveals; the screen's own LazyColumn
-                // never participates (see [NO_CHIP_REVEAL_SPEC]). Scoped to
-                // the grid alone, so every reveal on the screen outside it is
-                // unaffected.
-                ChipRevealScope {
-                    SubmenuChipGrid(
-                        entries = visibleEntries,
-                        categoryKey = category.key,
-                        chipFocusRequesters = chipFocusRequesters,
-                        onEntryClicked = viewModel::onBrowseEntryClicked,
-                        onEntryLongClick = onChipLongPress,
-                        armedChipName = armedChipName,
-                        onReturnChipConsumed = {
-                            viewModel.browseReturnChip = null
-                            onReturnChipNameConsumed()
-                        }
+        ) {
+            when {
+                submenuLoading && category.entries.isEmpty() -> {
+                    Text(
+                        text = "Resolving ${category.label.lowercase()}…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(
+                            top = 12.dp,
+                            start = SEARCH_RAIL_EDGE_PADDING
+                        )
                     )
+                }
+
+                category.entries.isEmpty() -> {
+                    Text(
+                        text = "Nothing to browse here yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(
+                            top = 12.dp,
+                            start = SEARCH_RAIL_EDGE_PADDING
+                        )
+                    )
+                }
+
+                visibleEntries.isEmpty() -> {
+                    KBStatusMessage(
+                        icon = KB_STATUS_ICON_EMPTY,
+                        message = "No ${browseCategoryNounPlural(category.key)} match " +
+                            "\"${filterQuery.trim()}\"",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp)
+                    )
+                }
+
+                else -> {
+                    // The grid owns its focus reveals; the screen's own
+                    // LazyColumn never participates (see
+                    // [NO_CHIP_REVEAL_SPEC]). Scoped to the grid alone, so
+                    // every reveal on the screen outside it is unaffected.
+                    ChipRevealScope {
+                        SubmenuChipGrid(
+                            entries = visibleEntries,
+                            categoryKey = category.key,
+                            chipFocusRequesters = chipFocusRequesters,
+                            onEntryClicked = viewModel::onBrowseEntryClicked,
+                            onEntryLongClick = onChipLongPress,
+                            armedChipName = armedChipName,
+                            onReturnChipConsumed = {
+                                viewModel.browseReturnChip = null
+                                onReturnChipNameConsumed()
+                            }
+                        )
+                    }
                 }
             }
         }

@@ -106,8 +106,10 @@ import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.mobile.GuideScreenMobile
+import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
@@ -1481,7 +1483,14 @@ Spacer(modifier = Modifier.height(14.dp))
     } else {
         Modifier.focusRequester(rowFocusRequester)
     }
-).onPreviewKeyEvent { event ->
+)
+    // A group change or a favourites toggle re-lists this column wholesale;
+    // the rows now fade (and take new places) instead of every keyed row
+    // vanishing and reappearing in one frame. Focus handling below is
+    // untouched, and the focus requesters sit inside the modifier, so the
+    // node a hand-back asks for is still the same node.
+    .animateItem()
+    .onPreviewKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
     when (event.key) {
@@ -2456,7 +2465,7 @@ private fun ChannelRowCard(
     // dim below.
     val alpha by animateFloatAsState(
         targetValue = if (isFocused || selected) 1f else 0.96f,
-        animationSpec = tween(durationMillis = 140),
+        animationSpec = tween(durationMillis = rememberMotionMs(KB_ALPHA_FADE_MS)),
         label = "channelRowAlpha"
     )
     val accentAlpha by animateFloatAsState(
@@ -2465,7 +2474,7 @@ private fun ChannelRowCard(
             selected -> 0.82f
             else -> 0f
         },
-        animationSpec = tween(durationMillis = 140),
+        animationSpec = tween(durationMillis = rememberMotionMs(KB_ALPHA_FADE_MS)),
         label = "channelRowAccentAlpha"
     )
     val rowShape = KBShapeCard

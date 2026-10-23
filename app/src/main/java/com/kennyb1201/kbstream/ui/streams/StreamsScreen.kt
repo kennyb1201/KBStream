@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +70,7 @@ import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.ui.components.KB_ALPHA_FADE_MS
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.mobile.StreamsScreenMobile
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -76,6 +78,8 @@ import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.rememberMotionMs
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -548,6 +552,11 @@ fun StreamsScreen(
                         ) { index, stream ->
                             StreamCard(
                                 stream = stream,
+                                // A refresh or a filter re-lists this column;
+                                // the rows fade and slide into their new places
+                                // instead of the list teleporting under the
+                                // D-pad hand-back.
+                                modifier = Modifier.animateItem(),
                                 // Only the first row carries the entry requester:
                                 // it is the stop the picker opens on, and every
                                 // other card keeps the platform's own focus walk.
@@ -702,6 +711,7 @@ private fun StreamCard(
     badgesAbove: Boolean,
     declaredLabel: String?,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     // Handed to the picker's first row only, so the screen has something named
     // to open on (see StreamsScreen's entry focus); null everywhere else.
     focusRequester: FocusRequester? = null
@@ -716,13 +726,13 @@ private fun StreamCard(
     // is gone rather than left running on every focus change.
     val alpha by animateFloatAsState(
         targetValue = if (isFocused) 1f else 0.97f,
-        animationSpec = tween(140),
+        animationSpec = tween(rememberMotionMs(KB_ALPHA_FADE_MS)),
         label = "streamCardAlpha"
     )
 
     KBCard(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .then(
                 if (focusRequester != null) {
@@ -963,6 +973,8 @@ private fun StreamRefreshChip(
  */
 @Composable
 private fun rememberRefreshSpin(): State<Float> {
+    // Reduced motion: the chip still says "refreshing", it just does not spin.
+    if (rememberReducedMotion()) return remember { mutableFloatStateOf(0f) }
     val transition = rememberInfiniteTransition(label = "streamRefreshSpin")
     return transition.animateFloat(
         initialValue = 0f,

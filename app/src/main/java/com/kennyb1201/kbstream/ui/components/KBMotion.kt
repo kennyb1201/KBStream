@@ -1,8 +1,17 @@
 package com.kennyb1201.kbstream.ui.components
 
 import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -13,6 +22,72 @@ import androidx.compose.ui.unit.dp
  * enough that a D-pad-happy user never waits on it.
  */
 const val KB_SCREEN_TRANSITION_MS = 220
+
+/**
+ * The app's one short alpha fade: focus dims, art reveals, status plates.
+ *
+ * These lengths were being retyped at each call site - 140 in the guide and the
+ * streams list, 200 for a GIF, nothing at all (a default spring) on two scales -
+ * so the same-feeling interactions eased three different ways. One constant per
+ * *kind* of motion, so a new surface inherits the app's tempo instead of
+ * inventing a fourth.
+ */
+const val KB_ALPHA_FADE_MS = 140
+
+/** Panel/dialog entrance. Exit is shorter: a dismissal should not linger. */
+const val KB_PANEL_ENTER_MS = 180
+const val KB_PANEL_EXIT_MS = 120
+
+/** Player chrome (a View-world overlay) show/hide. */
+const val KB_CHROME_FADE_MS = 160
+
+/** Art arriving into a slot that is already the right size (a GIF, a logo). */
+const val KB_ART_FADE_MS = 200
+
+/** The easing every short KB transition uses, so they share one acceleration. */
+val KB_EASE: Easing = FastOutSlowInEasing
+
+/**
+ * The one press-in spring (touch cards): a decisive but not bouncy give.
+ *
+ * Explicit rather than the `animateFloatAsState` default, which is a
+ * platform-tuned spring that happened to differ from every sibling surface.
+ */
+val KB_PRESS_SPRING: SpringSpec<Float> =
+    spring(dampingRatio = 0.8f, stiffness = 700f)
+
+/**
+ * A duration in the app's motion language, collapsed to a hard cut when the
+ * viewer has asked the platform to remove animations.
+ *
+ * Every tween that is not already routed through [screenTransitionMs] should
+ * take its length from here, so a reduced-motion user gets the same instant
+ * cut the shell gives them instead of motion in exactly the scattered places
+ * the system forgot.
+ */
+@Composable
+fun rememberMotionMs(durationMs: Int): Int =
+    if (rememberReducedMotion()) 0 else durationMs
+
+/**
+ * A 0 -> 1 progress for something that has just entered the composition, read
+ * by the caller inside `graphicsLayer {}` so the animation costs no
+ * recompositions.
+ *
+ * A `Dialog` window does not reliably run an `AnimatedVisibility` exit, which is
+ * why the dialog plate animates its own entrance this way instead: the panel
+ * mounts, then scales and fades up where it is drawn. Reduced motion returns 1
+ * immediately - the plate is simply there.
+ */
+@Composable
+fun rememberEntranceProgress(durationMs: Int = KB_PANEL_ENTER_MS): State<Float> {
+    if (rememberReducedMotion()) return remember { mutableStateOf(1f) }
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        progress.animateTo(1f, tween(durationMillis = durationMs, easing = KB_EASE))
+    }
+    return progress.asState()
+}
 
 /**
  * True when the user has asked the platform for less motion — turning off

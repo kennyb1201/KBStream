@@ -36,6 +36,18 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    /**
+     * The ranked, text-free backdrop for this collection's HEADER, or null
+     * while it is unresolved / when TMDB offers no ranking for it.
+     *
+     * Null is not an error state: the header falls back to the collection's own
+     * primary key art, which is exactly what it drew before this existed. It
+     * only changes when the ranking has something better to offer - a text-free
+     * still, where the primary has the collection's title baked into it.
+     */
+    private val _headerBackdropUrl = MutableStateFlow<String?>(null)
+    val headerBackdropUrl: StateFlow<String?> = _headerBackdropUrl.asStateFlow()
+
     // TMDB part id -> IMDB id, filled once parts load so badges can compare
     // against the same imdb-keyed watched keys used everywhere else.
     private val _resolvedIds = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -142,6 +154,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             _isLoading.value = true
             _collection.value = null
             _resolvedIds.value = emptyMap()
+            _headerBackdropUrl.value = null
 
             try {
                 val loaded = tmdbRepository.getCollection(collectionId)
@@ -161,9 +174,29 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
             val detail = _collection.value
             if (detail != null) {
+                // The header's own ranking, off the badge-resolution path so the
+                // rail is never held behind a second network round trip.
+                viewModelScope.launch {
+                    loadHeaderBackdrop(collectionId, generation)
+                }
                 resolveAndPreload(detail.parts.map { it.id })
             }
         }
+    }
+
+    /**
+     * Resolves the header's text-free backdrop (see
+     * [TmdbRepository.fetchCollectionHeaderBackdropCached]) and publishes it
+     * only if this load still owns the page - the ViewModel is activity-scoped,
+     * so a slower older load must not paint its art under a newer collection.
+     */
+    private suspend fun loadHeaderBackdrop(collectionId: Int, generation: Int) {
+        val url = runCatchingCancellable {
+            tmdbRepository.fetchCollectionHeaderBackdropCached(collectionId)
+        }.getOrNull() ?: return
+
+        if (generation != loadGeneration) return
+        _headerBackdropUrl.value = url
     }
 
     private suspend fun resolveAndPreload(tmdbIds: List<Int>) {
