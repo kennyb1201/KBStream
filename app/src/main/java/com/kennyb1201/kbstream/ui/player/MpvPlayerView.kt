@@ -104,7 +104,14 @@ class MpvPlayerView @JvmOverloads constructor(
         val startPositionMs: Long = 0L
     )
 
-    /** One audio or subtitle track as mpv reports it. */
+    /**
+     * One audio or subtitle track as mpv reports it.
+     *
+     * [position] and [trackCount] are set for AUDIO tracks only: the position
+     * among the file's audio tracks and how many there are. They are what makes
+     * an audio signature the same five-field shape the main player writes, so a
+     * pick made here resolves there and vice versa (see [signature]).
+     */
     data class Track(
         val id: Int,
         val type: String,
@@ -112,7 +119,9 @@ class MpvPlayerView @JvmOverloads constructor(
         val title: String?,
         val codec: String?,
         val channels: Int?,
-        val selected: Boolean
+        val selected: Boolean,
+        val position: Int? = null,
+        val trackCount: Int? = null
     ) {
         /**
          * The same four fields the main player's picker lists and stores
@@ -141,13 +150,36 @@ class MpvPlayerView @JvmOverloads constructor(
             get() = listOfNotNull(label, SubtitleKindRules.tagText(title))
                 .joinToString(" \u00b7 ")
 
-        /** `language|codec|channels`, the shape stored per title. */
+        /**
+         * The shape stored per title, built by the SAME rule the main player
+         * uses ([PlayerTrackBridge.signatureOf]) so a pick is one memory rather
+         * than two.
+         *
+         * Audio: `language|codec|channels|index|trackCount` — the full five
+         * fields, exactly what Exo writes on a manual pick. This view used to
+         * write three, which is why an MPV pick could not be position-matched by
+         * the other engine and why a twin of the same codec and layout resolved
+         * to whichever one came first (see the spec's "reported" case).
+         *
+         * Subtitles stay three fields: nothing in the field report indicts
+         * them, and the resolver accepts three-field input everywhere.
+         */
         val signature: String
-            get() = listOf(
-                language.orEmpty().lowercase(),
-                codec.orEmpty().lowercase(),
-                (channels ?: 0).toString()
-            ).joinToString("|")
+            get() = if (type == "audio") {
+                PlayerTrackBridge.signatureOf(
+                    language = language,
+                    codecs = codec,
+                    channelCount = channels ?: 0,
+                    index = position,
+                    trackCount = trackCount
+                )
+            } else {
+                PlayerTrackBridge.signatureOf(
+                    language = language,
+                    codecs = codec,
+                    channelCount = channels ?: 0
+                )
+            }
     }
 
     /** libmpv could not be loaded/created — the engine is unusable here. */
@@ -1022,10 +1054,17 @@ class MpvPlayerView @JvmOverloads constructor(
     fun subtitlesOn(): Boolean = subtitleTracks().any { it.selected }
 
     /**
-     * Applies a track signature remembered for this title
-     * ("language|codec|channels"), falling back to language + channel count.
-     * False when neither matches: the stored track may simply not be in this
+     * Applies a track signature remembered for this title, through the SAME
+     * tiered resolver the main player uses ([PlayerTrackBridge.resolveSignature]).
+     * False when no tier matches: the stored track may simply not be in this
      * episode's file.
+     *
+     * The pair this replaced — exact string, then language + channel count — is
+     * the defect the spec fixes: it never looked at the codec, so an untagged
+     * dual-audio pick (Russian AC-3, English MP3) could only ever "match" by
+     * chance of first-position, and a pick made here was invisible to the
+     * position tier the other engine relies on. It also had no notion of a
+     * seat, where the other engine treats one as the last resort.
      *
      * The false is a signal, not a verdict on what to play: the caller takes
      * over the choice with the language preference (see the activity's
@@ -1035,16 +1074,22 @@ class MpvPlayerView @JvmOverloads constructor(
     fun applyRememberedAudioTrack(signature: String): Boolean {
         if (!initialized || signature.isBlank()) return false
         val tracks = audioTracks()
-        val parts = signature.split('|')
-        val language = parts.getOrNull(0).orEmpty()
-        val channels = parts.getOrNull(2)?.toIntOrNull() ?: 0
-        val match = tracks.firstOrNull { it.signature == signature }
-            ?: tracks.firstOrNull {
-                LanguageMatch.matches(language, it.language) &&
-                    (channels <= 0 || it.channels == channels)
-            }
-            ?: return false
-        runCatching { MpvBackend.setPropertyInt("aid", match.id) }
+        // The resolver works on plain identities so both engines share one
+        // implementation; the position it answers is an index into THIS list,
+        // which is mpv's own track order.
+        val identities = tracks.map { track ->
+            PlayerTrackBridge.TrackIdentity(
+                language = track.language,
+                codecs = track.codec.orEmpty().lowercase(),
+                channels = track.channels ?: 0
+            )
+        }
+        val position = PlayerTrackBridge.resolveSignature(signature, identities)
+        if (position == null) {
+            PlayerTrackBridge.noteAudioMemoryMiss(signature, identities)
+            return false
+        }
+        runCatching { MpvBackend.setPropertyInt("aid", tracks[position].id) }
         return true
     }
 
@@ -2367,7 +2412,13 @@ class MpvPlayerView @JvmOverloads constructor(
                 selected = getPropertyBooleanOrNull("track-list/$index/selected") == true
             )
         }
-        return tracks
+        // Audio rows carry their seat and the file's audio count, which is the
+        // tail of the five-field signature the memory stores. Subtitles keep
+        // the three-field shape, so their tracks are returned as read.
+        if (type != "audio") return tracks
+        return tracks.mapIndexed { position, track ->
+            track.copy(position = position, trackCount = tracks.size)
+        }
     }
 
     private fun getPropertyIntOrNull(name: String): Int? =

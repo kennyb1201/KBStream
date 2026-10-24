@@ -17,6 +17,14 @@ import org.junit.Test
  * as a last resort, only when the next file has the same number of tracks, and
  * never onto a track that names a different language. Three-field signatures
  * written before it existed keep working exactly as they did.
+ *
+ * That was still not enough for a CODEC-distinguished pick on the same shape of
+ * file (The War at Home: Russian AC-3, English MP3, both untagged). The position
+ * is baked into the exact string, so an encode that orders the tracks the other
+ * way missed Exact entirely - and the position tier then re-selected the seat,
+ * which is now the other track. Faithfully playing the wrong one. The Identity
+ * tier answers the question the pick actually answered: the same language, codec
+ * and channel count, wherever it sits, before the seat is trusted.
  */
 class PlayerTrackBridgeSignatureTest {
 
@@ -167,9 +175,23 @@ class PlayerTrackBridgeSignatureTest {
      */
     @Test
     fun `a hand-picked untagged track is found by its position`() {
-        val tracks = listOf(track("und"), track(null))
-        assertEquals(1, PlayerTrackBridge.resolveSignature("und|eac3|6|1|2", tracks))
-        assertEquals(0, PlayerTrackBridge.resolveSignature("und|eac3|6|0|2", tracks))
+        // Neither track carries a tag, so the identity cannot separate them:
+        // they are twins, and the remembered seat is the only evidence left.
+        val tracks = listOf(track(null), track(null))
+        assertEquals(1, PlayerTrackBridge.resolveSignature("|eac3|6|1|2", tracks))
+        assertEquals(0, PlayerTrackBridge.resolveSignature("|eac3|6|0|2", tracks))
+    }
+
+    /**
+     * ...and the seat is still what resolves when the codec changed between
+     * remuxes (“ac3” to “eac3”), which is the case the position tier was added
+     * for: Identity has nothing to match, the language is blank so Loose cannot
+     * fire either, and the seat is the last resort.
+     */
+    @Test
+    fun `a re-encode with another codec still lands on the remembered seat`() {
+        val tracks = listOf(track(null, codecs = "ac3"), track(null, codecs = "aac"))
+        assertEquals(1, PlayerTrackBridge.resolveSignature("|eac3|6|1|2", tracks))
     }
 
     @Test
@@ -183,13 +205,20 @@ class PlayerTrackBridgeSignatureTest {
 
     @Test
     fun `the position is used only when the file has the same number of tracks`() {
-        // A release that dropped the commentary track: "the second audio track"
-        // no longer means the track that was picked, so nothing is applied.
-        assertNull(PlayerTrackBridge.resolveSignature("und|eac3|6|1|2", listOf(track("und"))))
+        // A re-encode whose codec also changed, so Identity cannot answer: "the
+        // second audio track" no longer means the track that was picked, and
+        // nothing is applied. (An exact identity match, by contrast, is
+        // positive evidence and is taken whatever the file's size - see the
+        // Identity cases below.)
+        assertNull(PlayerTrackBridge.resolveSignature("|eac3|6|1|2", listOf(track(null, codecs = "ac3"))))
         assertNull(
             PlayerTrackBridge.resolveSignature(
-                "und|eac3|6|1|2",
-                listOf(track("rus"), track("rus"), track("und"))
+                "|eac3|6|1|2",
+                listOf(
+                    track(null, codecs = "ac3"),
+                    track(null, codecs = "ac3"),
+                    track(null, codecs = "ac3")
+                )
             )
         )
     }
@@ -223,5 +252,156 @@ class PlayerTrackBridgeSignatureTest {
     @Test
     fun `a signature with no position is not rescued by one`() {
         assertNull(PlayerTrackBridge.resolveSignature("eng|eac3|6", listOf(track("rus"), track("und"))))
+    }
+
+    // ── the Identity tier: the reported case ───────────────────────────────
+
+    /**
+     * The field case, exactly: The War at Home, an untagged dual-audio file
+     * (Russian AC-3, English MP3). The MP3 was picked on an episode where it sat
+     * SECOND; the next episode's encode orders the tracks the other way. Exact
+     * misses on the baked-in position, and the position tier then re-seats the
+     * pick onto the AC-3 - which is the reported "every later episode starts on
+     * the Russian track".
+     */
+    private fun untagged(codecs: String, channels: Int) =
+        PlayerTrackBridge.TrackIdentity(language = null, codecs = codecs, channels = channels)
+
+    @Test
+    fun `the reported order flip still finds the picked codec`() {
+        // Picked: the MP3, second of two.
+        val stored = "|mp3|2|1|2"
+        // The next episode: the AC-3 first, the MP3 second - the same file order
+        // the pick was made in, so Exact still catches it.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                stored,
+                listOf(untagged("ac3", 2), untagged("mp3", 2))
+            )
+        )
+        // ...and the encode that flips them. Exact misses (position 1 is now
+        // the AC-3), the old ladder's last resort would return 1 anyway; the
+        // pick has to land on the MP3 at 0.
+        assertEquals(
+            "the codec the viewer picked, wherever the encode put it",
+            0,
+            PlayerTrackBridge.resolveSignature(
+                stored,
+                listOf(untagged("mp3", 2), untagged("ac3", 2))
+            )
+        )
+    }
+
+    @Test
+    fun `identity beats the remembered seat`() {
+        // Stored first (index 0) but the file now carries the picked codec
+        // second: before this tier, a same-size file sent the D-pad to seat 0 -
+        // the other track.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                "|mp3|2|0|2",
+                listOf(untagged("ac3", 2), untagged("mp3", 2))
+            )
+        )
+    }
+
+    /**
+     * The guard the tier must not loosen: a tagged pick of the DD+ 5.1 among a
+     * same-language stereo track still lands on the 5.1, because the channel
+     * count is part of the identity. This is the "tagged regression guard" from
+     * the spec's field list.
+     */
+    @Test
+    fun `a tagged 5_1 pick does not fall to the same-language stereo`() {
+        val tracks = listOf(
+            track("eng", codecs = "ac-3", channels = 2),
+            track("eng", codecs = "ec-3", channels = 6)
+        )
+        assertEquals(1, PlayerTrackBridge.resolveSignature("eng|ec-3|6|1|2", tracks))
+        // ...and the flipped encode, which Exact cannot catch.
+        assertEquals(
+            0,
+            PlayerTrackBridge.resolveSignature(
+                "eng|ec-3|6|1|2",
+                listOf(track("eng", codecs = "ec-3", channels = 6), track("eng", codecs = "ac-3", channels = 2))
+            )
+        )
+    }
+
+    @Test
+    fun `identity never picks a track that names another language`() {
+        // A stored English MP3 cannot identity-match a Russian MP3: language is
+        // one of the three fields.
+        assertNull(
+            PlayerTrackBridge.resolveSignature(
+                "eng|mp3|2|1|2",
+                listOf(track("rus", codecs = "mp3", channels = 2), track("rus", codecs = "mp3", channels = 2))
+            )
+        )
+    }
+
+    /**
+     * True twins - two tracks with the same language, codec and channels - go to
+     * the remembered seat while the file is still the same size, and to the first
+     * match once it is not. That is the one place Identity has nothing to choose
+     * between, so the seat is the only evidence left.
+     */
+    @Test
+    fun `twins resolve to the remembered seat, or the first one`() {
+        val twins = listOf(
+            track("eng", codecs = "aac", channels = 2),
+            track("eng", codecs = "aac", channels = 2)
+        )
+        assertEquals(1, PlayerTrackBridge.resolveSignature("eng|aac|2|1|2", twins))
+        assertEquals(0, PlayerTrackBridge.resolveSignature("eng|aac|2|0|2", twins))
+        assertEquals(
+            "a file that lost a track no longer agrees with the seat, so the first " +
+                "match answers instead",
+            0,
+            PlayerTrackBridge.resolveSignature("eng|aac|2|1|2", listOf(twins[0]))
+        )
+    }
+
+    @Test
+    fun `a pick whose codec is gone falls through to language and channels`() {
+        // The release dropped the MP3 entirely: Identity has no match, and the
+        // next tier - same language, same layout - still has to work, so the
+        // viewer is not dropped back to the muxer's default.
+        assertEquals(
+            0,
+            PlayerTrackBridge.resolveSignature(
+                "eng|mp3|2|1|2",
+                listOf(track("eng", codecs = "aac", channels = 2))
+            )
+        )
+    }
+
+    @Test
+    fun `a legacy three-field pick still resolves`() {
+        // Anything the current MPV build has written: three fields, no seat.
+        // Exact's legacy arm catches this one before Identity is even asked.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                "|mp3|2",
+                listOf(untagged("ac3", 2), untagged("mp3", 2))
+            )
+        )
+    }
+
+    @Test
+    fun `the miss line names the stored signature and the file's tracks`() {
+        val line = PlayerTrackBridge.audioMemoryMissLine(
+            signature = "|mp3|2|1|2",
+            tracks = listOf(untagged("ac3", 2), untagged("aac", 2))
+        )
+        assertEquals("track-memory: audio miss stored=|mp3|2|1|2 file=[|ac3|2, |aac|2]", line)
+        assertEquals(
+            "an empty file says so rather than ending in an empty bracket",
+            "track-memory: audio miss stored=|mp3|2 file=[none]",
+            PlayerTrackBridge.audioMemoryMissLine("|mp3|2", emptyList())
+        )
     }
 }

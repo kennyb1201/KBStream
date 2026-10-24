@@ -12,6 +12,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
@@ -187,6 +188,17 @@ internal object PlayerTrackBridge {
     /** One application per player instance; see [onPlayerAttached]. */
     @Volatile
     private var rememberedTrackApplied = false
+
+    /**
+     * The last audio signature whose miss was reported, so one file reports
+     * once.
+     *
+     * A miss is retried on every READY transition (the flag above stays false,
+     * which is deliberate - the tracks may arrive late), and each retry would
+     * append the same line to a twelve-line ring. Cleared with the flag on a new
+     * player, because a new instance is a new file.
+     */
+    private var reportedAudioMissFor: String? = null
 
     /** One re-assertion per player instance; see [applyRememberedSubtitleTrack]. */
     @Volatile
@@ -452,6 +464,7 @@ internal object PlayerTrackBridge {
         if (wiredPlayer === player) return
         wiredPlayer = player
         rememberedTrackApplied = false
+        reportedAudioMissFor = null
         rememberedSubtitleTrackApplied = false
         // The player may already be ready (rebuild after a source switch), in
         // which case a READY listener would never fire for this state.
@@ -487,12 +500,29 @@ internal object PlayerTrackBridge {
         Log.i(TAG, "track type $type carries ${tags.joinToString(", ").ifBlank { "nothing" }}")
     }
 
-    /** Applies the remembered track if this file carries it. True when applied. */
+    /**
+     * Applies the remembered track if this file carries it. True when applied.
+     *
+     * A miss now says so, once per file, to the diagnostics report as well as
+     * logcat: a stored signature that resolved to nothing used to be completely
+     * silent, which is why "the picked track is ignored on the next episode"
+     * arrived with no evidence trail at all (see [noteAudioMemoryMiss]).
+     */
     private fun applyRememberedAudioTrack(player: Player?): Boolean {
         if (player == null) return false
         val signature = audioTrackSignature
         if (signature.isBlank() || rememberedTrackApplied) return false
-        val match = findTrack(player, C.TRACK_TYPE_AUDIO, signature) ?: return false
+        val refs = trackRefs(player, C.TRACK_TYPE_AUDIO)
+        val tracks = refs.map { identityOf(it) }
+        val position = resolveSignature(signature, tracks)
+        val match = position?.let { refs[it] }
+        if (match == null) {
+            if (reportedAudioMissFor != signature) {
+                reportedAudioMissFor = signature
+                noteAudioMemoryMiss(signature, tracks)
+            }
+            return false
+        }
         rememberedTrackApplied = true
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
@@ -577,9 +607,33 @@ internal object PlayerTrackBridge {
      * 1. Exact: the same language, codec and channel count — and, for a
      *    signature that carries them, the same position in a file of the same
      *    size. A legacy three-field signature matches on its three fields.
-     * 2. Loose: the same language and channel count. The codec string is what
+     * 2. Identity: the same three fields the pick named, wherever the track
+     *    now SITS. This is the tier a codec-distinguished pick always answered:
+     *    on a dual-audio file whose tracks are untagged (Russian AC-3, English
+     *    MP3), the pick is the only evidence of which one the viewer wanted, and
+     *    the next episode's encode — same show, different release — may order
+     *    them the other way. Exact bakes the old position into the compared
+     *    string, so it misses on that flip; the position tier then re-selects
+     *    the seat, which is now the OTHER track. Identity asks the question the
+     *    pick actually answered ("find this codec, wherever it is") and is
+     *    positive evidence, strictly stronger than the seat guess it precedes.
+     *    It can never select a track naming a different language: language is
+     *    one of its three fields, and a blank matches blank through the same
+     *    string build Exact already trusts.
+     *
+     *    True twins (two tracks with the same three fields) go to the stored
+     *    position when it is one of the matches and the file is still the same
+     *    size; otherwise the first match.
+     *
+     *    AUDIO only ([allowIdentity]): the subtitle memory's contract is
+     *    deliberately unchanged - a stale positional subtitle signature arms
+     *    nothing rather than a first-of-three guess, and subtitle identity is
+     *    already the language pass's job. Nothing about the audio report touched
+     *    subtitles, and this tier exists for audio picks that name a codec the
+     *    language pass cannot see.
+     * 3. Loose: the same language and channel count. The codec string is what
      *    changes between two remuxes of the same audio ("ec-3" vs "eac3").
-     * 3. Position: the last resort for a hand-picked track that names no
+     * 4. Position: the last resort for a hand-picked track that names no
      *    language at all — a dual-audio EN/RU release with untagged tracks has
      *    no language to match on, so "the second audio track" is all that
      *    survives to the next episode. Only when the file has the same number
@@ -588,7 +642,11 @@ internal object PlayerTrackBridge {
      *    and a guess at a known-wrong track is the one thing this path never
      *    does.
      */
-    internal fun resolveSignature(signature: String, tracks: List<TrackIdentity>): Int? {
+    internal fun resolveSignature(
+        signature: String,
+        tracks: List<TrackIdentity>,
+        allowIdentity: Boolean = true
+    ): Int? {
         // 1. Exact. Deliberately independent of parsing: a signature whose
         //    channel count is not a number still names a track by its tag.
         tracks.forEachIndexed { position, track ->
@@ -599,7 +657,34 @@ internal object PlayerTrackBridge {
 
         val stored = parseSignature(signature) ?: return null
 
-        // 2. Loose.
+        // 2. Identity: the pick's own three fields, position ignored. Audio
+        //    only - see the tier's note above.
+        val identity = signatureOf(stored.language, stored.codecs, stored.channels)
+        val identityMatches = if (!allowIdentity) {
+            emptyList<Int>()
+        } else {
+            tracks.indices.filter { position ->
+                signatureOf(
+                    tracks[position].language,
+                    tracks[position].codecs,
+                    tracks[position].channels
+                ) == identity
+            }
+        }
+        if (identityMatches.isNotEmpty()) {
+            // Twins: the seat still decides, but only while it is one of the
+            // tracks that actually carries the picked identity.
+            val seat = stored.index
+            return if (
+                seat != null && stored.trackCount == tracks.size && seat in identityMatches
+            ) {
+                seat
+            } else {
+                identityMatches.first()
+            }
+        }
+
+        // 3. Loose.
         if (stored.channels > 0) {
             tracks.forEachIndexed { position, track ->
                 if (
@@ -611,7 +696,7 @@ internal object PlayerTrackBridge {
             }
         }
 
-        // 3. Position.
+        // 4. Position.
         val position = stored.index
         if (position != null && stored.trackCount == tracks.size && position in tracks.indices) {
             val candidate = tracks[position]
@@ -624,11 +709,16 @@ internal object PlayerTrackBridge {
 
     /**
      * Identity of one track across sources, through [resolveSignature]: exact
-     * match first, then language + channels, then the remembered position.
+     * match first, then the pick's own three fields, then language + channels,
+     * then the remembered position.
      */
     private fun findTrack(player: Player, type: Int, signature: String): TrackRef? {
         val refs = trackRefs(player, type)
-        val position = resolveSignature(signature, refs.map { identityOf(it) }) ?: return null
+        val position = resolveSignature(
+            signature = signature,
+            tracks = refs.map { identityOf(it) },
+            allowIdentity = type == C.TRACK_TYPE_AUDIO
+        ) ?: return null
         return refs[position]
     }
 
@@ -659,6 +749,49 @@ internal object PlayerTrackBridge {
             index = parts.getOrNull(3)?.toIntOrNull()?.takeIf { it >= 0 },
             trackCount = parts.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 }
         )
+    }
+
+    /**
+     * The one sentence a remembered-track miss writes, in whichever engine it
+     * happened.
+     *
+     * Shape is shared rather than copied so the two engines cannot drift into
+     * two different reports for one fault: the stored signature first (what the
+     * viewer picked, as it was written down), then the file's actual audio
+     * track identities in player order. On the reported dual-audio file that
+     * reads as `stored=|mp3|2|1|2 file=[|ac3|2, |mp3|2]` - enough to see at once
+     * whether the pick is absent from this encode, present at another seat, or
+     * present but with a changed codec string.
+     *
+     * Never a URL, a title or a stream name: signatures are language/codec/
+     * channel facts only, which is what makes this safe on a report that gets
+     * pasted into a chat.
+     */
+    internal fun audioMemoryMissLine(
+        signature: String,
+        tracks: List<TrackIdentity>
+    ): String {
+        val file = tracks.joinToString(", ") { track ->
+            signatureOf(track.language, track.codecs, track.channels)
+        }
+        return "track-memory: audio miss stored=$signature " +
+            "file=[${file.ifBlank { "none" }}]"
+    }
+
+    /**
+     * Reports a miss to logcat and to the diagnostics report.
+     *
+     * Called by BOTH engines (this bridge and [MpvPlayerView]) so a capture says
+     * the same thing whichever one was playing - the failure this exists for
+     * happened on one engine at a time and read as silence on both.
+     */
+    internal fun noteAudioMemoryMiss(
+        signature: String,
+        tracks: List<TrackIdentity>
+    ) {
+        val line = audioMemoryMissLine(signature, tracks)
+        Log.i(TAG, line)
+        PlaybackSessionTrace.note(line)
     }
 
     /**

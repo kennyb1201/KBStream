@@ -104,25 +104,72 @@ class MpvAudioMemoryContractTest {
         )
     }
 
+    /**
+     * The reported defect in this engine: its own two-tier match (exact string,
+     * then language + channels) never looked at the codec, so an untagged
+     * dual-audio pick could only ever hit by first-position luck, and it had no
+     * seat tier at all. It now resolves through the bridge's resolver, which is
+     * the same ladder the other engine runs. Nothing about what to DO on a miss
+     * changes: false is still the caller's cue to apply the language.
+     */
     @Test
-    fun `the view reports the miss instead of deciding what to play`() {
+    fun `the view resolves through the shared ladder instead of its own pair`() {
         val apply = functionBody(read(MPV_VIEW), "fun applyRememberedAudioTrack(")
         assertTrue(
-            "the exact signature wins",
-            apply.contains("firstOrNull { it.signature == signature }")
+            "one resolver, shared with the main player",
+            apply.contains("PlayerTrackBridge.resolveSignature(signature, identities)")
         )
         assertTrue(
-            "else the same language in the same layout",
-            apply.contains("LanguageMatch.matches(language, it.language)") &&
-                apply.contains("channels <= 0 || it.channels == channels")
+            "built from this view's own track list, in mpv's order",
+            apply.contains("PlayerTrackBridge.TrackIdentity(") &&
+                apply.contains("tracks.map { track ->")
+        )
+        assertFalse(
+            "and the exact-then-language pair it replaced is gone, not merely " +
+                "supplemented - a second rule beside the resolver is how the two " +
+                "engines drifted apart in the first place",
+            apply.contains("firstOrNull { it.signature == signature }") ||
+                apply.contains("LanguageMatch.matches(language, it.language)")
         )
         assertTrue(
-            "a miss is a false, which is the caller's cue to apply the language",
-            apply.contains("?: return false")
+            "a miss stays a false, so the caller applies the language",
+            apply.contains("if (position == null) {") && apply.contains("return false")
         )
         assertTrue(
-            "and a hit is applied through mpv's own aid",
-            apply.contains("MpvBackend.setPropertyInt(\"aid\", match.id)")
+            "and a hit is applied through mpv's own aid, by the resolver's position",
+            apply.contains("MpvBackend.setPropertyInt(\"aid\", tracks[position].id)")
+        )
+    }
+
+    /**
+     * A miss used to be silent everywhere: logcat only, and only on success.
+     * Both engines now write the same line to the diagnostics report, so the
+     * next "it starts on the wrong track" report can say which signature was
+     * stored and what the file actually carried.
+     */
+    @Test
+    fun `a miss is reported by both engines, in one shape`() {
+        assertTrue(
+            "the MPV view reports its miss",
+            functionBody(read(MPV_VIEW), "fun applyRememberedAudioTrack(")
+                .contains("PlayerTrackBridge.noteAudioMemoryMiss(signature, identities)")
+        )
+        assertTrue(
+            "and so does the main player's remembered pass, once per file",
+            functionBody(read(BRIDGE), "private fun applyRememberedAudioTrack(")
+                .contains("noteAudioMemoryMiss(signature, tracks)")
+        )
+        val bridge = read(BRIDGE)
+        assertTrue(
+            "one line shape, built in one place, carrying the stored signature and " +
+                "the file's own audio identities",
+            bridge.contains("internal fun audioMemoryMissLine(") &&
+                bridge.contains("internal fun noteAudioMemoryMiss(") &&
+                bridge.contains("\"track-memory: audio miss stored=\$signature \" +")
+        )
+        assertTrue(
+            "delivered on the diagnostics surface the other player lines use",
+            bridge.contains("PlaybackSessionTrace.note(line)")
         )
     }
 
@@ -181,26 +228,44 @@ class MpvAudioMemoryContractTest {
         assertTrue(bridge.contains("audioLang = audioLanguage,"))
         assertTrue(bridge.contains("audioTrackSignature = audioTrackSignature,"))
 
-        // ...and the MPV engine writes the same three-field shape the bridge
-        // writes and reads, so a pick remembered by one is a pick the other can
-        // resolve: "language|codec|channels", lowercased, no position.
+        // ...and the MPV engine builds its signature through the SAME rule the
+        // bridge does - the five-field form for audio, three for subtitles - so
+        // a pick remembered by one engine is one the other resolves.
         val view = read(MPV_VIEW)
         assertTrue(
-            "the MPV signature must be the bridge's three identity fields",
-            view.contains("language.orEmpty().lowercase(),") &&
-                view.contains("codec.orEmpty().lowercase(),") &&
-                view.contains("(channels ?: 0).toString()") &&
-                view.contains("joinToString(\"|\")")
+            "the MPV audio signature is the bridge's five-field shape, seat included",
+            view.contains("if (type == \"audio\") {") &&
+                view.contains("PlayerTrackBridge.signatureOf(") &&
+                view.contains("index = position,") &&
+                view.contains("trackCount = trackCount")
+        )
+        assertTrue(
+            "and the track list supplies that seat and the audio count",
+            view.contains("track.copy(position = position, trackCount = tracks.size)") &&
+                view.contains("if (type != \"audio\") return tracks")
         )
         assertEquals(
-            "and an MPV-written pick is one the bridge reads back as its own form",
-            PlayerTrackBridge.signatureOf(language = "en", codecs = "eac3", channelCount = 6),
-            "en|eac3|6"
+            "an MPV-written pick is one the bridge reads back as its own form",
+            PlayerTrackBridge.signatureOf(
+                language = "en",
+                codecs = "eac3",
+                channelCount = 6,
+                index = 1,
+                trackCount = 2
+            ),
+            "en|eac3|6|1|2"
         )
         assertEquals(
-            "including the untagged case, where the language field is empty",
-            PlayerTrackBridge.signatureOf(language = "", codecs = "ac3", channelCount = 2),
-            "|ac3|2"
+            "including the untagged case, where the language field is empty - the " +
+                "reported file's English MP3",
+            PlayerTrackBridge.signatureOf(
+                language = "",
+                codecs = "mp3",
+                channelCount = 2,
+                index = 1,
+                trackCount = 2
+            ),
+            "|mp3|2|1|2"
         )
     }
 

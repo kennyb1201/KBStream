@@ -133,8 +133,14 @@ class SubtitlePickerSignatureTest {
      * longer matches, so the position is not trusted at all and nothing is
      * armed — never a positional guess at a different track. (With a position
      * present there is no identity fallback; only a legacy three-field
-     * signature gets that, because the identity compare in [resolveSignature]
-     * is a literal string compare against the stored signature.)
+     * signature gets that, because the exact compare in [resolveSignature]
+     * rebuilds a signature and compares it as a literal string.)
+     *
+     * Identity is an AUDIO tier (`allowIdentity = false` here, exactly as
+     * [PlayerTrackBridge.findTrack] resolves a text track): a subtitle pick's
+     * codec names no distinction the language pass cannot already make, and the
+     * spec leaves subtitle resolution alone, so a stale layout still arms
+     * nothing.
      */
     @Test
     fun `a stale position in a re-muxed file never arms the wrong track`() {
@@ -142,7 +148,7 @@ class SubtitlePickerSignatureTest {
 
         assertNull(
             "a guess at \"the second text track\" in a file of three is exactly the mis-arm this guards",
-            PlayerTrackBridge.resolveSignature("eng|srt|0|1|2", tracks)
+            PlayerTrackBridge.resolveSignature("eng|srt|0|1|2", tracks, allowIdentity = false)
         )
     }
 
@@ -154,7 +160,9 @@ class SubtitlePickerSignatureTest {
     fun `a position that now names another language is refused`() {
         val tracks = listOf(identity("eng"), identity("rus"))
 
-        assertNull(PlayerTrackBridge.resolveSignature("eng|srt|0|1|2", tracks))
+        assertNull(
+            PlayerTrackBridge.resolveSignature("eng|srt|0|1|2", tracks, allowIdentity = false)
+        )
     }
 
     // ── the picker passes the flat position ────────────────────────────────
