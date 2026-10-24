@@ -221,6 +221,30 @@ class MobileDetailRulesTest {
     }
 
     @Test
+    fun `specials sort after the numbered seasons and the numbers stay ascending`() {
+        val ordered = MobileDetailRules.seasonsInChipOrder(
+            listOf(
+                TmdbSeasonSummary(seasonNumber = 0, name = "Specials"),
+                TmdbSeasonSummary(seasonNumber = 2),
+                TmdbSeasonSummary(seasonNumber = 1),
+                TmdbSeasonSummary(seasonNumber = 3)
+            )
+        )
+        assertEquals(listOf(1, 2, 3, 0), ordered.map { it.seasonNumber })
+        assertEquals("Specials", ordered.last().name)
+
+        // A show with nothing but a season 0 keeps it: the bucket is then the
+        // show's only listing, not something to hide.
+        assertEquals(
+            listOf(0),
+            MobileDetailRules.seasonsInChipOrder(
+                listOf(TmdbSeasonSummary(seasonNumber = 0))
+            ).map { it.seasonNumber }
+        )
+        assertTrue(MobileDetailRules.seasonsInChipOrder(emptyList()).isEmpty())
+    }
+
+    @Test
     fun `no pointer, no unparseable answer and no row all mean nothing is stale`() {
         assertTrue(MobileDetailRules.staleSeasonDates(null).isEmpty())
         assertTrue(

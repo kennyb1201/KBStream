@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -552,7 +553,26 @@ class LibraryViewModel(
             if (version != requestVersion) return@launch
 
             val watchlistMerged = kidsFiltered(
-                mergeById(simklItems + mdbListWatchlist + traktWatchlist)
+                // What My List was told to forget stays forgotten HERE too.
+                //
+                // The merge used to take every tracker row at face value, so a
+                // title removed on purpose - by the stamped cleanup, by a
+                // review confirmation, by the untick screen - came straight back
+                // into the Library wearing its Simkl/MDBList/Trakt tag: the
+                // local row was gone, the tracker copy was not, and nothing
+                // compared the two. The tombstone record is that comparison,
+                // and this is the one screen that makes it: the removal is the
+                // viewer's decision, and it outranks a remote watchlist entry.
+                //
+                // Filtered AFTER mergeById so one pass covers all three
+                // tracker sources, and scoped to this screen: personal lists,
+                // Continue Watching / Up Next / Upcoming cards, Detail's
+                // local-list state and every other profile's view are
+                // untouched (their own records govern them).
+                LibraryTombstones.removedFrom(
+                    mergeById(simklItems + mdbListWatchlist + traktWatchlist),
+                    LocalLibraryStore.tombstones(appContext)
+                )
             )
 
             // Canonical rows: ALL merges My List + watchlists + every local

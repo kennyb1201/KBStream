@@ -788,6 +788,16 @@ private fun IntegrationsPaneMobile(
         ) {
             TorBoxReview.rows(context)
         }
+        // The record's own size: the review row is offered whenever the round
+        // filed anything, and the dialog reconciles that count with the rows
+        // that still resolve, so nothing is silently missing from the list.
+        val torboxReviewFiled = remember(
+            syncedRevision,
+            torboxRoundRevision,
+            torboxResumeTick
+        ) {
+            TorBoxReview.filedCount(context)
+        }
         var torboxReviewOpen by remember { mutableStateOf(false) }
         var torboxReviewRemoved by remember { mutableIntStateOf(0) }
         // The row's gate is the WORKER's gate (switch on AND a key present), so
@@ -814,12 +824,12 @@ private fun IntegrationsPaneMobile(
         // can say whose they are, so the round keeps them and asks here. The
         // sync's own rows come ticked; confirming removes them through the same
         // tombstoning path as the cleanup, so no later round brings them back.
-        if (torboxReviewRows.isNotEmpty()) {
+        if (torboxReviewFiled > 0) {
             KBButton(
-                label = if (torboxReviewRows.size == 1) {
+                label = if (torboxReviewFiled == 1) {
                     "REVIEW 1 UNOWNED CLOUD TITLE"
                 } else {
-                    "REVIEW ${torboxReviewRows.size} UNOWNED CLOUD TITLES"
+                    "REVIEW $torboxReviewFiled UNOWNED CLOUD TITLES"
                 },
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { torboxReviewOpen = true }
@@ -841,6 +851,7 @@ private fun IntegrationsPaneMobile(
         if (torboxReviewOpen) {
             TorBoxReviewDialog(
                 rows = torboxReviewRows,
+                filedCount = torboxReviewFiled,
                 onKeep = { torboxReviewOpen = false },
                 onRemove = { selected ->
                     torboxReviewRemoved = TorBoxReview.remove(

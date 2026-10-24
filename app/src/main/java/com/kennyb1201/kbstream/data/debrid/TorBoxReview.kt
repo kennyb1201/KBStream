@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.debrid
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibraryOrigin
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 
@@ -58,6 +59,19 @@ internal object TorBoxReview {
         rows(LocalLibraryStore.myList(context), store.reviewCandidates())
 
     /**
+     * How many titles the last completed round filed, whether or not each one
+     * still resolves.
+     *
+     * The review shows this beside the rows it could resolve, so the queue can
+     * never look shorter than the record without saying why: a filed title whose
+     * row has since left My List is accounted for rather than silently absent.
+     */
+    fun filedCount(
+        context: Context,
+        store: TorBoxCloudStore = TorBoxCloudStore(context)
+    ): Int = store.reviewCandidates().size
+
+    /**
      * Removes the confirmed rows through the same tombstoning path as the
      * cleanup, and drops them from the queue.
      *
@@ -72,6 +86,20 @@ internal object TorBoxReview {
     fun remove(context: Context, store: TorBoxCloudStore, rows: List<TorBoxReviewRow>): Int {
         if (rows.isEmpty()) return 0
         val removed = LocalLibraryStore.removeMyListEntries(context, rows.map { it.item })
+        // The tracker copies go too, where the API allows it: a removal that
+        // only tombstoned the local row would leave an MDBList/Trakt entry that
+        // the Library merge then has to hide. Best-effort per title, and a
+        // failure never changes the count reported to the viewer - it is logged
+        // (see LibraryMirror.removeFromTrackers) so a survivor is findable.
+        rows.forEach { row ->
+            LibraryMirror.removeFromTrackers(
+                context = context,
+                mediaType = row.item.mediaType,
+                imdbId = row.item.imdbId,
+                tmdbId = row.item.tmdbId,
+                title = row.item.title
+            )
+        }
         store.forgetReviewCandidates(rows.map { it.key }.toSet())
         // The removal is news to a pane that is already open (and to the status
         // line's pending count), exactly like a filed round.

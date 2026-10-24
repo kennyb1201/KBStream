@@ -1483,6 +1483,16 @@ fun SettingsScreen(
                 ) {
                     TorBoxReview.rows(context)
                 }
+                // The record's own size, which is what the round filed - the
+                // row offers the review whenever the record is non-empty, and
+                // the dialog reconciles it with the rows that still resolve.
+                val torboxReviewFiled = remember(
+                    syncedRevision,
+                    torboxRoundRevision,
+                    torboxResumeTick
+                ) {
+                    TorBoxReview.filedCount(context)
+                }
                 var torboxReviewOpen by remember { mutableStateOf(false) }
                 var torboxReviewRemoved by remember { mutableIntStateOf(0) }
                 // The row's gate is the WORKER's gate (switch on AND a key
@@ -1543,7 +1553,7 @@ fun SettingsScreen(
                 // only place a decision can be made about it. It mirrors the
                 // cleanup's own tombstoning path, so a confirmed removal does
                 // not come back on the next round or on a TV pull.
-                if (torboxReviewRows.isNotEmpty()) {
+                if (torboxReviewFiled > 0) {
                     Spacer(modifier = Modifier.height(6.dp))
                     KBCard(
                         onClick = { torboxReviewOpen = true },
@@ -1556,10 +1566,10 @@ fun SettingsScreen(
                                 .padding(horizontal = 14.dp, vertical = 10.dp)
                         ) {
                             Text(
-                                text = if (torboxReviewRows.size == 1) {
+                                text = if (torboxReviewFiled == 1) {
                                     "Review 1 unowned cloud title"
                                 } else {
-                                    "Review ${torboxReviewRows.size} unowned cloud titles"
+                                    "Review $torboxReviewFiled unowned cloud titles"
                                 },
                                 color = KBTextHi,
                                 style = MaterialTheme.typography.bodyMedium
@@ -1589,6 +1599,7 @@ fun SettingsScreen(
                 if (torboxReviewOpen) {
                     TorBoxReviewDialog(
                         rows = torboxReviewRows,
+                        filedCount = torboxReviewFiled,
                         onKeep = { torboxReviewOpen = false },
                         onRemove = { selected ->
                             torboxReviewRemoved = TorBoxReview.remove(

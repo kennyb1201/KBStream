@@ -113,6 +113,15 @@ object LibraryMirror {
      * previously partial sync (title on one tracker but not the other)
      * heals on a repeat add. Returns true when the title was newly added
      * locally.
+     *
+     * A [LibraryOrigin.TORBOX_SYNC] add never mirrors. A cloud round is a
+     * download sync into My List, not a watchlist add: the row already shows in
+     * the Library, so mirroring it is redundant for the view and is exactly
+     * what seeded a profile's Simkl/MDBList watchlists with titles nobody there
+     * chose - every unowned kids title in the shared TorBox cloud landed in
+     * Profile 1's trackers this way. A deliberate add (MANUAL, or any other
+     * origin) keeps its mirrors, including on a repeat, so the partial-sync heal
+     * still works for a title the viewer actually asked for.
      */
     fun addToLibrary(
         context: Context,
@@ -143,7 +152,9 @@ object LibraryMirror {
             origin = origin
         )
 
-        launchMirrors(context, r)
+        // See this function's doc: the unattended cloud sync writes My List
+        // only. The stamp is still applied by LocalLibraryStore above.
+        if (origin != LibraryOrigin.TORBOX_SYNC) launchMirrors(context, r)
         return added
     }
 
@@ -217,7 +228,28 @@ object LibraryMirror {
         tmdbId: Int?
     ) {
         LocalLibraryStore.removeFromMyList(context, mediaType, imdbId, tmdbId)
+        removeFromTrackers(context, mediaType, imdbId, tmdbId)
+    }
 
+    /**
+     * The tracker half of [removeFromLibrary], without touching the local list.
+     *
+     * Split out for the review queue: its confirmation already tombstoned the
+     * local rows in one write, and a tracker copy left behind would resurface
+     * the title in the Library merge. MDBList and Trakt are asked to drop it,
+     * best-effort and independent of each other; [title] only names the row in
+     * the log, so a surviving remote copy is visible in diagnostics instead of
+     * silent. Simkl has no remove-from-watchlist endpoint, so a Simkl copy is
+     * left to the tombstone-aware merge and to a removal on simkl.com.
+     */
+    fun removeFromTrackers(
+        context: Context,
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ) {
+        val label = title?.takeIf { it.isNotBlank() } ?: "$mediaType $imdbId/$tmdbId"
         val type = when (mediaType.lowercase()) {
             "tv", "series" -> "series"
             else -> "movie"
@@ -237,7 +269,11 @@ object LibraryMirror {
                     runCatchingCancellable {
                         MdbListClient.removeFromWatchlist(context, listOf(entry))
                     }.onFailure { e ->
-                        Log.e(TAG, "mdblist removeFromWatchlist failed: ${e.message}", e)
+                        Log.e(
+                            TAG,
+                            "mdblist removeFromWatchlist failed for $label: ${e.message}",
+                            e
+                        )
                     }
                 }
             }
@@ -254,7 +290,11 @@ object LibraryMirror {
                             tmdbId = tmdbId
                         )
                     }.onFailure { e ->
-                        Log.e(TAG, "trakt removeFromWatchlist failed: ${e.message}", e)
+                        Log.e(
+                            TAG,
+                            "trakt removeFromWatchlist failed for $label: ${e.message}",
+                            e
+                        )
                     }
                 }
             }

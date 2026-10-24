@@ -370,7 +370,12 @@ fun DetailScreenMobile(
         LaunchedEffect(loadedSeason) {
             if (season == null) season = loadedSeason
         }
-        val seasons = tmdbDetail?.seasons.orEmpty()
+        // Specials (TMDB season 0) sort behind the numbered seasons: the chip
+        // row is the show's run, not its promo bucket, and the default season
+        // with nothing else to go on is then the first real one.
+        val seasons = remember(tmdbDetail) {
+            MobileDetailRules.seasonsInChipOrder(tmdbDetail?.seasons.orEmpty())
+        }
         val currentSeason = season ?: loadedSeason ?: seasons.firstOrNull()?.seasonNumber ?: 1
 
         // ---- the watched-state arithmetic the menus share ----

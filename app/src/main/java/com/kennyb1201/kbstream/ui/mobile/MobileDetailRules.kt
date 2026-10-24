@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import java.time.LocalDate
 
@@ -83,6 +84,23 @@ internal object MobileDetailRules {
     ): Boolean =
         seriesNumbers.isNotEmpty() &&
             seriesNumbers.all { (season, numbers) -> allWatched(numbers, watchedFor(season)) }
+
+    /**
+     * The season chips' order: the numbered seasons ascending, then the
+     * specials (TMDB's season 0) last.
+     *
+     * TMDB lists season 0 first, so before this the phone's chip row opened on
+     * "Specials" for every show that has them - a bucket of promos, recaps and
+     * webisodes parked in front of the show's actual run, and the default
+     * season whenever nothing said otherwise. The numbering is what a viewer
+     * navigates by, so it leads; specials stay reachable as the last chip. A
+     * show whose only season is 0 keeps it as its only chip.
+     */
+    fun seasonsInChipOrder(seasons: List<TmdbSeasonSummary>): List<TmdbSeasonSummary> =
+        seasons.sortedWith(
+            compareBy<TmdbSeasonSummary> { it.seasonNumber == 0 }
+                .thenBy { it.seasonNumber }
+        )
 
     /**
      * The seasons whose season-row air date disagrees with the show-level

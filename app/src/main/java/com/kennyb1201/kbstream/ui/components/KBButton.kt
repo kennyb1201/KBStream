@@ -31,6 +31,11 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  *
  * [danger] tints the label [KBDanger] for a destructive action, the same
  * affordance PosterContextMenu's destructive rows use.
+ *
+ * [labelColor] overrides that tint for the one case [danger] cannot serve: a
+ * destructive label on a raised, glow-lit focused plate, where the muted red
+ * washes out (the review queue's REMOVE - see [KBDangerHi]). Null everywhere
+ * else, so the shared look is unchanged.
  */
 @Composable
 fun KBButton(
@@ -38,6 +43,7 @@ fun KBButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     danger: Boolean = false,
+    labelColor: Color? = null,
     // Last, so a call site can hand the press to a trailing lambda - which is
     // how every button in the app is written (`KBButton(label = "SAVE") { … }`)
     // and keeps an action's body inside its own braces.
@@ -68,7 +74,7 @@ fun KBButton(
             text = label,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
-            color = if (danger) KBDanger else Color.Unspecified,
+            color = labelColor ?: if (danger) KBDanger else Color.Unspecified,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
         )
     }

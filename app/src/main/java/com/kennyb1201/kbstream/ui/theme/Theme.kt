@@ -291,6 +291,12 @@ fun customAccentHexText(argb: Int): String {
 val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
 val KBDanger = Color(0xFFB0453C)
+// A destructive label that stays legible on the RAISED surface under focus.
+// KBDanger is a plate tint: at 16px on KBTextHi's plate it reads, but a focused
+// card lifts to KBSurfaceRaised and wears the accent focus glow, and the dark
+// red was reported washed out there (the review queue's REMOVE). Same hue, lit
+// enough to hold contrast against either plate.
+val KBDangerHi = Color(0xFFFF7A6E)
 val KBSuccess = Color(0xFF3DBB6A)
 // Semantic badge companions (muted, same screening-room palette): season
 // finales, next-up, new seasons on Up-Next cards. Raw Material-palette
