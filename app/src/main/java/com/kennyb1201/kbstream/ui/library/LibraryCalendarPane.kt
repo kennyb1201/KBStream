@@ -2,11 +2,14 @@ package com.kennyb1201.kbstream.ui.library
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,10 +73,23 @@ import kotlinx.coroutines.delay
  * One composition serves both form factors. The grid, the header controls and
  * the day list are drawn once; what a television adds is focus (a day is
  * selected by focus, the grid's left/right edges page the month, Down enters the
- * list and Up comes back to the selected cell) and what a phone adds is a tap.
- * Everything is built on the TV `Surface`, which carries focus and activation as
- * one target and answers a touch press as readily as a D-pad OK - so the phone
- * gets the same controls without a second layout to keep in step.
+ * list and Up comes back to the selected cell) and what a phone adds is a tap
+ * on the same plate.
+ *
+ * Two things this pane had to learn about the TV `Surface` the field reported on
+ * 2026-10-24:
+ *
+ *  - it is a FOCUS surface. Its activation is a D-pad OK, and a finger cannot
+ *    press it at all - the same trap the phone's update popup hit. So every
+ *    pressable here is branched: a television draws the `Surface` (focus,
+ *    ring, glow), a phone draws the same plate with a plain foundation
+ *    `clickable`. Without that branch the whole calendar was dead to touch.
+ *  - its focused fill is NOT this app's. Passing only the resting pair leaves
+ *    tv-material3's near-white focused container in place, with the bright
+ *    resting label on top of it - "focus is bright white and hard to read
+ *    what you're focused on". Every pressable below therefore names its
+ *    focused and pressed containers as well, exactly as `KBCard` and the
+ *    Add-ons list card do.
  *
  * The day list is a COLUMN OF ITS OWN on a television, beside the grid. It used
  * to sit under the grid in the same column, where the six grid rows left it
@@ -315,6 +331,7 @@ private fun CalendarMonthSection(
     Column(modifier = modifier) {
         CalendarHeader(
             month = state.month,
+            touch = touch,
             onPrev = onPrevMonth,
             onNext = onNextMonth,
             onToday = onToday
@@ -342,6 +359,7 @@ private fun CalendarMonthSection(
 @Composable
 private fun CalendarHeader(
     month: YearMonth,
+    touch: Boolean,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit
@@ -353,7 +371,12 @@ private fun CalendarHeader(
             .fillMaxWidth()
             .padding(bottom = 8.dp)
     ) {
-        CalendarChip(label = "‹", description = "Previous month", onClick = onPrev)
+        CalendarChip(
+            label = "‹",
+            touch = touch,
+            description = "Previous month",
+            onClick = onPrev
+        )
         Text(
             text = calendarMonthLabel(month),
             color = KBTextHi,
@@ -362,9 +385,14 @@ private fun CalendarHeader(
             maxLines = 1,
             modifier = Modifier.width(180.dp)
         )
-        CalendarChip(label = "›", description = "Next month", onClick = onNext)
+        CalendarChip(
+            label = "›",
+            touch = touch,
+            description = "Next month",
+            onClick = onNext
+        )
         Spacer(modifier = Modifier.weight(1f))
-        CalendarChip(label = "TODAY", onClick = onToday)
+        CalendarChip(label = "TODAY", touch = touch, onClick = onToday)
     }
 }
 
@@ -393,39 +421,73 @@ private fun CalendarWeekdayRow() {
  *
  * [description] names the action for accessibility - "‹" is not a sentence on
  * its own - and is never drawn.
+ *
+ * Passing only the resting colours left tv-material3's near-white focused fill
+ * under the focused label, so the pair is named here as well - and a phone,
+ * which cannot press a focus surface at all, gets the foundation clickable on
+ * the same plate (see the pane's KDoc).
  */
 @Composable
 private fun CalendarChip(
     label: String,
+    touch: Boolean,
     description: String? = null,
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
+    val accessibility = if (description == null) {
+        Modifier
+    } else {
+        Modifier.semantics { contentDescription = description }
+    }
+
+    if (touch) {
+        Box(
+            modifier = Modifier
+                .clip(KBShapeCard)
+                .background(KBSurface)
+                .clickable(onClick = onClick)
+                .then(accessibility)
+        ) {
+            CalendarChipLabel(label = label, color = KBTextLo, focused = false)
+        }
+        return
+    }
+
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (focused) KBSurfaceRaised else KBSurface,
-            contentColor = if (focused) KBTextHi else KBTextLo
+            contentColor = if (focused) KBTextHi else KBTextLo,
+            focusedContainerColor = KBSurfaceRaised,
+            focusedContentColor = KBTextHi,
+            pressedContainerColor = KBSurfaceRaised,
+            pressedContentColor = KBTextHi
         ),
         modifier = Modifier
             .onFocusChanged { focused = it.isFocused }
-            .then(
-                if (description == null) {
-                    Modifier
-                } else {
-                    Modifier.semantics { contentDescription = description }
-                }
-            )
+            .then(accessibility)
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+        CalendarChipLabel(
+            label = label,
+            color = if (focused) KBTextHi else KBTextLo,
+            focused = focused
         )
     }
+}
+
+/** A chip's label, at the weight focus calls for. */
+@Composable
+private fun CalendarChipLabel(label: String, color: Color, focused: Boolean) {
+    Text(
+        text = label,
+        color = color,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+        maxLines = 1,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+    )
 }
 
 /**
@@ -508,6 +570,12 @@ private fun CalendarGrid(
  * number was drawn about half outside the cell, clipped by the Surface. The
  * count is how a viewer knows a day has more than one episode, so it has to be
  * legible, not decorative.
+ *
+ * Focus and touch are two different plates, for the two reasons in the pane's
+ * KDoc: a television names its focused fill (tv-material3's own is near-white
+ * on bright text) and keeps the accent ring that says where focus is; a phone
+ * gets a foundation clickable on the same plate, because it cannot press a
+ * focus surface at all.
  */
 @Composable
 private fun CalendarDayCell(
@@ -529,6 +597,36 @@ private fun CalendarDayCell(
 ) {
     var focused by remember { mutableStateOf(false) }
 
+    val selectedFill = KBAccent.copy(alpha = 0.28f)
+    val labelColor = if (selected || isToday) KBAccent else KBTextHi
+
+    val plate = if (selected) selectedFill else KBSurface
+
+    if (touch) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(CALENDAR_CELL_HEIGHT)
+                .clip(KBShapeCard)
+                .background(plate)
+                .border(
+                    width = 1.dp,
+                    color = if (isToday) KBAccent else Color.Transparent,
+                    shape = KBShapeCard
+                )
+                .clickable { onSelect(day) }
+        ) {
+            CalendarDayCellContent(
+                day = day,
+                episodeCount = episodeCount,
+                selected = selected,
+                labelColor = labelColor
+            )
+        }
+        return
+    }
+
     Surface(
         onClick = {
             onSelect(day)
@@ -536,19 +634,23 @@ private fun CalendarDayCell(
             // D-pad into its list so the episodes can be opened, not just read
             // in the pane beside the grid. A day with nothing on it keeps the
             // press as a plain selection.
-            if (!touch && hasEpisodesBelow) onOpenDay()
+            if (hasEpisodesBelow) onOpenDay()
         },
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = when {
-                selected -> KBAccent.copy(alpha = 0.28f)
+                selected -> selectedFill
                 focused -> KBSurfaceRaised
                 else -> KBSurface
             },
-            contentColor = when {
-                selected || isToday -> KBAccent
-                else -> KBTextHi
-            }
+            contentColor = labelColor,
+            // NAMED, not left to tv-material3: its focused fill is a near-white
+            // that this palette never uses, and the label keeps its bright
+            // resting colour on it - the "bright white, hard to read" report.
+            focusedContainerColor = if (selected) selectedFill else KBSurfaceRaised,
+            focusedContentColor = labelColor,
+            pressedContainerColor = if (selected) selectedFill else KBSurfaceRaised,
+            pressedContentColor = labelColor
         ),
         border = ClickableSurfaceDefaults.border(
             border = Border(
@@ -574,7 +676,7 @@ private fun CalendarDayCell(
                 if (focusState.isFocused) onSelect(day)
             }
             .onPreviewKeyEvent { event ->
-                if (touch || event.type != KeyEventType.KeyDown) {
+                if (event.type != KeyEventType.KeyDown) {
                     false
                 } else if (event.nativeKeyEvent.repeatCount > 0) {
                     // A KEY HELD DOWN IS ONE PAGE, NOT ONE PER REPEAT. Both the
@@ -613,27 +715,44 @@ private fun CalendarDayCell(
                 }
             }
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-        ) {
+        CalendarDayCellContent(
+            day = day,
+            episodeCount = episodeCount,
+            selected = selected,
+            labelColor = labelColor
+        )
+    }
+}
+
+/** A day cell's two lines: the number, and how many episodes land on it. */
+@Composable
+private fun CalendarDayCellContent(
+    day: LocalDate,
+    episodeCount: Int,
+    selected: Boolean,
+    labelColor: Color
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            text = day.dayOfMonth.toString(),
+            color = labelColor,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1
+        )
+        if (episodeCount > 0) {
             Text(
-                text = day.dayOfMonth.toString(),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                text = episodeCount.toString(),
+                color = KBAccent,
+                style = MaterialTheme.typography.labelSmall,
                 maxLines = 1
             )
-            if (episodeCount > 0) {
-                Text(
-                    text = episodeCount.toString(),
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1
-                )
-            }
         }
     }
 }
@@ -732,6 +851,7 @@ private fun CalendarDayList(
                 CalendarEpisodeRow(
                     episode = episode,
                     watched = state.isWatched(episode),
+                    touch = touch,
                     onClick = { onOpenDetails(episode.openId) },
                     // Only the first row carries the entry request; the rest
                     // are ordinary focus stops between it and the bottom.
@@ -762,23 +882,64 @@ private fun CalendarNotice(text: String, modifier: Modifier = Modifier) {
  * a PREMIERE/FINALE badge where the season payload says so, and a watched mark
  * for a past episode from the merged watched union. The press opens the SHOW's
  * detail page, which is what a rail card does - an episode is not a route.
+ *
+ * Focus is painted by the plate and the ring, never by a brighter label, and the
+ * focused fill is named: left to tv-material3 it was an almost solid white under
+ * the row's bright copy, which is the "hard to read what you're focused on"
+ * report. A phone presses the row through a foundation clickable - the TV
+ * `Surface` is a focus surface, and a finger cannot press it.
  */
 @Composable
 private fun CalendarEpisodeRow(
     episode: CalendarEpisode,
     watched: Boolean,
+    touch: Boolean,
     onClick: () -> Unit,
     requester: FocusRequester?,
     onUpPressed: (() -> Unit)?
 ) {
     var focused by remember { mutableStateOf(false) }
 
+    if (touch) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(KBShapeCard)
+                .background(KBSurface)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            CalendarEpisodeContent(episode = episode, watched = watched)
+        }
+        return
+    }
+
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (focused) KBSurfaceRaised else KBSurface,
-            contentColor = KBTextHi
+            contentColor = KBTextHi,
+            focusedContainerColor = KBSurfaceRaised,
+            focusedContentColor = KBTextHi,
+            pressedContainerColor = KBSurfaceRaised,
+            pressedContentColor = KBTextHi
+        ),
+        // A ring, not a scale or a glow. The row is full width inside the day
+        // list's LazyColumn, which clips to its own bounds - a row that grew
+        // would have its ring sheared off flat along both edges (the reason the
+        // theme keeps KBFocusChipInset and KBFocusRowInset for lazy rows).
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(1.dp, Color.Transparent),
+                shape = KBShapeCard
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, KBAccent),
+                shape = KBShapeCard
+            )
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -804,61 +965,73 @@ private fun CalendarEpisodeRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            AsyncImage(
-                model = episode.poster ?: episode.backdrop,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .width(46.dp)
-                    .height(64.dp)
-                    .clip(KBShapeCard)
-                    .background(KBSurfaceRaised)
-            )
-
-            Column(
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = episode.showTitle,
-                    color = if (watched) KBAccent else KBTextHi,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = listOfNotNull(
-                        "S%02d · E%02d".format(episode.season, episode.episode),
-                        episode.episodeTitle
-                    ).joinToString("  "),
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            if (episode.isPremiere) CalendarBadge("PREMIERE")
-            if (episode.isFinale) CalendarBadge("FINALE")
-            if (watched) {
-                Text(
-                    text = "WATCHED",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1
-                )
-            }
-            Text(
-                text = formatAirDateLabel(episode.airDate.toString()),
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                modifier = Modifier.width(96.dp),
-                textAlign = TextAlign.End
-            )
+            CalendarEpisodeContent(episode = episode, watched = watched)
         }
     }
+}
+
+/**
+ * One episode row's content, shared by the two form factors' plates: artwork,
+ * the two lines, the state tags and the date.
+ *
+ * Extracted rather than drawn twice so the string set can never drift between a
+ * television and a phone - only the plate underneath them differs.
+ */
+@Composable
+private fun RowScope.CalendarEpisodeContent(episode: CalendarEpisode, watched: Boolean) {
+    AsyncImage(
+        model = episode.poster ?: episode.backdrop,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .width(46.dp)
+            .height(64.dp)
+            .clip(KBShapeCard)
+            .background(KBSurfaceRaised)
+    )
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.weight(1f)
+    ) {
+        Text(
+            text = episode.showTitle,
+            color = if (watched) KBAccent else KBTextHi,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = listOfNotNull(
+                "S%02d · E%02d".format(episode.season, episode.episode),
+                episode.episodeTitle
+            ).joinToString("  "),
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+
+    if (episode.isPremiere) CalendarBadge("PREMIERE")
+    if (episode.isFinale) CalendarBadge("FINALE")
+    if (watched) {
+        Text(
+            text = "WATCHED",
+            color = KBAccent,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1
+        )
+    }
+    Text(
+        text = formatAirDateLabel(episode.airDate.toString()),
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelMedium,
+        maxLines = 1,
+        modifier = Modifier.width(96.dp),
+        textAlign = TextAlign.End
+    )
 }
 
 /** A small all-caps tag: PREMIERE / FINALE. */

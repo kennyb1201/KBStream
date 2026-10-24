@@ -84,7 +84,7 @@ class LibraryCalendarSurfaceContractTest {
                 "day does nothing' was exactly this: the press only retitled the " +
                 "pane beside the grid, which Down could reach from the bottom row " +
                 "alone",
-            pane.contains("if (!touch && hasEpisodesBelow) onOpenDay()") &&
+            pane.contains("if (hasEpisodesBelow) onOpenDay()") &&
                 pane.contains("onEnterDayList = { listLandRequest++ }") &&
                 pane.contains("LaunchedEffect(listLandRequest) {") &&
                 pane.contains("landed = runCatching { firstEpisodeRequester.requestFocus() }")
@@ -268,6 +268,68 @@ class LibraryCalendarSurfaceContractTest {
             "focus marks it as the one rail heading in Home that is also a door",
             title.contains("focusedBorder = androidx.tv.material3.Border(") &&
                 title.contains("BorderStroke(1.dp, KBAccent)")
+        )
+    }
+
+    @Test
+    fun `focus is legible, and a phone can press the calendar at all`() {
+        // Two reports from the same evening on the same screen (2026-10-24):
+        // "when u click on a day in calendar then focus is bright white and hard
+        // to read what ur focused on" and "the calendar on mobile is
+        // unclickable". One cause each.
+        val dayCell = pane.substringAfter("private fun CalendarDayCell(")
+            .substringBefore("private fun CalendarDayCellContent(")
+        val episodeRow = pane.substringAfter("private fun CalendarEpisodeRow(")
+            .substringBefore("private fun RowScope.CalendarEpisodeContent(")
+        val chip = pane.substringAfter("private fun CalendarChip(")
+            .substringBefore("private fun CalendarChipLabel(")
+
+        listOf(dayCell, episodeRow, chip).forEach { control ->
+            assertTrue(
+                "every pressable names its FOCUSED fill and label: tv-material3's " +
+                    "default focused container is an almost solid white this palette " +
+                    "never uses, and the label keeps its bright resting colour on it",
+                control.contains("focusedContainerColor =")
+            )
+            assertTrue(
+                "and its pressed pair, so a press is the same plate as focus",
+                control.contains("pressedContainerColor =") &&
+                    control.contains("pressedContentColor =")
+            )
+            assertTrue(
+                "the D-pad path is still a tv Surface - the fix added a touch " +
+                    "branch, it did not replace focus",
+                control.contains("Surface( onClick =")
+            )
+        }
+
+        assertTrue(
+            "focus is also RUNG, not only filled, so where focus is reads without " +
+                "relying on a colour change at ten feet",
+            dayCell.contains("focusedBorder = Border(") &&
+                episodeRow.contains("focusedBorder = Border(")
+        )
+
+        assertTrue(
+            "a phone presses the same plate through a plain foundation clickable: " +
+                "a tv `Surface` is a FOCUS surface and a finger cannot press it at " +
+                "all, which is why the whole calendar was dead to touch",
+            chip.contains(".clickable(onClick = onClick)") &&
+                dayCell.contains(".clickable { onSelect(day) }") &&
+                episodeRow.contains(".clickable(onClick = onClick)")
+        )
+        assertTrue(
+            "and that branch is wired from the form factor the pane already reads",
+            pane.contains("val touch = !FormFactor.isTv") &&
+                pane.contains("if (touch) {") &&
+                chip.contains("if (touch) {") &&
+                dayCell.contains("if (touch) {") &&
+                episodeRow.contains("if (touch) {")
+        )
+        assertTrue(
+            "the day a phone taps still selects, and the header chips still work",
+            pane.contains("CalendarChip( label = \"\u2039\", touch = touch,") &&
+                pane.contains("CalendarChip(label = \"TODAY\", touch = touch, onClick = onToday)")
         )
     }
 
