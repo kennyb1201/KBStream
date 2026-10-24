@@ -46,6 +46,7 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -175,30 +176,69 @@ fun StreamsScreenMobile(
         var refreshed by remember(loadedKey) { mutableStateOf(false) }
         val autoSelectSuppressed = suppressAutoSelect || refreshed
 
+        /*
+         * Auto-play's candidate rules, as a function of what is LEFT: the walk
+         * removes a hash row that would not prepare and picks again, so the
+         * episode rules, the season-pack test and the ceiling are re-applied to
+         * the remainder (see AutoplayWalk).
+         */
+        fun autoplayPickFrom(remaining: List<Stream>): Stream? =
+            AutoPlayQuality.cappedPick(
+                pick = EpisodeMatch.autoplayPick(remaining, season, episode, runtimeMinutes),
+                candidates = remaining,
+                season = season,
+                episode = episode,
+                runtimeMinutes = runtimeMinutes,
+                cap = AppPreferences.getMaxAutoPlayQuality(context)
+            )
+
+        /*
+         * Auto-play's start, the TV picker's exact route: a url-bearing pick
+         * starts at once, a hash row goes through TorBox, and a failure walks to
+         * the next candidate - bounded. A press on a card still takes
+         * selectSource's one attempt and its message.
+         */
+        fun autoplayStart(sources: List<Stream>, addons: List<String?>) {
+            resolveScope.launch {
+                val start = AutoplayWalk.start(
+                    candidates = sources,
+                    pick = { remaining -> autoplayPickFrom(remaining) },
+                    resolve = { TorBoxResolve.playableStream(context, it) }
+                )
+                StreamRankReport.noteAutoPlay(
+                    start?.let { picked ->
+                        "started · ${StreamRanker.labelOf(picked.stream)}" +
+                            if (picked.resolved) " (prepared from its hash)" else ""
+                    } ?: "none - the picker is showing instead " +
+                        "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+                )
+                start?.let { onStreamSelected(it.stream, it.sources, addons) }
+            }
+        }
+
+        // One autoplay attempt per target: the walk makes network calls, so a
+        // stream update landing mid-walk must not start a second one.
+        var autoplayHandled by remember(loadedKey) { mutableStateOf(false) }
+
         // Auto-play, with the TV's exact decision chain: the episode pick first
-        // (skip blank placeholders and files that declare another episode),
-        // then the viewer's quality ceiling, then the rank report that says what
-        // was started - or why nothing was.
+        // (skip dead placeholders and files that declare another episode), then
+        // the viewer's quality ceiling, then the walk, then the rank report that
+        // says what was started - or why nothing was.
         LaunchedEffect(isLoading, streams, manualPick) {
             if (
                 !isLoading && streams.isNotEmpty() && !autoSelectSuppressed &&
                 !manualPick && AppPreferences.getAutoSelectStream(context)
             ) {
-                val top = AutoPlayQuality.cappedPick(
-                    pick = EpisodeMatch.autoplayPick(streams, season, episode, runtimeMinutes),
-                    candidates = streams,
-                    season = season,
-                    episode = episode,
-                    runtimeMinutes = runtimeMinutes,
-                    cap = AppPreferences.getMaxAutoPlayQuality(context)
-                )
-                StreamRankReport.noteAutoPlay(
-                    top?.let { "started · ${StreamRanker.labelOf(it)}" }
-                        ?: "none - the picker is showing instead " +
-                        "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
-                )
-                if (top != null) {
-                    selectSource(top, streams, sourceAddons)
+                if (autoplayHandled) return@LaunchedEffect
+                autoplayHandled = true
+                val top = autoplayPickFrom(streams)
+                if (top == null) {
+                    StreamRankReport.noteAutoPlay(
+                        "none - the picker is showing instead " +
+                            "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+                    )
+                } else {
+                    autoplayStart(streams, sourceAddons)
                 }
             }
         }

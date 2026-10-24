@@ -174,6 +174,7 @@ import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBSteel
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -3320,6 +3321,15 @@ private fun SectionTitle(
         // and the pressed state as one target, so a D-pad OK and a tap both
         // open the calendar and the title takes focus when the rail is walked
         // up to.
+        //
+        // EVERY state's colours are named. Only the resting pair used to be,
+        // so the focused fill fell through to tv-material3's default - a
+        // near-white wash under the same near-white heading, which read as an
+        // unnamed control in the middle of the app's palette, and left the
+        // word barely legible in it. Focus now raises the theme's own surface
+        // and keeps the heading's own colour, exactly as the Library's filter
+        // chips do; the border is the accent, so the heading still reads as
+        // the one rail title in Home that is also a door.
         Surface(
             onClick = onClick,
             shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(
@@ -3327,7 +3337,24 @@ private fun SectionTitle(
             ),
             colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
                 containerColor = Color.Transparent,
-                contentColor = KBTextHi
+                contentColor = KBTextHi,
+                focusedContainerColor = KBSurfaceRaised,
+                focusedContentColor = KBTextHi,
+                pressedContainerColor = KBSurfaceRaised,
+                pressedContentColor = KBTextHi
+            ),
+            border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+                border = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        Color.Transparent
+                    ),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ),
+                focusedBorder = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(1.dp, KBAccent),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                )
             ),
             modifier = measured
         ) {

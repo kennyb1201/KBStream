@@ -54,7 +54,19 @@ data class StreamAddonGroup(val addonName: String, val streams: List<Stream>)
  */
 data class ResolvedSources(
     val streams: List<Stream>,
-    val addons: List<String?>
+    val addons: List<String?>,
+    /**
+     * Whether EVERY stream add-on was collected for this answer.
+     *
+     * Auto-play stops collecting a short grace after the first add-on answers
+     * (see [StreamsViewModel.AUTOPLAY_FIRST_RESULT_GRACE_MS]), so its result can
+     * be missing add-ons entirely. A partial answer may paint the picker - it is
+     * a true list of real sources - but it may NOT stand as the target's
+     * finished load: the fallback picker opened on one and never fetched again, 
+     * so a viewer with a Plex-class add-on first and AIOStreams second saw one
+     * add-on's rows, no tabs and no way out, however long they waited.
+     */
+    val complete: Boolean = true
 )
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
@@ -359,7 +371,15 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _debug.value = debugLines
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
-            _loadedKey.value = "$contentType:$streamId"
+            // Only a COMPLETE collection may tell the picker this target is
+            // loaded: that stamp is the picker's licence to skip its own fetch
+            // (see MainActivity's Screen.Streams), so stamping a truncated
+            // answer is what froze one add-on's rows into the picker forever.
+            // A partial answer still paints - it is a real list - and the
+            // picker that opens on it loads in full.
+            if (resolved.complete) {
+                _loadedKey.value = "$contentType:$streamId"
+            }
             _isLoading.value = false
         }
         return resolved
@@ -416,6 +436,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             return ResolvedSources(streams = emptyList(), addons = emptyList())
         }
 
+        // Whether the collection below stopped before every add-on answered.
+        // Declared outside the scope so the returned answer can say so.
+        var complete = true
+
         val results: List<AddonLoadResult> = supervisorScope {
             // A channel rather than awaitAll: the caller may be allowed to stop
             // collecting early (auto-play), and awaitAll cannot express "these
@@ -444,6 +468,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             }
 
             val collected = mutableListOf<Pair<Int, AddonLoadResult>>()
+            // Set once the grace has closed and been kept open because nothing
+            // collected so far could actually be started (see below).
+            var graceHeldOpen = false
             while (collected.size < streamAddons.size) {
                 // The wait-all case (the picker) keeps waiting for every
                 // add-on, each of which is already bounded by its own 15 s
@@ -451,12 +478,33 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 // the FIRST answer instead of paying the slowest add-on's
                 // timeout for a list whose head will not change.
                 val next =
-                    if (firstResultGraceMs == null || collected.isEmpty()) {
+                    if (firstResultGraceMs == null || collected.isEmpty() || graceHeldOpen) {
                         withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L) { outcomes.receive() }
                     } else {
                         withTimeoutOrNull(firstResultGraceMs) { outcomes.receive() }
                     }
-                if (next == null) break
+                if (next == null) {
+                    // The grace may not close on an empty hand. A fast add-on
+                    // that answered with nothing startable - a hash-only P2P
+                    // list while the account's debrid check has not run, or
+                    // an add-on whose answer was simply empty - used to end
+                    // the press-of-Play collection at 2.5 s, which is how the
+                    // one add-on that speaks first became the only add-on the
+                    // picker ever showed. Collection now continues (each
+                    // add-on still bounded by its own 15 s) until something can
+                    // be started or everyone has answered.
+                    if (
+                        !graceHeldOpen &&
+                        firstResultGraceMs != null &&
+                        collected.isNotEmpty() &&
+                        !hasStartableRow(collected)
+                    ) {
+                        graceHeldOpen = true
+                        continue
+                    }
+                    complete = false
+                    break
+                }
                 collected += next
             }
             if (collected.size < streamAddons.size) {
@@ -470,6 +518,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             // collection - auto-play stopped after the first answer - sorts the
             // same way, so its slices are still the leading add-ons' own.
             collected.sortedBy { it.first }.map { it.second }
+        }
+
+        if (!complete) {
+            val line = "collection stopped early: ${results.size}/${streamAddons.size} addons answered"
+            Log.w(TAG, line)
+            debugLines.add(line)
         }
 
         results.forEach { result ->
@@ -639,8 +693,30 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // the badge pass only adds chips, so every row here resolves.
         return ResolvedSources(
             streams = markedStreams,
-            addons = markedStreams.map { addonByStream[streamKey(it)] }
+            addons = markedStreams.map { addonByStream[streamKey(it)] },
+            complete = complete
         )
+    }
+
+    /**
+     * Whether anything collected so far could be STARTED - url-bearing, or a
+     * hash row whose torrent the process already knows is TorBox-cached.
+     *
+     * Deliberately no I/O ([TorBoxClient.knownCached] answers from memory): this
+     * is asked on the press-of-Play path, where the whole point of the grace is
+     * that nobody waits on a network call. A hash nothing is known about does
+     * not count - autoplay may still resolve it later, but it is no reason to
+     * stop listening for an add-on that is about to answer with a playable row.
+     */
+    private fun hasStartableRow(collected: List<Pair<Int, AddonLoadResult>>): Boolean {
+        val candidates = collected
+            .flatMap { (_, result) ->
+                if (result is AddonLoadResult.Success) result.streams else emptyList()
+            }
+            .filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
+        if (candidates.isEmpty()) return false
+        if (candidates.any { !it.url.isNullOrBlank() }) return true
+        return TorBoxClient.knownCached(candidates.map { it.infoHash }).isNotEmpty()
     }
 
     /**

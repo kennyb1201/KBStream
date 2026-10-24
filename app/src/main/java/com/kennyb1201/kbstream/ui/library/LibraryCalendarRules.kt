@@ -96,6 +96,38 @@ internal data class CalendarMonth(
     }
 }
 
+/**
+ * The calendar's candidate shows, in a SOURCE-FAIR order, capped at [cap].
+ *
+ * The tracked set arrives as four independent lists (this profile's history,
+ * Simkl, MDBList, Trakt) and the calendar resolves a bounded number of shows
+ * per month - so the order decides which shows get looked at at all. Taking
+ * them source by source let one long history fill the whole allowance and drop
+ * every tracker-only show (the ones that usually carry the UNAIRED episodes,
+ * because they are the shows being followed right now). Round-robin instead:
+ * one show from each source, then the next from each, so every source is
+ * represented before any source repeats. Duplicate ids across sources are
+ * collapsed on the way, keeping the earliest source that named them.
+ */
+internal fun calendarCandidates(
+    sources: List<List<String>>,
+    cap: Int
+): List<String> {
+    if (cap <= 0) return emptyList()
+    val cleaned = sources.map { source -> source.filter { it.isNotBlank() } }
+    val longest = cleaned.maxOfOrNull { it.size } ?: 0
+    val out = LinkedHashSet<String>(minOf(cap, cleaned.sumOf { it.size }))
+
+    for (index in 0 until longest) {
+        for (source in cleaned) {
+            val id = source.getOrNull(index) ?: continue
+            out += id
+            if (out.size >= cap) return out.toList()
+        }
+    }
+    return out.toList()
+}
+
 /** "October 2026" - the month header's label. */
 internal fun calendarMonthLabel(month: YearMonth): String =
     month.atDay(1).format(
@@ -202,16 +234,83 @@ internal fun correctedAirDate(
 }
 
 /**
- * Every episode of [shows] that lands in [month], indexed by day.
+ * One day's rows, in the order the calendar draws them.
+ *
+ * Ordered by show, then season, then episode - a stable order that does not
+ * depend on which show's TMDB call answered first, which matters more once the
+ * month is built show-by-show (see [calendarEpisodesFor]).
+ */
+internal val calendarEpisodeOrder: Comparator<CalendarEpisode> =
+    compareBy<CalendarEpisode> { it.showTitle.lowercase(Locale.getDefault()) }
+        .thenBy { it.season }
+        .thenBy { it.episode }
+
+/**
+ * ONE show's episodes that land in [month], indexed by day.
+ *
+ * Split out of [buildCalendarMonth] so a month can be assembled a show at a
+ * time: the pane paints each show as it resolves instead of holding the whole
+ * month behind the slowest TMDB call (see LibraryCalendarViewModel). The
+ * per-show and whole-month paths share this one function, so the two can never
+ * place an episode on different days.
  *
  * Premiere and finale are properties of the SEASON PAYLOAD, not of the month:
  * the first and last named episode of that season, so an episode that opened a
  * season in September still reads as a premiere when the calendar shows
  * October. That is the same first/last rule the Detail screen's season list
  * implies, applied once here so both the badge and any future summary agree.
+ */
+internal fun calendarEpisodesFor(
+    month: YearMonth,
+    show: CalendarShow,
+    today: LocalDate
+): Map<LocalDate, List<CalendarEpisode>> {
+    val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
+
+    for ((season, episodes) in show.seasons) {
+        if (episodes.isEmpty()) continue
+        val premiere = episodes.first().episodeNumber
+        val finale = episodes.last().episodeNumber
+
+        for (episode in episodes) {
+            val date = correctedAirDate(
+                episode = episode,
+                season = season,
+                sourceDates = show.sourceDates,
+                today = today
+            ) ?: continue
+            if (YearMonth.from(date) != month) continue
+
+            days.getOrPut(date) { ArrayList() } += CalendarEpisode(
+                showId = show.showId,
+                openId = show.openId,
+                showTitle = show.title,
+                poster = show.poster,
+                backdrop = show.backdrop,
+                season = season,
+                episode = episode.episodeNumber,
+                episodeTitle = episode.name?.takeIf { it.isNotBlank() },
+                airDate = date,
+                isPremiere = episode.episodeNumber == premiere,
+                isFinale = episode.episodeNumber == finale
+            )
+        }
+    }
+
+    return days
+}
+
+/** [days] with each day's rows in [calendarEpisodeOrder]. */
+internal fun calendarSortedDays(
+    days: Map<LocalDate, Collection<CalendarEpisode>>
+): Map<LocalDate, List<CalendarEpisode>> =
+    days.mapValues { (_, episodes) -> episodes.sortedWith(calendarEpisodeOrder) }
+
+/**
+ * Every episode of [shows] that lands in [month], indexed by day.
  *
- * Rows on one day are ordered by show, then season, then episode - a stable
- * order that does not depend on which show's TMDB call answered first.
+ * A thin fold over [calendarEpisodesFor], kept for the tests and for any caller
+ * that has the whole set in hand at once.
  */
 internal fun buildCalendarMonth(
     month: YearMonth,
@@ -221,48 +320,14 @@ internal fun buildCalendarMonth(
     val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
 
     for (show in shows) {
-        for ((season, episodes) in show.seasons) {
-            if (episodes.isEmpty()) continue
-            val premiere = episodes.first().episodeNumber
-            val finale = episodes.last().episodeNumber
-
-            for (episode in episodes) {
-                val date = correctedAirDate(
-                    episode = episode,
-                    season = season,
-                    sourceDates = show.sourceDates,
-                    today = today
-                ) ?: continue
-                if (YearMonth.from(date) != month) continue
-
-                days.getOrPut(date) { ArrayList() } += CalendarEpisode(
-                    showId = show.showId,
-                    openId = show.openId,
-                    showTitle = show.title,
-                    poster = show.poster,
-                    backdrop = show.backdrop,
-                    season = season,
-                    episode = episode.episodeNumber,
-                    episodeTitle = episode.name?.takeIf { it.isNotBlank() },
-                    airDate = date,
-                    isPremiere = episode.episodeNumber == premiere,
-                    isFinale = episode.episodeNumber == finale
-                )
-            }
+        for ((day, episodes) in calendarEpisodesFor(month, show, today)) {
+            days.getOrPut(day) { ArrayList() } += episodes
         }
     }
 
     if (days.isEmpty()) return CalendarMonth.empty(month)
 
-    val ordered = days.mapValues { (_, episodes) ->
-        episodes.sortedWith(
-            compareBy<CalendarEpisode> { it.showTitle.lowercase(Locale.getDefault()) }
-                .thenBy { it.season }
-                .thenBy { it.episode }
-        )
-    }
-
-    return CalendarMonth(month = month, days = ordered)
+    return CalendarMonth(month = month, days = calendarSortedDays(days))
 }
 
 /**

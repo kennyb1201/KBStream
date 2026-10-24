@@ -66,6 +66,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.images.ImageOverrides
@@ -201,6 +202,49 @@ fun StreamsScreen(
         }
     }
 
+    /*
+     * Auto-play's candidate rules, as a function of what is LEFT.
+     *
+     * The walk removes a hash row that would not prepare and asks again, so the
+     * episode rules, the season-pack test and the viewer's ceiling have to be
+     * re-applied to the remainder - a pick made once against the whole list
+     * cannot answer "what is next" (see AutoplayWalk).
+     */
+    fun autoplayPickFrom(remaining: List<Stream>): Stream? =
+        AutoPlayQuality.cappedPick(
+            pick = EpisodeMatch.autoplayPick(remaining, season, episode, runtimeMinutes),
+            candidates = remaining,
+            season = season,
+            episode = episode,
+            runtimeMinutes = runtimeMinutes,
+            cap = AppPreferences.getMaxAutoPlayQuality(context)
+        )
+
+    /*
+     * Auto-play's start: a url-bearing pick starts at once, a hash row goes
+     * through TorBox, and a failure walks to the next candidate - bounded, so a
+     * P2P-first list cannot hold the picker hostage (see AutoplayWalk). This is
+     * the AUTO route only; a press on a card keeps selectSource's one attempt
+     * and its message.
+     */
+    fun autoplayStart(sources: List<Stream>, addons: List<String?>) {
+        resolveScope.launch {
+            val start = AutoplayWalk.start(
+                candidates = sources,
+                pick = { remaining -> autoplayPickFrom(remaining) },
+                resolve = { TorBoxResolve.playableStream(context, it) }
+            )
+            StreamRankReport.noteAutoPlay(
+                start?.let { picked ->
+                    "started · ${StreamRanker.labelOf(picked.stream)}" +
+                        if (picked.resolved) " (prepared from its hash)" else ""
+                } ?: "none - the picker is showing instead " +
+                    "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+            )
+            start?.let { onStreamSelected(it.stream, it.sources, addons) }
+        }
+    }
+
     // A picker opened by "Play Manually" (or by the detail screen's episode
     // long-press) is the ONE place Auto-select must not fire: the viewer asked
     // to choose a source, and auto-selecting the top result instead just
@@ -223,40 +267,44 @@ fun StreamsScreen(
     // top result. Fire only once per target: after the user backs out of the
     // player, MainActivity marks this target as already-played and passes
     // suppressAutoSelect=true so the player isn't relaunched in a loop.
+    // One autoplay attempt per target: deciding to start now involves network
+    // calls (the hash walk), so a stream update landing mid-walk - the cached-badge
+    // pass folding chips in - must not start a second one.
+    var autoplayHandled by remember(loadedKey) { mutableStateOf(false) }
     LaunchedEffect(isLoading, streams, manualPick) {
         if (!isLoading && streams.isNotEmpty() && !autoSelectSuppressed && !manualPick && AppPreferences.getAutoSelectStream(context)) {
-            // Skip dead placeholder streams (blank URLs) at the top of the
-            // list — picking one would silently do nothing and look like
-            // auto-select is broken — and skip a source that declares another
-            // episode of this season, which is the same mistake in a form the
-            // viewer cannot see: the file is a different episode, and starting
-            // it by itself is the "playing the wrong episodes" report. Every
-            // source in that state means no auto-select at all, with the cards
-            // below naming what each file says it is.
+            if (autoplayHandled) return@LaunchedEffect
+            autoplayHandled = true
+            // Skip dead placeholder streams (blank URLs, and hashes nothing can
+            // prepare) at the top of the list — picking one would silently do
+            // nothing and look like auto-select is broken — and skip a source
+            // that declares another episode of this season, which is the same
+            // mistake in a form the viewer cannot see: the file is a different
+            // episode, and starting it by itself is the "playing the wrong
+            // episodes" report. Every source in that state means no auto-select
+            // at all, with the cards below naming what each file says it is.
             // Then the viewer's own quality ceiling (see AutoPlayQuality):
             // the episode rules above decide *which* episode, this decides how
             // tall a copy auto-play may start without a press. The picker still
             // shows every source; only the automatic head is capped.
-            val top = AutoPlayQuality.cappedPick(
-                pick = EpisodeMatch.autoplayPick(streams, season, episode, runtimeMinutes),
-                candidates = streams,
-                season = season,
-                episode = episode,
-                runtimeMinutes = runtimeMinutes,
-                cap = AppPreferences.getMaxAutoPlayQuality(context)
-            )
+            //
+            // The pick is then WALKED (see autoplayStart): a hash row that cannot
+            // be prepared moves the pick to the next candidate instead of ending
+            // autoplay.
+            val top = autoplayPickFrom(streams)
             // What auto-play did, recorded rather than inferred: the rank block
             // names the HEAD of the list, and the head is not always what a pick
             // takes - it skips every source that declares another episode and
             // every one that is a whole season, and it decides nothing at all
-            // when the viewer presses a card instead.
-            StreamRankReport.noteAutoPlay(
-                top?.let { "started · ${StreamRanker.labelOf(it)}" }
-                    ?: "none - the picker is showing instead " +
-                    "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
-            )
-            if (top != null) {
-                selectSource(top, streams, sourceAddons)
+            // when the viewer presses a card instead. The walk records the final
+            // answer itself.
+            if (top == null) {
+                StreamRankReport.noteAutoPlay(
+                    "none - the picker is showing instead " +
+                        "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+                )
+            } else {
+                autoplayStart(streams, sourceAddons)
             }
         }
     }

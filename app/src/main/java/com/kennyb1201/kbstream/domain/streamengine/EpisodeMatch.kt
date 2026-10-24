@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 
 /**
  * Whether a source is the episode that was asked for.
@@ -264,7 +265,7 @@ object EpisodeMatch {
         episode: Int?,
         runtimeMinutes: Int? = null
     ): Stream? {
-        val playable = streams.filter { !it.url.isNullOrBlank() }
+        val playable = streams.filter { isAutoplayCandidate(it) }
         if (season == null || episode == null) return playable.firstOrNull()
 
         var undeclared: Stream? = null
@@ -299,6 +300,24 @@ object EpisodeMatch {
      * length, or no size to read against it, the name is all there is: a source
      * that pins a season and never an episode is a pack.
      */
+    /**
+     * Whether auto-play may CONSIDER [stream] at all.
+     *
+     * A row that carries its own link starts as it always did. A row that is
+     * only a torrent hash does too - when the account holds the torrent, TorBox
+     * can hand back a CDN link for it (see TorBoxResolve), and refusing to look
+     * at those rows at all is why autoplay stopped dead in a P2P-first add-on's
+     * world: the fastest add-on's head rows were hashes, the list looked empty
+     * to the picker, and the viewer was handed a picker showing one add-on.
+     *
+     * UNDECIDED here rather than "playable": whether the hash can actually be
+     * prepared is the resolver's question, and autoplay answers it by trying -
+     * walking to the next candidate when one will not resolve. A manual press is
+     * different and still gets its one attempt (see the pickers' selectSource).
+     */
+    fun isAutoplayCandidate(stream: Stream): Boolean =
+        !stream.url.isNullOrBlank() || TorBoxResolve.isUnresolved(stream)
+
     fun isSeasonPack(stream: Stream, runtimeMinutes: Int?): Boolean {
         val runtime = runtimeMinutes?.takeIf { it > 0 }
         val sizeGb = if (runtime != null) StreamRanker.sizeGb(stream) else null

@@ -8,13 +8,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +75,13 @@ import kotlinx.coroutines.delay
  * one target and answers a touch press as readily as a D-pad OK - so the phone
  * gets the same controls without a second layout to keep in step.
  *
+ * The day list is a COLUMN OF ITS OWN on a television, beside the grid. It used
+ * to sit under the grid in the same column, where the six grid rows left it
+ * roughly one row of height - so a day with three episodes looked like a day
+ * with one, and the other two were unreachable because the list was cropped
+ * before it began. Beside the grid it has the pane's whole height, which is
+ * what a list of a day's episodes needs.
+ *
  * The pane never asks for the D-pad unless it was handed it ([takeInitialFocus]
  * is true, which is only the Home rail's shortcut): arriving from the CALENDAR
  * chip keeps focus on the chip, exactly as every other Library pane does.
@@ -101,13 +109,44 @@ fun LibraryCalendarPane(
             .filterNotNull()
             .associateWith { FocusRequester() }
     }
-    val listFocusRequester = remember { FocusRequester() }
+
+    /*
+     * The day list's first row. Down on the grid's bottom row hands the D-pad
+     * here; it is the list's own requester rather than a requester on the list
+     * container, because a Column is not a focus target - asking one for focus
+     * answered false and the list could not be entered at all.
+     */
+    val firstEpisodeRequester = remember { FocusRequester() }
 
     // The day the D-pad should be on, once the month it belongs to has landed.
     var landDay by remember { mutableStateOf(LocalDate.now()) }
     var landRequest by remember { mutableStateOf(if (takeInitialFocus) 1 else 0) }
 
+    /*
+     * A press on a day is a request to SEE that day, and on a television "see"
+     * means the D-pad has to get there: selecting the day only retitles the side
+     * list, which the viewer could not otherwise reach (Down enters it from the
+     * grid's BOTTOM row, so every earlier row's episodes were readable but not
+     * pressable). The request is retried rather than asked once, because the
+     * list re-composes for the new day in the same breath as the press - the
+     * same rule the month landing follows.
+     */
+    var listLandRequest by remember { mutableStateOf(0) }
+
     LaunchedEffect(Unit) { viewModel.open() }
+
+    LaunchedEffect(listLandRequest) {
+        if (listLandRequest == 0) return@LaunchedEffect
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching {
+                firstEpisodeRequester.requestFocus()
+            }.getOrDefault(false)
+            attempts++
+        }
+    }
 
     /*
      * One landing effect for both cases it has to serve: the initial focus the
@@ -140,16 +179,145 @@ fun LibraryCalendarPane(
         viewModel.pageMonth(delta)
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    val today = LocalDate.now()
+
+    CalendarPaneLayout(
+        state = state,
+        today = today,
+        touch = touch,
+        dayRequesters = dayRequesters,
+        firstEpisodeRequester = firstEpisodeRequester,
+        onSelect = viewModel::select,
+        onPrevMonth = { page(-1) },
+        onNextMonth = { page(1) },
+        onToday = {
+            landDay = LocalDate.now()
+            landRequest++
+            viewModel.goToToday()
+        },
+        onEnterDayList = { listLandRequest++ },
+        onOpenDetails = onOpenDetails,
+        modifier = modifier
+    )
+}
+
+/**
+ * The pane's two arrangements.
+ *
+ * A television has the width for the grid and the day list side by side, and
+ * that is the only arrangement in which a day's episodes are all reachable. A
+ * phone does not, so it keeps them stacked and gives the list the remaining
+ * height (`weight`) rather than letting the grid take its size first.
+ */
+@Composable
+private fun CalendarPaneLayout(
+    state: LibraryCalendarUiState,
+    today: LocalDate,
+    touch: Boolean,
+    dayRequesters: Map<LocalDate, FocusRequester>,
+    firstEpisodeRequester: FocusRequester,
+    onSelect: (LocalDate) -> Unit,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onToday: () -> Unit,
+    /** Take the D-pad into the selected day's list. */
+    onEnterDayList: () -> Unit,
+    onOpenDetails: (String) -> Unit,
+    modifier: Modifier
+) {
+    val backToGrid = {
+        if (!touch) {
+            runCatching { dayRequesters[state.selected]?.requestFocus() ?: false }
+        }
+    }
+
+    if (touch) {
+        Column(modifier = modifier.fillMaxSize()) {
+            CalendarMonthSection(
+                state = state,
+                today = today,
+                touch = touch,
+                dayRequesters = dayRequesters,
+                onSelect = onSelect,
+                onOpenDay = onEnterDayList,
+                onPrevMonth = onPrevMonth,
+                onNextMonth = onNextMonth,
+                onToday = onToday,
+                onEnterDayList = onEnterDayList,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            CalendarDayList(
+                state = state,
+                touch = touch,
+                firstEpisodeRequester = firstEpisodeRequester,
+                onUpToGrid = backToGrid,
+                onOpenDetails = onOpenDetails,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
+        }
+    } else {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
+            modifier = modifier.fillMaxSize()
+        ) {
+            CalendarMonthSection(
+                state = state,
+                today = today,
+                touch = touch,
+                dayRequesters = dayRequesters,
+                onSelect = onSelect,
+                onOpenDay = onEnterDayList,
+                onPrevMonth = onPrevMonth,
+                onNextMonth = onNextMonth,
+                onToday = onToday,
+                onEnterDayList = onEnterDayList,
+                modifier = Modifier
+                    .weight(1.1f)
+                    .fillMaxHeight()
+            )
+
+            CalendarDayList(
+                state = state,
+                touch = touch,
+                firstEpisodeRequester = firstEpisodeRequester,
+                onUpToGrid = backToGrid,
+                onOpenDetails = onOpenDetails,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
+        }
+    }
+}
+
+/** The header, the weekday initials and the month grid, as one column. */
+@Composable
+private fun CalendarMonthSection(
+    state: LibraryCalendarUiState,
+    today: LocalDate,
+    touch: Boolean,
+    dayRequesters: Map<LocalDate, FocusRequester>,
+    onSelect: (LocalDate) -> Unit,
+    /** A day was activated: select it AND move the D-pad into its list. */
+    onOpenDay: () -> Unit,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onToday: () -> Unit,
+    /** Down on the grid's bottom row: enter the day list. */
+    onEnterDayList: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
         CalendarHeader(
             month = state.month,
-            onPrev = { page(-1) },
-            onNext = { page(1) },
-            onToday = {
-                landDay = LocalDate.now()
-                landRequest++
-                viewModel.goToToday()
-            }
+            onPrev = onPrevMonth,
+            onNext = onNextMonth,
+            onToday = onToday
         )
 
         CalendarWeekdayRow()
@@ -158,33 +326,14 @@ fun LibraryCalendarPane(
             month = state.month,
             days = state.days,
             selected = state.selected,
-            today = LocalDate.now(),
+            today = today,
             touch = touch,
             dayRequesters = dayRequesters,
-            onSelect = viewModel::select,
-            onPrevMonth = { page(-1) },
-            onNextMonth = { page(1) },
-            onExitBottom = {
-                if (!touch) {
-                    runCatching { listFocusRequester.requestFocus() }
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        CalendarDayList(
-            state = state,
-            touch = touch,
-            listFocusRequester = listFocusRequester,
-            onUpToGrid = {
-                if (!touch) {
-                    runCatching {
-                        dayRequesters[state.selected]?.requestFocus() ?: false
-                    }
-                }
-            },
-            onOpenDetails = onOpenDetails
+            onSelect = onSelect,
+            onOpenDay = onOpenDay,
+            onPrevMonth = onPrevMonth,
+            onNextMonth = onNextMonth,
+            onEnterDayList = onEnterDayList
         )
     }
 }
@@ -297,9 +446,10 @@ private fun CalendarGrid(
     touch: Boolean,
     dayRequesters: Map<LocalDate, FocusRequester>,
     onSelect: (LocalDate) -> Unit,
+    onOpenDay: () -> Unit,
     onPrevMonth: () -> Unit,
     onNextMonth: () -> Unit,
-    onExitBottom: () -> Unit
+    onEnterDayList: () -> Unit
 ) {
     val rows = remember(month) { calendarCells(month).chunked(7) }
 
@@ -324,11 +474,17 @@ private fun CalendarGrid(
                                 isFirstColumn = column == 0,
                                 isLastColumn = column == 6,
                                 isLastRow = rowIndex == rows.lastIndex,
+                                // Down only leaves the grid when there is a
+                                // list below to land in; a day with nothing on
+                                // it lets the press fall through instead of
+                                // swallowing it.
+                                hasEpisodesBelow = days[day].orEmpty().isNotEmpty(),
                                 requester = if (touch) null else dayRequesters[day],
                                 onSelect = onSelect,
+                                onOpenDay = onOpenDay,
                                 onPrevMonth = onPrevMonth,
                                 onNextMonth = onNextMonth,
-                                onExitBottom = onExitBottom
+                                onEnterDayList = onEnterDayList
                             )
                         }
                     }
@@ -345,6 +501,13 @@ private fun CalendarGrid(
  * makes the day list under the grid follow the D-pad without a press; a phone
  * selects on tap. The grid's left/right edges page the month rather than
  * walking off into nothing, and Down on the bottom row enters the day list.
+ *
+ * The cell's height is a fixed [CALENDAR_CELL_HEIGHT] and its two lines are
+ * sized to fit inside it. It used to be 42dp, which is less than one label's
+ * line box plus the smallest label's - so the episode COUNT under the day
+ * number was drawn about half outside the cell, clipped by the Surface. The
+ * count is how a viewer knows a day has more than one episode, so it has to be
+ * legible, not decorative.
  */
 @Composable
 private fun CalendarDayCell(
@@ -356,16 +519,25 @@ private fun CalendarDayCell(
     isFirstColumn: Boolean,
     isLastColumn: Boolean,
     isLastRow: Boolean,
+    hasEpisodesBelow: Boolean,
     requester: FocusRequester?,
     onSelect: (LocalDate) -> Unit,
+    onOpenDay: () -> Unit,
     onPrevMonth: () -> Unit,
     onNextMonth: () -> Unit,
-    onExitBottom: () -> Unit
+    onEnterDayList: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
 
     Surface(
-        onClick = { onSelect(day) },
+        onClick = {
+            onSelect(day)
+            // On a television the press is a request to see the day: take the
+            // D-pad into its list so the episodes can be opened, not just read
+            // in the pane beside the grid. A day with nothing on it keeps the
+            // press as a plain selection.
+            if (!touch && hasEpisodesBelow) onOpenDay()
+        },
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = when {
@@ -416,8 +588,8 @@ private fun CalendarDayCell(
                             true
                         }
 
-                        event.key == Key.DirectionDown && isLastRow -> {
-                            onExitBottom()
+                        event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow -> {
+                            onEnterDayList()
                             true
                         }
 
@@ -431,7 +603,7 @@ private fun CalendarDayCell(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp)
+                .padding(vertical = 2.dp)
         ) {
             Text(
                 text = day.dayOfMonth.toString(),
@@ -452,62 +624,75 @@ private fun CalendarDayCell(
 }
 
 /**
- * The selected day's episodes, under the grid.
+ * The selected day's episodes, in their own column.
  *
  * The three empty states are deliberately different sentences: no tracked shows
  * at all (naming the sources that would fill it), a month with nothing in it,
  * and a day with nothing in it. A day with many episodes scrolls HERE and only
- * here - the grid above never moves.
+ * here - the grid never moves.
+ *
+ * The FIRST row is the list's entry point: Down on the grid's bottom row asks
+ * for it, and Up on it hands the D-pad back to the selected day. Before this
+ * the requester sat on the (non-focusable) container Column, so the press
+ * answered false and a day's episodes could not be reached with a remote at
+ * all - the only way to an episode was to open the show from somewhere else.
  */
 @Composable
 private fun CalendarDayList(
     state: LibraryCalendarUiState,
     touch: Boolean,
-    listFocusRequester: FocusRequester,
+    firstEpisodeRequester: FocusRequester,
     onUpToGrid: () -> Unit,
-    onOpenDetails: (String) -> Unit
+    onOpenDetails: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     if (!state.hasShows && !state.loading) {
         CalendarNotice(
             text = "Nothing to schedule yet. Watch something, or connect " +
-                "Simkl, MDBList or Trakt, and its episodes appear here."
+                "Simkl, MDBList or Trakt, and its episodes appear here.",
+            modifier = modifier
         )
         return
     }
 
     if (state.loading) {
-        CalendarNotice("Loading this month…")
+        CalendarNotice("Loading this month…", modifier = modifier)
         return
     }
 
     if (state.monthIsEmpty) {
-        CalendarNotice("Nothing scheduled this month.")
+        CalendarNotice("Nothing scheduled this month.", modifier = modifier)
         return
     }
 
     val episodes = state.episodesOn(state.selected)
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .focusRequester(listFocusRequester)
-            .onPreviewKeyEvent { event ->
-                if (!touch && event.type == KeyEventType.KeyDown &&
-                    event.key == Key.DirectionUp
-                ) {
-                    onUpToGrid()
-                    true
-                } else {
-                    false
-                }
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = calendarDayLabel(state.selected),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            if (episodes.isNotEmpty()) {
+                // How many there are, in words: the grid's count is a glyph,
+                // and this is the line that says what it counted.
+                Text(
+                    text = if (episodes.size == 1) {
+                        "1 episode"
+                    } else {
+                        "${episodes.size} episodes"
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1
+                )
             }
-    ) {
-        Text(
-            text = calendarDayLabel(state.selected),
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         if (episodes.isEmpty()) {
             Text(
@@ -523,16 +708,20 @@ private fun CalendarDayList(
             contentPadding = PaddingValues(bottom = 20.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(
+            itemsIndexed(
                 items = episodes,
-                key = { episode ->
+                key = { _, episode ->
                     "${episode.showId}|s${episode.season}|e${episode.episode}"
                 }
-            ) { episode ->
+            ) { index, episode ->
                 CalendarEpisodeRow(
                     episode = episode,
                     watched = state.isWatched(episode),
-                    onClick = { onOpenDetails(episode.openId) }
+                    onClick = { onOpenDetails(episode.openId) },
+                    // Only the first row carries the entry request; the rest
+                    // are ordinary focus stops between it and the bottom.
+                    requester = if (index == 0) firstEpisodeRequester else null,
+                    onUpPressed = if (index == 0 && !touch) onUpToGrid else null
                 )
             }
         }
@@ -541,12 +730,12 @@ private fun CalendarDayList(
 
 /** A plain line of copy where a list would be. */
 @Composable
-private fun CalendarNotice(text: String) {
+private fun CalendarNotice(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         color = KBTextLo,
         style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 8.dp)
+        modifier = modifier.padding(top = 8.dp)
     )
 }
 
@@ -563,7 +752,9 @@ private fun CalendarNotice(text: String) {
 private fun CalendarEpisodeRow(
     episode: CalendarEpisode,
     watched: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    requester: FocusRequester?,
+    onUpPressed: (() -> Unit)?
 ) {
     var focused by remember { mutableStateOf(false) }
 
@@ -572,11 +763,26 @@ private fun CalendarEpisodeRow(
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeCard),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (focused) KBSurfaceRaised else KBSurface,
-            contentColor = if (focused) KBTextHi else KBTextHi
+            contentColor = KBTextHi
         ),
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (requester == null) Modifier else Modifier.focusRequester(requester)
+            )
             .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (
+                    onUpPressed != null &&
+                    event.type == KeyEventType.KeyDown &&
+                    event.key == Key.DirectionUp
+                ) {
+                    onUpPressed()
+                    true
+                } else {
+                    false
+                }
+            }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -664,5 +870,5 @@ private fun calendarDayLabel(day: LocalDate): String =
         )
     )
 
-/** A day cell's height: "31" plus a marker line, at TV density. */
-private val CALENDAR_CELL_HEIGHT = 42.dp
+/** A day cell's height: the day number plus the episode count, both legible. */
+private val CALENDAR_CELL_HEIGHT = 48.dp

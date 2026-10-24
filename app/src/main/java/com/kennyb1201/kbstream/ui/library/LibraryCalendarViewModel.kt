@@ -46,7 +46,13 @@ data class LibraryCalendarUiState(
     val selected: LocalDate = LocalDate.now(),
     val days: Map<LocalDate, List<CalendarEpisode>> = emptyMap(),
     val watched: Set<String> = emptySet(),
-    /** True while the first build for [month] is in flight. */
+    /**
+     * True while nothing has landed for [month] yet.
+     *
+     * A month is no longer all-or-nothing: rows appear as each show resolves
+     * (see [LibraryCalendarViewModel.loadMonth]), so this turns false with the
+     * FIRST row rather than with the last.
+     */
     val loading: Boolean = true,
     /** True when at least one source named a show; false draws the explanation. */
     val hasShows: Boolean = true
@@ -82,7 +88,6 @@ class LibraryCalendarViewModel(
     private val simklRepository = SimklRepository.getInstance(application)
     private val traktRepository = TraktRepository.getInstance(application)
     private val airDateRepository = TvmazeAirDateRepository.getInstance(application)
-    private val historyDao = WatchHistoryDatabase.getInstance(application).watchHistoryDao()
 
     private val _uiState = MutableStateFlow(LibraryCalendarUiState())
     val uiState: StateFlow<LibraryCalendarUiState> = _uiState.asStateFlow()
@@ -105,6 +110,24 @@ class LibraryCalendarViewModel(
 
     /** Built months, so paging back to a month the viewer already saw is instant. */
     private val monthCache = LinkedHashMap<YearMonth, CalendarMonth>()
+
+    /**
+     * Months assembled show-by-show, including the ones still building.
+     *
+     * The point of keeping this beside [monthCache] is that a build the viewer
+     * INTERRUPTED (paging away cancels [buildJob]) keeps what it had already
+     * fetched: the month opens on those rows next time and only the shows not
+     * yet resolved are asked about again. Without it, a slow month could never
+     * accumulate anything, and every visit restarted from nothing - which is
+     * what made the first look at a future month feel like it would never load.
+     */
+    private class MonthProgress {
+        val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
+        val resolved = HashSet<String>()
+        var lastPublishedAt = 0L
+    }
+
+    private val progress = HashMap<YearMonth, MonthProgress>()
 
     init {
         observeProfileSwitches()
@@ -191,14 +214,20 @@ class LibraryCalendarViewModel(
                     first = false
                     return@collect
                 }
-                showIds = emptyList()
-                showsLoadedAt = 0L
-                details.clear()
-                monthCache.clear()
+                forgetEverything()
                 loadShowIds()
                 loadMonth(_uiState.value.month, landingDay = null)
             }
         }
+    }
+
+    /** Drops every per-profile fact this session gathered. */
+    private fun forgetEverything() {
+        showIds = emptyList()
+        showsLoadedAt = 0L
+        details.clear()
+        monthCache.clear()
+        progress.clear()
     }
 
     /**
@@ -210,24 +239,24 @@ class LibraryCalendarViewModel(
      * rail's unaired-flagged subset), MDBList's started shows, and Trakt's
      * watched shows. Every read fails soft: a tracker that is down contributes
      * nothing and the calendar shows the rest.
+     *
+     * The four lists are then interleaved by [calendarCandidates] rather than
+     * concatenated, so a long local history cannot consume the whole resolution
+     * allowance and leave the tracker-sourced - i.e. currently airing - shows
+     * out of the calendar entirely.
      */
     private suspend fun loadShowIds() {
-        val ids = LinkedHashSet<String>()
+        val local = runCatchingCancellable {
+            val dao = historyDao()
+            (
+                dao.getCompletedSeriesRows() + dao.getResumeRowsForLauncher()
+                )
+                .filterNot { it.type.lowercase().contains("movie") }
+                .mapNotNull { it.parentId.takeIf { parent -> parent.isNotBlank() } }
+        }.getOrNull().orEmpty()
 
-        val localRows = runCatchingCancellable { historyDao.getCompletedSeriesRows() }
-            .getOrNull()
-            .orEmpty() +
-            runCatchingCancellable { historyDao.getResumeRowsForLauncher() }
-                .getOrNull()
-                .orEmpty()
-
-        localRows.forEach { row ->
-            if (row.type.lowercase().contains("movie")) return@forEach
-            row.parentId.takeIf { it.isNotBlank() }?.let(ids::add)
-        }
-
-        if (simklRepository.isConfigured() && simklRepository.hasToken()) {
-            val simkl = runCatchingCancellable {
+        val simkl = if (simklRepository.isConfigured() && simklRepository.hasToken()) {
+            runCatchingCancellable {
                 buildList {
                     addAll(simklRepository.getCompletedShowImdbIds())
                     addAll(simklRepository.getPartiallyWatchedShowImdbIds())
@@ -238,26 +267,47 @@ class LibraryCalendarViewModel(
                 Log.w(TAG, "simkl shows unavailable: ${error.message}")
                 emptyList()
             }
-            ids += simkl.filter { it.isNotBlank() }
+        } else {
+            emptyList()
         }
 
-        runCatchingCancellable { MdbListClient.getWatchedSnapshot(appContext) }
-            .getOrNull()
+        val mdbList = runCatchingCancellable {
+            MdbListClient.getWatchedSnapshot(appContext)
+        }.getOrNull()
             ?.startedShowKeys
-            ?.let { ids += it }
+            ?.toList()
+            .orEmpty()
 
-        if (traktRepository.isConfigured() && traktRepository.hasToken()) {
+        val trakt = if (traktRepository.isConfigured() && traktRepository.hasToken()) {
             runCatchingCancellable { traktRepository.watchedSnapshot() }
                 .getOrNull()
                 ?.shows
-                ?.forEach { row ->
-                    preferredId(row.idKeys)?.let(ids::add)
-                }
+                ?.mapNotNull { row -> preferredId(row.idKeys) }
+                .orEmpty()
+        } else {
+            emptyList()
         }
 
-        showIds = ids.toList()
+        showIds = calendarCandidates(
+            sources = listOf(local, simkl, mdbList, trakt),
+            cap = MAX_CALENDAR_SHOWS
+        )
         showsLoadedAt = System.currentTimeMillis()
     }
+
+    /**
+     * This profile's watch history.
+     *
+     * Resolved PER READ, never captured in a field: every profile has its own
+     * history file, and switching profiles retires (closes) the previous
+     * instance a few seconds later. A DAO captured at construction therefore
+     * answers every read after a switch with "attempt to re-open an
+     * already-closed object", which the soft-failure wrapping below turns into
+     * an empty read - so a profile's own shows silently vanished from its
+     * calendar while the account-level trackers kept filling someone else's.
+     */
+    private fun historyDao() =
+        WatchHistoryDatabase.getInstanceScoped(appContext).watchHistoryDao()
 
     /** The id a Trakt row is addressed by here: IMDb first, then TMDB. */
     private fun preferredId(idKeys: Set<String>): String? =
@@ -269,10 +319,12 @@ class LibraryCalendarViewModel(
      *
      * A cached month is published immediately and only its watched state is
      * re-read - that is what makes paging back instant while a mark made in the
-     * meantime still tints. An uncached month is built off the main thread and
-     * replaces the state when it lands; the month being LEFT is dropped from the
-     * grid at once (rather than staying up under a spinner) so a slow build can
-     * never show October's episodes under a November header.
+     * meantime still tints. An uncached month shows whatever an earlier,
+     * interrupted visit to it already resolved (see [MonthProgress]) and then
+     * fills the rest in AS EACH SHOW LANDS: a hundred TMDB round trips no longer
+     * stand between the viewer and an empty grid. The month being LEFT is
+     * dropped at once (rather than staying up under a spinner) so a slow build
+     * can never show October's episodes under a November header.
      */
     private fun loadMonth(month: YearMonth, landingDay: LocalDate?) {
         buildJob?.cancel()
@@ -284,37 +336,125 @@ class LibraryCalendarViewModel(
             return
         }
 
+        val build = progress.getOrPut(month) { MonthProgress() }
+        val selectedWhenStarted = _uiState.value.selected
+
         _uiState.value = _uiState.value.copy(
             month = month,
-            days = emptyMap(),
-            loading = true
+            days = calendarSortedDays(build.days),
+            selected = landingDayFor(month, landingDay, build.days),
+            loading = build.days.isEmpty(),
+            hasShows = showIds.isNotEmpty()
         )
 
         buildJob = viewModelScope.launch {
-            val shows = calendarShowsFor(month)
-            val built = buildCalendarMonth(month, shows, LocalDate.now())
-            monthCache[month] = built
-            publish(built, landingDay)
-            refreshWatched()
+            resolveMonth(month, build, landingDay, selectedWhenStarted)
         }
     }
 
-    /** Puts a built month on screen, with the day the viewer should be on. */
-    private fun publish(month: CalendarMonth, landingDay: LocalDate?) {
-        val today = LocalDate.now()
-        val selected = when {
-            landingDay != null && YearMonth.from(landingDay) == month.month -> landingDay
-            landingDay != null && landingDay == today -> today
-            else -> calendarLanding(month.month, month.days, today).day
+    /**
+     * Resolves one month, show by show, publishing as it goes.
+     *
+     * A cancelled build (the viewer paged away) leaves [MonthProgress] holding
+     * everything it had resolved; the next visit picks up from there.
+     */
+    private suspend fun resolveMonth(
+        month: YearMonth,
+        build: MonthProgress,
+        landingDay: LocalDate?,
+        selectedWhenStarted: LocalDate
+    ) {
+        val remaining = showIds.filterNot { it in build.resolved }
+        val semaphore = Semaphore(CALENDAR_CONCURRENCY)
+
+        coroutineScope {
+            remaining.map { id ->
+                async {
+                    semaphore.withPermit {
+                        val show = runCatchingCancellable {
+                            calendarShowFor(id, month)
+                        }.getOrNull()
+                        noteResolved(month, build, id, show)
+                    }
+                }
+            }.awaitAll()
         }
 
+        val built = CalendarMonth(
+            month = month,
+            days = calendarSortedDays(build.days)
+        )
+        monthCache[month] = built
+        progress.remove(month)
+
+        // The viewer may have walked the grid while this was landing; their day
+        // wins over the one the month would have chosen for them.
+        val moved = _uiState.value.selected
+            .takeIf { _uiState.value.month == month && it != selectedWhenStarted }
+        publish(built, landingDay, keepSelection = moved)
+        refreshWatched()
+    }
+
+    /**
+     * Files one resolved show (or one that had nothing to say) and paints the
+     * month if it gained anything - or at most every [PARTIAL_PUBLISH_MS], so a
+     * hundred misses do not compose a hundred times.
+     */
+    private fun noteResolved(
+        month: YearMonth,
+        build: MonthProgress,
+        candidateId: String,
+        show: CalendarShow?
+    ) {
+        build.resolved += candidateId
+        var gained = false
+        if (show != null) {
+            for ((day, episodes) in calendarEpisodesFor(month, show, LocalDate.now())) {
+                build.days.getOrPut(day) { ArrayList() } += episodes
+                gained = true
+            }
+        }
+        if (_uiState.value.month != month) return
+
+        val now = System.currentTimeMillis()
+        if (!gained && now - build.lastPublishedAt < PARTIAL_PUBLISH_MS) return
+        build.lastPublishedAt = now
+        _uiState.value = _uiState.value.copy(
+            days = calendarSortedDays(build.days),
+            loading = false,
+            hasShows = showIds.isNotEmpty()
+        )
+    }
+
+    /** Puts a built month on screen, with the day the viewer should be on. */
+    private fun publish(
+        month: CalendarMonth,
+        landingDay: LocalDate?,
+        keepSelection: LocalDate? = null
+    ) {
         _uiState.value = _uiState.value.copy(
             month = month.month,
             days = month.days,
-            selected = selected,
+            selected = landingDayFor(month.month, landingDay, month.days, keepSelection),
             hasShows = showIds.isNotEmpty(),
             loading = false
         )
+    }
+
+    /** Which day a month opens on: the viewer's own, else today, else the rule. */
+    private fun landingDayFor(
+        month: YearMonth,
+        landingDay: LocalDate?,
+        days: Map<LocalDate, List<CalendarEpisode>>,
+        keepSelection: LocalDate? = null
+    ): LocalDate {
+        val today = LocalDate.now()
+        return when {
+            keepSelection != null && YearMonth.from(keepSelection) == month -> keepSelection
+            landingDay != null && YearMonth.from(landingDay) == month -> landingDay
+            landingDay != null && landingDay == today -> today
+            else -> calendarLanding(month, days, today).day
+        }
     }
 
     /**
@@ -327,29 +467,6 @@ class LibraryCalendarViewModel(
      * Shows are de-duplicated by their TMDB id, because the same show reaches
      * here under an IMDb id from one source and a TMDB id from another.
      */
-    private suspend fun calendarShowsFor(month: YearMonth): List<CalendarShow> {
-        val candidates = showIds.take(MAX_CALENDAR_SHOWS)
-        if (candidates.isEmpty()) return emptyList()
-
-        val semaphore = Semaphore(CALENDAR_CONCURRENCY)
-        val resolved = coroutineScope {
-            candidates.map { id ->
-                async {
-                    semaphore.withPermit {
-                        runCatchingCancellable { calendarShowFor(id, month) }.getOrNull()
-                    }
-                }
-            }.awaitAll()
-        }
-
-        val byShow = LinkedHashMap<String, CalendarShow>()
-        resolved.filterNotNull().forEach { show ->
-            byShow.putIfAbsent(show.showId, show)
-        }
-        return byShow.values.toList()
-    }
-
-    /** One show's month-relevant seasons, artwork and source dates. */
     private suspend fun calendarShowFor(
         candidateId: String,
         month: YearMonth
@@ -512,7 +629,7 @@ class LibraryCalendarViewModel(
      * id are the same show, and only one spelling of each can be compared.
      */
     private suspend fun localWatchedRows(): Map<String, Set<Pair<Int, Int>>> {
-        val rows = runCatchingCancellable { historyDao.getCompletedSeriesRows() }
+        val rows = runCatchingCancellable { historyDao().getCompletedSeriesRows() }
             .getOrNull()
             .orEmpty()
 
@@ -537,7 +654,17 @@ class LibraryCalendarViewModel(
         /** Parallel TMDB/TVmaze resolutions per month build. */
         const val CALENDAR_CONCURRENCY = 4
 
-        /** Bound on how many shows one month build will resolve. */
-        const val MAX_CALENDAR_SHOWS = 200
+        /**
+         * Bound on how many shows one month build will resolve.
+         *
+         * A bound rather than a bug fix: the candidate order is source-fair
+         * (see [calendarCandidates]), so this only ever trims a library with
+         * hundreds of tracked shows, and pages after the first cost no new
+         * detail lookups (they are cached for the session).
+         */
+        const val MAX_CALENDAR_SHOWS = 300
+
+        /** Quiet gap between two partial month publishes, in milliseconds. */
+        const val PARTIAL_PUBLISH_MS = 180L
     }
 }

@@ -70,7 +70,9 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -1559,7 +1561,6 @@ fun AppRoot(
         // The add-on for each source, in the same order the advance will walk:
         // the binge resolver above may have re-ordered the list, so the names
         // are resolved by stream identity rather than by their old position.
-        val orderedAddons = addonsFor(ordered, resolved.streams, resolved.addons)
         // Auto-play takes the episode this request is for, then a source that
         // says nothing about the episode - and never one whose own name
         // declares another episode (see EpisodeMatch). Where that leaves no
@@ -1567,49 +1568,76 @@ fun AppRoot(
         // declaration on its card, instead of the wrong episode starting by
         // itself: "Paw Patrol is playing the wrong episodes" was a head of the
         // list the app could see was not the episode and started anyway.
-        val top = AutoPlayQuality.cappedPick(
-            pick = EpisodeMatch.autoplayPick(
-                ordered,
-                pending.target.season,
-                pending.target.episode,
-                pending.target.runtimeMinutes
-            ),
+        //
+        // The pick is then WALKED (see AutoplayWalk): a hash row that cannot be
+        // prepared hands over to the next candidate instead of launching a dead
+        // link. This path is Continue Watching and the next-episode advance, and
+        // it used to launch its pick straight to the player with no resolve step
+        // at all - an unresolved head there was a launch that showed nothing.
+        val autoplayPick: (List<Stream>) -> Stream? = { remaining ->
+            AutoPlayQuality.cappedPick(
+                pick = EpisodeMatch.autoplayPick(
+                    remaining,
+                    pending.target.season,
+                    pending.target.episode,
+                    pending.target.runtimeMinutes
+                ),
+                candidates = remaining,
+                season = pending.target.season,
+                episode = pending.target.episode,
+                runtimeMinutes = pending.target.runtimeMinutes,
+                cap = AppPreferences.getMaxAutoPlayQuality(context)
+            )
+        }
+        val start = AutoplayWalk.start(
             candidates = ordered,
-            season = pending.target.season,
-            episode = pending.target.episode,
-            runtimeMinutes = pending.target.runtimeMinutes,
-            cap = AppPreferences.getMaxAutoPlayQuality(context)
+            pick = autoplayPick,
+            resolve = { TorBoxResolve.playableStream(context, it) }
         )
         // Recorded, not inferred from the head of the list: this is the
         // episode-handoff path a wrong episode is reported from, and the rank
         // block cannot say whether auto-play started anything at all (see
         // StreamRankReport.noteAutoPlay).
         com.kennyb1201.kbstream.data.reporting.StreamRankReport.noteAutoPlay(
-            top?.let { "started · ${StreamRanker.labelOf(it)}" }
-                ?: "none - the picker is showing instead " +
+            start?.let { picked ->
+                "started · ${StreamRanker.labelOf(picked.stream)}" +
+                    if (picked.resolved) " (prepared from its hash)" else ""
+            } ?: "none - the picker is showing instead " +
                 "(episode length ${
                     pending.target.runtimeMinutes?.let { "$it min" } ?: "unknown"
                 })"
         )
         pendingAutoPlay = null
-        screen = if (top != null) {
+        screen = if (start != null) {
+            // The list handed to the player is the walked one: the prepared
+            // stream is IN it where its hash row was, so "next source" continues
+            // from the right place. The substitution is positional, so the names
+            // resolved against `ordered` still line up with it.
+            val startedSources = start.sources
+            val startedAddons = addonsFor(ordered, resolved.streams, resolved.addons)
             if (pending.isNextEpisodeAdvance) {
                 // Not remembered either: caching the advance's ordering would
                 // hand the NEXT replay of this episode the same stale ordering
                 // the get above just refused. A fresh start (no binge identity)
                 // is the case the cache is for.
-                pending.toPlayerScreen(top, ordered, orderedAddons)
+                pending.toPlayerScreen(start.stream, startedSources, startedAddons)
             } else {
-                // Remember what actually started, so a replay within the link's
-                // lifetime can skip this resolve entirely.
-                PlayedLinkCache.remember(context, pending.streamKey, top, ordered)
+                // Remember what actually started - the RESOLVED stream, so a
+                // replay within the link's lifetime replays the CDN link rather
+                // than the hash it had to prepare first.
+                PlayedLinkCache.remember(
+                    context,
+                    pending.streamKey,
+                    start.stream,
+                    startedSources
+                )
                 // ...and stamp the key on the player screen as well, exactly as
                 // the cache-hit path above does: the key is the invalidation
                 // handle the player uses when this freshly-resolved link turns
                 // out to be dead before its first frame. Without it only a
                 // REPLAY (a cache hit) could heal the entry, so one more launch
                 // replayed the corpse.
-                pending.toPlayerScreen(top, ordered, orderedAddons)
+                pending.toPlayerScreen(start.stream, startedSources, startedAddons)
                     .copy(linkCacheKey = pending.streamKey)
             }
         } else {
