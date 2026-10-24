@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.history.titleProfileKey
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibraryOrigin
+import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -79,6 +80,12 @@ internal object TorBoxLibrarySync {
         val scanned: Int,
         val added: Int,
         val handledSkips: Int = 0,
+        /**
+         * Titles this round would have added but for a My List removal record —
+         * a title removed on purpose here or on another device. Counted so the
+         * round's own log says why a cloud full of torrents added nothing.
+         */
+        val tombstoneSkips: Int = 0,
         val removed: Int = 0,
         val outcome: Outcome = Outcome.COMPLETED
     )
@@ -136,6 +143,14 @@ internal object TorBoxLibrarySync {
         // round's report, so the Settings line can say they happened.
         val removed = remediateOwnership(context, store, liveProfileId, torrents)
 
+        // Read AFTER the cleanup, on purpose: the rows it just removed are
+        // tombstoned as it removes them, and this round's add pass must not put
+        // them straight back. That is the field's "removed 81, offered 81
+        // again", and it is also how a Resync (which resets every processed
+        // mark) can re-walk the whole cloud without re-imposing what another
+        // device decided to remove.
+        val tombstones = LocalLibraryStore.tombstones(context)
+
         val handled = store.processed()
         // One snapshot for the whole round: the ownership map only grows when
         // this device watches something, and a round is a second of work.
@@ -143,6 +158,7 @@ internal object TorBoxLibrarySync {
         val repository = TmdbRepository.getInstance(context)
         var added = 0
         var skips = 0
+        var tombstoneSkips = 0
 
         for (torrent in torrents) {
             // Already dealt with in an earlier round: skip before spending a
@@ -240,6 +256,20 @@ internal object TorBoxLibrarySync {
                 repository.resolveImdbId(match.tmdbId, match.mediaType)
             }.getOrNull()
 
+            // Removed on purpose, here or on another device: a sync round never
+            // puts it back, whatever the processed marks say. The only way back
+            // is a MANUAL re-add, which clears the record (see
+            // LocalLibraryStore.addToMyList). Not marked handled: the record can
+            // be cleared later, and a mark would hide the title until a Resync.
+            if (LibraryTombstones.isRemoved(tombstones, match.mediaType, imdbId, match.tmdbId)) {
+                tombstoneSkips++
+                Log.i(
+                    TAG,
+                    "not adding '${torrent.name}': '${match.title}' was removed from My List on purpose"
+                )
+                continue
+            }
+
             val wasAdded = runCatchingCancellable {
                 LibraryMirror.addToLibrary(
                     context = context,
@@ -266,6 +296,7 @@ internal object TorBoxLibrarySync {
                 scanned = torrents.size,
                 added = added,
                 handledSkips = skips,
+                tombstoneSkips = tombstoneSkips,
                 removed = removed,
                 outcome = Outcome.COMPLETED
             )
@@ -355,6 +386,7 @@ internal object TorBoxLibrarySync {
             TAG,
             "TorBox library sync: outcome=${report.outcome}, ${report.scanned} seen, " +
                 "${report.added} added, ${report.handledSkips} already handled, " +
+                "${report.tombstoneSkips} removed on purpose elsewhere, " +
                 "${report.removed} removed as another profile's"
         )
         return report

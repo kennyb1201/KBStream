@@ -415,13 +415,22 @@ object LocalLibraryStore {
     /**
      * Removes every torbox-sync row from this profile's My List in ONE write,
      * and reports how many that was. The untoggle question's "yes".
+     *
+     * Every row that leaves is TOMBSTONED first: the cross-device sync replaces
+     * the whole list, so a removal that is not written down as a removal is a
+     * removal another device can undo with an older copy of the list (see
+     * [LibraryTombstones]).
      */
     @Synchronized
     fun removeTorboxSynced(context: Context): Int {
         val items = readListForWrite(context, KEY_MY_LIST) ?: return 0
+        val leaving = items.filter { it.origin == LibraryOrigin.TORBOX_SYNC }
         val kept = items.filterNot { it.origin == LibraryOrigin.TORBOX_SYNC }
         val removed = items.size - kept.size
-        if (removed > 0) writeList(context, KEY_MY_LIST, kept)
+        if (removed > 0) {
+            markTombstoned(context, leaving)
+            writeList(context, KEY_MY_LIST, kept)
+        }
         return removed
     }
 
@@ -429,16 +438,165 @@ object LocalLibraryStore {
      * Removes exactly [entries] from this profile's My List, matching on the
      * store's own de-dupe key so the caller can name rows it read (the one-time
      * remediation) without guessing indices.
+     *
+     * The removed rows are tombstoned, for the reason [removeTorboxSynced]
+     * gives: the cleanup's half of the field's leak is only half the fix if the
+     * next device re-adds what it just removed.
      */
     @Synchronized
     fun removeMyListEntries(context: Context, entries: List<LibraryItem>): Int {
         if (entries.isEmpty()) return 0
         val doomed = entries.map { dedupeKey(it) }.toSet()
         val items = readListForWrite(context, KEY_MY_LIST) ?: return 0
+        val leaving = items.filter { dedupeKey(it) in doomed }
         val kept = items.filterNot { dedupeKey(it) in doomed }
         val removed = items.size - kept.size
-        if (removed > 0) writeList(context, KEY_MY_LIST, kept)
+        if (removed > 0) {
+            markTombstoned(context, leaving)
+            writeList(context, KEY_MY_LIST, kept)
+        }
         return removed
+    }
+
+    // ------------------------------------------------------------------
+    // My List tombstones — the removals that have to survive the sync.
+    // ------------------------------------------------------------------
+
+    /**
+     * This profile's removal record (or another profile's, addressed directly
+     * for a pull - see [mergePulledTombstones]).
+     */
+    fun tombstones(
+        context: Context,
+        profileId: String? = null
+    ): Map<String, LibraryTombstone> =
+        LibraryTombstones.decode(
+            libraryPrefs(context, profileId).getString(LibraryTombstones.PREFS_KEY, null)
+        )
+
+    /**
+     * Records [entries] as removed on purpose, and pushes the record.
+     *
+     * Called by the two removal paths that answer "the sync put this here and it
+     * does not belong" - the cleanup and the untoggle question - so what they
+     * remove stays removed on every device rather than until the next pull.
+     */
+    @Synchronized
+    fun markTombstoned(
+        context: Context,
+        entries: List<LibraryItem>,
+        at: Long = System.currentTimeMillis()
+    ): Int {
+        if (entries.isEmpty()) return 0
+        val record = tombstones(context).toMutableMap()
+        entries.forEach { entry ->
+            val key = dedupeKey(entry)
+            record[key] = LibraryTombstone(key = key, at = at, removed = true)
+        }
+        writeTombstones(context, profileId = null, record = LibraryTombstones.cap(record))
+        return entries.size
+    }
+
+    /**
+     * Records a DELIBERATE re-add: this title is welcome again.
+     *
+     * Written as a clearance entry rather than by deleting the removal, because
+     * the record travels by the newest timestamp per key - a deletion would be
+     * undone by the other device's older tombstone on the very next merge, and
+     * the title would vanish again. Clears every key that names this title, for
+     * the reason [LibraryTombstones.merge] gives.
+     */
+    @Synchronized
+    fun clearTombstonesFor(
+        context: Context,
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        at: Long = System.currentTimeMillis()
+    ) {
+        val record = tombstones(context)
+        if (record.isEmpty()) return
+        val hits = record.keys.filter { key ->
+            LibraryTombstones.matches(key, mediaType, imdbId, tmdbId)
+        }
+        if (hits.isEmpty()) return
+        val updated = record.toMutableMap()
+        hits.forEach { key -> updated[key] = LibraryTombstone(key, at, removed = false) }
+        writeTombstones(context, profileId = null, record = LibraryTombstones.cap(updated))
+    }
+
+    /**
+     * Merges a PULLED record into [profileId]'s own, and answers the merged one.
+     *
+     * Addressed by profile rather than by the ambient store: the applier may be
+     * writing a sibling profile's library, and the tombstone merge has to land in
+     * that profile's file. No push - a pull is not the local device's edit, and
+     * the applier already owns the timestamp that decides the next one.
+     */
+    @Synchronized
+    fun mergePulledTombstones(
+        context: Context,
+        profileId: String?,
+        incoming: Map<String, LibraryTombstone>
+    ): Map<String, LibraryTombstone> {
+        val local = tombstones(context, profileId)
+        val merged = LibraryTombstones.merge(local, incoming)
+        if (merged != local) {
+            writeTombstones(context, profileId = profileId, record = merged, push = false)
+        }
+        return merged
+    }
+
+    /** [profileId]'s raw My List blob, as stored, or null when there is none. */
+    fun myListBlob(context: Context, profileId: String? = null): String? =
+        libraryPrefs(context, profileId).getString(KEY_MY_LIST, null)
+
+    /**
+     * [raw] with every identity-tombstoned row removed, in the store's own
+     * encoding.
+     *
+     * A blob that does not parse is handed back UNCHANGED: a pull must never
+     * turn an unreadable library into an empty one (the shape [lastGood] exists
+     * for), and an empty answer here would do exactly that.
+     */
+    fun withoutTombstonedRows(
+        raw: String,
+        record: Map<String, LibraryTombstone>
+    ): String {
+        if (record.isEmpty()) return raw
+        val rows = runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(::entryFromJson) }
+        }.getOrNull() ?: return raw
+        val kept = LibraryTombstones.removedFrom(rows, record)
+        if (kept.size == rows.size) return raw
+        val arr = JSONArray()
+        kept.forEach { arr.put(entryJson(it)) }
+        return arr.toString()
+    }
+
+    private fun libraryPrefs(context: Context, profileId: String?): android.content.SharedPreferences {
+        val id = profileId?.trim().orEmpty()
+        if (id.isEmpty()) return prefs(context)
+        return context.applicationContext.getSharedPreferences(
+            ProfileStorage.prefsName(id, BASE_NAME),
+            Context.MODE_PRIVATE
+        )
+    }
+
+    private fun writeTombstones(
+        context: Context,
+        profileId: String?,
+        record: Map<String, LibraryTombstone>,
+        push: Boolean = true
+    ) {
+        libraryPrefs(context, profileId).edit()
+            .putString(LibraryTombstones.PREFS_KEY, LibraryTombstones.encode(record))
+            .apply()
+        // Only this device's own edit is news to the other devices. A pull - and
+        // a sibling profile's file, which only a pull writes - must not enqueue a
+        // push of the ambient profile's library.
+        if (push && profileId == null) pushLibrarySync(context)
     }
 
     @Synchronized
@@ -720,9 +878,19 @@ object LocalLibraryStore {
                 Log.w(TAG, "add refused: library blob will not parse")
                 return false
             }
-            if (items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
-            items.add(0, entry)
-            writeList(context, storageKey, items)
+            if (items.none { matches(it, mediaType, imdbId, tmdbId) }) {
+                items.add(0, entry)
+                writeList(context, storageKey, items)
+            }
+            // A MANUAL add is the viewer's word against a removal the sync made:
+            // it clears the title's tombstone, and the clearance travels the same
+            // way the tombstone did. Asked even when the row is already here - a
+            // manual add of a title the sync put back is the same statement - and
+            // never for the sync's own adds, which is what keeps a re-processed
+            // cloud from re-imposing a removal by adding the title again.
+            if (origin == LibraryOrigin.MANUAL) {
+                clearTombstonesFor(context, mediaType, imdbId, tmdbId)
+            }
             return true
         }
 

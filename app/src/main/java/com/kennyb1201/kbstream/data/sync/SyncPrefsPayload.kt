@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.library.LibraryTombstones
+import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.trakt.TraktToken
 import com.kennyb1201.kbstream.data.trakt.TraktTokenStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -962,11 +964,15 @@ object PrefsPayloadBuilder {
         }
 
     /**
-     * Local library (My List + personal lists) as two raw JSON strings —
-     * the payloads mirror LocalLibraryStore's on-disk encoding exactly, so
-     * the applier can hand them straight back without re-encoding. Full
-     * replace on apply: the latest writer wins, matching how the store
-     * itself writes.
+     * Local library (My List + personal lists + the My List removal record) as
+     * raw JSON strings — the payloads mirror LocalLibraryStore's on-disk
+     * encoding exactly, so the applier can hand them straight back without
+     * re-encoding. The lists full-replace on apply (the latest writer wins,
+     * matching how the store itself writes); the removal record is the one part
+     * that MERGES instead (see [PrefsPayloadApplier.applyLibrary]), because a
+     * removal that a newer list can overwrite is not a removal. That is the
+     * cross-device half of the TorBox library leak: without it, one device's
+     * round re-adds whatever the other device's cleanup removed.
      */
     fun buildLibrary(context: Context): JsonObject =
         buildJsonObject {
@@ -974,6 +980,10 @@ object PrefsPayloadBuilder {
             val prefs = scopedPrefs(context, "kbstream_library")
             put("my_list", prefs.getString("my_list", null) ?: "")
             put("personal_lists", prefs.getString("personal_lists", null) ?: "")
+            put(
+                LibraryTombstones.PAYLOAD_KEY,
+                prefs.getString(LibraryTombstones.PREFS_KEY, null) ?: ""
+            )
         }
 
     /**
@@ -1163,23 +1173,52 @@ object PrefsPayloadApplier {
      * remote write is newer than the last local one — My List edits from
      * either device must survive, so the loser of a timestamp race keeps
      * its state and re-pushes on its next edit.
+     *
+     * The one exception is the removal record, and it is what makes removals
+     * converge: a tombstone is merged (newest timestamp per key, never a
+     * whole-blob replacement) BEFORE the timestamp gate, so a stale device's
+     * push can win the list but never resurrect a title. Whatever the gate then
+     * decides, the list that ends up stored is filtered against the MERGED
+     * record - the incoming one when the pull wins, the local one when it does
+     * not - so the two devices converge on the same list without either needing
+     * its own cleanup pass to have fired.
      */
     private fun applyLibrary(context: Context, payload: JsonObject, profileId: String?) {
         val remoteUpdated = payloadUpdatedAt(payload)
         val prefs = profilePrefs(context, "kbstream_library", profileId)
-        if (remoteUpdated != null &&
+        val remoteIsStale = remoteUpdated != null &&
             remoteUpdated < prefs.getLong("library_synced_at", 0L)
-        ) return
 
         fun raw(key: String): String? {
             val v = (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content
             return v?.takeIf { it.isNotBlank() }
         }
 
+        val tombstones = LocalLibraryStore.mergePulledTombstones(
+            context = context,
+            profileId = profileId,
+            incoming = LibraryTombstones.decode(raw(LibraryTombstones.PAYLOAD_KEY))
+        )
+
         val editor = prefs.edit()
-        raw("my_list")?.let { editor.putString("my_list", it) }
-        raw("personal_lists")?.let { editor.putString("personal_lists", it) }
-        editor.putLong("library_synced_at", remoteUpdated ?: System.currentTimeMillis())
+        if (!remoteIsStale) {
+            raw("personal_lists")?.let { editor.putString("personal_lists", it) }
+            editor.putLong("library_synced_at", remoteUpdated ?: System.currentTimeMillis())
+        }
+
+        // The list this profile ends up with: the pulled blob when the pull wins,
+        // otherwise the one already here - filtered either way, so a removal
+        // learned from the other device is applied even to a list that lost the
+        // race for being written.
+        val source = (if (remoteIsStale) null else raw("my_list"))
+            ?: LocalLibraryStore.myListBlob(context, profileId)
+        if (source != null) {
+            editor.putString(
+                "my_list",
+                LocalLibraryStore.withoutTombstonedRows(source, tombstones)
+            )
+        }
+
         editor.apply()
     }
 
