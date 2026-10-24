@@ -78,7 +78,8 @@ class TorBoxResourceBoundsContractTest {
         // the processed ids, the empty-search streak and the no-match streak
         // that decide when a torrent stops being looked up (see
         // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS]), plus the last round's
-        // record - and the migration that clears all of it. Every member that
+        // record, the review queue and the migration that clears all of it.
+        // Every member that
         // reads or writes them is listed here, so a new one cannot arrive
         // unlocked.
         listOf(
@@ -96,7 +97,12 @@ class TorBoxResourceBoundsContractTest {
             "@Synchronized\\s+fun recordRound\\(",
             "@Synchronized\\s+fun ownershipRemediationPending\\(\\)",
             "@Synchronized\\s+fun markOwnershipRemediated\\(\\)",
-            "@Synchronized\\s+fun clearOwnershipRemediation\\(\\)"
+            "@Synchronized\\s+fun clearOwnershipRemediation\\(\\)",
+            // The review queue's set is read, replaced and subtracted by a
+            // round and by the reviewer at once (see TorBoxReview).
+            "@Synchronized\\s+fun reviewCandidates\\(\\)",
+            "@Synchronized\\s+fun recordReviewCandidates\\(",
+            "@Synchronized\\s+fun forgetReviewCandidates\\("
         ).forEach { signature ->
             assertTrue(
                 "missing lock: $signature",
@@ -105,7 +111,7 @@ class TorBoxResourceBoundsContractTest {
         }
         assertEquals(
             "no member that does not touch the stored sets should be locked",
-            15,
+            18,
             Regex("@Synchronized[\\s\\S]{0,40}?fun ").findAll(store).count()
         )
     }

@@ -5,6 +5,9 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Which of the account's TorBox torrents the library sync has already handled,
@@ -21,12 +24,15 @@ import java.time.format.DateTimeFormatter
  * bookkeeping, not account state (the Library entries it produces DO sync, via
  * LocalLibraryStore's own blob).
  *
- * Two things sit here that are not marks:
+ * Three things sit here that are not marks:
  *
  *  - the retry streaks (empty search, no confident match), which are the
  *    opposite of a mark: evidence that the torrent should be looked at again;
  *  - the last round's report, which is what the Settings panes show so a round
- *    that added nothing is visibly different from a round that never ran.
+ *    that added nothing is visibly different from a round that never ran;
+ *  - the review queue: the de-dupe keys of My List rows the last COMPLETED
+ *    round could attribute to nobody (see [TorBoxLibrarySync]). Not a mark and
+ *    not a verdict, just the rows the rules refuse to guess about.
  */
 internal class TorBoxCloudStore(context: Context) {
 
@@ -135,6 +141,43 @@ internal class TorBoxCloudStore(context: Context) {
     }
 
     /**
+     * The de-dupe keys of the rows the last completed round could not
+     * attribute, for the Settings review row.
+     *
+     * Keys rather than copies of the rows: the queue is a statement about the
+     * last round, and the titles, years and types shown in the review are read
+     * from the CURRENT My List. A row removed since the round simply stops
+     * resolving, which is the behaviour the reviewer expects - they are not
+     * being shown a ghost. Filed only by a COMPLETED round, so a gate exit
+     * leaves the previous queue intact instead of blanking it.
+     */
+    @Synchronized
+    fun reviewCandidates(): Set<String> =
+        prefs.getStringSet(KEY_REVIEW_CANDIDATES, emptySet()).orEmpty().toSet()
+
+    /** Replaces this profile's review queue with [keys] (empty clears it). */
+    @Synchronized
+    fun recordReviewCandidates(keys: Set<String>) {
+        prefs.edit()
+            .apply {
+                if (keys.isEmpty()) remove(KEY_REVIEW_CANDIDATES)
+                else putStringSet(KEY_REVIEW_CANDIDATES, keys)
+            }
+            .apply()
+    }
+
+    /**
+     * Drops [keys] from the review queue after the reviewer confirmed them.
+     * A kept row stays queued: it is still a row no rule can attribute, and
+     * hiding it would be the same silence this queue was built to end.
+     */
+    @Synchronized
+    fun forgetReviewCandidates(keys: Set<String>) {
+        val remaining = reviewCandidates() - keys
+        recordReviewCandidates(remaining)
+    }
+
+    /**
      * Re-arms the one-time ownership cleanup for this profile.
      *
      * The manual Resync's other half. Clearing the processed marks lets the
@@ -224,6 +267,8 @@ internal class TorBoxCloudStore(context: Context) {
             added = prefs.getInt(KEY_LAST_ADDED, 0),
             handledSkips = prefs.getInt(KEY_LAST_HANDLED, 0),
             removed = prefs.getInt(KEY_LAST_REMOVED, 0),
+            candidates = prefs.getInt(KEY_LAST_CANDIDATES, 0),
+            siblingEvidence = prefs.getBoolean(KEY_LAST_SIBLING, false),
             atMillis = prefs.getLong(KEY_LAST_AT, 0L)
         )
     }
@@ -237,8 +282,16 @@ internal class TorBoxCloudStore(context: Context) {
             .putInt(KEY_LAST_ADDED, report.added)
             .putInt(KEY_LAST_HANDLED, report.handledSkips)
             .putInt(KEY_LAST_REMOVED, report.removed)
+            .putInt(KEY_LAST_CANDIDATES, report.candidates)
+            .putBoolean(KEY_LAST_SIBLING, report.siblingEvidence)
             .putLong(KEY_LAST_AT, System.currentTimeMillis())
             .apply()
+        // A pane that is OPEN while the round finishes (the field's Resync, the
+        // schedule, the launch round) reads the line from here, so the record
+        // has to say it changed. Before this, the line was a snapshot taken on
+        // entering Settings and a round that filed while the viewer watched
+        // showed nothing until they left and came back.
+        TorBoxSyncStatus.publish()
     }
 
     /**
@@ -295,6 +348,19 @@ internal class TorBoxCloudStore(context: Context) {
         val handledSkips: Int,
         /** Rows the one-time cleanup took out of this profile's list. */
         val removed: Int,
+        /**
+         * Rows this round could attribute to nobody and left in the review
+         * queue (see [reviewCandidates]). Zero on a round with nothing to say
+         * about attribution, which includes every gate exit.
+         */
+        val candidates: Int = 0,
+        /**
+         * Whether any OTHER profile on this device has a My List row at all -
+         * arm B's raw material (see [TorBoxLibrarySync]). False means the round
+         * had no sibling copy to compare against, which is a different fact
+         * from "nothing was leaking" and is named on the line.
+         */
+        val siblingEvidence: Boolean = false,
         val atMillis: Long
     )
 
@@ -322,7 +388,7 @@ internal class TorBoxCloudStore(context: Context) {
          * evidence), which re-runs it once for every profile that has already
          * been through an older version.
          */
-        private const val OWNERSHIP_REMEDIATION_VERSION = 2
+        private const val OWNERSHIP_REMEDIATION_VERSION = 3
         private const val KEY_OWNERSHIP_REMEDIATION_VERSION =
             "torbox_library_ownership_remediation_version"
 
@@ -331,7 +397,31 @@ internal class TorBoxCloudStore(context: Context) {
         private const val KEY_LAST_ADDED = "torbox_library_last_added"
         private const val KEY_LAST_HANDLED = "torbox_library_last_handled"
         private const val KEY_LAST_REMOVED = "torbox_library_last_removed"
+        private const val KEY_LAST_CANDIDATES = "torbox_library_last_candidates"
+        private const val KEY_LAST_SIBLING = "torbox_library_last_sibling"
+        private const val KEY_REVIEW_CANDIDATES = "torbox_library_review_candidates"
         private const val KEY_LAST_AT = "torbox_library_last_at"
+    }
+}
+
+/**
+ * The "last round filed" signal the Settings panes read the status line on.
+ *
+ * A process-wide counter rather than a store field because the panes and the
+ * worker hold different [TorBoxCloudStore] instances for the same profile, and
+ * the line has to change while a pane is already open: the round the field
+ * pressed for finishes with no navigation at all, and a snapshot taken when the
+ * pane composed is exactly what left it showing the previous round's counts.
+ * Nothing is read from here except the fact that something was filed - the
+ * line itself still comes from the store's own record.
+ */
+object TorBoxSyncStatus {
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
+
+    /** Called by the round that files a report (see [TorBoxCloudStore.recordRound]). */
+    fun publish() {
+        _revision.value += 1
     }
 }
 
@@ -347,12 +437,18 @@ internal class TorBoxCloudStore(context: Context) {
  */
 internal fun torboxSyncStatusLine(
     round: TorBoxCloudStore.LastRound?,
-    zone: ZoneId = ZoneId.systemDefault()
+    zone: ZoneId = ZoneId.systemDefault(),
+    // The queue as it stands NOW, not as the round filed it: the reviewer can
+    // empty it from the row below, and a line still claiming N titles were
+    // found after they were removed would send them looking for a row that is
+    // gone. Defaulted to the round's own count so the pure line and its tests
+    // keep one meaning.
+    pendingReview: Int = round?.candidates ?: 0
 ): String {
     if (round == null) return "Not run yet on this device"
     val at = DateTimeFormatter.ofPattern("HH:mm")
         .format(Instant.ofEpochMilli(round.atMillis).atZone(zone))
-    val base = when (round.outcome) {
+    var base = when (round.outcome) {
         // A gate exit is still a round: it says why nothing happened, which is
         // more than the silent return it replaced.
         TorBoxLibrarySync.Outcome.NO_KEY -> "Last sync $at — no TorBox key set"
@@ -384,7 +480,24 @@ internal fun torboxSyncStatusLine(
     // facts, and "the round ran" must not read the same as "the cleanup found
     // nothing" - which is exactly how the field's still-leaking Library looked
     // from Settings while the pass was silently keeping every row.
-    if (round.removed <= 0) return base
-    val titles = if (round.removed == 1) "title" else "titles"
-    return "$base · removed ${round.removed} $titles owned by another profile"
+    if (round.removed > 0) {
+        val titles = if (round.removed == 1) "title" else "titles"
+        base = "$base · removed ${round.removed} $titles owned by another profile"
+    }
+    // The rows no rule could attribute are the third fact, and the one the
+    // field's Library leak was invisible as: a completed round with nothing
+    // removed read exactly like a round with nothing to remove. Named with the
+    // missing sibling evidence when there is none, because on that device "no
+    // sibling copy" is why they could not be decided, not a sign they are fine.
+    if (pendingReview > 0) {
+        val titles = if (pendingReview == 1) "title" else "titles"
+        val why = if (round.siblingEvidence) {
+            ""
+        } else {
+            " (no sibling library on this device to compare)"
+        }
+        base = "$base · found $pendingReview cloud $titles it could not " +
+            "attribute$why — see the review row"
+    }
+    return base
 }

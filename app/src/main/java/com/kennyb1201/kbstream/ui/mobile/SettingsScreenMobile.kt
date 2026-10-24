@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,12 +53,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
+import com.kennyb1201.kbstream.data.debrid.TorBoxReview
+import com.kennyb1201.kbstream.data.debrid.TorBoxSyncStatus
 import com.kennyb1201.kbstream.data.debrid.torboxSyncStatusLine
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -86,6 +91,7 @@ import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.settings.SettingsGroup
+import com.kennyb1201.kbstream.ui.settings.TorBoxReviewDialog
 import com.kennyb1201.kbstream.ui.settings.SettingsPane
 import com.kennyb1201.kbstream.ui.settings.syncRelativeTime
 import com.kennyb1201.kbstream.ui.theme.CUSTOM_ACCENT_INDEX
@@ -758,16 +764,41 @@ private fun IntegrationsPaneMobile(
         // the same record (see torboxSyncStatusLine), because "nothing appeared
         // in My List" used to be the same absence whether the round was off,
         // keyless, empty, all-handled or simply not matching.
-        val torboxLastRound = remember(syncedRevision) {
+        //
+        // Live, not a snapshot: a round can file while this pane is open (the
+        // Resync right below is the usual one), so the read is keyed on the
+        // store's own "a round filed" signal and refreshed on resume instead of
+        // only on a synced-prefs revision.
+        val torboxRoundRevision by TorBoxSyncStatus.revision.collectAsStateWithLifecycle()
+        var torboxResumeTick by remember { mutableIntStateOf(0) }
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { torboxResumeTick++ }
+        val torboxLastRound = remember(
+            syncedRevision,
+            torboxRoundRevision,
+            torboxResumeTick
+        ) {
             TorBoxCloudStore(context).lastRound()
         }
+        // The rows no rule can attribute, resolved against My List as it stands
+        // now (see TorBoxReview) - the phone's half of the review queue.
+        val torboxReviewRows = remember(
+            syncedRevision,
+            torboxRoundRevision,
+            torboxResumeTick
+        ) {
+            TorBoxReview.rows(context)
+        }
+        var torboxReviewOpen by remember { mutableStateOf(false) }
+        var torboxReviewRemoved by remember { mutableIntStateOf(0) }
         // The row's gate is the WORKER's gate (switch on AND a key present), so
         // a press can never fire a round the worker would refuse.
         val torboxResyncReady = remember(syncedRevision) {
             AppPreferences.getTorboxLibrarySync(context) &&
                 AppPreferences.getTorboxApiKey(context).isNotBlank()
         }
-        SettingsCaptionMobile(torboxSyncStatusLine(torboxLastRound))
+        SettingsCaptionMobile(
+            torboxSyncStatusLine(torboxLastRound, pendingReview = torboxReviewRows.size)
+        )
         KBButton(
             label = "RESYNC TORBOX CLOUD",
             enabled = torboxResyncReady,
@@ -778,6 +809,49 @@ private fun IntegrationsPaneMobile(
             "Forgets what this device has already checked and looks at the whole " +
                 "TorBox cloud again. Titles already in My List are not added twice."
         )
+        // The field case in one row: cloud titles in this profile's list that no
+        // profile has watched and no sibling lists. Nothing in the stored data
+        // can say whose they are, so the round keeps them and asks here. The
+        // sync's own rows come ticked; confirming removes them through the same
+        // tombstoning path as the cleanup, so no later round brings them back.
+        if (torboxReviewRows.isNotEmpty()) {
+            KBButton(
+                label = if (torboxReviewRows.size == 1) {
+                    "REVIEW 1 UNOWNED CLOUD TITLE"
+                } else {
+                    "REVIEW ${torboxReviewRows.size} UNOWNED CLOUD TITLES"
+                },
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { torboxReviewOpen = true }
+            )
+            SettingsCaptionMobile(
+                "In your cloud and in My List, with no owner recorded and no copy in " +
+                    "another profile's list. The ones the sync added are already ticked."
+            )
+        }
+        if (torboxReviewRemoved > 0) {
+            SettingsCaptionMobile(
+                if (torboxReviewRemoved == 1) {
+                    "Removed 1 title"
+                } else {
+                    "Removed $torboxReviewRemoved titles"
+                }
+            )
+        }
+        if (torboxReviewOpen) {
+            TorBoxReviewDialog(
+                rows = torboxReviewRows,
+                onKeep = { torboxReviewOpen = false },
+                onRemove = { selected ->
+                    torboxReviewRemoved = TorBoxReview.remove(
+                        context = context,
+                        store = TorBoxCloudStore(context),
+                        rows = selected
+                    )
+                    torboxReviewOpen = false
+                }
+            )
+        }
         // The one TorBox switch that lets the app WRITE to the account: a
         // source that is only a torrent hash is added to the cloud when it is
         // missing, then played. Off by default (see TorBoxResolve).

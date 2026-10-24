@@ -60,7 +60,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kennyb1201.kbstream.data.debrid.TorBoxReview
+import com.kennyb1201.kbstream.data.debrid.TorBoxSyncStatus
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -1454,9 +1458,33 @@ fun SettingsScreen(
                 // used to be the same absence whether the round was off,
                 // keyless, empty, all-handled or simply not matching - and the
                 // one thing that can tell them apart is a round that says so.
-                val torboxLastRound = remember(syncedRevision) {
+                //
+                // The line follows the record LIVE: a round can file while this
+                // pane is open (the Resync below is one), and keying the read on
+                // the prefs revision alone meant the press showed the previous
+                // round until the viewer left Settings and came back.
+                val torboxRoundRevision by TorBoxSyncStatus.revision
+                    .collectAsStateWithLifecycle()
+                var torboxResumeTick by remember { mutableIntStateOf(0) }
+                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { torboxResumeTick++ }
+                val torboxLastRound = remember(
+                    syncedRevision,
+                    torboxRoundRevision,
+                    torboxResumeTick
+                ) {
                     TorBoxCloudStore(context).lastRound()
                 }
+                // The rows the rule refuses to guess about, resolved against the
+                // list as it stands now (see TorBoxReview).
+                val torboxReviewRows = remember(
+                    syncedRevision,
+                    torboxRoundRevision,
+                    torboxResumeTick
+                ) {
+                    TorBoxReview.rows(context)
+                }
+                var torboxReviewOpen by remember { mutableStateOf(false) }
+                var torboxReviewRemoved by remember { mutableIntStateOf(0) }
                 // The row's gate is the WORKER's gate (switch on AND a key
                 // present), so a press can never fire a round the worker would
                 // refuse - and a disabled row cannot look like a broken one.
@@ -1465,7 +1493,10 @@ fun SettingsScreen(
                         AppPreferences.getTorboxApiKey(context).isNotBlank()
                 }
                 Text(
-                    text = torboxSyncStatusLine(torboxLastRound),
+                    text = torboxSyncStatusLine(
+                        torboxLastRound,
+                        pendingReview = torboxReviewRows.size
+                    ),
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(start = 4.dp, top = 6.dp)
@@ -1502,6 +1533,72 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
+                }
+
+                // ── TORBOX: THE ROWS NO RULE CAN ATTRIBUTE ─────────────
+                // The field case in one row. A cloud title in this profile's
+                // list that no profile has watched and no sibling lists is not
+                // distinguishable from one of the viewer's own unwatched cloud
+                // titles, so the round keeps it and queues it here; this is the
+                // only place a decision can be made about it. It mirrors the
+                // cleanup's own tombstoning path, so a confirmed removal does
+                // not come back on the next round or on a TV pull.
+                if (torboxReviewRows.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    KBCard(
+                        onClick = { torboxReviewOpen = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(KBSurfaceRaised, KBShapeSmall)
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = if (torboxReviewRows.size == 1) {
+                                    "Review 1 unowned cloud title"
+                                } else {
+                                    "Review ${torboxReviewRows.size} unowned cloud titles"
+                                },
+                                color = KBTextHi,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "In your TorBox cloud and in My List, with no " +
+                                    "owner recorded and no copy in another profile's " +
+                                    "list. The ones the sync added are already ticked.",
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+                if (torboxReviewRemoved > 0) {
+                    Text(
+                        text = if (torboxReviewRemoved == 1) {
+                            "Removed 1 title"
+                        } else {
+                            "Removed $torboxReviewRemoved titles"
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+                    )
+                }
+                if (torboxReviewOpen) {
+                    TorBoxReviewDialog(
+                        rows = torboxReviewRows,
+                        onKeep = { torboxReviewOpen = false },
+                        onRemove = { selected ->
+                            torboxReviewRemoved = TorBoxReview.remove(
+                                context = context,
+                                store = TorBoxCloudStore(context),
+                                rows = selected
+                            )
+                            torboxReviewOpen = false
+                        }
+                    )
                 }
 
                 // ── TORBOX: ADD A MISSING TORRENT ON PLAY ──────────────

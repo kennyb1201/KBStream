@@ -87,6 +87,15 @@ internal object TorBoxLibrarySync {
          */
         val tombstoneSkips: Int = 0,
         val removed: Int = 0,
+        /**
+         * Rows left in this profile's list that no rule could attribute (see
+         * [torboxUnattributableRows]), filed as the review queue. Only a
+         * completed round fills it: the gates file a report too, and a gate
+         * must not read as "the queue is empty".
+         */
+        val candidates: Int = 0,
+        /** Whether ANY sibling profile on this device had a My List row. */
+        val siblingEvidence: Boolean = false,
         val outcome: Outcome = Outcome.COMPLETED
     )
 
@@ -138,10 +147,26 @@ internal object TorBoxLibrarySync {
             return file(store, Report(0, 0, outcome = Outcome.CLOUD_EMPTY))
         }
 
+        // The shared cloud's title set and the siblings' lists: arm B's evidence,
+        // and the review queue's other input. Read once for the whole round and
+        // passed down, so the cleanup and the queue cannot disagree about what
+        // the cloud holds or what a sibling lists.
+        val cloudTitles = torrents
+            .mapNotNull { TorBoxCloudRules.parseName(it.name)?.title }
+            .mapNotNull { titleIdentityName(it) }
+            .toSet()
+        val siblingTitles = siblingLibraryTitles(context, liveProfileId)
+
         // The one-time cleanup of an older build's cross-profile adds, before
         // this round adds anything of its own. Its removals are part of the
         // round's report, so the Settings line can say they happened.
-        val removed = remediateOwnership(context, store, liveProfileId, torrents)
+        val removed = remediateOwnership(
+            context = context,
+            store = store,
+            liveProfileId = liveProfileId,
+            cloudTitles = cloudTitles,
+            siblingTitles = siblingTitles
+        )
 
         // Read AFTER the cleanup, on purpose: the rows it just removed are
         // tombstoned as it removes them, and this round's add pass must not put
@@ -290,6 +315,20 @@ internal object TorBoxLibrarySync {
             store.markProcessed(torrent.id)
         }
 
+        // The rows the two arms could not decide, filed for the viewer's eye.
+        // Read AFTER the adds on purpose: this round's own writes (the add-time
+        // filter admits titles no profile owns) are exactly the rows that will
+        // never have an owner, so a round that produced them has to queue them
+        // in the same breath instead of leaving them to a second press.
+        val candidates = torboxUnattributableRows(
+            ownerByTitleKey = owners,
+            entries = LocalLibraryStore.myList(context),
+            cloudTitles = cloudTitles,
+            siblingTitles = siblingTitles,
+            liveProfileId = liveProfileId
+        )
+        store.recordReviewCandidates(candidates.map { LocalLibraryStore.dedupeKey(it) }.toSet())
+
         return file(
             store,
             Report(
@@ -298,6 +337,8 @@ internal object TorBoxLibrarySync {
                 handledSkips = skips,
                 tombstoneSkips = tombstoneSkips,
                 removed = removed,
+                candidates = candidates.size,
+                siblingEvidence = siblingTitles.isNotEmpty(),
                 outcome = Outcome.COMPLETED
             )
         )
@@ -324,16 +365,12 @@ internal object TorBoxLibrarySync {
         context: Context,
         store: TorBoxCloudStore,
         liveProfileId: String,
-        torrents: List<TorBoxClient.CloudTorrent>
+        cloudTitles: Set<String>,
+        siblingTitles: Set<String>
     ): Int {
         if (!store.ownershipRemediationPending()) return 0
 
         val owners = TitleProfileOwnership.snapshot(context)
-        val cloudTitles = torrents
-            .mapNotNull { TorBoxCloudRules.parseName(it.name)?.title }
-            .mapNotNull { titleIdentityName(it) }
-            .toSet()
-        val siblingTitles = siblingLibraryTitles(context, liveProfileId)
 
         val doomed = LocalLibraryStore.myList(context).filter { entry ->
             torboxRowLeakedFromAnotherProfile(
@@ -387,7 +424,9 @@ internal object TorBoxLibrarySync {
             "TorBox library sync: outcome=${report.outcome}, ${report.scanned} seen, " +
                 "${report.added} added, ${report.handledSkips} already handled, " +
                 "${report.tombstoneSkips} removed on purpose elsewhere, " +
-                "${report.removed} removed as another profile's"
+                "${report.removed} removed as another profile's, " +
+                "${report.candidates} awaiting review" +
+                (if (report.siblingEvidence) "" else " (no sibling list on this device)")
         )
         return report
     }
@@ -456,11 +495,13 @@ internal object TorBoxLibrarySync {
  *    this profile's, and it stays.
  *  - ARM A (positive attribution, unchanged): owned by another profile AND
  *    (marked [LibraryOrigin.TORBOX_SYNC], or its title is in the shared cloud).
- *  - ARM B (cloud-shaped evidence): UNMARKED, title in the shared cloud, AND
- *    the title also sits in at least one sibling profile's My List. That last
- *    clause is what stands in for attribution: the pre-fix sync mirrored the
- *    cloud into every profile it ran under, so a leaked title has a copy there,
- *    while a title only this profile ever listed does not.
+ *  - ARM B (cloud-shaped evidence): title in the shared cloud AND the title
+ *    also sits in at least one sibling profile's My List - WHATEVER the mark
+ *    says. Sibling presence is the evidence; the mark only ever said which
+ *    build wrote the row, and the add-time filter admits titles no profile
+ *    owns, so every post-fix round still stamps unowned rows. Gating this arm
+ *    on `!marked` therefore left exactly the field's rows - stamped, owned by
+ *    nobody, copied into a sibling list by the pre-fix sync - unreachable.
  *
  * The residual ambiguity is real and stated rather than hidden: a title the
  * viewer hand-added here, that ALSO sits in a sibling's list and in the cloud, is
@@ -470,7 +511,10 @@ internal object TorBoxLibrarySync {
  *
  * A row owned by NOBODY, in no sibling list, is kept whatever it is - including
  * this profile's own cloud titles, which is the state the add-time filter leaves
- * every new row in.
+ * every new row in. Those rows are indistinguishable from this profile's own
+ * unwatched cloud titles in the stored data, so no rule here touches them; they
+ * go to the review queue instead (see [torboxUnattributableRows]), which is the
+ * honest place for a question only the viewer can answer.
  */
 internal fun torboxRowLeakedFromAnotherProfile(
     ownerByTitleKey: Map<String, String>,
@@ -492,5 +536,36 @@ internal fun torboxRowLeakedFromAnotherProfile(
         return marked || inCloud
     }
 
-    return !marked && inCloud && identity in siblingTitles
+    // Mark-agnostic on purpose: see the arm B note above. The mark said which
+    // build wrote the row, never that the row was this profile's.
+    return inCloud && identity in siblingTitles
+}
+
+/**
+ * The rows of [entries] that NO rule can attribute, i.e. exactly what
+ * [torboxRowLeakedFromAnotherProfile] refuses to touch because the stored data
+ * does not say whose they are: present in the shared cloud, no recorded owner,
+ * and no copy in any sibling profile's list.
+ *
+ * This is the field case stated plainly. The kids' titles sat in Profile 1's
+ * list, stamped by the sync, with the kids' list empty on this device - so arm B
+ * had no sibling copy to compare against and arm A had no owner to name. That is
+ * not a hole in a rule that can be closed by a better rule: an unowned cloud
+ * title with no sibling copy is byte-for-byte the same as one of the viewer's own
+ * unwatched cloud titles. It is a question, so it goes to the viewer.
+ *
+ * Owned titles are excluded whatever the owner: another profile's rows are arm
+ * A's business, and this profile's own are the veto's.
+ */
+internal fun torboxUnattributableRows(
+    ownerByTitleKey: Map<String, String>,
+    entries: List<LibraryItem>,
+    cloudTitles: Set<String>,
+    siblingTitles: Set<String>,
+    liveProfileId: String
+): List<LibraryItem> = entries.filter { entry ->
+    val identity = titleIdentityName(entry.title) ?: return@filter false
+    val owner = titleProfileKey(entry.mediaType, entry.title)?.let { ownerByTitleKey[it] }
+    if (owner != null) return@filter false
+    identity in cloudTitles && identity !in siblingTitles
 }

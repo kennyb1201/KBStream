@@ -264,8 +264,12 @@ class TorBoxLibraryProfileFilterTest {
         )
         assertTrue(
             "it runs in a live-session round, after the gate",
-            sync.indexOf("remediateOwnership(context, store, liveProfileId, torrents)") >
-                sync.indexOf("ProfileSession.liveProfileId(context)")
+            sync.indexOf(
+                "remediateOwnership(\n            context = context,\n            store = store,\n" +
+                    "            liveProfileId = liveProfileId,\n" +
+                    "            cloudTitles = cloudTitles,\n" +
+                    "            siblingTitles = siblingTitles\n        )"
+            ) > sync.indexOf("ProfileSession.liveProfileId(context)")
         )
 
         val store = source(LIBRARY_STORE)
@@ -280,7 +284,7 @@ class TorBoxLibraryProfileFilterTest {
         val cloud = cloudStore.replace(Regex("\\s+"), " ")
         assertTrue(
             "the version flag lives with the marks it cleans, in the profile's own file",
-            cloud.contains("private const val OWNERSHIP_REMEDIATION_VERSION = 2") &&
+            cloud.contains("private const val OWNERSHIP_REMEDIATION_VERSION = 3") &&
                 cloud.contains(
                     "private const val KEY_OWNERSHIP_REMEDIATION_VERSION = " +
                         "\"torbox_library_ownership_remediation_version\""
