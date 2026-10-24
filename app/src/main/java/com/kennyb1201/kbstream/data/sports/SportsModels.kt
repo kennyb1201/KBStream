@@ -123,8 +123,26 @@ enum class GameState { LIVE, UPCOMING, FINAL }
 
 /** One head-to-head fixture. */
 data class SportsGame(
-    /** ESPN event id. */
+    /**
+     * What identifies this fixture inside its league.
+     *
+     * The ESPN EVENT id for every ordinary game. A multi-competition event (a
+     * fight card) fans out into one game per bout, and those need ids of their
+     * own or the list, the match map and the detail sheet would collide - so
+     * there it is the event id plus the competition's. See [eventId] for the
+     * half that stays the same across all of them.
+     */
     val id: String,
+    /**
+     * The ESPN EVENTS id behind this fixture: the whole card for a bout, the
+     * game itself everywhere else.
+     *
+     * Separate from [id] because the summary endpoint is fetched by EVENT - one
+     * request answers a whole fight card - while everything the hub keys by
+     * fixture (the channel match, the open sheet, a reminder) wants the bout.
+     * Defaults to [id], which is what every single-competition event is.
+     */
+    val eventId: String = id,
     /** The ESPN path this came from, e.g. "basketball/nba". */
     val league: String,
     /** ESPN's own event name, e.g. "Lakers at Celtics". */
@@ -286,6 +304,18 @@ data class StandingEntry(
     val gamesBehind: String,
     /** "W4"; blank when the feed carries none. */
     val streak: String,
+    /**
+     * The table's POINTS column, as ESPN sends it ("21"), or blank where the
+     * sport has no points table.
+     *
+     * Soccer is the case this exists for: the table is read on points, and the
+     * hub used to draw W-L-T with a win percentage and a games-behind that the
+     * feed does not even publish there, so the columns a viewer actually reads
+     * were the ones missing (audit C8, 2026-10-23). Presence - not the league -
+     * is what switches the table to the points shape, so a feed that starts
+     * carrying points gets them without a code change.
+     */
+    val points: String = "",
     /**
      * ESPN's own team id from the row's `team` object - the same id a favourite
      * is stored under (see [SportsTeam.favoriteKey]), which is what lets a

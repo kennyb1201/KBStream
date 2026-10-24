@@ -597,6 +597,25 @@ class HomeViewModel(
     val heroTmdbDetail: StateFlow<TmdbDetail?> =
         _heroTmdbDetail.asStateFlow()
 
+    /**
+     * The hero whose state has been published IN FULL - `"<id>:<type>"` - or
+     * null until one has.
+     *
+     * The screen needs one thing this ViewModel already knows and could not
+     * otherwise say: which focused item's words AND art are on screen together.
+     * Focus moves in one frame, but a cold item's art lands a third of a second
+     * later (p95 over a second, per the session diagnostics), so the hero's copy
+     * used to fade in over the PREVIOUS item's picture and then have a second act
+     * when the art arrived - the reported switching jump. A resolve publishes
+     * everything at once at the end of [resolveHeroMeta]; this is the marker the
+     * screen animates on, so a transition happens once per settled item and an
+     * item the viewer skips past never gets one at all.
+     */
+    private val _heroSettledKey = MutableStateFlow<String?>(null)
+
+    val heroSettledKey: StateFlow<String?> =
+        _heroSettledKey.asStateFlow()
+
     private var heroResolveJob: Job? = null
 
     /**
@@ -627,6 +646,7 @@ class HomeViewModel(
             _heroLogoUrl.value = null
             _heroTrailerKey.value = null
             _heroTmdbDetail.value = null
+            _heroSettledKey.value = null
             return
         }
 
@@ -956,6 +976,10 @@ Log.d(
                     _heroLogoUrl.value = resolvedLogo
                     _heroTmdbDetail.value = resolvedTmdbDetail
                     _heroTrailerKey.value = heroTrailerKeyOf(resolvedTmdbDetail)
+                    // Last: the marker says the whole set above is published, so
+                    // a screen that reads it can never animate over a half-set
+                    // hero (see [heroSettledKey]).
+                    _heroSettledKey.value = "$requestedId:$requestedType"
 
                     Log.d(
                         "HOME_HERO",
@@ -983,6 +1007,10 @@ Log.d(
                 _heroLogoUrl.value = null
                 _heroTrailerKey.value = null
                 _heroTmdbDetail.value = null
+                // A failed resolve never settles: without this the previous
+                // item's marker would still name the item the hero is showing,
+                // and its copy would animate as though the art had arrived.
+                _heroSettledKey.value = null
             }
         }
     }
@@ -1269,6 +1297,10 @@ Log.d(
                     _heroBackdropUrl.value = null
                     _heroLogoUrl.value = null
                     _heroTrailerKey.value = null
+                    // The marker too: the items those states described belong
+                    // to the profile being left, so nothing about them may read
+                    // as settled for the one that replaces it.
+                    _heroSettledKey.value = null
                     heroResolveJob?.cancel()
 
                     // Hard-drop the watched-state caches, including the

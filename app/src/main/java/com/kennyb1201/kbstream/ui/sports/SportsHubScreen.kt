@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -649,7 +650,13 @@ fun SportsHubScreen(
             // card below would otherwise repeat the same sentence twenty times
             // and blame the games for it.
             if (lineupMissing) {
-                LineupMissingNotice(onRetry = viewModel::retryLineup)
+                LineupMissingNotice(
+                    onRetry = viewModel::retryLineup,
+                    // The install's own callback, not a timer: the hub re-reads
+                    // the lineup the moment the free one has landed in the
+                    // cache, so a match appears in the same visit.
+                    onLineupInstalled = viewModel::retryLineup
+                )
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
@@ -973,8 +980,22 @@ private fun LeagueTabRow(
     selectedFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier,
 ) {
+    val state = rememberLazyListState()
+    // Put the selected tab on screen before anything tries to focus it.
+    //
+    // A LazyRow only composes the tabs in its viewport, so a restored selection
+    // deep in a long row did not exist when the screen claimed entry focus - the
+    // claim retried its frames, found nothing to attach to, and latched (audit
+    // C10, 2026-10-23). Scrolling to the selection is what makes that claim
+    // land; switching leagues scrolls the chosen tab into view for the same
+    // reason, and nothing here moves focus.
+    val selectedIndex = leagues.indexOfFirst { it.path == selectedPath }
+    LaunchedEffect(selectedIndex, leagues.size) {
+        if (selectedIndex >= 0) state.scrollToItem(selectedIndex)
+    }
+
     LazyRow(
-        state = rememberLazyListState(),
+        state = state,
         contentPadding = PaddingValues(horizontal = KBFocusChipInset),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = modifier
@@ -1687,34 +1708,100 @@ private fun Map<String, List<IptvChannel>>.primaryChannel(id: String): IptvChann
  * viewer can retry from here rather than being told to go somewhere else.
  */
 @Composable
-private fun LineupMissingNotice(onRetry: () -> Unit) {
-    KBCard(
-        onClick = onRetry,
-        focusedScale = KBFocusRow,
-        shape = KBShapePanel,
-        modifier = Modifier.fillMaxWidth()
+private fun LineupMissingNotice(
+    onRetry: () -> Unit,
+    onLineupInstalled: () -> Unit = {}
+) {
+    // Created HERE, and only when this notice is composed: the IPTV ViewModel
+    // resolves the cached playlist and starts the guide clock, which a session
+    // with a working playlist has no reason to pay for on the hub.
+    val iptvViewModel: IptvViewModel = viewModel()
+    val freeInstalled by iptvViewModel.freeLineupInstalled.collectAsStateWithLifecycle()
+    val freeInstalling by iptvViewModel.freeLineupInstalling.collectAsStateWithLifecycle()
+    val freeFailed by iptvViewModel.freeLineupFailed.collectAsStateWithLifecycle()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text(
-                text = "NO LINEUP LOADED",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBAccent
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Your playlist could not be read, so no game can be matched to a " +
-                    "channel yet. Open Live TV once to load it, or press here to try again.",
-                style = MaterialTheme.typography.bodySmall,
-                color = KBTextHi
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "LOAD LINEUP",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBAccent
-            )
+        KBCard(
+            onClick = onRetry,
+            focusedScale = KBFocusRow,
+            shape = KBShapePanel,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = "NO LINEUP LOADED",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBAccent
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Your playlist could not be read, so no game can be matched to a " +
+                        "channel yet. Open Live TV once to load it, or press here to try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "LOAD LINEUP",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBAccent
+                )
+            }
+        }
+
+        // The same offer the Live TV no-playlist state makes, in the words this
+        // state already uses: a viewer with no playlist gets a real lineup to
+        // match against instead of a hub that can match nothing. It is an
+        // on-ramp - cable and RSN games stay "not in your playlist".
+        KBCard(
+            onClick = {
+                if (!freeInstalling) {
+                    iptvViewModel.installFreeLineup(onReady = onLineupInstalled)
+                }
+            },
+            focusedScale = KBFocusRow,
+            shape = KBShapePanel,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = when {
+                        freeInstalling -> "INSTALLING FREE TV…"
+                        freeInstalled -> "RETRY FREE TV"
+                        else -> "WATCH FREE CHANNELS"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (freeInstalling) KBTextLo else KBAccent
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (freeInstalled) {
+                        "The built-in free lineup did not load. Press here to try it " +
+                            "again, or add your own playlist in Live TV."
+                    } else {
+                        "No playlist yet? Start with the built-in free lineup - news, " +
+                            "local stations and free sports channels. Your own playlist " +
+                            "can be added any time; cable and regional sports channels " +
+                            "need it."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi
+                )
+                if (freeFailed) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The free lineup didn't load. Check the connection.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = KBDanger
+                    )
+                }
+            }
         }
     }
 }
@@ -2892,6 +2979,12 @@ private fun StandingsColumn(
     // opened the new table at the depth the cards were left at.
     LaunchedEffect(leaguePath) { listState.scrollToItem(0) }
 
+    // Whether this table is read on POINTS (soccer) rather than on a win
+    // percentage and games behind, which the feed does not even publish there.
+    // Per column, from the rows themselves: presence of the stat is the rule, so
+    // no league list has to be kept in the UI.
+    val pointsTable = groups.any { group -> group.entries.any { it.points.isNotBlank() } }
+
     HubList(
         listState = listState,
         modifier = modifier.then(
@@ -2913,7 +3006,7 @@ private fun StandingsColumn(
             item(key = "$groupKey-head") {
                 StandingsGroupHeader(name = group.name, count = group.entries.size)
             }
-            item(key = "$groupKey-cols") { StandingsColumnHeader() }
+            item(key = "$groupKey-cols") { StandingsColumnHeader(points = pointsTable) }
             itemsIndexed(
                 group.entries,
                 key = { _, entry ->
@@ -2927,6 +3020,7 @@ private fun StandingsColumn(
                 val followed = team.favoriteKey in favoriteKeys
                 StandingsRow(
                     entry = entry,
+                    points = pointsTable,
                     followed = followed,
                     onToggleFollow = {
                         onToggleTeam?.invoke(team, !followed)
@@ -2961,9 +3055,16 @@ private fun StandingsGroupHeader(name: String, count: Int) {
     }
 }
 
-/** The W/L/T/PCT/GB/STRK labels, drawn once above each group's rows. */
+/**
+ * The column labels, drawn once above each group's rows.
+ *
+ * A points table (soccer) labels its own four columns instead: W-D-L-PTS is how
+ * that table is read, and PCT/GB/STRK are stats the feed does not publish for it
+ * - so drawing them produced three empty columns where the one number that
+ * matters was missing (audit C8, 2026-10-23).
+ */
 @Composable
-private fun StandingsColumnHeader() {
+private fun StandingsColumnHeader(points: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2979,7 +3080,8 @@ private fun StandingsColumnHeader() {
             color = KBTextLo,
             modifier = Modifier.weight(1f)
         )
-        listOf("W", "L", "T", "PCT", "GB", "STRK").forEach { label ->
+        (if (points) listOf("W", "D", "L", "PTS") else listOf("W", "L", "T", "PCT", "GB", "STRK"))
+            .forEach { label ->
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -2994,6 +3096,7 @@ private fun StandingsColumnHeader() {
 @Composable
 private fun StandingsRow(
     entry: StandingEntry,
+    points: Boolean = false,
     followed: Boolean,
     onToggleFollow: () -> Unit
 ) {
@@ -3034,12 +3137,20 @@ private fun StandingsRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            StandingsStat(entry.wins.toString())
-            StandingsStat(entry.losses.toString())
-            StandingsStat(entry.ties.toString())
-            StandingsStat(standingsText(entry.winPercent))
-            StandingsStat(standingsText(entry.gamesBehind))
-            StandingsStat(standingsText(entry.streak))
+            if (points) {
+                // Read on points: wins, draws, losses, points - in that order.
+                StandingsStat(entry.wins.toString())
+                StandingsStat(entry.ties.toString())
+                StandingsStat(entry.losses.toString())
+                StandingsStat(standingsText(entry.points))
+            } else {
+                StandingsStat(entry.wins.toString())
+                StandingsStat(entry.losses.toString())
+                StandingsStat(entry.ties.toString())
+                StandingsStat(standingsText(entry.winPercent))
+                StandingsStat(standingsText(entry.gamesBehind))
+                StandingsStat(standingsText(entry.streak))
+            }
         }
     }
 }

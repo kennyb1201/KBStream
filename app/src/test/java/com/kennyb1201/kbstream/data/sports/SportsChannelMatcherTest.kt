@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -586,6 +587,49 @@ class SportsChannelMatcherTest {
     }
 
     @Test
+    fun `the guide row airing now leads an ended day that sat closer to the slot`() {
+        // Audit C9: the rows were ranked on |start - event.dateMs| alone, with no
+        // time filter, so on day 3 of a golf event an ENDED day-1 row that
+        // started nearer the event's slot outranked the live day-3 row as the
+        // card's primary feed.
+        val dayOne = channel("day1", "Golf Channel")
+        val dayThree = channel("day3", "Golf Channel 2")
+        val event = TournamentEvent(
+            id = "t9",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = firstPitch,
+            state = GameState.LIVE,
+            statusDetail = "Round 3",
+            leaders = emptyList(),
+            broadcastNames = emptyList(),
+        )
+        val now = firstPitch + 2 * 24 * 60 * minute
+        val ended = program(
+            channelId = "day1",
+            title = "Baycurrent Classic",
+            startMs = firstPitch + 10 * minute,
+            endMs = firstPitch + 4 * 60 * minute,
+        )
+        val airing = program(
+            channelId = "day3",
+            title = "Baycurrent Classic",
+            startMs = now - 60 * minute,
+            endMs = now + 3 * 60 * minute,
+        )
+
+        assertEquals(
+            listOf(dayThree, dayOne),
+            SportsChannelMatcher.matches(
+                event = event,
+                channels = listOf(dayOne, dayThree),
+                programs = listOf(ended, airing),
+                nowMs = now,
+            ),
+        )
+    }
+
+    @Test
     fun `a game's EPG tier still insists on its window`() {
         // The change is tournaments only: a game's guide row has to overlap its
         // kick-off, or every re-run of last night's game would look like this
@@ -893,6 +937,49 @@ class SportsChannelMatcherTest {
         )
 
         assertEquals(listOf(yes), found)
+    }
+
+    @Test
+    fun `a regional network is looked up in the game's own league`() {
+        // Audit C12: the lookup was by abbreviation alone, so an entry from any
+        // league answered - and tier 2 runs only where the guide and the network
+        // names both missed, which is exactly where being wrong costs the game.
+        val yesNetwork = channel("yes", "YES Network")
+        val baseball = game(yankees, redSox)
+
+        assertEquals(
+            listOf(yesNetwork),
+            SportsChannelMatcher.matches(baseball, listOf(yesNetwork), emptyList())
+        )
+        assertTrue(
+            "the same abbreviation in another league does not inherit MLB's RSN table",
+            SportsChannelMatcher.matches(
+                baseball.copy(league = "basketball/nba"),
+                listOf(yesNetwork),
+                emptyList()
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `a big broadcast family cannot fill the cap ahead of the regional feed`() {
+        // Audit C13: the families were concatenated in front of the RSNs, so
+        // ESPN plus its variants could take all four slots and the one feed
+        // actually carrying the game never appeared in the list at all.
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val espnU = channel("espnu", "ESPNU")
+        val espnNews = channel("espnnews", "ESPN News")
+        val nesn = channel("nesn", "NESN")
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(espn, espn2, espnU, espnNews, nesn),
+            programs = emptyList(),
+        )
+
+        assertEquals("the named network still leads the ladder", espn, found.first())
+        assertTrue("and the carrying regional feed holds a slot behind it", nesn in found)
     }
 
     @Test

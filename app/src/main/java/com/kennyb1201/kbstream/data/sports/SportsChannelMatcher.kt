@@ -187,53 +187,60 @@ internal object SportsChannelMatcher {
     val TEAM_SHORT_FORMS: Map<String, String> = emptyMap()
 
     /**
-     * Team abbreviation -> the regional networks that carry the team.
+     * `LEAGUE:ABBR` -> the regional networks that carry the team.
      *
      * Data, not code: a league's RSN situation changes every year and this is
      * the only part of the matcher that needs editing when it does. Kept small
      * and US-league focused - it is the LAST resort behind a real EPG match and
      * a real network name, so a missing entry costs nothing but a "not in your
      * playlist" on a game that had no other signal.
+     *
+     * The league is in the key because an abbreviation is not unique across
+     * them (see [rsnNetworks]): `SF` belongs to one team here and could be
+     * another league's tomorrow, and `CHI`/`CWS` share a city outright.
      */
     val TEAM_RSN: Map<String, List<String>> = mapOf(
+        // Keys are "LEAGUE:ABBR" (the league path's last segment, upper-cased):
+        // see rsnNetworks for why the league is part of the key rather than the
+        // abbreviation alone.
         // MLB
-        "NYY" to listOf("YES Network"),
-        "NYM" to listOf("SNY"),
-        "BOS" to listOf("NESN"),
-        "LAD" to listOf("Spectrum SportsNet LA"),
-        "LAA" to listOf("FanDuel Sports Network West", "Bally Sports West"),
-        "CHC" to listOf("Marquee Sports Network"),
-        "CWS" to listOf("Chicago Sports Network"),
-        "PHI" to listOf("NBC Sports Philadelphia"),
-        "SF" to listOf("NBC Sports Bay Area"),
-        "SEA" to listOf("Root Sports Northwest"),
-        "BAL" to listOf("MASN"),
-        "WSH" to listOf("MASN"),
-        "ATL" to listOf("FanDuel Sports Network South"),
-        "DET" to listOf("FanDuel Sports Network Detroit"),
-        "CLE" to listOf("FanDuel Sports Network Great Lakes"),
-        "MIN" to listOf("FanDuel Sports Network North"),
-        "KC" to listOf("FanDuel Sports Network Kansas City"),
-        "STL" to listOf("FanDuel Sports Network Midwest"),
-        "HOU" to listOf("Space City Home Network"),
-        "TEX" to listOf("FanDuel Sports Network Southwest"),
-        "COL" to listOf("Rockies.TV"),
-        "SD" to listOf("Padres.TV"),
-        "ARI" to listOf("Diamondbacks.TV"),
-        "MIL" to listOf("FanDuel Sports Network Wisconsin"),
-        "PIT" to listOf("SportsNet Pittsburgh"),
-        "CIN" to listOf("FanDuel Sports Network Ohio"),
-        "TOR" to listOf("Sportsnet"),
+        "MLB:NYY" to listOf("YES Network"),
+        "MLB:NYM" to listOf("SNY"),
+        "MLB:BOS" to listOf("NESN"),
+        "MLB:LAD" to listOf("Spectrum SportsNet LA"),
+        "MLB:LAA" to listOf("FanDuel Sports Network West", "Bally Sports West"),
+        "MLB:CHC" to listOf("Marquee Sports Network"),
+        "MLB:CWS" to listOf("Chicago Sports Network"),
+        "MLB:PHI" to listOf("NBC Sports Philadelphia"),
+        "MLB:SF" to listOf("NBC Sports Bay Area"),
+        "MLB:SEA" to listOf("Root Sports Northwest"),
+        "MLB:BAL" to listOf("MASN"),
+        "MLB:WSH" to listOf("MASN"),
+        "MLB:ATL" to listOf("FanDuel Sports Network South"),
+        "MLB:DET" to listOf("FanDuel Sports Network Detroit"),
+        "MLB:CLE" to listOf("FanDuel Sports Network Great Lakes"),
+        "MLB:MIN" to listOf("FanDuel Sports Network North"),
+        "MLB:KC" to listOf("FanDuel Sports Network Kansas City"),
+        "MLB:STL" to listOf("FanDuel Sports Network Midwest"),
+        "MLB:HOU" to listOf("Space City Home Network"),
+        "MLB:TEX" to listOf("FanDuel Sports Network Southwest"),
+        "MLB:COL" to listOf("Rockies.TV"),
+        "MLB:SD" to listOf("Padres.TV"),
+        "MLB:ARI" to listOf("Diamondbacks.TV"),
+        "MLB:MIL" to listOf("FanDuel Sports Network Wisconsin"),
+        "MLB:PIT" to listOf("SportsNet Pittsburgh"),
+        "MLB:CIN" to listOf("FanDuel Sports Network Ohio"),
+        "MLB:TOR" to listOf("Sportsnet"),
         // NBA
-        "LAL" to listOf("Spectrum SportsNet"),
-        "LAC" to listOf("FanDuel Sports Network SoCal"),
-        "BKN" to listOf("YES Network"),
-        "POR" to listOf("Root Sports Plus"),
+        "NBA:LAL" to listOf("Spectrum SportsNet"),
+        "NBA:LAC" to listOf("FanDuel Sports Network SoCal"),
+        "NBA:BKN" to listOf("YES Network"),
+        "NBA:POR" to listOf("Root Sports Plus"),
         // NFL
-        "NYG" to listOf("MSG Network"),
-        "NYJ" to listOf("MSG Network"),
-        "NE" to listOf("NBC Sports Boston"),
-        "CHI" to listOf("Chicago Sports Network"),
+        "NFL:NYG" to listOf("MSG Network"),
+        "NFL:NYJ" to listOf("MSG Network"),
+        "NFL:NE" to listOf("NBC Sports Boston"),
+        "NFL:CHI" to listOf("Chicago Sports Network"),
     )
 
     /** The channel carrying [game], or null when no tier is confident. */
@@ -333,8 +340,23 @@ internal object SportsChannelMatcher {
         }
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
-        val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
-        val networkHits = cap(networks.flatMap { channelIndex.channelsFor(it) })
+        //
+        // The families and the RSN feeds are kept apart and INTERLEAVED rather
+        // than concatenated, because concatenation let a big family eat the
+        // whole cap: ESPN + its variants could fill all four slots ahead of the
+        // one RSN feed actually carrying the game (audit C13, 2026-10-23). The
+        // head is unchanged - the first broadcast family's best-named channel is
+        // still the pick - while the first RSN hit is now guaranteed a slot.
+        val families = game.broadcastNames.flatMap { channelIndex.channelsFor(it) }
+        val regionals = (rsnNetworks(game.home, game.league) + rsnNetworks(game.away, game.league))
+            .flatMap { channelIndex.channelsFor(it) }
+        val networks = buildList {
+            families.firstOrNull()?.let(::add)
+            regionals.firstOrNull()?.let(::add)
+            addAll(families.drop(1))
+            addAll(regionals.drop(1))
+        }
+        val networkHits = cap(networks)
         // A matchup name leads the networks (the provider asserted this game),
         // and a lone team channel trails them - a 24/7 channel is a viewer's
         // last resort, never a fabrication.
@@ -386,6 +408,12 @@ internal object SportsChannelMatcher {
         channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
         /** The pass's channel index, as on the game path; see there. */
         channelIndex: ChannelIndex = ChannelIndex.of(channels),
+        /**
+         * The clock the guide rows are ranked against (see [epgNameHits]).
+         * Defaulted so a one-off call needs no clock, and read once per call so
+         * a pass cannot rank two rows against two different "now"s.
+         */
+        nowMs: Long = System.currentTimeMillis(),
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         val present = channelIndex.ids
@@ -394,7 +422,7 @@ internal object SportsChannelMatcher {
         val recalled = listOfNotNull(
             remembered(event.favoriteKey)?.takeIf { it.id in present }
         )
-        val epg = epgNameHits(event, programs, channelById)
+        val epg = epgNameHits(event, programs, channelById, nowMs)
         if (epg.isNotEmpty()) return leadWith(recalled, cap(epg))
         val networkHits = cap(event.broadcastNames.flatMap { channelIndex.channelsFor(it) })
         return leadWith(recalled, networkHits)
@@ -829,6 +857,7 @@ internal object SportsChannelMatcher {
         event: TournamentEvent,
         programs: List<MatcherProgram>,
         channelById: Map<String, IptvChannel>,
+        nowMs: Long,
     ): List<IptvChannel> {
         val eventWords = words(event.name)
         if (eventWords.isEmpty()) return emptyList()
@@ -836,9 +865,21 @@ internal object SportsChannelMatcher {
             words(program.title).containsSequence(eventWords)
         }
         if (hits.isEmpty()) return emptyList()
-        return hits
-            .sortedBy { abs(it.startMs - event.dateMs) }
+        // Which of a multi-day event's guide rows is the one on now, not which
+        // one ESPN dated nearest the event's slot.
+        //
+        // Distance alone (audit C9, 2026-10-23) let an ENDED day-1 row that
+        // happened to start closer to the slot outrank the live day-3 row on the
+        // event's own card - the card then offered a finished day's feed as its
+        // primary. The three buckets are the viewer's own question: airing now,
+        // still to come, already over; within the second the soonest start wins,
+        // within the third the most recent end.
+        val live = hits.filter { it.startMs <= nowMs && it.endMs >= nowMs }
+        val upcoming = hits.filter { it.startMs > nowMs }.sortedBy { it.startMs }
+        val finished = hits.filter { it.endMs < nowMs }.sortedByDescending { it.endMs }
+        return (live + upcoming + finished)
             .mapNotNull { channelById[it.channelId] }
+            .distinctBy { it.id }
     }
 
     private fun overlapsWindow(program: MatcherProgram, startMs: Long): Boolean =
@@ -950,9 +991,22 @@ internal object SportsChannelMatcher {
 
     // ── Tiers 2 and 3 ────────────────────────────────────────────────
 
-    /** The regional networks [team] plays on, the team's own listing order. */
-    private fun rsnNetworks(team: SportsTeam): List<String> =
-        TEAM_RSN[team.abbreviation.trim().uppercase()].orEmpty()
+    /**
+     * The regional networks [team] plays on in [leaguePath], the team's own
+     * listing order.
+     *
+     * Looked up BY LEAGUE as well as by abbreviation, because an abbreviation is
+     * not unique across leagues (audit C12, 2026-10-23): a bare lookup resolved
+     * whichever league's entry happened to exist, and tier 2 only runs where the
+     * guide and the network names both missed - so the error landed on exactly
+     * the hardest games. [TEAM_RSN]'s keys carry the league for that reason.
+     */
+    private fun rsnNetworks(team: SportsTeam, leaguePath: String): List<String> {
+        val league = leaguePath.substringAfterLast('/').uppercase()
+        val abbreviation = team.abbreviation.trim().uppercase()
+        if (league.isEmpty() || abbreviation.isEmpty()) return emptyList()
+        return TEAM_RSN["$league:$abbreviation"].orEmpty()
+    }
 
     /**
      * The pass's playlist, indexed ONCE so no card has to walk it again.

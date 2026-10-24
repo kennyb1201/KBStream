@@ -82,11 +82,23 @@ class SportsHubStandingsContractTest {
         )
         assertTrue(
             "and one column header per group, not one for the whole screen",
-            hub.contains("item(key = \"\$groupKey-cols\") { StandingsColumnHeader() }")
+            hub.contains("item(key = \"\$groupKey-cols\") { StandingsColumnHeader(points = pointsTable) }")
         )
         assertTrue(
             "the labels are the spec's, in order",
-            hub.contains("listOf(\"W\", \"L\", \"T\", \"PCT\", \"GB\", \"STRK\").forEach")
+            hub.contains("listOf(\"W\", \"L\", \"T\", \"PCT\", \"GB\", \"STRK\")")
+        )
+        assertTrue(
+            "and a POINTS table labels its own four columns - soccer is read on points, and the feed " +
+                "publishes neither a win percentage nor games behind for it",
+            hub.contains("if (points) listOf(\"W\", \"D\", \"L\", \"PTS\") else") &&
+                hub.contains("StandingsColumnHeader(points = pointsTable)") &&
+                hub.contains("pointsTable = groups.any { group -> group.entries.any { it.points.isNotBlank() } }")
+        )
+        assertTrue(
+            "and the row draws the points value last, behind wins, draws and losses",
+            hub.contains("StandingsStat(entry.ties.toString())") &&
+                hub.contains("StandingsStat(standingsText(entry.points))")
         )
     }
 

@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
 import com.kennyb1201.kbstream.data.iptv.EpgStalledException
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
+import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.GuideImportOutcome
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.epgEntryImportCoolingDown
@@ -28,6 +29,7 @@ import com.kennyb1201.kbstream.data.reporting.Redaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -120,6 +122,171 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     fun onExtraPlaylistUrlsChanged(value: String) {
         _extraPlaylistUrls.value = value
         saveInputs()
+    }
+
+    // ── The free lineup (see FreeLineup) ──────────────────────────────────
+    //
+    // Installed INTO the extra-source slots, never the primary playlist slot: a
+    // profile that has its own playlist is byte-for-byte unaffected, and the
+    // free channels merge with namespaced ids exactly as any second provider
+    // does. Per-profile by construction - these are the profile-scoped prefs,
+    // so installing under one profile touches no other.
+
+    /** True while a free-lineup install is fetching and applying. */
+    private val _freeLineupInstalling = MutableStateFlow(false)
+    val freeLineupInstalling: StateFlow<Boolean> = _freeLineupInstalling.asStateFlow()
+
+    /**
+     * Set when the free sources could not be read at install time.
+     *
+     * The install STAYS - it is removable and retryable - but nothing is cached
+     * as a lineup, so the screens keep their no-lineup state and say the FREE
+     * LINEUP failed to load instead of pretending the profile has channels it
+     * cannot show.
+     */
+    private val _freeLineupFailed = MutableStateFlow(false)
+    val freeLineupFailed: StateFlow<Boolean> = _freeLineupFailed.asStateFlow()
+
+    /** Whether the built-in lineup is among this profile's sources. */
+    val freeLineupInstalled: StateFlow<Boolean> = _extraPlaylistUrls
+        .map { FreeLineup.isInstalled(it) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            FreeLineup.isInstalled(_extraPlaylistUrls.value)
+        )
+
+    private var installJob: Job? = null
+
+    /**
+     * Installs the free lineup and loads it - one tap, one prefs edit.
+     *
+     * Idempotent, and deliberately re-entrant: pressed on an already-installed
+     * lineup it retries the load, which is the state a failed install leaves
+     * behind - so the same offer reads as both "watch free channels" and "try
+     * again".
+     *
+     * [onReady] runs when the attempt is over, success or not: the Sports Hub
+     * re-reads the lineup from that callback rather than guessing how long a
+     * multi-thousand-channel fetch takes.
+     */
+    fun installFreeLineup(onReady: () -> Unit = {}) {
+        if (installJob?.isActive == true) return
+        installJob = viewModelScope.launch {
+            _freeLineupInstalling.value = true
+            try {
+                if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) {
+                    val (playlists, guides) = FreeLineup.install(
+                        extraPlaylistUrls = _extraPlaylistUrls.value,
+                        extraEpgUrls = _extraEpgUrls.value
+                    )
+                    writeSources(playlists, guides)
+                }
+                // SKIPPED (an EPG import holds the load) is not a failure:
+                // the install stays, and the next load is the retry.
+                _freeLineupFailed.value = loadLineup() == LoadOutcome.FAILED
+            } finally {
+                _freeLineupInstalling.value = false
+                withContext(NonCancellable) {
+                    Log.i(
+                        TAG,
+                        "FREE LINEUP install finished failed=${_freeLineupFailed.value}"
+                    )
+                    onReady()
+                }
+            }
+        }
+    }
+
+    /**
+     * Removes both halves of the built-in lineup. Everything else the viewer
+     * configured is kept, and with nothing left to load the profile is back to
+     * its exact no-playlist state.
+     */
+    fun removeFreeLineup() {
+        val (playlists, guides) = FreeLineup.remove(
+            extraPlaylistUrls = _extraPlaylistUrls.value,
+            extraEpgUrls = _extraEpgUrls.value
+        )
+        if (playlists == _extraPlaylistUrls.value && guides == _extraEpgUrls.value) return
+        writeSources(playlists, guides)
+        _freeLineupFailed.value = false
+        if (effectiveLineupUrl().isBlank()) {
+            // Nothing left to load: drop the lineup in hand rather than leaving
+            // its rows on screen as if the source were still configured. Its
+            // cached channels and programs stop being read with the URLs, and
+            // the next guide import no longer matches against them.
+            restoreJob?.cancel()
+            loadJob?.cancel()
+            _playlist.value = null
+            _guideChannelIds.value = emptySet()
+            _guideItemsByChannelId.value = emptyMap()
+            _pendingGuideChannelIds.value = emptySet()
+            _error.value = null
+            _guideRefreshTick.value += 1
+        } else {
+            load()
+        }
+    }
+
+    /**
+     * One prefs edit writes both source lists - never a half-installed state -
+     * and then the flows every screen and the guide import reads.
+     */
+    private fun writeSources(extraPlaylistUrls: String, extraEpgUrls: String) {
+        _extraPlaylistUrls.value = extraPlaylistUrls
+        _extraEpgUrls.value = extraEpgUrls
+        saveInputs()
+    }
+
+    /** `<url>|<name>` extras, trimmed, blanks dropped. */
+    private fun extraPlaylistEntries(): List<Pair<String, String?>> =
+        _extraPlaylistUrls.value
+            .split('\n', ';')
+            .mapNotNull { raw -> raw.trim().takeIf { it.isNotEmpty() } }
+            .map { entry ->
+                val parts = entry.split('|', limit = 2)
+                parts[0].trim() to parts.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+            }
+            .filter { (url, _) -> url.isNotBlank() }
+
+    /**
+     * The URL a load should read.
+     *
+     * A profile can own extras WITHOUT a primary playlist - that is the shape of
+     * a free-lineup install - and the playlist slot stays empty on purpose, so
+     * the primary is borrowed from the first extra for LOADING only. Nothing is
+     * ever written back to `playlist_url`.
+     */
+    private fun effectiveLineupUrl(): String =
+        _playlistUrl.value.trim().ifBlank {
+            extraPlaylistEntries().firstOrNull()?.first.orEmpty()
+        }
+
+    /** The name to load under: the typed one, else the first extra's label. */
+    private fun lineupLoadName(): String? {
+        val typed = _playlistName.value.trim()
+        if (typed.isNotEmpty()) return typed
+        if (_playlistUrl.value.isNotBlank()) return null
+        return extraPlaylistEntries().firstOrNull()?.second ?: FreeLineup.NAME
+    }
+
+    /**
+     * One extra source's channels, ids prefixed with the source's hash so two
+     * providers that both emit "channel_1" cannot collide (dedupe + EPG keys).
+     *
+     * ONE rule, used by every merge: the guide's, the extras-only lineup's and
+     * (in the hub's own copy) the Sports Hub's, so a channel a card names is the
+     * channel the guide would have launched.
+     */
+    private fun namespacedExtraChannels(
+        url: String,
+        channels: List<IptvChannel>
+    ): List<IptvChannel> {
+        val ns = (url.hashCode().toUInt() and 0xFFFFFFu).toString(16)
+        return channels.map { channel ->
+            if (channel.id.isBlank()) channel else channel.copy(id = "x$ns:${channel.id}")
+        }
     }
 
     private val _playlist = MutableStateFlow<IptvPlaylist?>(null)
@@ -808,10 +975,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun restoreCachedPlaylist() {
-        val url = _playlistUrl.value.trim()
-        val name = _playlistName.value.trim().ifBlank { null }
+        val url = effectiveLineupUrl()
+        val name = lineupLoadName()
         if (url.isBlank()) {
-            Log.d(TAG, "CACHE RESTORE SKIPPED playlist URL is blank")
+            Log.d(TAG, "CACHE RESTORE SKIPPED no playlist sources are configured")
             return
         }
         restoreJob?.cancel()
@@ -821,12 +988,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         Log.w(TAG, "CACHE RESTORE START source=${Redaction.url(url)}")
         restoreJob = viewModelScope.launch {
             try {
-                val cachedPlaylist = repository.loadCachedPlaylist(url, name)
+                // No primary playlist means the extras ARE the lineup, so the
+                // cache read is the extras' own (see loadCachedExtrasLineup).
+                val cachedPlaylist = if (_playlistUrl.value.isBlank()) {
+                    loadCachedExtrasLineup()
+                } else {
+                    repository.loadCachedPlaylist(url, name)
+                }
                 // A profile switch rewrote the pref while this was reading, and
                 // its own restore is the one that owns the state now. Applying
                 // here would put the PREVIOUS profile's lineup under the new
                 // profile - the reported cross-profile guide.
-                if (_playlistUrl.value.trim() != url) {
+                if (effectiveLineupUrl() != url) {
                     Log.w(TAG, "CACHE RESTORE DROPPED: profile/URL changed mid-read")
                     return@launch
                 }
@@ -851,58 +1024,148 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                if (_playlistUrl.value.trim() != url) return@launch
+                if (effectiveLineupUrl() != url) return@launch
                 reportFailure(_error, t)
                 Log.e(TAG, "CACHE RESTORE FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
             } finally {
                 // Only the restore that still owns the page may stop its
                 // spinner: clearing it here for a superseded one stopped the
                 // new profile's restore mid-flight.
-                if (_playlistUrl.value.trim() == url) _isLoading.value = false
+                if (effectiveLineupUrl() == url) _isLoading.value = false
             }
         }
     }
 
     fun load() {
-        val url = _playlistUrl.value.trim()
-        val name = _playlistName.value.trim().ifBlank { null }
-        if (url.isBlank()) {
-            _error.value = "Playlist URL is required"
-            return
-        }
         if (_isImportingGuide.value) {
             _error.value = "EPG import is in progress. Please wait before loading the playlist."
             return
         }
         loadJob?.cancel()
-        loadJob = viewModelScope.launch {
-            val hasPlaylist = _playlist.value != null
-            _isLoading.value = !hasPlaylist
-            _error.value = null
-            try {
-                val loadedPlaylist = loadPlaylistResilient(url, name)
-                applyPlaylist(loadedPlaylist)
-                markUpdated(KEY_PLAYLIST_UPDATED_AT)
-                Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=${Redaction.url(url)}")
-                // The cache-MISS path (fresh install, cleared storage, a
-                // profile switch before the first load) ends up here, and the
-                // synced EPG URLs are already configured — so opening the
-                // Guide used to show channels with "No program data" until
-                // IMPORT EPG was pressed. The cache-HIT path above already
-                // asks, and this is the same ask after the fresh channel list
-                // is in place. refreshIfNeeded's own guards make it safe: it
-                // no-ops with no EPG URL, with a fresh guide, while an import
-                // is in flight, and during the stall cooldown.
-                refreshIfNeeded()
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                reportFailure(_error, t)
-                Log.e(TAG, "PLAYLIST LOAD FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
-                if (!hasPlaylist) _playlist.value = null
-            } finally {
-                _isLoading.value = false
-            }
+        loadJob = viewModelScope.launch { loadLineup() }
+    }
+
+    /**
+     * The one load pipeline, answering whether a lineup is now in hand.
+     *
+     * Suspending rather than fire-and-forget so an install can report its own
+     * outcome (see [installFreeLineup]): the free lineup's screens have to say
+     * whether it worked, and a launcher cannot tell.
+     */
+    private suspend fun loadLineup(): LoadOutcome {
+        val url = effectiveLineupUrl()
+        val name = lineupLoadName()
+        // No primary playlist and no extras: there is nothing to load at all.
+        if (url.isBlank()) {
+            _error.value = "Playlist URL is required"
+            return LoadOutcome.FAILED
         }
+        if (_isImportingGuide.value) {
+            _error.value = "EPG import is in progress. Please wait before loading the playlist."
+            return LoadOutcome.SKIPPED
+        }
+        val hasPlaylist = _playlist.value != null
+        _isLoading.value = !hasPlaylist
+        _error.value = null
+        return try {
+            // With no primary playlist the extras ARE the lineup (see
+            // [effectiveLineupUrl]): they are loaded and namespaced here, and
+            // not merged a second time by [applyPlaylist].
+            val loadedPlaylist = if (_playlistUrl.value.isBlank()) {
+                loadExtrasOnlyLineup()
+            } else {
+                loadPlaylistResilient(url, name)
+            }
+            applyPlaylist(loadedPlaylist)
+            markUpdated(KEY_PLAYLIST_UPDATED_AT)
+            Log.d(TAG, "PLAYLIST LOAD SUCCESS channels=${loadedPlaylist.channels.size} source=${Redaction.url(url)}")
+            // The cache-MISS path (fresh install, cleared storage, a
+            // profile switch before the first load) ends up here, and the
+            // synced EPG URLs are already configured — so opening the
+            // Guide used to show channels with "No program data" until
+            // IMPORT EPG was pressed. The cache-HIT path above already
+            // asks, and this is the same ask after the fresh channel list
+            // is in place. refreshIfNeeded's own guards make it safe: it
+            // no-ops with no EPG URL, with a fresh guide, while an import
+            // is in flight, and during the stall cooldown.
+            refreshIfNeeded()
+            LoadOutcome.LOADED
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            reportFailure(_error, t)
+            Log.e(TAG, "PLAYLIST LOAD FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
+            if (!hasPlaylist) _playlist.value = null
+            LoadOutcome.FAILED
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
+    /** How one load pipeline ended - see [loadLineup]. */
+    private enum class LoadOutcome {
+        /** A lineup is in hand (or an already-loaded one was kept). */
+        LOADED,
+
+        /** The sources could not be read; nothing new was applied. */
+        FAILED,
+
+        /** Not attempted: an EPG import holds the load right now. */
+        SKIPPED,
+    }
+
+    /**
+     * The lineup built from the extra sources ALONE - the free-lineup shape,
+     * where nothing occupies the primary slot.
+     *
+     * Every entry is treated as an extra, so its ids are namespaced exactly as
+     * they are once a primary playlist appears: adding your own playlist later
+     * must not renumber channels that favorites, zap history and remembered
+     * sports picks already point at.
+     */
+    private suspend fun loadExtrasOnlyLineup(): IptvPlaylist {
+        val entries = extraPlaylistEntries()
+        check(entries.isNotEmpty()) { "No playlist sources are configured" }
+        val channels = ArrayList<IptvChannel>()
+        var fetched = 0
+        entries.forEach { (url, name) ->
+            val loaded = repository.loadPlaylist(url, name)
+            fetched += loaded.channels.size
+            channels += namespacedExtraChannels(url, loaded.channels)
+        }
+        check(fetched > 0) { "The playlist sources returned no channels" }
+        return IptvPlaylist(
+            name = entries.firstOrNull()?.second ?: FreeLineup.NAME,
+            sourceUrl = entries.first().first,
+            epgUrl = null,
+            channels = channels.distinctBy { it.id }
+        )
+    }
+
+    /**
+     * The same lineup, read from the playlist CACHE instead of the network -
+     * the cold-start path, where the free channels must come back without a
+     * fetch. Null when no extra has a cached channel list yet.
+     */
+    private suspend fun loadCachedExtrasLineup(): IptvPlaylist? {
+        val entries = extraPlaylistEntries()
+        if (entries.isEmpty()) return null
+        val channels = ArrayList<IptvChannel>()
+        var found = false
+        entries.forEach { (url, name) ->
+            val cached = runCatchingCancellable {
+                repository.loadCachedPlaylist(url, name)
+            }.getOrNull() ?: return@forEach
+            if (cached.channels.isEmpty()) return@forEach
+            found = true
+            channels += namespacedExtraChannels(url, cached.channels)
+        }
+        if (!found) return null
+        return IptvPlaylist(
+            name = entries.firstOrNull()?.second ?: FreeLineup.NAME,
+            sourceUrl = entries.first().first,
+            epgUrl = null,
+            channels = channels.distinctBy { it.id }
+        )
     }
 
     /**
@@ -913,31 +1176,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * dedupe/EPG-match keys stable across providers.
      */
     private suspend fun mergeWithExtraPlaylists(primary: IptvPlaylist): IptvPlaylist {
-        val entries = _extraPlaylistUrls.value
-            .split('\n', ';')
-            .mapNotNull { raw ->
-                val trimmed = raw.trim()
-                if (trimmed.isBlank()) null else trimmed
-            }
+        val entries = extraPlaylistEntries()
         if (entries.isEmpty()) return primary
 
         var added = 0
         val extraChannelLists = mutableListOf<List<IptvChannel>>()
-        for (entry in entries) {
-            val parts = entry.split('|', limit = 2)
-            val extraUrl = parts[0].trim()
-            val extraName = parts.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
-            if (extraUrl.isBlank() || extraUrl.equals(primary.sourceUrl?.trim(), ignoreCase = true)) {
+        for ((extraUrl, extraName) in entries) {
+            if (extraUrl.equals(primary.sourceUrl?.trim(), ignoreCase = true)) {
                 continue
             }
             try {
                 val extra = repository.loadPlaylist(extraUrl, extraName)
-                extraChannelLists += extra.channels.map { ch ->
-                    // Prefix ids with the source hash so two providers that
-                    // both emit "channel_1" don't collide (dedupe + EPG keys).
-                    val ns = (extraUrl.hashCode().toUInt() and 0xFFFFFFu).toString(16)
-                    if (ch.id.isBlank()) ch else ch.copy(id = "x$ns:${ch.id}")
-                }
+                extraChannelLists += namespacedExtraChannels(extraUrl, extra.channels)
                 added += extra.channels.size
             } catch (t: Throwable) {
                 // Failures are non-fatal: the primary playlist still loads.
@@ -1145,10 +1395,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         )
 
     private suspend fun refreshPlaylistInBackground() {
-        val url = _playlistUrl.value.trim()
-        val name = _playlistName.value.trim().ifBlank { null }
+        val url = effectiveLineupUrl()
+        val name = lineupLoadName()
         if (url.isBlank() || _isImportingGuide.value) return
-        val refreshedPlaylist = loadPlaylistResilient(url, name)
+        val refreshedPlaylist = if (_playlistUrl.value.isBlank()) {
+            loadExtrasOnlyLineup()
+        } else {
+            loadPlaylistResilient(url, name)
+        }
         applyPlaylist(refreshedPlaylist)
         markUpdated(KEY_PLAYLIST_UPDATED_AT)
         // applyPlaylist merged the extras in, so report what was applied.
@@ -1340,8 +1594,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun applyPlaylist(newPlaylist: IptvPlaylist) =
         withContext(Dispatchers.Default) {
             // Merged here rather than at the call sites so the concat (and the
-            // extra playlists' own loads) happen off the main thread too.
-            val merged = mergeWithExtraPlaylists(newPlaylist)
+            // extra playlists' own loads) happen off the main thread too. With
+            // no primary playlist the caller already built the extras into the
+            // lineup ([loadExtrasOnlyLineup] / [loadCachedExtrasLineup]): those
+            // channels are ALREADY namespaced, so merging again would fetch
+            // them a second time and namespace the prefix twice.
+            val merged = if (_playlistUrl.value.isBlank()) {
+                newPlaylist
+            } else {
+                mergeWithExtraPlaylists(newPlaylist)
+            }
             val guideUrls = allEpgUrls()
             // A background playlist refresh usually returns the same channels, and
             // resetting the guide for it re-ran the entire lineup query (snapshot

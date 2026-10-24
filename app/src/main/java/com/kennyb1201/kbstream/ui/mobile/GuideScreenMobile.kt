@@ -182,6 +182,10 @@ fun GuideScreenMobile(
         val playlistName by viewModel.playlistName.collectAsStateWithLifecycle()
         val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsStateWithLifecycle()
         val extraEpgUrls by viewModel.extraEpgUrls.collectAsStateWithLifecycle()
+        // The built-in free lineup - the same states the TV form reads.
+        val freeLineupInstalled by viewModel.freeLineupInstalled.collectAsStateWithLifecycle()
+        val freeLineupInstalling by viewModel.freeLineupInstalling.collectAsStateWithLifecycle()
+        val freeLineupFailed by viewModel.freeLineupFailed.collectAsStateWithLifecycle()
         val programSearchRows by viewModel.programSearchResults.collectAsStateWithLifecycle()
 
         // Per-profile guide prefs: favorites, hidden groups and the recent-play
@@ -456,6 +460,11 @@ fun GuideScreenMobile(
                 onPlaylistNameChanged = viewModel::onPlaylistNameChanged,
                 onExtraPlaylistUrlsChanged = viewModel::onExtraPlaylistUrlsChanged,
                 onExtraEpgUrlsChanged = viewModel::onExtraEpgUrlsChanged,
+                freeLineupInstalled = freeLineupInstalled,
+                freeLineupInstalling = freeLineupInstalling,
+                freeLineupFailed = freeLineupFailed,
+                onInstallFreeLineup = { viewModel.installFreeLineup() },
+                onRemoveFreeLineup = { viewModel.removeFreeLineup() },
                 onLoad = { viewModel.load() },
                 onImportGuide = { viewModel.importGuide() },
                 onBack = { if (playlist == null) onBack() else showSetup = false }
@@ -1307,6 +1316,11 @@ private fun MobileGuideSetup(
     onPlaylistNameChanged: (String) -> Unit,
     onExtraPlaylistUrlsChanged: (String) -> Unit,
     onExtraEpgUrlsChanged: (String) -> Unit,
+    freeLineupInstalled: Boolean = false,
+    freeLineupInstalling: Boolean = false,
+    freeLineupFailed: Boolean = false,
+    onInstallFreeLineup: () -> Unit = {},
+    onRemoveFreeLineup: () -> Unit = {},
     onLoad: () -> Unit,
     onImportGuide: () -> Unit,
     onBack: () -> Unit
@@ -1343,6 +1357,75 @@ private fun MobileGuideSetup(
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodySmall
             )
+
+            // The free lineup: the offer when absent, the installed entry with
+            // its Remove action when present. Same ViewModel calls as the TV
+            // form - this is only the phone's own door to them.
+            if (freeLineupInstalled) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = com.kennyb1201.kbstream.data.iptv.FreeLineup.INSTALLED_LABEL,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (freeLineupInstalling) {
+                            "Loading the free channels…"
+                        } else {
+                            "News, local stations and free channels."
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                KBButton(
+                    label = "REMOVE FREE TV",
+                    modifier = Modifier.fillMaxWidth()
+                ) { onRemoveFreeLineup() }
+                if (freeLineupFailed && playlist == null) {
+                    MobileGuideErrorLine(
+                        "The free lineup didn't load. Check the connection and try " +
+                            "again, or add your own playlist below."
+                    )
+                }
+            } else {
+                KBButton(
+                    label = if (freeLineupInstalling) {
+                        "INSTALLING FREE TV…"
+                    } else if (playlist == null) {
+                        "WATCH FREE CHANNELS"
+                    } else {
+                        "ADD FREE TV (BUILT-IN)"
+                    },
+                    enabled = !freeLineupInstalling,
+                    modifier = Modifier.fillMaxWidth()
+                ) { onInstallFreeLineup() }
+                Text(
+                    text = "News, local stations and free sports channels, built in. " +
+                        "Media links only - add your own playlist any time.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (playlist == null) {
+                    // The secondary action needs no button here: the phone form
+                    // puts the playlist fields directly below the offer, so
+                    // "add your playlist" is the next thing on screen. What it
+                    // does need is to say so.
+                    Text(
+                        text = "ADD YOUR PLAYLIST",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                if (freeLineupFailed) {
+                    MobileGuideErrorLine(
+                        "The free lineup didn't load. Check the connection and try " +
+                            "again, or add your own playlist below."
+                    )
+                }
+            }
 
             SetupField(
                 label = "PLAYLIST URL",
@@ -1391,13 +1474,17 @@ private fun MobileGuideSetup(
 
             KBButton(
                 label = if (playlist == null) "LOAD PLAYLIST" else "RELOAD PLAYLIST",
-                enabled = !isLoading && playlistUrl.isNotBlank(),
+                // A free-lineup install leaves the primary slot empty on
+                // purpose, so the reload must stay available for a profile
+                // whose only sources are extras.
+                enabled = !isLoading && (playlistUrl.isNotBlank() || freeLineupInstalled),
                 modifier = Modifier.fillMaxWidth()
             ) { onLoad() }
 
             KBButton(
                 label = if (isImportingGuide) "IMPORTING…" else "IMPORT GUIDE",
-                enabled = !isImportingGuide && !isLoading && epgUrl.isNotBlank(),
+                enabled = !isImportingGuide && !isLoading &&
+                    (epgUrl.isNotBlank() || extraEpgUrls.isNotBlank()),
                 modifier = Modifier.fillMaxWidth()
             ) { onImportGuide() }
 

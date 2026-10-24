@@ -84,9 +84,57 @@ class TmdbLogoLanguageContractTest {
         // This cache stores the RESOLVED URL, so a foreign logo written before
         // the fix would be served for its full 30-day TTL. The prefix is the
         // cache key, so bumping it drops every such row at once.
+        //
+        // Bumped a second time, to logo2, when it turned out the English-only
+        // pick was correct but its LOGO-LESS answers were being persisted: a
+        // title whose resolve raced an empty `logos` payload stayed
+        // wordmark-free for the month (Kenny's MobLand case, where Detail - a
+        // path that never reads this cache - showed the logo the whole time).
         assertTrue(
-            "the hero disk cache prefix must be bumped past hero_artwork_en:",
-            heroRepo.contains("DISK_KEY_PREFIX = \"hero_artwork_enlogo:\"")
+            "the hero disk cache prefix must be bumped past the logo-less entries",
+            heroRepo.contains("DISK_KEY_PREFIX = \"hero_artwork_logo2:\"")
+        )
+    }
+
+    @Test
+    fun `a logo-less hero answer may not pin the title for thirty days`() {
+        // The backdrop it did fetch stays worth caching; the LOGO question is
+        // asked again after a day, so one raced resolve costs a request rather
+        // than a month of plain-text heroes.
+        assertTrue(
+            "a backdrop-only entry must expire on a short negative TTL",
+            heroRepo.contains("LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L")
+        )
+        assertTrue(
+            "and the read must pick it for entries with no logo",
+            heroRepo.contains("val ttl = if (hasLogo) DISK_CACHE_TTL_MS else LOGO_MISS_TTL_MS") &&
+                heroRepo.contains("if (ageMs < ttl)")
+        )
+    }
+
+    @Test
+    fun `every hero resolve is recorded for copy diagnostics`() {
+        // Logcat is unreachable from a couch, and the capture Kenny could send
+        // did not contain the hero's own resolution line. The same four facts -
+        // tmdbId, media type, logo found, which layer answered - are recorded
+        // for the in-app report instead, so a still-logo-less title names its
+        // id and its answering layer without another evening of guessing.
+        assertTrue(
+            "every exit from resolve() records a HeroArtTrace line, including a " +
+                "missing tmdbId that never asked at all",
+            Regex("HeroArtTrace\\.record\\(").findAll(heroRepo).count() >= 4
+        )
+        listOf("MEMORY", "DISK", "NETWORK", "NONE").forEach { layer ->
+            assertTrue(
+                "the $layer layer must be distinguishable in the trace",
+                heroRepo.contains("HeroArtTrace.Layer.$layer")
+            )
+        }
+        val diagnostics = read(DIAGNOSTICS)
+        assertTrue(
+            "and Diagnostics must print those lines in the copied report",
+            diagnostics.contains("private fun heroArtLine()") &&
+                diagnostics.contains("heroArtLine()?.let { report.appendLine(it) }")
         )
     }
 
@@ -166,5 +214,7 @@ class TmdbLogoLanguageContractTest {
             "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt"
         const val LANDSCAPE_ART =
             "com/kennyb1201/kbstream/ui/components/LandscapeArt.kt"
+        const val DIAGNOSTICS =
+            "com/kennyb1201/kbstream/data/reporting/Diagnostics.kt"
     }
 }

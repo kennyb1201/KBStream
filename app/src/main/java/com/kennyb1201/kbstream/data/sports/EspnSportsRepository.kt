@@ -82,8 +82,24 @@ class EspnSportsRepository(
             return cached?.value.orEmpty()
         }
         failed -= leaguePath
-        scoreboards[leaguePath] = Cached(now, fetched)
-        return fetched
+        // A game still in play after midnight Eastern belongs to ESPN's
+        // PREVIOUS day window, which the default request stops asking for the
+        // moment the day rolls over - so a 10:30 PM ET tip simply vanished from
+        // its tab mid-play (audit C1, 2026-10-23). The day's own body is read
+        // once, and only for the games that fell out of the fresh slate; the
+        // ones that finished with it are not resurrected.
+        val carried = EspnCacheRules
+            .carryOverDay(cached?.value.orEmpty(), fetched, now)
+            ?.let { day ->
+                fetch(leaguePath, day)
+                    ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
+                    .orEmpty()
+                    .filter { game -> fetched.none { it.id == game.id } }
+            }
+            .orEmpty()
+        val merged = if (carried.isEmpty()) fetched else fetched + carried
+        scoreboards[leaguePath] = Cached(now, merged)
+        return merged
     }
 
     /** The tournament events (golf, F1) in [leaguePath]. */
@@ -94,7 +110,10 @@ class EspnSportsRepository(
             return cached.value
         }
         // The STRICT parse, for the same reason as the scoreboard's.
-        val fetched = fetch(leaguePath)?.let { body -> parseTournamentEventsOrNull(body, leaguePath) }
+        // The clock decides which of a weekend's sessions the card is about.
+        val fetched = fetch(leaguePath)?.let { body ->
+            parseTournamentEventsOrNull(body, leaguePath, now)
+        }
         if (fetched == null) {
             failed += leaguePath
             return cached?.value.orEmpty()
@@ -209,8 +228,15 @@ class EspnSportsRepository(
     private fun ttlMsForEvents(events: List<TournamentEvent>, nowMs: Long): Long =
         ttlMs(EspnCacheRules.eventsNeedLiveTtl(events, nowMs, IDLE_TTL_MS))
 
-    private suspend fun fetch(leaguePath: String): String? =
-        httpGet(SCOREBOARD_BASE + leaguePath + "/scoreboard", "scoreboard $leaguePath")
+    /**
+     * The scoreboard body, for the default (Eastern "today") window or for one
+     * named ESPN day - `dates=20261023`, the form the endpoint accepts.
+     */
+    private suspend fun fetch(leaguePath: String, day: String? = null): String? =
+        httpGet(
+            SCOREBOARD_BASE + leaguePath + "/scoreboard" + (day?.let { "?dates=$it" } ?: ""),
+            "scoreboard $leaguePath" + (day?.let { " ($it)" } ?: "")
+        )
 
     private suspend fun fetchStandings(leaguePath: String): String? =
         httpGet(
@@ -398,8 +424,8 @@ internal fun parseScoreboardOrNull(json: String, leaguePath: String): List<Sport
     // (see `scoreboard`). A missing `events` array is that case; an EMPTY one
     // is a real slate with nothing on.
     val events = espnEventsArray(json) ?: return null
-    val games = (0 until events.length()).mapNotNull { index ->
-        events.optJSONObject(index)?.let { event -> espnEventToGame(event, leaguePath) }
+    val games = (0 until events.length()).flatMap { index ->
+        events.optJSONObject(index)?.let { event -> espnEventToGames(event, leaguePath) }.orEmpty()
     }
     // Events that all failed to parse are the same class of fault: a league
     // whose payload no longer carries what a game needs (a missing home flag is
@@ -418,28 +444,106 @@ internal fun parseScoreboard(json: String, leaguePath: String): List<SportsGame>
 private fun espnEventsArray(json: String): JSONArray? =
     runCatching { JSONObject(json).optJSONArray("events") }.getOrNull()
 
-private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? {
-    val id = event.optString("id", "").ifBlank { return null }
-    val competition = event.optJSONArray("competitions")?.optJSONObject(0)
-    val competitors = competition?.optJSONArray("competitors") ?: event.optJSONArray("competitors")
-    if (competitors == null) return null
+private fun espnEventToGames(event: JSONObject, leaguePath: String): List<SportsGame> {
+    val eventId = event.optString("id", "").ifBlank { return emptyList() }
+    val competitions = event.optJSONArray("competitions")
+    // ONE competition is the ordinary case - a game. A fight card or a racing
+    // weekend carries several, each its own fixture with its own id, date and
+    // status, and this read only `competitions[0]` (audit C3, 2026-10-23):
+    // UFC 333 ships FOURTEEN bouts, so the hub drew the first prelim bout under
+    // the card's own title and the other thirteen did not exist. A body with no
+    // `competitions` array falls back to the event-level competitors, as before.
+    val rows: List<JSONObject?> = if (competitions == null || competitions.length() == 0) {
+        listOf(null)
+    } else {
+        (0 until competitions.length()).map { index -> competitions.optJSONObject(index) }
+    }
+    return rows.mapIndexedNotNull { index, competition ->
+        val competitors = competition?.optJSONArray("competitors")
+            ?: event.optJSONArray("competitors")
+        // A head-to-head fixture has exactly two sides. A competition carrying a
+        // whole FIELD (a racing session's 22 drivers) is not a game - its league
+        // reads the tournament parser instead - so requiring two keeps the
+        // fan-out from inventing an opponent out of a grid.
+        if (competitors == null || competitors.length() != 2) return@mapIndexedNotNull null
+        espnGameOf(
+            event = event,
+            competition = competition,
+            competitors = competitors,
+            eventId = eventId,
+            // Only a multi-competition event needs a per-bout id; every other
+            // league keeps the event id it has always had, so a remembered
+            // pick, a reminder and a cached summary keep keying the same thing.
+            gameId = if (rows.size <= 1) {
+                eventId
+            } else {
+                eventId + ":" + (competition?.optString("id", "").orEmpty().ifBlank { index.toString() })
+            },
+            // A bout has no name of its own on the feed; its pairing is the
+            // name a viewer reads.
+            name = if (rows.size <= 1) {
+                event.optString("name", "")
+            } else {
+                ""
+            },
+            leaguePath = leaguePath,
+        )
+    }
+}
 
-    var away: SportsTeam? = null
-    var home: SportsTeam? = null
+/** One competition read as one game. */
+private fun espnGameOf(
+    event: JSONObject,
+    competition: JSONObject?,
+    competitors: JSONArray,
+    eventId: String,
+    gameId: String,
+    name: String,
+    leaguePath: String,
+): SportsGame? {
+
+    // The sides, with the flag the feed actually sent beside each one.
+    //
+    // A fight card or a tennis match has no home side, and ESPN then sends no
+    // `homeAway` at all. Those events used to be DROPPED here: every competitor
+    // fell to `away`, the next one overwrote it, `home` stayed null - so a whole
+    // league's tabs could parse to nothing while the fetch "succeeded", with no
+    // error state to ever show for it (audit C2, 2026-10-23).
+    //
+    // The flags stay authoritative whenever they exist. Only a side the feed
+    // left unnamed is filled from the feed's own order - first competitor away,
+    // second home, which is how ESPN ships every card of this shape.
+    val sides = ArrayList<Pair<SportsTeam, String>>(competitors.length())
     for (i in 0 until competitors.length()) {
         val row = competitors.optJSONObject(i) ?: continue
-        val team = espnTeamOf(
-            row = row,
-            homeAway = row.optString("homeAway", ""),
-            leaguePath = leaguePath
-        )
-        if (team.isHome) home = team else away = team
+        val flag = row.optString("homeAway", "").trim().lowercase()
+        sides += espnTeamOf(row = row, homeAway = flag, leaguePath = leaguePath) to flag
     }
-    // A head-to-head card needs two sides; a one-sided payload is not a game.
-    val awayTeam = away ?: return null
-    val homeTeam = home ?: return null
+    val flaggedHome = sides.indexOfFirst { it.second == "home" }
+    val flaggedAway = sides.indexOfFirst { it.second == "away" }
+    val awayIndex = when {
+        flaggedAway >= 0 -> flaggedAway
+        flaggedHome >= 0 -> sides.indices.firstOrNull { it != flaggedHome } ?: -1
+        else -> 0
+    }
+    val homeIndex = when {
+        flaggedHome >= 0 -> flaggedHome
+        flaggedAway >= 0 -> sides.indices.firstOrNull { it != flaggedAway } ?: -1
+        else -> 1
+    }
+    // A head-to-head card still needs two sides; a one-sided payload is not a
+    // game, and saying so is the honest answer rather than inventing an opponent.
+    val awayTeam = sides.getOrNull(awayIndex)?.first ?: return null
+    val homeTeam = sides.getOrNull(homeIndex)?.first ?: return null
 
-    val status = event.optJSONObject("status")?.optJSONObject("type")
+    // `status.period` sits on the status OBJECT, not on its `type` - which is
+    // where the state word and the clock live. Kept separately because
+    // baseball's inning fallback reads it (see espnBaseballSituation).
+    //
+    // A competition's own status wins over the event's: on a fight card the
+    // event is one long night, while each bout starts and ends on its own.
+    val statusObject = competition?.optJSONObject("status") ?: event.optJSONObject("status")
+    val status = statusObject?.optJSONObject("type")
     // Both read once, because the situation line is built from the same two
     // facts the state and the clock are (see espnSituation). The feed's end
     // time rides along so a stale "in" cannot show a finished game as LIVE.
@@ -459,12 +563,22 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
         sport = espnSport(leaguePath),
         competition = competition,
         statusDetail = statusDetail,
+        // Baseball's inning is on the status for the feeds that ship no
+        // `details` block (see espnBaseballSituation).
+        period = statusObject?.optInt("period", 0) ?: 0,
     )
     return SportsGame(
-        id = id,
+        id = gameId,
+        // The EVENT behind this game: what its summary is fetched by, and what
+        // a fight card's fourteen bouts share.
+        eventId = eventId,
         league = leaguePath,
-        name = event.optString("name", ""),
-        dateMs = espnDateMs(event.optString("date", "")),
+        // A bout's pairing stands in for the name the feed only gives a card.
+        name = name.ifBlank { "${awayTeam.displayName} vs ${homeTeam.displayName}" },
+        // A competition's own start beats the card's: the main event does not
+        // begin when the first prelim does.
+        dateMs = espnDateMs(competition?.optString("date", "").orEmpty())
+            .takeIf { it > 0L } ?: espnDateMs(event.optString("date", "")),
         state = state,
         statusDetail = statusDetail,
         // Free: football's down/distance and baseball's inning/outs are on the
@@ -632,6 +746,9 @@ private fun espnStandingEntry(row: JSONObject): StandingEntry? {
         winPercent = espnStatText(stats, "winPercent"),
         gamesBehind = espnStatText(stats, "gamesBehind"),
         streak = espnStatText(stats, "streak"),
+        // Soccer's table is read on points; the feed publishes them and the hub
+        // never asked (see StandingEntry.points).
+        points = espnStatText(stats, "points"),
         // The same id a favourite is stored under, so a row can be followed
         // from the table and match the side on the scoreboard.
         teamId = team.optString("id", "").takeIf { it.isNotBlank() },
@@ -822,6 +939,48 @@ internal object EspnCacheRules {
      */
     private fun startsWithin(dateMs: Long, nowMs: Long, idleTtlMs: Long): Boolean =
         dateMs > 0L && dateMs <= nowMs + idleTtlMs
+
+    /**
+     * The day the scoreboard endpoint groups a timestamp into, as its own
+     * `dates=` parameter writes it ("20261023").
+     *
+     * EASTERN, deliberately, because that is the feed's day: the endpoint's
+     * default window is the current US Eastern day, which a Pacific viewer's 9 PM
+     * tip is already outside of. The real zone (not a fixed offset) so the DST
+     * boundary moves this with the feed's own.
+     */
+    fun espnDay(dateMs: Long): String =
+        java.time.Instant.ofEpochMilli(dateMs)
+            .atZone(java.time.ZoneId.of("America/New_York"))
+            .toLocalDate()
+            .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
+
+    /**
+     * The ESPN day whose slate must also be read, or null when today's is enough.
+     *
+     * A game that is LIVE in the cached slate, absent from the fresh one, and
+     * dated on an EARLIER ESPN day is a game that has outlived its day window:
+     * midnight Eastern rolled the endpoint over to the next slate and the game
+     * vanished mid-play (audit C1, 2026-10-23). Reading that one day again is
+     * what keeps it on its tab until it actually finishes - the second read
+     * carries its current state, so the moment it is FINAL it stops qualifying.
+     *
+     * A final or upcoming game that leaves the window is NOT carried: only a
+     * game in progress is a game the viewer is watching disappear.
+     */
+    fun carryOverDay(
+        cached: List<SportsGame>,
+        fresh: List<SportsGame>,
+        nowMs: Long,
+    ): String? {
+        val today = espnDay(nowMs)
+        return cached
+            .asSequence()
+            .filter { it.state == GameState.LIVE && it.dateMs > 0L }
+            .filter { game -> fresh.none { it.id == game.id } }
+            .map { espnDay(it.dateMs) }
+            .firstOrNull { it != today }
+    }
 }
 
 /**
@@ -846,19 +1005,55 @@ private fun espnBroadcasts(event: JSONObject, competition: JSONObject?): List<St
 internal fun parseTournamentEventsOrNull(
     json: String,
     leaguePath: String,
+    /** The clock that says which of a weekend's sessions is the relevant one. */
+    nowMs: Long = System.currentTimeMillis(),
 ): List<TournamentEvent>? {
     // Null on a body that is not a scoreboard at all - see parseScoreboardOrNull.
     val events = espnEventsArray(json) ?: return null
     val out = (0 until events.length()).mapNotNull { index ->
-        events.optJSONObject(index)?.let { event -> espnEventToTournament(event, leaguePath) }
+        events.optJSONObject(index)?.let { event -> espnEventToTournament(event, leaguePath, nowMs) }
     }
     if (events.length() > 0 && out.isEmpty()) return null
     return out
 }
 
 /** [parseTournamentEventsOrNull], answering an empty list for an unreadable body. */
-internal fun parseTournamentEvents(json: String, leaguePath: String): List<TournamentEvent> =
-    parseTournamentEventsOrNull(json, leaguePath).orEmpty()
+internal fun parseTournamentEvents(
+    json: String,
+    leaguePath: String,
+    nowMs: Long = System.currentTimeMillis(),
+): List<TournamentEvent> = parseTournamentEventsOrNull(json, leaguePath, nowMs).orEmpty()
+
+/** How long a session is assumed to run when its end time is missing. */
+private const val SESSION_MS = 3L * 60L * 60_000L
+
+/**
+ * The competition a tournament card is about: the session on now, else the most
+ * recent one that started, else the first still to come.
+ *
+ * A golf tournament has one competition, so this is a no-op there; a racing
+ * weekend has one per session, and the race is not the first of them.
+ */
+private fun tournamentSession(competitions: JSONArray?, nowMs: Long): JSONObject? {
+    if (competitions == null || competitions.length() == 0) return null
+    val rows = (0 until competitions.length()).mapNotNull { index ->
+        competitions.optJSONObject(index)
+    }
+    if (rows.size <= 1) return rows.firstOrNull()
+    val dated = rows.map { row -> row to espnDateMs(row.optString("date", "")) }
+    val airing = dated.firstOrNull { (row, start) ->
+        val end = espnDateMs(row.optString("endDate", "")).takeIf { it > 0L }
+            ?: (start + SESSION_MS)
+        start > 0L && start <= nowMs && nowMs <= end
+    }
+    if (airing != null) return airing.first
+    return dated
+        .filter { it.second in 1..nowMs }
+        .maxByOrNull { it.second }
+        ?.first
+        ?: dated.firstOrNull { it.second > nowMs }?.first
+        ?: dated.first().first
+}
 
 /**
  * One tournament event, or null when the object is not one (no id).
@@ -869,9 +1064,20 @@ internal fun parseTournamentEvents(json: String, leaguePath: String): List<Tourn
  * publishes each day, a racing weekend that names practice and the race) could
  * only ever show whichever one ESPN happened to put first.
  */
-private fun espnEventToTournament(event: JSONObject, leaguePath: String): TournamentEvent? {
+private fun espnEventToTournament(
+    event: JSONObject,
+    leaguePath: String,
+    nowMs: Long,
+): TournamentEvent? {
     val id = event.optString("id", "").ifBlank { return null }
-    val competition = event.optJSONArray("competitions")?.optJSONObject(0)
+    // Which of the weekend's sessions this card is about.
+    //
+    // A racing weekend is ONE event with FIVE competitions - practice,
+    // qualifying, the sprint, the race - and this used to read `[0]`, so the
+    // Grand Prix card carried Friday practice's order as its leaderboard (audit
+    // C3, 2026-10-23). The session that matters is the one on now, else the most
+    // recent that started, else the next one due.
+    val competition = tournamentSession(event.optJSONArray("competitions"), nowMs)
     val status = event.optJSONObject("status")?.optJSONObject("type")
     return TournamentEvent(
         id = id,
@@ -1010,13 +1216,15 @@ internal fun espnSituation(
     sport: EspnSport,
     competition: JSONObject?,
     statusDetail: String,
+    /** ESPN's `status.period`: the inning for baseball, when `details` has none. */
+    period: Int = 0,
 ): EspnSituation? {
     if (state != GameState.LIVE) return null
     return when (sport) {
         EspnSport.FOOTBALL -> espnFootballSituation(competition)
         // Baseball's half-inning and count say nothing about a ball being held,
         // so its situation is a line and no possession.
-        EspnSport.BASEBALL -> espnBaseballSituation(competition, statusDetail)
+        EspnSport.BASEBALL -> espnBaseballSituation(competition, statusDetail, period)
             ?.let { EspnSituation(line = it) }
         else -> null
     }
@@ -1075,9 +1283,18 @@ private fun espnFootballSituation(competition: JSONObject?): EspnSituation? {
     }
 }
 
-private fun espnBaseballSituation(competition: JSONObject?, statusDetail: String): String? {
-    val details = competition?.optJSONObject("details") ?: return null
-    val inning = details.optInt("inning", 0)
+private fun espnBaseballSituation(
+    competition: JSONObject?,
+    statusDetail: String,
+    period: Int,
+): String? {
+    val details = competition?.optJSONObject("details")
+    // The inning is on `details` when the feed ships that block, and on
+    // `status.period` when it does not - the shape the audit suspected (C6,
+    // 2026-10-23). Reading only `details` meant MLB's situation line was
+    // silently absent for every game whose feed keeps the inning on the status,
+    // and silence reads the same as "no situation".
+    val inning = details?.optInt("inning", 0)?.takeIf { it > 0 } ?: period
     if (inning <= 0) return null
     // Only the first word is inspected: a status like "Suspended" contains
     // "end" and would otherwise read as a mid-inning break.
@@ -1089,7 +1306,7 @@ private fun espnBaseballSituation(competition: JSONObject?, statusDetail: String
         halfWord.startsWith("top") -> "Top"
         else -> null
     }
-    val outs = details.optInt("outs", -1)
+    val outs = details?.optInt("outs", -1) ?: -1
     val count = if (outs < 0) "" else " · $outs ${if (outs == 1) "out" else "outs"}"
     return if (half == null) "$inningLabel$count" else "$half $inningLabel$count"
 }

@@ -86,6 +86,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
+import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
@@ -197,6 +198,11 @@ fun GuideScreen(
     val playlistName by viewModel.playlistName.collectAsStateWithLifecycle()
     val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsStateWithLifecycle()
     val extraEpgUrls by viewModel.extraEpgUrls.collectAsStateWithLifecycle()
+    // The built-in free lineup: whether this profile has it, whether a tap is
+    // still fetching it, and whether the last attempt failed (see FreeLineup).
+    val freeLineupInstalled by viewModel.freeLineupInstalled.collectAsStateWithLifecycle()
+    val freeLineupInstalling by viewModel.freeLineupInstalling.collectAsStateWithLifecycle()
+    val freeLineupFailed by viewModel.freeLineupFailed.collectAsStateWithLifecycle()
 
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
@@ -1214,6 +1220,11 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 viewModel.onExtraEpgUrlsChanged("")
                 showSetup = true
             },
+            freeLineupInstalled = freeLineupInstalled,
+            freeLineupInstalling = freeLineupInstalling,
+            freeLineupFailed = freeLineupFailed,
+            onInstallFreeLineup = { viewModel.installFreeLineup() },
+            onRemoveFreeLineup = { viewModel.removeFreeLineup() },
             containFocus = containFocus,
             modifier = panelModifier
         )
@@ -1919,6 +1930,11 @@ private fun SetupPanel(
     onImportGuide: () -> Unit,
     onManageHidden: () -> Unit,
     onClear: () -> Unit,
+    freeLineupInstalled: Boolean = false,
+    freeLineupInstalling: Boolean = false,
+    freeLineupFailed: Boolean = false,
+    onInstallFreeLineup: () -> Unit = {},
+    onRemoveFreeLineup: () -> Unit = {},
     /**
      * Keeps every D-pad press inside the panel. True for the overlay placement
      * (which sits over the guide) and false for the inline one, where the panel
@@ -2050,6 +2066,22 @@ private fun SetupPanel(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 4.dp)
+        )
+
+        // The free lineup, offered where a viewer with no playlist lands and
+        // administered where the sources live. It is an on-ramp, not a
+        // replacement: a profile with its own playlist only ever sees the
+        // install row, never the offer (see FreeLineup).
+        FreeLineupSetupBlock(
+            installed = freeLineupInstalled,
+            installing = freeLineupInstalling,
+            failed = freeLineupFailed,
+            noPlaylist = playlist == null,
+            onInstall = onInstallFreeLineup,
+            onRemove = onRemoveFreeLineup,
+            onAddPlaylist = {
+                runCatching { firstFieldFocusRequester.requestFocus() }
+            }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -2251,6 +2283,119 @@ private fun SetupPanel(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The free-lineup row on the setup form: the offer when it is absent, the
+ * installed entry with its Remove action when it is present.
+ *
+ * Three doors lead here (the no-playlist Live TV screen, the Sports Hub's
+ * missing-lineup notice, and this form) and all of them call the same
+ * `installFreeLineup()` - this block is only the form's own door.
+ *
+ * The wording carries the two things that keep it honest: the lineup is
+ * "built-in", and a failed attempt says the FREE LINEUP failed rather than
+ * leaving an empty guide to imply the profile has channels it cannot show.
+ */
+@Composable
+private fun FreeLineupSetupBlock(
+    installed: Boolean,
+    installing: Boolean,
+    failed: Boolean,
+    noPlaylist: Boolean,
+    onInstall: () -> Unit,
+    onRemove: () -> Unit,
+    onAddPlaylist: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (installed) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = FreeLineup.INSTALLED_LABEL,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (installing) {
+                            "Loading the free channels…"
+                        } else {
+                            "News, local stations and free channels."
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                KBCard(onClick = onRemove) {
+                    Text(
+                        text = "REMOVE",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    )
+                }
+            }
+            if (failed && noPlaylist) {
+                Text(
+                    text = "The free lineup didn't load. Check the connection and try " +
+                        "again, or add your own playlist below.",
+                    color = KBDanger,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        } else {
+            KBCard(
+                onClick = if (installing) ({}) else onInstall,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)) {
+                    Text(
+                        text = when {
+                            installing -> "INSTALLING FREE TV…"
+                            noPlaylist -> "WATCH FREE CHANNELS"
+                            else -> "ADD FREE TV (BUILT-IN)"
+                        },
+                        color = if (installing) KBTextLo else KBAccent,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "News, local stations and free sports channels, built " +
+                            "in. Media links only - add your own playlist any time.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+            if (noPlaylist) {
+                Spacer(modifier = Modifier.height(8.dp))
+                KBCard(onClick = onAddPlaylist) {
+                    Text(
+                        text = "ADD YOUR PLAYLIST",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                if (failed) {
+                    Text(
+                        text = "The free lineup didn't load. Check the connection and try " +
+                            "again, or add your own playlist below.",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
         }
     }

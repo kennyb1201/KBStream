@@ -28,7 +28,11 @@ class GuideEntryAutoImportContractTest {
 
     @Test
     fun `a successful playlist load asks for a stale guide import`() {
-        val load = body("fun load() {")
+        // The load pipeline is ONE suspending function now (loadLineup), so an
+        // install can report its own outcome; load() is the launcher around it.
+        // Both halves are asserted: the launcher must still own the job that
+        // runs the work, and the pipeline must still ask for the guide last.
+        val load = body("private suspend fun loadLineup(): LoadOutcome")
 
         assertTrue(
             "the channel list has to exist before the import matches against it",
@@ -51,13 +55,13 @@ class GuideEntryAutoImportContractTest {
         )
         assertTrue(
             "and inside the load job, so it runs after that job's own work",
-            success.contains("loadJob = viewModelScope.launch {")
+            body("fun load() {").contains("loadJob = viewModelScope.launch { loadLineup() }")
         )
     }
 
     @Test
     fun `a failed load never starts an import`() {
-        val load = body("fun load() {")
+        val load = body("private suspend fun loadLineup(): LoadOutcome")
         val failure = load.substringAfter("} catch")
 
         assertFalse(

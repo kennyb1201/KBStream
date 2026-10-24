@@ -397,6 +397,202 @@ class EspnSportsRepositoryTest {
     }
 
     @Test
+    fun `a card with no home-away flags keeps its two sides, in the feed's order`() {
+        // A fight has no home side, and ESPN then sends no `homeAway` at all.
+        // Both competitors used to fall to `away`, `home` stayed null and the
+        // event was dropped - so a league whose payload looks like this parsed
+        // to nothing while the fetch counted as a success, with no error state
+        // to show for it (audit C2).
+        val unflagged = """
+            {
+              "events": [
+                {
+                  "id": "930",
+                  "name": "UFC 400: Main Card",
+                  "date": "2024-11-16T23:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "7:00 PM" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "athlete": { "displayName": "Alex Pereira" } },
+                        { "athlete": { "displayName": "Magomed Ankalaev" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val fight = parseScoreboard(unflagged, "mma/ufc").single()
+        // No flags: the feed's order carries the sides - first away, second home.
+        assertEquals("Alex Pereira", fight.away.displayName)
+        assertEquals("Magomed Ankalaev", fight.home.displayName)
+    }
+
+    @Test
+    fun `one named side still leaves the other filled from the feed's order`() {
+        // Half-flagged is the same failure one step in: the unflagged side is
+        // the one the feed left unnamed, not a side that does not exist.
+        val halfFlagged = """
+            {
+              "events": [
+                {
+                  "id": "931",
+                  "name": "Semi-final",
+                  "date": "2024-11-16T23:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "7:00 PM" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "athlete": { "displayName": "Carlos Alcaraz" } },
+                        { "homeAway": "home", "athlete": { "displayName": "Jannik Sinner" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val match = parseScoreboard(halfFlagged, "tennis/atp").single()
+        assertEquals("Carlos Alcaraz", match.away.displayName)
+        assertEquals("Jannik Sinner", match.home.displayName)
+    }
+
+    @Test
+    fun `the inning comes from the status when the competition has no details block`() {
+        // Audit C6: only `competitions[0].details.inning` was read, so on a feed
+        // that keeps the inning on `status.period` the situation line never
+        // rendered for any MLB game - and silence reads as "no situation".
+        val noDetails = """
+            {
+              "events": [
+                {
+                  "id": "940",
+                  "name": "Boston Red Sox at New York Yankees",
+                  "date": "2024-06-08T23:00Z",
+                  "status": {
+                    "period": 7,
+                    "type": { "state": "in", "shortDetail": "Bot 7th" }
+                  },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "homeAway": "away", "team": { "abbreviation": "BOS", "displayName": "Boston Red Sox" } },
+                        { "homeAway": "home", "team": { "abbreviation": "NYY", "displayName": "New York Yankees" } }
+                      ],
+                      "details": { "outs": 2 }
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val fromStatus = parseScoreboard(noDetails, "baseball/mlb").single()
+        assertEquals("Bot 7th · 2 outs", fromStatus.situation)
+
+        // The details block still wins where it exists: it is the feed's own
+        // inning, and the status period is only the fallback.
+        assertEquals(
+            "Top 5th · 1 out",
+            espnSituation(
+                state = GameState.LIVE,
+                sport = EspnSport.BASEBALL,
+                competition = org.json.JSONObject(
+                    """{"details":{"inning":5,"outs":1}}"""
+                ),
+                statusDetail = "Top 5th",
+                period = 7,
+            )?.line
+        )
+    }
+
+    @Test
+    fun `a card with several competitions becomes one game per bout`() {
+        // Audit C3: only `competitions[0]` was read. UFC 333 ships fourteen
+        // bouts, so the hub drew the first prelim under the card's own title and
+        // the other thirteen did not exist at all.
+        val card = """
+            {
+              "events": [
+                {
+                  "id": "600",
+                  "name": "UFC 333: Volkanovski vs. Evloev",
+                  "date": "2026-10-24T14:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "7:00 PM" } },
+                  "competitions": [
+                    {
+                      "id": "c1",
+                      "date": "2026-10-24T14:00Z",
+                      "competitors": [
+                        { "athlete": { "displayName": "Nicolle Caliari" } },
+                        { "athlete": { "displayName": "Iasmin Lucindo" } }
+                      ]
+                    },
+                    {
+                      "id": "c2",
+                      "date": "2026-10-24T22:00Z",
+                      "competitors": [
+                        { "athlete": { "displayName": "Alexander Volkanovski" } },
+                        { "athlete": { "displayName": "Movsar Evloev" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val bouts = parseScoreboard(card, "mma/ufc")
+
+        assertEquals(2, bouts.size)
+        assertEquals(listOf("600:c1", "600:c2"), bouts.map { it.id })
+        assertTrue(
+            "every bout names the same EVENT, which is what its summary is fetched by",
+            bouts.all { it.eventId == "600" }
+        )
+        assertEquals("Alexander Volkanovski", bouts[1].away.displayName)
+        assertEquals("Movsar Evloev", bouts[1].home.displayName)
+        assertEquals(
+            "and each bout keeps its own start, not the card's first bell",
+            espnDateMs("2026-10-24T22:00Z"),
+            bouts[1].dateMs
+        )
+    }
+
+    @Test
+    fun `a competition carrying a field is not a game`() {
+        // A racing session's twenty-two drivers are a field, not a fixture: the
+        // fan-out must not invent a two-sided game out of a grid.
+        val field = """
+            {
+              "events": [
+                {
+                  "id": "700",
+                  "name": "United States Grand Prix",
+                  "date": "2026-10-23T17:30Z",
+                  "status": { "type": { "state": "post", "shortDetail": "Final" } },
+                  "competitions": [
+                    {
+                      "id": "s1",
+                      "competitors": [
+                        { "athlete": { "displayName": "Max Verstappen" } },
+                        { "athlete": { "displayName": "Lando Norris" } },
+                        { "athlete": { "displayName": "Charles Leclerc" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        assertTrue(parseScoreboard(field, "racing/f1").isEmpty())
+    }
+
+    @Test
     fun `an event with no id is skipped`() {
         val noId = """
             {"events": [{"name": "Ghost game", "competitions": [{"competitors": []}]}]}
@@ -532,6 +728,57 @@ class EspnSportsRepositoryTest {
         assertEquals(GameState.UPCOMING, event.state)
         assertEquals(listOf("Max Verstappen", "Charles Leclerc"), event.leaders.map { it.name })
         assertEquals("1", event.leaders.first().score)
+    }
+
+    @Test
+    fun `a racing weekend's card is about the session that is on, not the first one`() {
+        // Audit C3, tournaments: a Grand Prix is ONE event with five
+        // competitions. Reading `[0]` put Friday practice's order on the race
+        // card.
+        val weekend = """
+            {
+              "events": [
+                {
+                  "id": "f1-weekend",
+                  "name": "United States Grand Prix",
+                  "date": "2026-10-23T17:30Z",
+                  "status": { "type": { "state": "in", "shortDetail": "Race" } },
+                  "competitions": [
+                    { "id": "p1", "date": "2026-10-23T17:30Z", "endDate": "2026-10-23T18:30Z",
+                      "competitors": [ { "athlete": { "displayName": "Practice Leader" }, "status": { "position": "1" } } ] },
+                    { "id": "q1", "date": "2026-10-24T21:00Z", "endDate": "2026-10-24T22:00Z",
+                      "competitors": [ { "athlete": { "displayName": "Qualifying Leader" }, "status": { "position": "1" } } ] },
+                    { "id": "r1", "date": "2026-10-25T20:00Z", "endDate": "2026-10-25T22:00Z",
+                      "competitors": [ { "athlete": { "displayName": "Race Leader" }, "status": { "position": "1" } } ] }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        // During qualifying: the session on now is the one the card shows.
+        val duringQualifying = parseTournamentEvents(
+            weekend,
+            "racing/f1",
+            nowMs = espnDateMs("2026-10-24T21:30Z")
+        ).single()
+        assertEquals(listOf("Qualifying Leader"), duringQualifying.leaders.map { it.name })
+
+        // After the race: the most recent session, not the first.
+        val afterTheRace = parseTournamentEvents(
+            weekend,
+            "racing/f1",
+            nowMs = espnDateMs("2026-10-26T12:00Z")
+        ).single()
+        assertEquals(listOf("Race Leader"), afterTheRace.leaders.map { it.name })
+
+        // Before the weekend: the first session due.
+        val beforeTheWeekend = parseTournamentEvents(
+            weekend,
+            "racing/f1",
+            nowMs = espnDateMs("2026-10-22T12:00Z")
+        ).single()
+        assertEquals(listOf("Practice Leader"), beforeTheWeekend.leaders.map { it.name })
     }
 
     @Test
@@ -1088,6 +1335,46 @@ class EspnSportsRepositoryTest {
           ]
         }
     """.trimIndent()
+
+    @Test
+    fun `a soccer table's points are read, so the table can be read on them`() {
+        // Audit C8: the feed publishes `points` for every soccer table and the
+        // hub never asked, so Premier League rows carried W-L-T and three blank
+        // columns (win pct, games behind, streak) where the one number a viewer
+        // reads was missing.
+        val soccer = """
+            {
+              "children": [
+                {
+                  "name": "English Premier League",
+                  "standings": { "entries": [
+                    { "team": { "abbreviation": "ARS", "displayName": "Arsenal" },
+                      "stats": [
+                        { "name": "wins", "displayValue": "7" },
+                        { "name": "losses", "displayValue": "0" },
+                        { "name": "ties", "displayValue": "0" },
+                        { "name": "points", "displayValue": "21" }
+                      ] }
+                  ] }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val row = parseStandings(soccer).single().entries.single()
+        assertEquals("21", row.points)
+        assertEquals(7, row.wins)
+        // The stats soccer does not publish stay blank, which is what lets the
+        // table choose its columns from the data rather than from a league list.
+        assertEquals("", row.winPercent)
+        assertEquals("", row.gamesBehind)
+    }
+
+    @Test
+    fun `a table with no points stat reports none, so the six-column shape stays`() {
+        val football = parseStandings(standings).first { it.name == "AFC West" }
+        assertEquals("", football.entries.single().points)
+    }
 
     @Test
     fun `conferences are flattened into their divisions, in order, with empties skipped`() {

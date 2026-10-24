@@ -249,7 +249,9 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * way.
      */
     fun openDetail(game: SportsGame) {
-        detailRequest = game.league to game.id
+        // The EVENT, not the fixture id: a fight card's fourteen bouts are one
+        // event, and one summary answers all of them (see SportsGame.eventId).
+        detailRequest = game.league to game.eventId
         detailJob?.cancel()
         _detailSummary.value = null
         if (!EspnSummaryRules.shouldFetch(game.state)) return
@@ -1365,9 +1367,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // merges them (see IptvViewModel), so two providers both emitting
         // "channel_1" cannot collide - and a channel the hub launches carries
         // the same id the guide would have launched it with.
+        //
+        // The rule is "the PRIMARY playlist's ids stay raw; every extra is
+        // namespaced", not "the first entry stays raw": a profile with no
+        // primary playlist (the free-lineup shape) owns extras only, and its
+        // channels must carry the ids the guide already gives them - numbered
+        // by POSITION, adding a primary later would renumber them.
+        val primaryUrl = prefs.getString(KEY_PLAYLIST_URL, "").orEmpty()
+            .substringBefore('|')
+            .trim()
         val merged = ArrayList<IptvChannel>()
-        loaded.forEachIndexed { index, (url, playlist) ->
-            if (index == 0) {
+        loaded.forEach { (url, playlist) ->
+            if (primaryUrl.isNotEmpty() && url.equals(primaryUrl, ignoreCase = true)) {
                 merged += playlist.channels
             } else {
                 val ns = (url.hashCode().toUInt() and 0xFFFFFFu).toString(16)

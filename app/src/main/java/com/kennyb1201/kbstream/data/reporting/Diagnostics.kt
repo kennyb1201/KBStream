@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.tmdb.HeroArtTrace
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +115,7 @@ object Diagnostics {
         // report. Absent until the hub has run (see [sportsLine]).
         sportsLine()?.let { report.appendLine(it) }
         artLine()?.let { report.appendLine(it) }
+        heroArtLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see
@@ -330,6 +332,24 @@ object Diagnostics {
                 append(" slowest=").append(PerfTrace.maxMs("home.artLookup")).append("ms")
             }
         }
+    }
+
+    /**
+     * The hero's last few artwork resolves: the id it asked about, the media
+     * type, whether a logo came back, and which layer answered.
+     *
+     * The `art:` line above counts rail-artwork lookups; this one is about the
+     * CLEARLOGO, which has its own cache and its own failure mode - an entry
+     * written from a resolve that found no logo used to stand for thirty days.
+     * A "this show's logo never appears" report now names the tmdbId and says
+     * whether the answer came from memory, disk or the network, which is the
+     * difference between a wrong id, a stale cache and a title TMDB genuinely
+     * has no English wordmark for (see [HeroArtTrace]).
+     */
+    private fun heroArtLine(): String? {
+        val lines = HeroArtTrace.lines()
+        if (lines.isEmpty()) return null
+        return "heroart: " + lines.joinToString(" · ")
     }
 
     private fun accountLine(): String {

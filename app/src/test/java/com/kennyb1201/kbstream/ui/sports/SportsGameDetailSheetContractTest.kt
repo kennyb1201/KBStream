@@ -206,7 +206,8 @@ class SportsGameDetailSheetContractTest {
         assertTrue(
             "said once, at the top, instead of on every card",
             hub.contains("if (lineupMissing) {") &&
-                hub.contains("LineupMissingNotice(onRetry = viewModel::retryLineup)")
+                hub.contains("LineupMissingNotice(") &&
+                hub.contains("onRetry = viewModel::retryLineup")
         )
         assertTrue(
             "and the notice is a pressable card with the retry on it",

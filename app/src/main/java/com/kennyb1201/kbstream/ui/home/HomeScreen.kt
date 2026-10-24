@@ -1263,6 +1263,11 @@ private fun HomeHero(
     // single top-ranked plate used to do here. Empty for a catalog title, a KB
     // folder and the non-browse cases, which keep HeroClearLogo below.
     heroLogoUrls: List<String> = emptyList(),
+    // Whether this item's art AND words have been published together (see
+    // HomeViewModel.heroSettledKey). The copy fade/rise runs on that moment
+    // rather than on the focus change alone: a hop that outruns the resolve
+    // never gets a second act, and an item that settles transitions once.
+    copySettled: Boolean = true,
     // A hero that is nothing but a mark or a name - the Browse chip a tile
     // hands up - centres that in the whole hero instead of anchoring it to the
     // bottom. A catalog title and a KB folder are letters + metadata + buttons
@@ -1965,8 +1970,19 @@ private fun HomeHero(
         val heroCopyKey = "${tmdbDetail?.id ?: meta?.id ?: preview.id}:${preview.type}"
         val heroCopyReducedMotion = rememberReducedMotion()
         val heroCopyProgress = remember { Animatable(1f) }
-        LaunchedEffect(heroCopyKey) {
-            if (heroCopyReducedMotion) {
+        // The key whose words have already been on screen.
+        //
+        // A COLD item's copy shows while its art resolves (the alternative - a
+        // blank hero for a third of a second on every hop - reads as a flash),
+        // and it must not fade in a SECOND time when the art lands. So the fade
+        // belongs to a copy that has not been seen yet: an item that arrives
+        // already settled (cached art, a folder, a browse chip). Each of those
+        // gets exactly one; anything the viewer saw while it resolved gets none.
+        var heroCopyShownKey by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(heroCopyKey, copySettled) {
+            val alreadyOnScreen = heroCopyShownKey == heroCopyKey
+            heroCopyShownKey = heroCopyKey
+            if (!copySettled || heroCopyReducedMotion || alreadyOnScreen) {
                 heroCopyProgress.snapTo(1f)
                 return@LaunchedEffect
             }
@@ -2001,36 +2017,52 @@ private fun HomeHero(
             verticalArrangement =
                 if (centerLogo) Arrangement.Center else Arrangement.Bottom
         ) {
-            if (heroLogoUrls.isNotEmpty() && !brandMarkUnusable) {
-                // A focused Browse tile's brand mark, walked past the
-                // candidates that cannot be drawn (see heroLogoUrls).
-                BrandMarkLogo(
-                    urls = heroLogoUrls,
-                    contentDescription = title,
-                    onUnusable = { brandMarkUnusable = true },
-                    modifier = Modifier
-                        .width(heroLogoWidth)
-                        .height(heroLogoHeight)
-                )
-            } else if (heroLogoUrls.isEmpty() && !clearLogo.isNullOrBlank()) {
-                HeroClearLogo(
-                    url = clearLogo,
-                    name = title,
-                    // Fixed size, coerced by the parent column's constraints
-                    // on narrow screens; Collection manifests get the larger
-                    // box so their wordmark logos carry the hero.
-                    modifier = Modifier
-                        .width(heroLogoWidth)
-                        .height(heroLogoHeight)
-                )
-            } else {
-                Text(
-                    text = title,
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.headlineLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+            // The logo/text slot is ONE fixed box: a clearlogo arriving late -
+            // or never arriving - changes nothing about the column's height or
+            // the position of everything under it, so the art landing can no
+            // longer re-lay-out the copy. The plain-title fallback renders
+            // INSIDE that same box for exactly that reason.
+            //
+            // The 10dp rise is cancelled here instead of being taken off the
+            // whole column: the text keeps the motion it earns, while the logo
+            // (a wordmark) fades only. A wordmark sliding vertically is the
+            // motion that read as a jump on a switch.
+            Box(
+                modifier = Modifier
+                    .width(heroLogoWidth)
+                    .height(heroLogoHeight)
+                    .graphicsLayer {
+                        translationY = -(1f - heroCopyProgress.value) * 10.dp.toPx()
+                    },
+                contentAlignment = Alignment.BottomStart
+            ) {
+                if (heroLogoUrls.isNotEmpty() && !brandMarkUnusable) {
+                    // A focused Browse tile's brand mark, walked past the
+                    // candidates that cannot be drawn (see heroLogoUrls).
+                    BrandMarkLogo(
+                        urls = heroLogoUrls,
+                        contentDescription = title,
+                        onUnusable = { brandMarkUnusable = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (heroLogoUrls.isEmpty() && !clearLogo.isNullOrBlank()) {
+                    HeroClearLogo(
+                        url = clearLogo,
+                        name = title,
+                        // Fixed size, coerced by the parent column's constraints
+                        // on narrow screens; Collection manifests get the larger
+                        // box so their wordmark logos carry the hero.
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text(
+                        text = title,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.headlineLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
                         // Main metadata line.
@@ -2554,6 +2586,7 @@ private fun HomeHeroHost(
     heroBackdropUrl: State<String?>,
     heroLogoUrl: State<String?>,
     heroTrailerKey: State<String?>,
+    heroSettledKey: State<String?>,
     onResolveHeroMeta: (MetaPreview) -> Unit
 ) {
     val context = LocalContext.current
@@ -2717,7 +2750,13 @@ private fun HomeHeroHost(
             heroLogoUrls = browseArt?.clearlogoUrls.orEmpty(),
             // A browse chip's hero is its mark or its name and nothing else, so
             // it sits in the middle of the panel rather than at the bottom.
-            centerLogo = heroBrowse != null
+            centerLogo = heroBrowse != null,
+            // One animation per settled item. A folder or a browse chip brings
+            // its own art with it (or has none to wait for), so those settle
+            // immediately; a catalog title waits for the resolve that publishes
+            // its art and words together.
+            copySettled = heroOverridden ||
+                heroSettledKey.value == "${it.id}:${it.type}"
         )
     }
 }
@@ -3773,6 +3812,10 @@ fun HomeScreen(
     val heroBackdropUrlState = viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
     val heroLogoUrlState = viewModel.heroLogoUrl.collectAsStateWithLifecycle()
     val heroTrailerKeyState = viewModel.heroTrailerKey.collectAsStateWithLifecycle()
+    // Which hero's art AND words are on screen together (see
+    // HomeViewModel.heroSettledKey). The copy transition waits for it, so a
+    // switch is one settled change rather than words-now-art-later.
+    val heroSettledKeyState = viewModel.heroSettledKey.collectAsStateWithLifecycle()
 
     // KB collections interleaved with addon rails (merged order from the
     // Collections manager: pin / reorder / hide). Computed in composable
@@ -4758,6 +4801,7 @@ fun HomeScreen(
                 heroBackdropUrl = heroBackdropUrlState,
                 heroLogoUrl = heroLogoUrlState,
                 heroTrailerKey = heroTrailerKeyState,
+                heroSettledKey = heroSettledKeyState,
                 onResolveHeroMeta = { viewModel.resolveHeroMeta(it) }
             )
 

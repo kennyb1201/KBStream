@@ -163,8 +163,11 @@ class SportsMatchSpeedContractTest {
         )
         assertTrue(
             "and the broadcast tier reads the index it was handed",
-            matcher.contains("game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)") &&
-                matcher.contains("networks.flatMap { channelIndex.channelsFor(it) }") &&
+            matcher.contains("val families = game.broadcastNames.flatMap { channelIndex.channelsFor(it) }") &&
+                matcher.contains(
+                    "val regionals = (rsnNetworks(game.home, game.league) + " +
+                        "rsnNetworks(game.away, game.league))"
+                ) &&
                 matcher.contains("event.broadcastNames.flatMap { channelIndex.channelsFor(it) }")
         )
         val index = slice(matcher, "internal class ChannelIndex", "private val RSN_BRANDS")

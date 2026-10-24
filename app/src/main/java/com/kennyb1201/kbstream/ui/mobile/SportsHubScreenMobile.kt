@@ -62,6 +62,7 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
+import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.Leader
@@ -314,6 +315,7 @@ fun SportsHubScreenMobile(
                 if (lineupMissing) {
                     LineupMissingNoticeMobile(
                         onRetry = viewModel::retryLineup,
+                        onLineupInstalled = viewModel::retryLineup,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -675,29 +677,90 @@ private fun LeagueViewChipMobile(label: String, selected: Boolean, onClick: () -
 }
 
 @Composable
-private fun LineupMissingNoticeMobile(onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    KBCard(onClick = onRetry, shape = KBShapeCard, modifier = modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text(
-                text = "NO LINEUP LOADED",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBAccent
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Your playlist could not be read, so no game can be matched to a " +
-                    "channel yet. Open Live TV once to load it, or press here to try again.",
-                style = MaterialTheme.typography.bodySmall,
-                color = KBTextHi
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "LOAD LINEUP",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBAccent
-            )
+private fun LineupMissingNoticeMobile(
+    onRetry: () -> Unit,
+    onLineupInstalled: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    // Created here, and only while this notice is on screen: see the TV twin.
+    val iptvViewModel: IptvViewModel = viewModel()
+    val freeInstalled by iptvViewModel.freeLineupInstalled.collectAsStateWithLifecycle()
+    val freeInstalling by iptvViewModel.freeLineupInstalling.collectAsStateWithLifecycle()
+    val freeFailed by iptvViewModel.freeLineupFailed.collectAsStateWithLifecycle()
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        KBCard(onClick = onRetry, shape = KBShapeCard, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = "NO LINEUP LOADED",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBAccent
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Your playlist could not be read, so no game can be matched to a " +
+                        "channel yet. Open Live TV once to load it, or press here to try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "LOAD LINEUP",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBAccent
+                )
+            }
+        }
+
+        // The same offer the no-playlist Live TV screen makes, here for the hub.
+        KBCard(
+            onClick = {
+                if (!freeInstalling) {
+                    iptvViewModel.installFreeLineup(onReady = onLineupInstalled)
+                }
+            },
+            shape = KBShapeCard,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = when {
+                        freeInstalling -> "INSTALLING FREE TV…"
+                        freeInstalled -> "RETRY FREE TV"
+                        else -> "WATCH FREE CHANNELS"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (freeInstalling) KBTextLo else KBAccent
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (freeInstalled) {
+                        "The built-in free lineup did not load. Press here to try it " +
+                            "again, or add your own playlist in Live TV."
+                    } else {
+                        "No playlist yet? Start with the built-in free lineup - news, " +
+                            "local stations and free sports channels. Your own playlist " +
+                            "can be added any time; cable and regional sports channels " +
+                            "need it."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi
+                )
+                if (freeFailed) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The free lineup didn't load. Check the connection.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = KBDanger
+                    )
+                }
+            }
         }
     }
 }
@@ -1506,20 +1569,32 @@ private fun StandingRowMobile(
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
+                // A POINTS table (soccer) reads W-D-L and the points behind it;
+                // the TV's four-column shape, on one line. Anything else keeps
+                // the six stats it always drew.
+                val pointsTable = entry.points.isNotBlank()
                 Text(
                     // The six table columns, on one line: a phone cannot hold
                     // six fixed-width columns beside a team name, and dropping
                     // any of them would make the table say less than the TV's.
-                    text = "${entry.wins}-${entry.losses}-${entry.ties}",
+                    text = if (pointsTable) {
+                        "${entry.wins}-${entry.ties}-${entry.losses}"
+                    } else {
+                        "${entry.wins}-${entry.losses}-${entry.ties}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = OswaldFamily,
                     fontWeight = FontWeight.SemiBold,
                     color = KBTextHi
                 )
                 Text(
-                    text = "PCT ${standingsTextMobile(entry.winPercent)} · " +
-                        "GB ${standingsTextMobile(entry.gamesBehind)} · " +
-                        "STRK ${standingsTextMobile(entry.streak)}",
+                    text = if (pointsTable) {
+                        "PTS ${entry.points}"
+                    } else {
+                        "PCT ${standingsTextMobile(entry.winPercent)} · " +
+                            "GB ${standingsTextMobile(entry.gamesBehind)} · " +
+                            "STRK ${standingsTextMobile(entry.streak)}"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = KBTextLo,
                     maxLines = 1

@@ -128,15 +128,27 @@ class TmdbHeroArtworkRepository(
     ): HeroArtwork? {
         if (BuildConfig.TMDB_API_KEY.isBlank()) return null
 
+        // Read BEFORE the id: a resolve that bails out on a missing id still has
+        // a media type, and the diagnostics line for it is the one that says the
+        // request never happened (see HeroArtTrace).
+        val mediaType = when (type.lowercase()) {
+            "series", "show", "tv" -> "tv"
+            else -> "movie"
+        }
+
         val resolvedTmdbId = tmdbId ?: when {
             id.startsWith("tmdb:", ignoreCase = true) ->
                 id.substringAfter(":").toIntOrNull()
             else -> null
-        } ?: return null
-
-        val mediaType = when (type.lowercase()) {
-            "series", "show", "tv" -> "tv"
-            else -> "movie"
+        }
+        if (resolvedTmdbId == null) {
+            HeroArtTrace.record(
+                tmdbId = null,
+                mediaType = mediaType,
+                logo = false,
+                layer = HeroArtTrace.Layer.NONE
+            )
+            return null
         }
 
         val key = "$mediaType:$resolvedTmdbId"
@@ -156,6 +168,12 @@ class TmdbHeroArtworkRepository(
             // In-memory cache (fast path for the current session).
             memoryCache[key]?.let { (fetchedAt, artwork) ->
                 if (now - fetchedAt < MEMORY_CACHE_TTL_MS) {
+                    HeroArtTrace.record(
+                        tmdbId = resolvedTmdbId,
+                        mediaType = mediaType,
+                        logo = !artwork.logoUrl.isNullOrBlank(),
+                        layer = HeroArtTrace.Layer.MEMORY
+                    )
                     return artwork
                 }
                 memoryCache.remove(key)
@@ -166,14 +184,37 @@ class TmdbHeroArtworkRepository(
                 tmdbJsonCacheDao?.getByKey(DISK_KEY_PREFIX + key)
             }.getOrNull()
 
-            if (diskCached != null && now - diskCached.updatedAt < DISK_CACHE_TTL_MS) {
-                val parsed = runCatching {
-                    artworkAdapter.fromJson(diskCached.json)
-                }.getOrNull()
+            // A backdrop-only answer may not pin the LOGO question for a month.
+            //
+            // The entry is a resolved artwork, not a response, so a resolve that
+            // raced an empty or slow images payload used to stand as the title's
+            // permanent answer - Detail showed the logo the whole time, because
+            // Detail never reads this cache (Kenny's MobLand case, 2026-10-23).
+            // The backdrop is still worth the full month, so a logo-less entry
+            // is kept and served for its backdrop inside a short negative TTL,
+            // and then re-asked: 24 hours is long enough to cost one request a
+            // day and short enough that a bad resolve cannot outlive the night.
+            if (diskCached != null) {
+                val ageMs = now - diskCached.updatedAt
+                if (ageMs < DISK_CACHE_TTL_MS) {
+                    val parsed = runCatching {
+                        artworkAdapter.fromJson(diskCached.json)
+                    }.getOrNull()
 
-                if (parsed != null) {
-                    memoryCache[key] = now to parsed
-                    return parsed
+                    if (parsed != null) {
+                        val hasLogo = !parsed.logoUrl.isNullOrBlank()
+                        val ttl = if (hasLogo) DISK_CACHE_TTL_MS else LOGO_MISS_TTL_MS
+                        if (ageMs < ttl) {
+                            memoryCache[key] = now to parsed
+                            HeroArtTrace.record(
+                                tmdbId = resolvedTmdbId,
+                                mediaType = mediaType,
+                                logo = hasLogo,
+                                layer = HeroArtTrace.Layer.DISK
+                            )
+                            return parsed
+                        }
+                    }
                 }
             }
 
@@ -228,6 +269,13 @@ class TmdbHeroArtworkRepository(
             abandonFetch(key, deferred)
             throw cancellation
         }
+
+        HeroArtTrace.record(
+            tmdbId = resolvedTmdbId,
+            mediaType = mediaType,
+            logo = !artwork?.logoUrl.isNullOrBlank(),
+            layer = HeroArtTrace.Layer.NETWORK
+        )
 
         if (artwork != null) {
             runCatchingCancellable {
@@ -357,14 +405,30 @@ class TmdbHeroArtworkRepository(
     private companion object {
         const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
         const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
-        // Bumped from "hero_artwork:" when the language filter landed, and
-        // again to "hero_artwork_enlogo:" when the logo pick stopped falling
-        // back to TMDB's `null` (unset-language) wordmarks: this cache stores
-        // the RESOLVED URL, so a foreign logo already resolved and written here
-        // would otherwise be served for its full 30 days. Bumping the prefix
-        // drops every one of them at once - the cache is keyed BY prefix, so
-        // the old rows are simply never read again.
-        const val DISK_KEY_PREFIX = "hero_artwork_enlogo:"
+
+        /**
+         * How long an entry with NO logo may answer for its backdrop only.
+         *
+         * This cache stores the RESOLVED artwork, so a resolve that raced an
+         * empty or slow images payload used to be this title's answer for a
+         * month: the hero fell back to plain text on every visit while Detail -
+         * which does not read this cache - showed the wordmark TMDB plainly has.
+         * A day is the compromise: the backdrop it did fetch stays useful, and
+         * the logo question is asked again while the viewer still remembers the
+         * title.
+         */
+        const val LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L
+
+        // Bumped from "hero_artwork:" when the language filter landed, again to
+        // "hero_artwork_enlogo:" when the logo pick stopped falling back to
+        // TMDB's `null` (unset-language) wordmarks, and now to
+        // "hero_artwork_logo2:" because that second version still PERSISTED
+        // logo-less answers for 30 days - so every title whose resolve raced an
+        // empty logos payload was pinned wordmark-free until the month turned.
+        // This cache stores the RESOLVED URL and is keyed BY prefix, so a bump
+        // drops every standing entry at once; the short negative TTL above is
+        // what stops the next bad resolve from doing the same thing again.
+        const val DISK_KEY_PREFIX = "hero_artwork_logo2:"
         const val MEMORY_CACHE_MAX_ENTRIES = 128
 
         /** Concurrent artwork fetches (prefetch + foreground hero together). */
