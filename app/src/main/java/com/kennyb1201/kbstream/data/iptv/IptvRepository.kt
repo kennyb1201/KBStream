@@ -235,6 +235,32 @@ class IptvRepository(
         "iptv: guideSnapshots=${guideSnapshots.size}" +
             " guideQueries=${guideQueryCache.size}/$MAX_CACHED_GUIDE_QUERIES"
 
+    /**
+     * Forgets one playlist's own storage: its cached channel list and every
+     * guide match recorded against it.
+     *
+     * The removal half of Playlist Setup's per-source Remove. Deleting the
+     * CACHE is what makes a removed source stop answering the reads that do not
+     * go through the configured-URL list (a stale match, a cold-start cache
+     * read), and deleting the MATCHES is what takes its rows out of the guide
+     * immediately instead of at the next import's prune. The guide SOURCE
+     * itself - the EPG URL and its channels - is a separate source and is left
+     * alone: it may serve other playlists.
+     *
+     * The DAO's replace-with-nothing transaction is the primitive: it exists to
+     * rewrite one playlist's cache, and rewriting it to no rows is exactly the
+     * delete, matches included.
+     */
+    suspend fun forgetPlaylist(playlistUrl: String): Unit = withContext(Dispatchers.IO) {
+        val normalizedUrl = playlistUrl.trim()
+        if (normalizedUrl.isEmpty()) return@withContext
+        dao.replaceCachedPlaylistChannels(
+            playlistUrl = normalizedUrl,
+            channels = emptyList()
+        )
+        Log.i(TAG, "PLAYLIST FORGOTTEN source=${Redaction.url(normalizedUrl)}")
+    }
+
     suspend fun loadPlaylist(
         playlistUrl: String,
         playlistName: String? = null

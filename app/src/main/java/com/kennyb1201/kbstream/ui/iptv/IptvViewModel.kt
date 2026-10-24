@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.PlaylistSources
 import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
 import com.kennyb1201.kbstream.data.iptv.EpgStalledException
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
@@ -211,11 +212,109 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (playlists == _extraPlaylistUrls.value && guides == _extraEpgUrls.value) return
         writeSources(playlists, guides)
         _freeLineupFailed.value = false
+        forgetPlaylistRows(FreeLineup.PLAYLIST_URL)
+        afterSourceRemoval()
+    }
+
+    /**
+     * Swaps a free-lineup install's dead guide address for the living one.
+     *
+     * Earlier builds installed a guide at an iptv-org path that no longer
+     * exists (every guide path on that host is a 404), which is what put
+     * "Guide download failed: HTTP 404" above the whole guide. The address the
+     * playlist itself declares now works, and this is where an install from an
+     * older build is brought forward: on the same read that derives
+     * [freeLineupInstalled], one write replaces that line.
+     *
+     * Idempotent, and deliberately narrow - it only fires when the free
+     * playlist entry is installed, so a legacy line standing alone (which may be
+     * the viewer's own manual entry) is left exactly as typed. Afterwards the
+     * ordinary guide machinery fetches the living guide on its own.
+     */
+    private fun repairFreeLineupGuideEntry() {
+        val repaired = FreeLineup.repairEpgEntry(
+            extraPlaylistUrls = _extraPlaylistUrls.value,
+            extraEpgUrls = _extraEpgUrls.value
+        ) ?: return
+        _extraEpgUrls.value = repaired
+        saveInputs()
+        Log.i(TAG, "FREE LINEUP guide source upgraded to the current address")
+    }
+
+    /**
+     * Removes the PRIMARY playlist - the URL and the name, nothing else.
+     *
+     * The extras, the guide sources and the free lineup are separate sources and
+     * are left exactly as they are (a profile whose only real playlist was the
+     * primary keeps loading its extras, through the same extras-only path a
+     * free-lineup install uses). When the primary was the last source, the
+     * profile lands back in the no-playlist state, with the Free TV offer.
+     *
+     * One tap, no confirmation: the form's own precedent (CLEAR is one tap) and
+     * a removed playlist is one paste away from being back. The reload that
+     * follows is the feedback.
+     */
+    fun removeMainPlaylist() {
+        if (_playlistUrl.value.isBlank() && _playlistName.value.isBlank()) return
+        val removedUrl = _playlistUrl.value.trim()
+        _playlistUrl.value = ""
+        _playlistName.value = ""
+        saveInputs()
+        forgetPlaylistRows(removedUrl)
+        afterSourceRemoval()
+    }
+
+    /**
+     * Removes ONE extra playlist by its URL.
+     *
+     * Its line leaves the extras blob (the rest of the blob is byte-for-byte
+     * what the viewer typed), the blob persists, and the lineup reloads - the
+     * same tap/reload/gone shape as [removeFreeLineup]. The guide SOURCE is a
+     * separate setting and stays: an Extra EPG line may serve the other
+     * playlists. What goes with the playlist is its own storage: cached channels
+     * and guide matches (see [forgetPlaylistRows]), so a removed source cannot
+     * answer a read or leave rows in the guide.
+     */
+    fun removeExtraPlaylist(url: String) {
+        val wanted = url.trim()
+        if (wanted.isEmpty()) return
+        val remaining = PlaylistSources.removeEntry(_extraPlaylistUrls.value, wanted)
+        if (remaining == _extraPlaylistUrls.value) return
+        // One edit, and the EPG blob is passed through untouched: guide sources
+        // are not playlists.
+        writeSources(remaining, _extraEpgUrls.value)
+        forgetPlaylistRows(wanted)
+        afterSourceRemoval()
+    }
+
+    /**
+     * Drops a removed playlist's own storage after its entry is gone.
+     *
+     * Fire-and-forget on purpose: the reload must not wait on a delete to start,
+     * and the delete is idempotent (a source that is re-added re-caches on its
+     * next load, which is the same path every load takes). The guide tick after
+     * it is what makes the rows disappear without waiting for an import.
+     */
+    private fun forgetPlaylistRows(url: String) {
+        val wanted = url.trim()
+        if (wanted.isEmpty()) return
+        viewModelScope.launch {
+            runCatchingCancellable { repository.forgetPlaylist(wanted) }
+            _guideRefreshTick.value += 1
+        }
+    }
+
+    /**
+     * The shared tail of every source removal - the free lineup, the primary
+     * playlist, one extra - so all of them behave identically to the viewer:
+     * tap, reload, gone.
+     *
+     * Nothing left to load means the profile returns to its exact no-playlist
+     * state rather than leaving the removed lineup's rows on screen as if the
+     * source were still configured. Otherwise the reload is the feedback.
+     */
+    private fun afterSourceRemoval() {
         if (effectiveLineupUrl().isBlank()) {
-            // Nothing left to load: drop the lineup in hand rather than leaving
-            // its rows on screen as if the source were still configured. Its
-            // cached channels and programs stop being read with the URLs, and
-            // the next guide import no longer matches against them.
             restoreJob?.cancel()
             loadJob?.cancel()
             _playlist.value = null
@@ -661,6 +760,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        repairFreeLineupGuideEntry()
         viewModelScope.launch {
             lineupSource.collect { lineup ->
                 if (lineup.isNotEmpty()) {
@@ -710,6 +810,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     _playlistName.value = prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty()
                     _extraPlaylistUrls.value = prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "").orEmpty()
                     _extraEpgUrls.value = prefs.getString(KEY_EXTRA_EPG_URLS, "").orEmpty()
+                    // The incoming profile may be an install from an older build.
+                    repairFreeLineupGuideEntry()
                     _hiddenChannelIds.value =
                         prefs.getStringSet(KEY_HIDDEN_CHANNEL_IDS, emptySet()).orEmpty().toSet()
                     // Re-bind: the listener has to follow the new profile's store.

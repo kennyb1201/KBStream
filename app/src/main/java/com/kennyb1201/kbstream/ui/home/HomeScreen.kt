@@ -33,6 +33,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
 import com.kennyb1201.kbstream.FormFactor
@@ -71,6 +73,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -2837,6 +2841,19 @@ private fun BuiltinContinueWatchingRail(
      * have started navigating, and this rail leaves focus where they put it.
      */
     viewerMovedFocusSinceEntry: Boolean = false,
+    /**
+     * Where the rails column sits in the window, recorded from its own layout by
+     * Home.
+     *
+     * A fresh entry is not landed until the head card is VISIBLE (see the
+     * verdict below), and "visible" is a question only the column can answer:
+     * it is the viewport the rails scroll in, and the card's own bounds say
+     * nothing without it. On a cold start the column seeds at the top, the
+     * viewport under the hero is short, and the rail this landing picks can sit
+     * below it - focus delivered, card unseen, first D-pad press doing the
+     * scroll by hand (field, 2026-10-24).
+     */
+    railsViewportBounds: LandingBounds,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2846,6 +2863,19 @@ private fun BuiltinContinueWatchingRail(
     // its head, so the rail owns it now (the default state was a remembered
     // one either way, so nothing else about the row moves).
     val railState = rememberLazyListState()
+
+    // Where the head card sits in the window, recorded from the card's own
+    // layout and read by the fresh-entry landing's visibility check (see
+    // [landingCardOnScreen]). A plain holder rather than state: it moves on
+    // every scroll frame, and nothing composes on it.
+    val headCardBounds = remember { LandingBounds() }
+
+    // The rail's own handle on the rails column. Asking it to bring this rail
+    // into view produces the same scroll the D-pad's traversal would, through
+    // the same [LocalBringIntoViewSpec] Home provides - which is the point: the
+    // landing has to rest WHERE a press would have taken the viewer, not at a
+    // second geometry invented here (see the landing below).
+    val railAnchor = remember { BringIntoViewRequester() }
 
     // The card at the head of the rail is focusable through the RAIL's own
     // requester, so the landing below can reach exactly the card in position 0:
@@ -2959,14 +2989,54 @@ private fun BuiltinContinueWatchingRail(
         // Two consecutive acceptances, not one (see [FocusLandingVerdict]):
         // an answer that accepted and was disposed a frame later - the rail
         // reloading under the landing - used to be logged as a delivery here.
+
+        // Whether the ask has ever been ACCEPTED. Kept apart from [landed]
+        // because the fresh-entry landing now has two ways to fail - focus
+        // never delivered, and focus delivered onto a card that is not on
+        // screen - and the HOME_FOCUS line at the end has to say which one it
+        // was (see the report below).
+        var focusDelivered = false
         var landed = false
         var attempts = 0
         val verdict = FocusLandingVerdict()
         while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {
             awaitFrame()
+            if (freshEntryLanding) {
+                // The rails column's own scroll, asked the way a D-pad step
+                // asks for it - through the BringIntoViewSpec Home provides - so
+                // the rail comes to rest exactly where traversal would have put
+                // it. A fresh entry has no place yet, so bringing the rail the
+                // landing just chose into view takes nothing from the viewer;
+                // this is the scroll their first press used to perform.
+                //
+                // Asked per frame rather than once: the node may not be laid
+                // out on the first try, and a bring-into-view is a no-op then
+                // rather than a failure (the same reason the settings search's
+                // jump asks per frame).
+                runCatching { railAnchor.bringIntoView() }
+            }
             landed = verdict.accepted(
                 runCatching { headRequester.requestFocus() }.getOrDefault(false)
             )
+            if (landed) focusDelivered = true
+            if (
+                landed &&
+                freshEntryLanding &&
+                !landingCardOnScreen(
+                    cardTopPx = headCardBounds.topPx,
+                    cardBottomPx = headCardBounds.bottomPx,
+                    viewportTopPx = railsViewportBounds.topPx,
+                    viewportBottomPx = railsViewportBounds.bottomPx
+                )
+            ) {
+                // Focus answered, but the card it answered for is not where the
+                // viewer can see it. Visibility is part of the landing now, not
+                // a detail after it: an accepted focus on a card below the fold
+                // is the field case, and calling that a landing is what kept it
+                // invisible for three reports. Retry - the column scroll above
+                // is still settling.
+                landed = false
+            }
             attempts++
         }
         if (freshEntryLanding) {
@@ -2975,20 +3045,35 @@ private fun BuiltinContinueWatchingRail(
             // debug output.
             val decided =
                 "Fresh-entry landing on Continue Watching head " + headId
-            if (landed) {
-                Log.i("HOME_FOCUS", decided + " after " + attempts + " frames")
-            } else {
-                Log.w("HOME_FOCUS", decided + " gave up after " + attempts + " frames")
+            when {
+                landed ->
+                    Log.i("HOME_FOCUS", decided + " after " + attempts + " frames")
+                // The distinction the next field report needs: focus was
+                // delivered, the SCROLL is what did not finish. Saying "gave up"
+                // here would read as the focus failure this is not.
+                focusDelivered -> Log.w(
+                    "HOME_FOCUS",
+                    decided + " landed off-screen after " + attempts +
+                        " frames: the head card is outside the rails viewport"
+                )
+                else ->
+                    Log.w("HOME_FOCUS", decided + " gave up after " + attempts + " frames")
             }
         }
     }
 
     Column(
-        modifier = Modifier.padding(
-            start = TvSafeAreaHorizontal,
-            top = 0.dp,
-            bottom = 0.dp
-        )
+        modifier = Modifier
+            .padding(
+                start = TvSafeAreaHorizontal,
+                top = 0.dp,
+                bottom = 0.dp
+            )
+            // The rail's own little hop on the column: this is the node a
+            // fresh-entry landing asks to be brought into view (see the landing
+            // above), which is what makes the whole section - title and cards -
+            // the thing the column lands, rather than the head card alone.
+            .bringIntoViewRequester(railAnchor)
     ) {
         SectionTitle(title, onHeight = onTitleHeight)
 
@@ -3058,7 +3143,25 @@ private fun BuiltinContinueWatchingRail(
                         // A card that leaves this rail (marked watched, or
                         // removed) fades where it was and the rest close the
                         // gap instead of the rail teleporting under the D-pad.
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier
+                            .animateItem()
+                            .then(
+                                if (index == CONTINUE_WATCHING_HEAD_INDEX) {
+                                    // Only the head is measured: it is the one the
+                                    // landing promises is visible (see the verdict
+                                    // above), and a write per card would be work
+                                    // for nothing.
+                                    Modifier.onGloballyPositioned { coordinates ->
+                                        val bounds = coordinates.boundsInWindow()
+                                        headCardBounds.record(
+                                            topPx = bounds.top,
+                                            bottomPx = bounds.bottom
+                                        )
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                            ),
                         onClick = { onOpenUpNext(item) },
                         onLongClick = {
                             // Remember this card's requester so dismissing the
@@ -4057,6 +4160,16 @@ fun HomeScreen(
         }
     }
 
+    // Where the rails column sits in the window, recorded from the column's own
+    // layout. The Continue Watching landing's verdict reads it to tell a card
+    // that is on screen from one that is merely focused (see
+    // [landingCardOnScreen]): the field case was a head card focused below the
+    // fold, and nothing in the app could name that difference before.
+    //
+    // A plain holder, not state: the column's bounds do not change while its
+    // contents scroll, and the only reader is the landing coroutine.
+    val railsViewportBounds = remember { LandingBounds() }
+
     // Every rail card's requester, keyed the same way the remembered card is
     // (see HomeViewModel.lastFocusedRailItemKey), so the card the viewer left
     // Home on can be asked for focus when they come back.
@@ -4722,6 +4835,7 @@ fun HomeScreen(
                     // landing on this rail's head.
                     isFreshEntry = isFreshEntry,
                     viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry,
+                    railsViewportBounds = railsViewportBounds,
                     onUpPressed = upHook
                 )
             } else if (
@@ -4857,6 +4971,17 @@ fun HomeScreen(
                     // still opens the bar on the press itself.
                     modifier = Modifier
                         .weight(1f)
+                        // The viewport the landing's visibility check measures
+                        // against (see [railsViewportBounds]); recorded from the
+                        // list itself, so it stays right on any panel size and
+                        // through any header change.
+                        .onGloballyPositioned { coordinates ->
+                            val bounds = coordinates.boundsInWindow()
+                            railsViewportBounds.record(
+                                topPx = bounds.top,
+                                bottomPx = bounds.bottom
+                            )
+                        }
                         .then(
                             rememberHomeTopBarHoldUpHook(
                                 // The card the hold began on - the one focus is

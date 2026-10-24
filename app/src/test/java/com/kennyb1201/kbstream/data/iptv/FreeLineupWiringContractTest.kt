@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,6 +49,27 @@ class FreeLineupWiringContractTest {
         assertTrue(
             "removal takes both halves out",
             viewModel.contains("FreeLineup.remove(")
+        )
+    }
+
+    @Test
+    fun `an older install's dead guide address is repaired on reconciliation`() {
+        // The field case: the previous build installed a guide path that now
+        // 404s. The swap has to happen where the lineup state is first read -
+        // construction, and again when a profile switch makes a new profile's
+        // sources this ViewModel's - so no viewer has to edit a URL.
+        assertTrue(
+            "the repair delegates to FreeLineup's own rule",
+            viewModel.contains("FreeLineup.repairEpgEntry(")
+        )
+        assertTrue(
+            "it writes the blob it repaired",
+            viewModel.contains("private fun repairFreeLineupGuideEntry()")
+        )
+        assertEquals(
+            "called at construction and on every profile switch",
+            2,
+            Regex("\\n\\s+repairFreeLineupGuideEntry\\(\\)").findAll(viewModel).count()
         )
     }
 

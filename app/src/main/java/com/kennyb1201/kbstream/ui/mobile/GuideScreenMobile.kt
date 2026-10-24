@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
+import com.kennyb1201.kbstream.data.iptv.PlaylistSources
 import com.kennyb1201.kbstream.data.iptv.XmltvProgram
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -465,6 +466,18 @@ fun GuideScreenMobile(
                 freeLineupFailed = freeLineupFailed,
                 onInstallFreeLineup = { viewModel.installFreeLineup() },
                 onRemoveFreeLineup = { viewModel.removeFreeLineup() },
+                // The installed sources as rows, over the same storage the
+                // fields below edit (see PlaylistSources). The free lineup is
+                // not among them: its block above administers it.
+                sources = PlaylistSources.rows(
+                    playlistUrl = playlistUrl,
+                    playlistName = playlistName,
+                    extraPlaylistUrls = extraPlaylistUrls
+                ),
+                onRemoveSource = { source ->
+                    if (source.isMain) viewModel.removeMainPlaylist()
+                    else viewModel.removeExtraPlaylist(source.url)
+                },
                 onLoad = { viewModel.load() },
                 onImportGuide = { viewModel.importGuide() },
                 onBack = { if (playlist == null) onBack() else showSetup = false }
@@ -1321,6 +1334,9 @@ private fun MobileGuideSetup(
     freeLineupFailed: Boolean = false,
     onInstallFreeLineup: () -> Unit = {},
     onRemoveFreeLineup: () -> Unit = {},
+    /** The installed sources, one row each - see [PlaylistSources]. */
+    sources: List<PlaylistSources.Source> = emptyList(),
+    onRemoveSource: (PlaylistSources.Source) -> Unit = {},
     onLoad: () -> Unit,
     onImportGuide: () -> Unit,
     onBack: () -> Unit
@@ -1424,6 +1440,43 @@ private fun MobileGuideSetup(
                         "The free lineup didn't load. Check the connection and try " +
                             "again, or add your own playlist below."
                     )
+                }
+            }
+
+            // What is installed, above the fields that edit it. One Remove per
+            // source, one tap, no confirmation - the reload that follows is the
+            // feedback. Same rows as the TV form, same ViewModel calls.
+            if (sources.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    sources.forEach { source ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = source.label,
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (source.isMain) {
+                                        "MAIN PLAYLIST"
+                                    } else {
+                                        "EXTRA PLAYLIST"
+                                    },
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            KBButton(label = "REMOVE", danger = true) {
+                                onRemoveSource(source)
+                            }
+                        }
+                    }
                 }
             }
 

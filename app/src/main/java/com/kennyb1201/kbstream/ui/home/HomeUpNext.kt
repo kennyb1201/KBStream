@@ -1536,6 +1536,76 @@ internal fun continueWatchingLandsOnFreshEntry(
     isFreshEntry && !initialLandingDone && !viewerMovedFocusSinceEntry
 
 /**
+ * Where a laid-out node sits in the window, as the fresh-entry landing's
+ * visibility check reads it.
+ *
+ * Recorded from layout rather than held in Compose state on purpose: the head
+ * card's bounds move on every frame of a scroll, and a state write there would
+ * recompose the rail on every scroll tick to answer a question only the landing
+ * coroutine asks - and asks by reading the field, after a frame has been
+ * awaited. So this is a plain holder, not observable state.
+ *
+ * Both fields are NaN until a layout reports them - a node that has not been
+ * measured yet - which is the "unknown" answer [landingCardOnScreen] treats as
+ * NOT on screen: a landing cannot claim a visibility it has not observed.
+ */
+internal class LandingBounds {
+
+    var topPx: Float = Float.NaN
+        private set
+
+    var bottomPx: Float = Float.NaN
+        private set
+
+    fun record(topPx: Float, bottomPx: Float) {
+        this.topPx = topPx
+        this.bottomPx = bottomPx
+    }
+}
+
+/**
+ * How much of the head card may sit outside the viewport and still count as
+ * landed: one pixel.
+ *
+ * The landing line is computed in floats from measured heights, so a card that
+ * sits exactly on it can round a hundredth past the edge. Anything more than
+ * that would be a card the viewer still has to press Down to see, which is the
+ * report this check exists for.
+ */
+internal const val LANDING_ON_SCREEN_TOLERANCE_PX = 1f
+
+/**
+ * Whether the Continue Watching head card is where the fresh-entry landing
+ * promised it: inside the rails viewport, which is the band the viewer can
+ * actually see under the hero.
+ *
+ * Both rects are in the same coordinate space (window, from `boundsInWindow`),
+ * so the comparison is direct. Unknown bounds - NaN, from a node that has not
+ * been measured yet - answer false rather than true: the landing retries, and a
+ * card whose position was never observed must not be reported as landed.
+ *
+ * The bar is the card being FULLY inside, not merely intersecting. A four-pixel
+ * sliver of a card at the bottom edge is the "you can't see what is focused"
+ * state this fix is for, and "intersects" would call it a landing.
+ */
+internal fun landingCardOnScreen(
+    cardTopPx: Float,
+    cardBottomPx: Float,
+    viewportTopPx: Float,
+    viewportBottomPx: Float,
+    tolerancePx: Float = LANDING_ON_SCREEN_TOLERANCE_PX
+): Boolean {
+    if (cardTopPx.isNaN() || cardBottomPx.isNaN()) return false
+    if (viewportTopPx.isNaN() || viewportBottomPx.isNaN()) return false
+    // A viewport with no height is not a viewport: nothing can be inside it.
+    if (viewportBottomPx <= viewportTopPx) return false
+    // A card with no height was never laid out.
+    if (cardBottomPx <= cardTopPx) return false
+    return cardTopPx >= viewportTopPx - tolerancePx &&
+        cardBottomPx <= viewportBottomPx + tolerancePx
+}
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.

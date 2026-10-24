@@ -87,6 +87,7 @@ import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.ChannelNumberEntry
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.FreeLineup
+import com.kennyb1201.kbstream.data.iptv.PlaylistSources
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
@@ -1225,6 +1226,19 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             freeLineupFailed = freeLineupFailed,
             onInstallFreeLineup = { viewModel.installFreeLineup() },
             onRemoveFreeLineup = { viewModel.removeFreeLineup() },
+            // The installed sources as rows: a view over the fields above them,
+            // so a viewer can see what is in the lineup and take one out without
+            // hand-editing a blob. The free lineup is not among them - its own
+            // block administers it.
+            sources = PlaylistSources.rows(
+                playlistUrl = playlistUrl,
+                playlistName = playlistName,
+                extraPlaylistUrls = extraPlaylistUrls
+            ),
+            onRemoveSource = { source ->
+                if (source.isMain) viewModel.removeMainPlaylist()
+                else viewModel.removeExtraPlaylist(source.url)
+            },
             containFocus = containFocus,
             modifier = panelModifier
         )
@@ -1936,6 +1950,12 @@ private fun SetupPanel(
     onInstallFreeLineup: () -> Unit = {},
     onRemoveFreeLineup: () -> Unit = {},
     /**
+     * The installed sources, one row each (see [PlaylistSources]). Empty when the
+     * profile has nothing installed - which is the offer's state, not an error.
+     */
+    sources: List<PlaylistSources.Source> = emptyList(),
+    onRemoveSource: (PlaylistSources.Source) -> Unit = {},
+    /**
      * Keeps every D-pad press inside the panel. True for the overlay placement
      * (which sits over the guide) and false for the inline one, where the panel
      * is the whole screen and the header must stay reachable.
@@ -2083,6 +2103,11 @@ private fun SetupPanel(
                 runCatching { firstFieldFocusRequester.requestFocus() }
             }
         )
+
+        // What is installed, above the fields that edit it. One Remove per
+        // source, one tap, no confirmation - the reload that follows is the
+        // feedback (see IptvViewModel.removeExtraPlaylist).
+        PlaylistSourceRows(sources = sources, onRemove = onRemoveSource)
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -2394,6 +2419,64 @@ private fun FreeLineupSetupBlock(
                         color = KBDanger,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The installed playlists, one row each, each with its own Remove.
+ *
+ * A view over the storage that already exists (see [PlaylistSources]): the text
+ * fields below stay the add/edit path, and CLEAR stays the whole-form reset. A
+ * row carries the source's name (or its URL when it has none) and whether it is
+ * the main source or an extra, so "why is this channel here" has an answer on
+ * the same screen as the fields.
+ *
+ * The free lineup is deliberately absent: its block above administers it, with
+ * a Remove that also takes its guide entry out. Nothing renders when there are
+ * no sources - that is the offer's state, and a heading over an empty list would
+ * read as an error.
+ */
+@Composable
+private fun PlaylistSourceRows(
+    sources: List<PlaylistSources.Source>,
+    onRemove: (PlaylistSources.Source) -> Unit
+) {
+    if (sources.isEmpty()) return
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        sources.forEach { source ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = source.label,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (source.isMain) "MAIN PLAYLIST" else "EXTRA PLAYLIST",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                KBCard(onClick = { onRemove(source) }) {
+                    Text(
+                        text = "REMOVE",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                     )
                 }
             }

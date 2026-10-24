@@ -34,6 +34,16 @@ import org.junit.Test
  * HOME_FOCUS report - is asserted from the source, the way
  * [ContinueWatchingHeadLandingContractTest] does for the landing that was
  * already there.
+ *
+ * Reported again (field, 2026-10-24, Onn, cold start): the landing LANDED and
+ * the viewer still could not see it - focus was on the Continue Watching head
+ * and the hero was showing that title, but the rail itself sat below the fold,
+ * so the first D-pad press was doing the scroll by hand. Focus delivery was the
+ * whole verdict, and nothing asked the rails column to bring the section into
+ * view. So the fresh branch now brings the rail in through the column's own
+ * BringIntoViewSpec (the same scroll traversal makes) and its verdict is focus
+ * AND visibility ([landingCardOnScreen]); a landing that delivers focus onto a
+ * card it never saw says exactly that on HOME_FOCUS.
  */
 class ContinueWatchingFreshEntryLandingContractTest {
 
@@ -122,7 +132,200 @@ class ContinueWatchingFreshEntryLandingContractTest {
         )
     }
 
+    // --------------------------------------------------- the second verdict --
+
+    /** The rails band under the hero: the viewport the check measures against. */
+    private val viewportTop = 400f
+    private val viewportBottom = 700f
+
+    @Test
+    fun `the reported case - focus on a card below the fold - is not a landing`() {
+        assertFalse(
+            "focus said yes, the viewer saw the hero: the head card sat entirely " +
+                "under the rails viewport",
+            landingCardOnScreen(
+                cardTopPx = 720f,
+                cardBottomPx = 840f,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+        assertFalse(
+            "and a card poking a few pixels over the fold edge is the same " +
+                "report one press later, so it is not one either",
+            landingCardOnScreen(
+                cardTopPx = 650f,
+                cardBottomPx = 770f,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+    }
+
+    @Test
+    fun `a card resting in the rails band is a landing, on the line included`() {
+        assertTrue(
+            "the landing's own inset: the card is inside the band",
+            landingCardOnScreen(
+                cardTopPx = 420f,
+                cardBottomPx = 540f,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+        assertTrue(
+            "on the line exactly, with the float rounding the measured " +
+                "geometry can leave behind",
+            landingCardOnScreen(
+                cardTopPx = viewportTop - 0.4f,
+                cardBottomPx = viewportBottom + 0.4f,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+        assertFalse(
+            "but not a half-pixel rule that lets a real clip through: 4px over " +
+                "the top is a card the viewer has to press Up to see",
+            landingCardOnScreen(
+                cardTopPx = viewportTop - 4f,
+                cardBottomPx = 540f,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+    }
+
+    @Test
+    fun `unmeasured bounds never read as visible`() {
+        assertFalse(
+            "a card that has not been laid out yet is not a card the viewer can " +
+                "see, and the landing retries instead of claiming it",
+            landingCardOnScreen(
+                cardTopPx = Float.NaN,
+                cardBottomPx = Float.NaN,
+                viewportTopPx = viewportTop,
+                viewportBottomPx = viewportBottom
+            )
+        )
+        assertFalse(
+            "nor is a column that has not reported its own bounds",
+            landingCardOnScreen(
+                cardTopPx = 420f,
+                cardBottomPx = 540f,
+                viewportTopPx = Float.NaN,
+                viewportBottomPx = Float.NaN
+            )
+        )
+        assertFalse(
+            "and a viewport with no height contains nothing",
+            landingCardOnScreen(
+                cardTopPx = 500f,
+                cardBottomPx = 540f,
+                viewportTopPx = 500f,
+                viewportBottomPx = 500f
+            )
+        )
+    }
+
     // ----------------------------------------------------------- the wiring --
+
+    @Test
+    fun `the fresh-entry landing brings the rail in, through the column's own spec`() {
+        assertTrue(
+            "the rail holds a bring-into-view anchor and attaches it to its own " +
+                "section, so the request moves the rail the landing chose rather " +
+                "than the head card alone",
+            rail.contains("val railAnchor = remember { BringIntoViewRequester() }") &&
+                rail.contains(".bringIntoViewRequester(railAnchor)")
+        )
+        val loop = landing.substringAfter(
+            "while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {"
+        )
+        assertTrue(
+            "asked on every fresh-entry attempt, because a request against an " +
+                "unlaid node is a no-op rather than a failure",
+            loop.contains("runCatching { railAnchor.bringIntoView() }")
+        )
+        assertTrue(
+            "only from the fresh branch: a mid-session head change keeps its " +
+                "focus-only landing, which is what keeps a load from yanking the " +
+                "page under the viewer",
+            loop.contains("if (freshEntryLanding) {") &&
+                loop.indexOf("if (freshEntryLanding) {") <
+                loop.indexOf("railAnchor.bringIntoView()")
+        )
+        assertEquals(
+            "one call site - the branch cannot be entered twice",
+            1,
+            rail.split("railAnchor.bringIntoView()").size - 1
+        )
+    }
+
+    @Test
+    fun `the verdict is focus delivered AND the card on screen`() {
+        assertTrue(
+            "focus is still read from its own answer, through the shared verdict",
+            landing.contains("landed = verdict.accepted(") &&
+                landing.contains("if (landed) focusDelivered = true")
+        )
+        assertTrue(
+            "and visibility is asked of the head card against the rails viewport",
+            landing.contains("!landingCardOnScreen(") &&
+                landing.contains("cardTopPx = headCardBounds.topPx") &&
+                landing.contains("cardBottomPx = headCardBounds.bottomPx") &&
+                landing.contains("viewportTopPx = railsViewportBounds.topPx")
+        )
+        assertTrue(
+            "inside the retry loop, so the column's scroll can settle before the " +
+                "landing is called",
+            landing.indexOf("while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {") <
+                landing.indexOf("!landingCardOnScreen(")
+        )
+        assertTrue(
+            "only the fresh entry is held to it: a head change and a rail re-entry " +
+                "keep the focus-only verdict they had",
+            landing.substringBefore("!landingCardOnScreen(").contains("freshEntryLanding &&")
+        )
+    }
+
+    @Test
+    fun `a focus landing with the card off screen says so, distinctly`() {
+        assertTrue(
+            "the field's next report must be able to tell a focus failure from a " +
+                "scroll one",
+            landing.contains("\" landed off-screen after \"") &&
+                landing.contains("focusDelivered ->")
+        )
+        assertTrue(
+            "and the give-up line still exists for a focus that never answered",
+            landing.contains("\" gave up after \"")
+        )
+    }
+
+    @Test
+    fun `home supplies both measurements from layout, and nothing composes on them`() {
+        assertTrue(
+            "the column records its own window bounds",
+            home.contains("val railsViewportBounds = remember { LandingBounds() }") &&
+                home.contains("railsViewportBounds.record(")
+        )
+        assertTrue(
+            "and hands the rail the holder rather than a copy of the numbers",
+            rail.contains("railsViewportBounds: LandingBounds,") &&
+                home.contains("railsViewportBounds = railsViewportBounds,")
+        )
+        assertTrue(
+            "the head card is the only card measured",
+            rail.contains("if (index == CONTINUE_WATCHING_HEAD_INDEX) {") &&
+                rail.contains("headCardBounds.record(")
+        )
+        assertFalse(
+            "a holder, not state: writing a state on every scroll frame would " +
+                "recompose the rail for a number nothing composes on",
+            rail.contains("val headCardBounds by remember { mutableStateOf") ||
+                home.contains("val railsViewportBounds by remember { mutableStateOf")
+        )
+    }
 
     @Test
     fun `the fresh branch runs before the gate and reuses the landing verbatim`() {
