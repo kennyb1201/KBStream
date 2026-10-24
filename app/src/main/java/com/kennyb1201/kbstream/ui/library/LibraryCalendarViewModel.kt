@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -544,7 +545,6 @@ class LibraryCalendarViewModel(
             }.getOrNull()
 
         val seasonNumbers = seasonsCoveringMonth(detail.seasons, month)
-        if (seasonNumbers.isEmpty()) return null
 
         val seasons = LinkedHashMap<Int, List<ResolvedEpisode>>()
         for (season in seasonNumbers) {
@@ -553,7 +553,16 @@ class LibraryCalendarViewModel(
             }.getOrNull().orEmpty()
             if (episodes.isNotEmpty()) seasons[season] = episodes
         }
-        if (seasons.isEmpty()) return null
+
+        // The detail's next_episode_to_air is a second, independent statement
+        // about the schedule - the one the Home Upcoming rail builds its card
+        // from. A returning show's premiere is announced there before TMDB's
+        // season payload carries it, so without this the rail already knew a
+        // date the calendar could not place. Kept only when the payloads are
+        // silent about that episode (see CalendarShow.nextEpisode).
+        val announced = announcedNextEpisode(detail.nextEpisodeToAir, seasons)
+
+        if (seasons.isEmpty() && announced == null) return null
 
         // The second source corrects TMDB's dates exactly as the Upcoming rail
         // does; without it the calendar and the rail could label one episode
@@ -579,7 +588,40 @@ class LibraryCalendarViewModel(
                 ?.takeIf { it.isNotBlank() }
                 ?.let { TmdbRepository.BACKDROP_BASE + it },
             seasons = seasons,
-            sourceDates = sourceDates
+            sourceDates = sourceDates,
+            nextEpisode = announced
+        )
+    }
+
+    /**
+     * The detail pointer as an episode to place, or null when there is nothing
+     * to add: no pointer, no episode number, or a season payload that already
+     * lists the episode (the ordinary case, which the payloads place on their
+     * own).
+     */
+    private fun announcedNextEpisode(
+        next: TmdbEpisodeAirInfo?,
+        seasons: Map<Int, List<ResolvedEpisode>>
+    ): CalendarNextEpisode? {
+        val season = next?.seasonNumber?.takeIf { it > 0 } ?: return null
+        val number = next.episodeNumber?.takeIf { it > 0 } ?: return null
+        if (seasons[season].orEmpty().any { it.episodeNumber == number }) return null
+
+        return CalendarNextEpisode(
+            season = season,
+            episode = ResolvedEpisode(
+                // Never played from here - the calendar only needs the number,
+                // the title and the date; the id is the season/episode pair so
+                // it is at least a stable, readable value.
+                streamId = "s${season}e$number",
+                episodeNumber = number,
+                name = next.name?.takeIf { it.isNotBlank() },
+                overview = null,
+                thumbnail = null,
+                runtimeMinutes = null,
+                airDate = next.airDate,
+                voteAverage = null
+            )
         )
     }
 

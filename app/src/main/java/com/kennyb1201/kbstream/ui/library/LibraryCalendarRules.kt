@@ -62,7 +62,32 @@ internal data class CalendarShow(
     val poster: String? = null,
     val backdrop: String? = null,
     val seasons: Map<Int, List<ResolvedEpisode>> = emptyMap(),
-    val sourceDates: Map<String, String> = emptyMap()
+    val sourceDates: Map<String, String> = emptyMap(),
+    /**
+     * The series detail's own `next_episode_to_air`, when the season payloads
+     * did not list that episode.
+     *
+     * This is the half the Upcoming rail always had and the calendar did not:
+     * the rail builds its card straight off the detail pointer, so a returning
+     * show's announced premiere is on the rail the moment TMDB announces it -
+     * while the calendar, which only ever walked season payloads, had nothing
+     * to place until TMDB added the episode to a season. Reported as "Bad
+     * Monkey's new season airs Dec 1, it shows in my upcoming rail on home but
+     * not in calendar".
+     *
+     * Set only when the payloads are silent about the episode, so a normal
+     * episode is never drawn twice; null means "nothing extra to place".
+     */
+    val nextEpisode: CalendarNextEpisode? = null
+)
+
+/**
+ * One announced-but-unlisted episode: the season it belongs to and the
+ * episode itself, as the detail pointer described it.
+ */
+internal data class CalendarNextEpisode(
+    val season: Int,
+    val episode: ResolvedEpisode
 )
 
 /** Where a calendar's focus and selection start for a month. */
@@ -266,6 +291,38 @@ internal fun calendarEpisodesFor(
     today: LocalDate
 ): Map<LocalDate, List<CalendarEpisode>> {
     val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
+
+    // The detail's announced next episode, placed after the payloads below so
+    // a normal episode is never doubled. It is a PREMIERE when it opens its
+    // season and never a finale: nothing later in that season is known yet, so
+    // a season whose only known episode is this one must not read "FINALE".
+    val announced = show.nextEpisode
+    if (announced != null) {
+        val date = correctedAirDate(
+            episode = announced.episode,
+            season = announced.season,
+            sourceDates = show.sourceDates,
+            today = today
+        )
+        val alreadyListed = show.seasons[announced.season]
+            .orEmpty()
+            .any { it.episodeNumber == announced.episode.episodeNumber }
+        if (date != null && YearMonth.from(date) == month && !alreadyListed) {
+            days.getOrPut(date) { ArrayList() } += CalendarEpisode(
+                showId = show.showId,
+                openId = show.openId,
+                showTitle = show.title,
+                poster = show.poster,
+                backdrop = show.backdrop,
+                season = announced.season,
+                episode = announced.episode.episodeNumber,
+                episodeTitle = announced.episode.name?.takeIf { it.isNotBlank() },
+                airDate = date,
+                isPremiere = announced.episode.episodeNumber == 1,
+                isFinale = false
+            )
+        }
+    }
 
     for ((season, episodes) in show.seasons) {
         if (episodes.isEmpty()) continue

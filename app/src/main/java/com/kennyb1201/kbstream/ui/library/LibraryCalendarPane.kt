@@ -52,6 +52,7 @@ import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.home.formatAirDateLabel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -839,7 +840,15 @@ private fun CalendarDayList(
 
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(6.dp),
-            contentPadding = PaddingValues(bottom = 20.dp),
+            // The vertical inset is the room a focused row needs INSIDE the
+            // list's own clips-to-bounds viewport (see KBFocusRowInset). With
+            // only bottom padding, the FIRST row's ring was drawn at the very
+            // top edge of the scroll and sliced off flat - the reported "first
+            // row is clipped up top" once a day was focused.
+            contentPadding = PaddingValues(
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset
+            ),
             modifier = Modifier.fillMaxSize()
         ) {
             itemsIndexed(

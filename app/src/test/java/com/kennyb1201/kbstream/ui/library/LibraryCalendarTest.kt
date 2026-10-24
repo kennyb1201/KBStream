@@ -194,4 +194,58 @@ class LibraryCalendarTest {
             calendarCandidates(listOf(listOf("", "  "), listOf("tt1")), cap = 10)
         )
     }
+
+    @Test
+    fun `an announced next episode the season payloads do not list is still on its day`() {
+        // Reported: a caught-up show's new season airs Dec 1 and the Home
+        // Upcoming rail (which reads TMDB's next_episode_to_air) shows it,
+        // while the calendar - which only walked season payloads - had nothing
+        // to place. Same show, same date, both screens.
+        val december = YearMonth.of(2026, 12)
+        val month = buildCalendarMonth(
+            month = december,
+            shows = listOf(
+                CalendarShow(
+                    showId = "tmdb:1",
+                    openId = "tt1",
+                    title = "Bad Monkey",
+                    seasons = mapOf(3 to listOf(episode(10, "2025-10-08"))),
+                    nextEpisode = CalendarNextEpisode(
+                        season = 4,
+                        episode = episode(1, "2026-12-01", name = "Pilot")
+                    )
+                )
+            ),
+            today = today
+        )
+
+        val rows = month.episodesOn(LocalDate.of(2026, 12, 1))
+        assertEquals("the announced premiere is on the rail's own date", 1, rows.size)
+        assertEquals(4, rows.single().season)
+        assertEquals(1, rows.single().episode)
+        assertTrue("it opens the season, so it is a premiere", rows.single().isPremiere)
+        assertTrue(
+            "but nothing later is known, so it must not read as a finale",
+            !rows.single().isFinale
+        )
+    }
+
+    @Test
+    fun `an episode the payload already lists is never placed twice`() {
+        val month = buildCalendarMonth(
+            month = october,
+            shows = listOf(
+                CalendarShow(
+                    showId = "tmdb:2",
+                    openId = "tt2",
+                    title = "Some Show",
+                    seasons = mapOf(1 to listOf(episode(1, "2026-10-14"))),
+                    nextEpisode = CalendarNextEpisode(season = 1, episode = episode(1, "2026-10-14"))
+                )
+            ),
+            today = today
+        )
+
+        assertEquals(1, month.episodesOn(LocalDate.of(2026, 10, 14)).size)
+    }
 }
