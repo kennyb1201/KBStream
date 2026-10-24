@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.Surface
@@ -182,6 +183,51 @@ internal object FrameRateMatch {
      */
     fun resumeRate(lastContentFps: Double?): Double? =
         lastContentFps?.let { normalise(it) }
+
+    /**
+     * How long into a session the panel may still be moved.
+     *
+     * A mode request is an HDMI renegotiation, and renegotiating the panel under
+     * a film that has already started is a hitch the viewer sees as judder - the
+     * "it gets juddery partway through" report. Worse than a rate being a frame
+     * or two off, because the film never recovers the moment.
+     *
+     * Every legitimate request happens while a title is opening: the player's
+     * own track report, the probe's reading of the stream head, the one retry
+     * that follows it, and the confirm ladder that finishes within ~3.5 s all
+     * land in the first seconds. A rate offered later is therefore not the
+     * opening - it is a rebuilt player re-reporting a track after a source
+     * switch, a probe that only now finished on a slow host, or a track group
+     * that appeared mid-file - and the panel is left exactly where it is. The
+     * diagnostics row says so, so the next field report can name the late claim.
+     *
+     * [FrameRateSource.RESUME] is the one exception: its whole job is repairing
+     * a panel the platform put back while the player was away, and that repair
+     * can be hours into a session.
+     */
+    const val ENGAGE_WINDOW_MS = 90_000L
+
+    /**
+     * Whether a session this old may still move the panel, given who offered
+     * the rate. Pure, so the rule is unit-tested rather than only observed.
+     */
+    fun engageWindowAllows(ageMs: Long, source: FrameRateSource): Boolean =
+        source == FrameRateSource.RESUME || ageMs <= ENGAGE_WINDOW_MS
+
+    /**
+     * The diagnostics line for a panel that left the mode this session engaged,
+     * and was asked for it once more.
+     */
+    fun describeReasserted(engagedModeId: Int, currentModeId: Int): String =
+        "panel left the engaged mode $engagedModeId for $currentModeId; asked for " +
+            "$engagedModeId again (the film's rate is the one this session chose)"
+
+    /** The diagnostics line for a rate offered after [ENGAGE_WINDOW_MS]. */
+    fun describeLateOffer(contentFps: Double?, ageMs: Long): String {
+        val label = contentFps?.let { "${rate(it)} fps" } ?: "a rate"
+        return "$label offered ${ageMs / 1_000}s into playback; panel left alone " +
+            "(a mode switch mid-title judders the picture)"
+    }
 
     /**
      * The panel mode to switch to, or null when the panel must be left alone.
@@ -590,6 +636,9 @@ internal class FrameRateMatcher(
     private val originalPreferredModeId = activity.window.attributes.preferredDisplayModeId
     private val handler = Handler(Looper.getMainLooper())
 
+    /** When this session opened, for [FrameRateMatch.engageWindowAllows]. */
+    private val openedAtMs = SystemClock.elapsedRealtime()
+
     /** The mode this session asked for by id, or [UNSET] when it has asked for none. */
     private var appliedModeId = UNSET
 
@@ -627,6 +676,12 @@ internal class FrameRateMatcher(
 
     /** Set by [release]; a second look that lands after it does nothing. */
     private var released = false
+
+    /** Set once [verifyEngagedMode] has put the panel back after it moved. */
+    private var reassertedMode = false
+
+    /** Last look at the panel from [verifyEngagedMode]. */
+    private var lastVerifyMs = 0L
 
     /**
      * Offers one content frame rate. Safe to call as often as the player likes:
@@ -666,6 +721,44 @@ internal class FrameRateMatcher(
         handler.removeCallbacksAndMessages(null)
     }
 
+    /**
+     * Holds the panel to the mode this session engaged.
+     *
+     * The engage ladder runs once, in the opening seconds, and then never looks
+     * at the panel again - so a panel that leaves the chosen mode later (the
+     * TV's own display setting, an HDMI renegotiation, another app's mode being
+     * restored underneath) stays wrong for the rest of the film, and the judder
+     * this feature exists to remove comes back partway through with nothing
+     * having asked again. That is the "AFR on and it still judders halfway
+     * through" shape.
+     *
+     * Called from the player's one-second tick, but throttled to
+     * [VERIFY_INTERVAL_MS] and only while the picture is moving. **One repair
+     * per session**: a box that keeps dropping the mode would otherwise be
+     * renegotiating HDMI in a loop, and each renegotiation is itself a hitch.
+     * The repair re-asks the mode this session already chose - [apply]'s engage
+     * window still refuses to pick a NEW mode mid-film.
+     *
+     * Nothing happens for a session that never asked by id: an "already in the
+     * best mode" session has no request to hold the panel to.
+     */
+    fun verifyEngagedMode() {
+        if (released || appliedModeId == UNSET || reassertedMode) return
+        if (!isPlaybackActive()) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastVerifyMs < VERIFY_INTERVAL_MS) return
+        lastVerifyMs = now
+        val display = displayOf() ?: return
+        val currentModeId = runCatching { display.mode.modeId }.getOrNull() ?: return
+        if (currentModeId == appliedModeId) return
+        reassertedMode = true
+        setPreferredModeId(appliedModeId)
+        FrameRateDiagnostics.setOutcome(
+            FrameRateMatch.describeReasserted(appliedModeId, currentModeId)
+        )
+        Log.i(TAG, "panel left the engaged mode $appliedModeId for $currentModeId; re-asked")
+    }
+
     /** Puts the panel back. Called from the player's teardown. */
     fun release() {
         released = true
@@ -693,10 +786,29 @@ internal class FrameRateMatcher(
         // Which half of the app supplied this number, first in the sequence.
         // Nothing is written for a rate that does not describe content, so a
         // track the player could not measure adds no line, exactly as before.
-        FrameRateMatch.normalise(contentFps)?.let {
+        val normalised = FrameRateMatch.normalise(contentFps)
+        normalised?.let {
             FrameRateDiagnostics.addRequest(FrameRateMatch.describeSource(it, source))
         }
         Log.i(TAG, "panel: $panel")
+
+        // The panel is only moved while a title is opening (see
+        // [FrameRateMatch.ENGAGE_WINDOW_MS]). A late offer is a rebuilt player
+        // re-reporting a track, a source switched mid-film, or a probe that
+        // finished long after the picture did - and switching the mode for it
+        // renegotiates HDMI under a playing film, which is the judder that
+        // starts partway through. Recorded rather than silently dropped, so a
+        // field capture can name what was still asking.
+        val ageMs = SystemClock.elapsedRealtime() - openedAtMs
+        if (!FrameRateMatch.engageWindowAllows(ageMs, source)) {
+            FrameRateDiagnostics.setOutcome(FrameRateMatch.describeLateOffer(normalised, ageMs))
+            Log.i(
+                TAG,
+                "ignored a ${rate(contentFps)} fps offer ${ageMs}ms into playback; " +
+                    "the panel stays in mode $modeId"
+            )
+            return
+        }
 
         // A resume can only repair the MODE, never the surface.
         //
@@ -1033,6 +1145,13 @@ internal class FrameRateMatcher(
          * the title.
          */
         const val SECOND_CONFIRM_DELAY_MS = 2000L
+
+        /**
+         * How often [verifyEngagedMode] may look at the panel. A mode read is
+         * free; the repair it may lead to is not, so the look is cheap and the
+         * repair is once per session.
+         */
+        const val VERIFY_INTERVAL_MS = 20_000L
     }
 }
 

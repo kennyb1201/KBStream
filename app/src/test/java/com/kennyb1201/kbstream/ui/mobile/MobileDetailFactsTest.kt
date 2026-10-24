@@ -29,7 +29,9 @@ class MobileDetailFactsTest {
         runtime: Int? = 107,
         status: String? = "Released",
         certification: String? = "R",
-        origin: List<String> = listOf("US", "AU", "GB")
+        origin: List<String> = listOf("US", "AU", "GB"),
+        budget: Long? = 12_000_000L,
+        revenue: Long? = 48_500_000L
     ) = TmdbDetail(
         id = 1,
         title = "By Any Means",
@@ -37,6 +39,8 @@ class MobileDetailFactsTest {
         runtime = runtime,
         status = status,
         originCountries = origin,
+        budget = budget,
+        revenue = revenue,
         releaseDates = certification?.let { rating ->
             TmdbMovieReleaseDates(
                 results = listOf(
@@ -79,15 +83,53 @@ class MobileDetailFactsTest {
 
         assertEquals("Movie Details", detailFactsTitle(isMovie = true))
         assertEquals(
-            listOf("Release Info", "Runtime", "Certification", "Origin Country"),
+            listOf(
+                "Release Info", "Runtime", "Certification",
+                "Budget", "Revenue", "Origin Country"
+            ),
             facts.map { it.label }
         )
         assertEquals("2026", facts.first { it.label == "Release Info" }.value)
         assertEquals("1h 47m", facts.first { it.label == "Runtime" }.value)
         assertEquals("R", facts.first { it.label == "Certification" }.value)
+        // The money is the film's own fact, in the television meta line's own
+        // format (the TV's formatUsd, shared rather than retyped here).
+        assertEquals("$12,000,000.00", facts.first { it.label == "Budget" }.value)
+        assertEquals("$48,500,000.00", facts.first { it.label == "Revenue" }.value)
         // A film has no Status row: nothing on that line is something a viewer
         // acts on, and the reference has never shown it for a movie.
         assertTrue(facts.none { it.label == "Status" })
+    }
+
+    @Test
+    fun `awards are read for films and series alike, and sit before the country`() {
+        // OMDB carries awards and TMDB carries none; the TV page shows them for
+        // a series too, unlike budget/revenue.
+        val film = detailFacts("movie", movie(), awards = "Won 2 Oscars. 159 wins & 220 nominations total")
+        val show = detailFacts("series", series(), awards = "Won 2 Primetime Emmys.")
+
+        film.first { it.label == "Awards" }.also { fact ->
+            assertEquals("Won 2 Oscars. 159 wins & 220 nominations total", fact.value)
+        }
+        assertTrue(film.indexOfFirst { it.label == "Awards" } <
+            film.indexOfFirst { it.label == "Origin Country" })
+        assertEquals("Won 2 Primetime Emmys.", show.first { it.label == "Awards" }.value)
+        assertTrue(
+            "a series has no budget or revenue row - TMDB sends neither",
+            show.none { it.label == "Budget" || it.label == "Revenue" }
+        )
+    }
+
+    @Test
+    fun `a missing or zero figure is no row, and no awards text is no row`() {
+        val bare = detailFacts(
+            "movie",
+            movie(budget = 0L, revenue = -5L, certification = null),
+            awards = "   "
+        )
+        assertTrue(bare.none { it.label == "Budget" || it.label == "Revenue" })
+        assertTrue(bare.none { it.label == "Awards" })
+        assertTrue(detailFacts("series", series(), awards = null).none { it.label == "Awards" })
     }
 
     @Test
@@ -116,7 +158,13 @@ class MobileDetailFactsTest {
     fun `rows TMDB cannot fill are dropped, not printed empty`() {
         val bare = detailFacts(
             "movie",
-            movie(runtime = null, certification = null, origin = emptyList())
+            movie(
+                runtime = null,
+                certification = null,
+                origin = emptyList(),
+                budget = null,
+                revenue = null
+            )
         )
         assertEquals(listOf("Release Info"), bare.map { it.label })
         assertEquals("2026", bare.single().value)

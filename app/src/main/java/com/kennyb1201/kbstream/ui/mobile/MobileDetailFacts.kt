@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.detail.formatSeriesYearRange
+import com.kennyb1201.kbstream.ui.detail.formatUsd
 import java.util.Locale
 
 /**
@@ -34,10 +35,24 @@ internal fun detailFactsTitle(isMovie: Boolean): String =
  * Status is a series' row only; a film's status is not something a viewer acts
  * on, and the reference has never shown it.
  *
+ * Budget, Revenue and Awards are the television page's own facts, in the order
+ * it prints them (see `DetailScreen.kt`'s meta line) and after the rows this
+ * block already had: the money is a FILM's
+ * fact - TMDB sends no budget or revenue for a series - while awards belong to
+ * both, which is why [awards] is read for either type. A zero or missing figure
+ * is no row at all, and awards with no text is no row either: the block never
+ * prints a placeholder.
+ *
  * [type] is the route's own ("movie" / "series"), the same string every other
- * rule on this page branches on.
+ * rule on this page branches on. [awards] is the OMDB text the ViewModel's own
+ * flow publishes; this module keeps no dependency on it, so the rule stays a
+ * pure function of what the screen read.
  */
-internal fun detailFacts(type: String, detail: TmdbDetail?): List<DetailFact> {
+internal fun detailFacts(
+    type: String,
+    detail: TmdbDetail?,
+    awards: String? = null
+): List<DetailFact> {
     detail ?: return emptyList()
     val isMovie = type.equals("movie", ignoreCase = true)
     return listOfNotNull(
@@ -51,6 +66,23 @@ internal fun detailFacts(type: String, detail: TmdbDetail?): List<DetailFact> {
             ?.takeIf { it > 0 }
             ?.let { DetailFact("Runtime", formatRuntimeMinutes(it)) },
         detail.certification(isMovie)?.let { DetailFact("Certification", it) },
+        if (isMovie) {
+            detail.budget
+                ?.takeIf { it > 0L }
+                ?.let { DetailFact("Budget", formatUsd(it)) }
+        } else {
+            null
+        },
+        if (isMovie) {
+            detail.revenue
+                ?.takeIf { it > 0L }
+                ?.let { DetailFact("Revenue", formatUsd(it)) }
+        } else {
+            null
+        },
+        awards
+            ?.takeIf { it.isNotBlank() }
+            ?.let { DetailFact("Awards", it.trim()) },
         originCountryNames(detail.originCountries)?.let { DetailFact("Origin Country", it) }
     )
 }

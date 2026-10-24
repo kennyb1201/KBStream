@@ -36,6 +36,7 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
 import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
+import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -140,6 +141,13 @@ fun KBEpisodeRailCardTouch(
             .height(EpisodeCardHeight)
             .clip(KBShapeCard)
             .background(KBSurface)
+            // The viewer's poster border, on the still rather than only on the
+            // page's posters: a rail of dark stills runs together exactly the
+            // way a wall of dark posters does, and this card is artwork in the
+            // same frame. Its own card shape, not the poster edge - an episode
+            // still does not get squared off or pill-softened by a preference
+            // about posters.
+            .then(posterBorderModifier(KBShapeCard))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         AsyncImage(

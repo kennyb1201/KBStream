@@ -92,6 +92,7 @@ import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
+import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
@@ -272,6 +273,10 @@ fun DetailScreenMobile(
             viewModel.resolvedPosterIds.collectAsStateWithLifecycle()
         val collection by viewModel.collection.collectAsStateWithLifecycle()
         val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
+        // OMDB's awards text, the same flow the TV page reads. It is display-only
+        // and arrives after the detail (a separate lookup), so it is a key of the
+        // facts block rather than something the block waits for.
+        val awards by viewModel.awards.collectAsStateWithLifecycle()
         val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
@@ -876,8 +881,8 @@ fun DetailScreenMobile(
         // ...and the Movie / Show Details block: the same facts the TV page
         // prints as one meta line, laid out as labeled rows for a phone (see
         // MobileDetailFacts.kt, which owns the rules).
-        val facts = remember(normalizedType, tmdbDetail) {
-            detailFacts(normalizedType, tmdbDetail)
+        val facts = remember(normalizedType, tmdbDetail, awards) {
+            detailFacts(normalizedType, tmdbDetail, awards)
         }
 
         fun openCollectionPart(part: TmdbCollectionPart) {
@@ -2085,6 +2090,11 @@ private fun EpisodeRow(
                 .height(74.dp)
                 .clip(KBShapeCard)
                 .background(KBSurface)
+                // The same edge the rail card and the page's posters draw: a
+                // row of dark stills on a near-black page runs together without
+                // it. The card shape, not the poster edge - this still is not a
+                // poster.
+                .then(posterBorderModifier(KBShapeCard))
         ) {
             AsyncImage(
                 model = episode.thumbnail,
@@ -2573,8 +2583,12 @@ private fun MobileRatingsStrip(
 
 /**
  * One row of the Movie / Show Details block: the label in the muted colour on
- * the left, the value right-aligned, wrapping when it has to (Origin Country
- * is the long one).
+ * the left, the value right-aligned, wrapping when it has to.
+ *
+ * The wrap is what the Awards row needs: OMDB answers with a whole sentence
+ * ("Won 2 Oscars. 159 wins & 220 nominations total") and the television shows
+ * it whole rather than truncated, so this row grows a line instead of ellipsing
+ * a fact away.
  */
 @Composable
 private fun DetailFactRow(fact: DetailFact) {

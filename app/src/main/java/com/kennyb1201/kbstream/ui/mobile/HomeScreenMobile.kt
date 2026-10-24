@@ -176,6 +176,10 @@ fun HomeScreenMobile(
     // Only the all-hidden card uses it: it is the one state where the manager
     // is the only way forward.
     onManageRails: () -> Unit = {},
+    // The Upcoming header's press: Library, on the Calendar pane - the same
+    // callback the TV rail's header gets (see the shell's wiring). Nullable so
+    // a host that cannot navigate leaves the heading a plain caption.
+    onOpenCalendar: (() -> Unit)? = null,
     viewModel: HomeViewModel
 ) {
     MobileTheme {
@@ -428,7 +432,14 @@ fun HomeScreenMobile(
                             KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE -> {
                                 if (upcomingVisible) {
                                     item(key = "upcoming", contentType = "section") {
-                                        MobileSection(title = upcomingTitle) {
+                                        // The heading is the phone's way into the
+                                        // whole schedule: one next episode per
+                                        // show here, a year of them in
+                                        // Library's Calendar pane.
+                                        MobileSection(
+                                            title = upcomingTitle,
+                                            onClick = onOpenCalendar
+                                        ) {
                                             LazyRow(
                                                 contentPadding =
                                                     PaddingValues(horizontal = 16.dp),
@@ -1278,10 +1289,31 @@ private fun MobileHero(
 @Composable
 private fun MobileSection(
     title: String,
+    /**
+     * When set, the heading is a control rather than a caption.
+     *
+     * Only the Upcoming row passes it, as on the TV: that row is one next
+     * episode per show, while the whole year lives in Library's Calendar pane.
+     * Every other section keeps a plain heading.
+     */
+    onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(MobileSpacing.gap)) {
-        MobileSectionHeader(title)
+        if (onClick == null) {
+            MobileSectionHeader(title)
+        } else {
+            // The word itself is the target - no chip or pill around it. The
+            // heading's own edge padding is restated here (the default one is
+            // replaced, not added to) so the clickable title still lines up
+            // with every other section's heading.
+            MobileSectionHeader(
+                title = title,
+                modifier = Modifier
+                    .padding(horizontal = MobileSpacing.edge)
+                    .clickable(onClick = onClick)
+            )
+        }
         content()
     }
 }

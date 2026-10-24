@@ -151,6 +151,32 @@ class UiUniformityBatchFContractTest {
     }
 
     @Test
+    fun `the skip prompt fades in place instead of sliding`() {
+        // A translated view is composited from a render node whose bounds are
+        // captured while the offset is still on it, so the plate's leading edge
+        // falls outside the node and is clipped - a square left corner on a pill
+        // whose right corner is round (field, 2026-10-24). Both entrances - the
+        // shared chrome's and the native path's own - fade where they are laid
+        // out; the panels keep their slide, which is what the slide is for.
+        val shared = source("ui/player/PlayerChrome.kt")
+        val native = source("ui/player/NativePlayerActivity.kt")
+        assertTrue(
+            "the shared chrome must fade the prompt in place",
+            shared.contains("KbViewMotion.fadeIn(button)")
+        )
+        assertTrue(
+            "and so must the native path's own prompt",
+            native.contains("KbViewMotion.fadeIn(btnSkipIntro)")
+        )
+        val translateThePrompt = Regex("slideFadeIn\\([^)]{0,120}(button|btnSkipIntro)")
+        assertFalse(
+            "no skip prompt may be translated on the way in",
+            translateThePrompt.containsMatchIn(shared) ||
+                translateThePrompt.containsMatchIn(native)
+        )
+    }
+
+    @Test
     fun `status copy uses one ellipsis glyph`() {
         // A whole-tree scan rather than a list of known strings: the fifteen
         // fixed occurrences were spread over seven files (screens, a player and

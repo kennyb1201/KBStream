@@ -3840,6 +3840,10 @@ fun HomeScreen(
             onOpenKBFolder = onOpenKBFolder,
             onOpenBrowseShortcut = onOpenBrowseShortcut,
             onManageRails = onManageRails,
+            // The Upcoming header is the same door on both form factors: the
+            // phone has no room for the TV's rail-a-year argument, but the
+            // whole schedule still lives in Library's Calendar pane.
+            onOpenCalendar = onOpenCalendar,
             viewModel = viewModel
         )
         return

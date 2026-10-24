@@ -7887,7 +7887,11 @@ internal fun airedEpisodeCount(
         episodes.size
     }
 
-private fun formatUsd(
+/**
+ * `$12,000,000` - the TV meta line's money format, shared with the phone's
+ * facts block so the two pages cannot word a budget two ways.
+ */
+internal fun formatUsd(
     amount: Long
 ): String =
     NumberFormat

@@ -5818,11 +5818,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val mediaItemBuilder = newMediaItemBuilder(mimeType)
 
         val resolvedBufferMode = if (bufferMode == 2) {
-            // Auto: live IPTV channels and HLS manifests take the low-latency
-            // profile. HLS is resolved through resolveMimeType instead of an
-            // endsWith(".m3u8") test, which missed every query-carrying and
-            // extension-less playlist URL.
-            if (isLiveChannel || resolveMimeType(currentUrl) == MimeTypes.APPLICATION_M3U8) 1 else 0
+            // Auto: a LIVE channel takes the low-latency profile - it is at the
+            // live edge, its playlist never ends, and a deep buffer there is
+            // only latency.
+            //
+            // The rule used to send every HLS manifest down this path too, on
+            // the theory that HLS means live. An addon's VOD HLS is not live,
+            // and the low-latency profile's start gate is shorter than the
+            // cushion the session then needs - so the picture appeared, the
+            // buffer the gate allowed drained a second later, and playback
+            // stalled once before settling (the reported "press play, video
+            // starts, buffers for a second, then plays normally"). Container is
+            // not liveness: a VOD file gets the balanced profile and its gate,
+            // whatever its manifest looks like.
+            if (isLiveChannel) 1 else 0
         } else bufferMode
         // Media3 validates minBufferMs >= bufferForPlaybackAfterRebufferMs
         // (DefaultLoadControl.Builder throws IllegalArgumentException
@@ -5863,7 +5872,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // duration - is what bounds it (a 40 Mbps stream is capped at roughly
         // 13s of media either way), so the cushion is only added where it was
         // missing. At 6 Mbps, 60s is ~45MB, well under the budget.
-        val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
+        // The low profile's START gate is 3_000, not the 1_500 it was. A gate
+        // is a promise about the runway playback gets, and 1.5s is shorter than
+        // any source's jitter: the session started on it, the buffer drained a
+        // second in, and the viewer got exactly the stall this profile exists
+        // to avoid - on live channels, where a zap is the only thing that gate
+        // was ever buying speed for. Matching the after-rebuffer figure keeps
+        // the low profile's own contract (it never resumes on less than it
+        // starts on) and costs a zap half a second.
+        val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 3_000, 3_000)
         else intArrayOf(15_000, 60_000, 6_000, 5_000)
 
         // Media3 buffers sample data as JAVA-HEAP byte[] blocks (DefaultAllocator
@@ -12435,6 +12452,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     dur
                 )
 
+                // Holds the panel to the mode this session engaged, for a TV
+                // that leaves it later (see FrameRateMatcher.verifyEngagedMode):
+                // the AFR ladder only runs in the opening seconds, so without
+                // this a panel that moved afterwards stayed wrong - and the
+                // judder came back mid-film with nothing asking again.
+                frameRateMatcher?.verifyEngagedMode()
+
                 // Last, so a timer that fires on this tick stops a session the
                 // completion checks have already finished with.
                 enforceSleepTimer(player)
@@ -12537,13 +12561,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 if (matching != null) {
                     btnSkipIntro.text = matching.type.buttonLabel
                     // Same entrance the shared chrome uses, so the legacy
-                    // native path and PlayerChrome's setSkipIntro agree.
-                    KbViewMotion.slideFadeIn(
-                        btnSkipIntro,
-                        16f * resources.displayMetrics.density
-                    )
+                    // native path and PlayerChrome's setSkipIntro agree: a fade
+                    // in place, never a slide. A translated pill is composited
+                    // from a render node still offset by the slide, which clips
+                    // a sliver off the plate's leading corner (see
+                    // PlayerChrome.setSkipIntro).
+                    btnSkipIntro.translationX = 0f
+                    KbViewMotion.fadeIn(btnSkipIntro)
                 } else {
                     val wasFocused = btnSkipIntro.isFocused
+                    btnSkipIntro.translationX = 0f
                     KbViewMotion.fadeOut(btnSkipIntro)
                     // If focus was parked on the button when it hid (e.g.
                     // the user paused mid-intro), pull it back to the

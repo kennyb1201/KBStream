@@ -612,8 +612,10 @@ class DetailScreenMobileContractTest {
                 mobile.contains("onNavigateStudio(company.id, company.name, false)")
         )
         assertTrue(
-            "the facts block is the shared rule under the reference's heading",
-            mobile.contains("detailFacts(normalizedType, tmdbDetail)") &&
+            "the facts block is the shared rule under the reference's heading, " +
+                "with the awards text the ViewModel published",
+            mobile.contains("detailFacts(normalizedType, tmdbDetail, awards)") &&
+                mobile.contains("val awards by viewModel.awards.collectAsStateWithLifecycle()") &&
                 mobile.contains(
                     "MobileSectionTitle(detailFactsTitle(normalizedType == \"movie\"))"
                 ) &&

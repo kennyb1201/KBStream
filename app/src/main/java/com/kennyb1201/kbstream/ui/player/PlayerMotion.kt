@@ -116,6 +116,13 @@ internal object KbViewMotion {
      * Brings a panel in the way [fadeIn] does, plus a short slide from
      * [fromXPx]. The offset is drawn, never laid out, so a row's focusable
      * bounds are stationary from the first frame.
+     *
+     * For PANELS. A control whose own plate has to stay inside its box (the
+     * rounded SKIP INTRO pill) must use [fadeIn] instead: a translated view is
+     * composited from a render node whose bounds were captured while the offset
+     * was still on it, so the leading edge of that plate can be clipped by a
+     * couple of dp - a square left corner on a pill whose right one is round
+     * (field, 2026-10-24).
      */
     fun slideFadeIn(
         view: View?,

@@ -393,13 +393,27 @@ class PlayerChrome(
             // for a segment that has ended. The entrance is the animation;
             // the exit is the contract.
             button.visibility = View.GONE
+            // Nothing translates this pill any more (see the entrance below),
+            // but a build that did could park it mid-slide if its animation was
+            // cancelled by this hide - and the NEXT show would inherit the
+            // offset. Clearing it here makes the plate's box its own.
+            button.translationX = 0f
             if (wasFocused && isVisible) playPauseButton?.requestFocus()
         } else {
             button.text = label
-            // Fades and rises from the trailing edge: the prompt appears on
-            // nearly every television episode, and it used to pop into a
-            // focused-looking button mid-frame.
-            KbViewMotion.slideFadeIn(button, 16f * button.resources.displayMetrics.density)
+            // A plain fade, in place - deliberately NOT the slide the panels
+            // use. The prompt appears on nearly every television episode, and
+            // it used to pop into a focused-looking button mid-frame; the slide
+            // that replaced the pop put a sliver of the plate's left corner on
+            // the wrong side of the view's own bounds (field, 2026-10-24: the
+            // left corner drawn square, the right one round, only sometimes). A
+            // translated view is composited from a render node whose bounds are
+            // captured while the offset is still on it, so the left of the fill
+            // is clipped by a couple of dp for a frame - never on the trailing
+            // side, which is why the damage was one-sided. In place, the plate
+            // and its node always agree, and the entrance still matches the
+            // bar's own fade.
+            KbViewMotion.fadeIn(button)
         }
     }
 

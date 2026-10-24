@@ -451,6 +451,47 @@ class HomeScreenMobileContractTest {
         )
     }
 
+    /**
+     * The Upcoming heading is a door on both form factors: the TV rail's header
+     * opens Library's Calendar pane, and the phone's row is the same schedule
+     * behind the same word. The heading itself stays a heading on the phone -
+     * no chip or pill wraps it - so the word is the whole target.
+     */
+    @Test
+    fun `the Upcoming heading opens the calendar on the phone`() {
+        val mobile = mobileHome()
+        val home = homeScreen()
+
+        assertTrue(
+            "the shell's calendar hand-off must reach the phone screen through " +
+                "HomeScreen's dispatch, as every other callback does",
+            home.contains("onOpenCalendar = onOpenCalendar, viewModel = viewModel")
+        )
+        assertTrue(
+            "the phone's Upcoming section must wire its heading to that hand-off",
+            mobile.contains("title = upcomingTitle, onClick = onOpenCalendar")
+        )
+        // The plain-word contract: the header is made pressable by a clickable
+        // modifier on the heading itself, not by a chip, pill or button twin.
+        assertTrue(
+            "a pressable section heading is the heading text with a clickable " +
+                "modifier on it",
+            mobile.contains(
+                ".padding(horizontal = MobileSpacing.edge) .clickable(onClick = onClick)"
+            )
+        )
+        assertFalse(
+            "the Upcoming heading must not gain a chip or button around it",
+            mobile.contains("MobileSectionButton") ||
+                mobile.contains("title = upcomingTitle, trailing")
+        )
+        assertTrue(
+            "every other section keeps a plain heading (the CW row is the only " +
+                "plain-title call left in the built-in pair)",
+            mobile.contains("MobileSection(title = continueWatchingTitle) {")
+        )
+    }
+
     @Test
     fun `the mobile home does not edit the tv hero or rails`() {
         // The only HomeScreen edit is the dispatch; the rail-card and hero code

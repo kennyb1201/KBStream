@@ -493,6 +493,60 @@ class FrameRateMatchTest {
         )
     }
 
+    // ── The engage window ──────────────────────────────────────────────
+    //
+    // Reported 2026-10-24: "with AFR on it's still causing judder, like
+    // halfway through movies". The engage ladder only runs in the opening
+    // seconds, so the panel is moved once and then held; the exception is a
+    // rate offered LATE - a rebuilt player re-reporting a track, a source
+    // switched mid-film, a probe that finally finished - which used to be
+    // allowed to renegotiate HDMI under a playing film.
+
+    @Test
+    fun `the panel is only moved while a title is opening`() {
+        assertTrue(
+            "the opening seconds are the window every real offer lands in",
+            FrameRateMatch.engageWindowAllows(0L, FrameRateSource.PLAYER)
+        )
+        assertTrue(
+            "the probe and its retry are still the opening",
+            FrameRateMatch.engageWindowAllows(
+                FrameRateMatch.ENGAGE_WINDOW_MS - 1L,
+                FrameRateSource.PROBE_RETRY
+            )
+        )
+        assertFalse(
+            "a rate that only arrives after the window must not move the panel: " +
+                "a mode switch under a running film is the judder itself",
+            FrameRateMatch.engageWindowAllows(
+                FrameRateMatch.ENGAGE_WINDOW_MS + 1L,
+                FrameRateSource.PLAYER
+            )
+        )
+        assertTrue(
+            "a resume repairs the panel however long the session has been open - " +
+                "it is not a new claim about the content",
+            FrameRateMatch.engageWindowAllows(Long.MAX_VALUE, FrameRateSource.RESUME)
+        )
+    }
+
+    @Test
+    fun `a late offer says it was ignored, and why`() {
+        val line = FrameRateMatch.describeLateOffer(23.976, 132_000L)
+        assertTrue(
+            "the row has to name the rate and the moment, got: $line",
+            line.contains("23.976") && line.contains("132s")
+        )
+        assertTrue(
+            "and it has to say the panel was left alone, got: $line",
+            line.contains("left alone")
+        )
+        assertTrue(
+            "a rate that describes nothing still reads as a line, not as silence",
+            FrameRateMatch.describeLateOffer(null, 1_000L).startsWith("a rate offered")
+        )
+    }
+
     @Test
     fun `the resume source line says the rate was measured earlier, not reported now`() {
         // The diagnostics row is the only place these two can be told apart, and

@@ -87,6 +87,37 @@ class PlayerChromeContractTest {
         assertEquals(View.GONE, skip.visibility)
     }
 
+    @Test
+    fun `the skip prompt appears in place and never inherits an offset`() {
+        // The plate is a rounded rect drawn to the view's own bounds, so the only
+        // way a sliver of its leading corner gets shaved is the view being drawn
+        // from a translated render node: the node's bounds are captured while the
+        // offset is still on, and the fill's left edge falls outside them (field,
+        // 2026-10-24 - a square left corner, a round right one). A fade in place
+        // cannot do that, and nothing may leave an offset behind for the next
+        // show to inherit.
+        val layer = inflateChrome()
+        val chrome = PlayerChrome(layer, FakeHost())
+        val skip = layer.findViewById<TextView>(R.id.chrome_skip_intro)
+
+        chrome.setSkipIntro("SKIP INTRO")
+        assertEquals(
+            "the prompt must be drawn exactly where it is laid out",
+            0f,
+            skip.translationX,
+            0f
+        )
+
+        skip.translationX = 42f
+        chrome.setSkipIntro(null)
+        assertEquals(
+            "and hiding it clears any offset, so the next prompt starts in place",
+            0f,
+            skip.translationX,
+            0f
+        )
+    }
+
     // ── progress ─────────────────────────────────────────────────────────
 
     @Test

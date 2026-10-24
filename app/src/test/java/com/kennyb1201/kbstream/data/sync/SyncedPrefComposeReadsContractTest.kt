@@ -142,7 +142,9 @@ class SyncedPrefComposeReadsContractTest {
             POSTER_CARD to "fun PosterCard(",
             LANDSCAPE_CARD to "fun LandscapeCard(",
             POSTER_CAPTIONS to "fun PosterCaptions(",
-            POSTER_BORDER to "fun posterBorderModifier()",
+            // The parameter (episode cards draw it on their own shape) is part
+            // of the header now, so the marker stops at the paren.
+            POSTER_BORDER to "fun posterBorderModifier(",
             POSTER_EDGE to "fun posterEdgeShape()"
         ).forEach { (path, header) ->
             val body = functionBody(readSource(path), header)

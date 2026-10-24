@@ -4,6 +4,7 @@ import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -55,9 +56,15 @@ enum class PosterBorder(val label: String, val alpha: Float) {
  * followed the setting when something else happened to invalidate the tile
  * (the same reason [PosterCard] and [LandscapeCard] read their eye-badge toggle
  * the same way).
+ *
+ * [shape] is for the surfaces that draw a tile in a shape of their OWN rather
+ * than the poster edge setting - the episode cards, which keep the app's card
+ * shape whatever the viewer picked for posters. Left out, the border follows the
+ * poster edge, which is what a poster tile wants. Either way the STRENGTH is the
+ * one saved setting: an edge turned off turns it off everywhere.
  */
 @Composable
-fun posterBorderModifier(): Modifier {
+fun posterBorderModifier(shape: Shape? = null): Modifier {
     val context = LocalContext.current
     val syncedRevision = posterTileRevision()
     val border = remember(syncedRevision) {
@@ -67,6 +74,6 @@ fun posterBorderModifier(): Modifier {
     return Modifier.border(
         width = 1.dp,
         color = KBTextHi.copy(alpha = border.alpha),
-        shape = posterEdgeShape()
+        shape = shape ?: posterEdgeShape()
     )
 }

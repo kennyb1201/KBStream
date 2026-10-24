@@ -278,6 +278,29 @@ class DetailEpisodeRailMobileContractTest {
     }
 
     @Test
+    fun `both episode layouts wear the viewer's poster border`() {
+        // A season of dark stills on a near-black page runs together exactly the
+        // way a wall of posters does, so the one edge setting covers both. The
+        // SHAPE passed in is the card's own: an episode still is not squared off
+        // or pill-softened by a preference that is about posters.
+        listOf("the vertical row" to mobileRow(), "the rail card" to railCard())
+            .forEach { (name, source) ->
+                assertTrue(
+                    "$name must draw the poster edge on its still (and so obey " +
+                        "the Off level too)",
+                    source.contains("posterBorderModifier(KBShapeCard)")
+                )
+            }
+        assertTrue(
+            "the row draws it on its thumbnail, not on the whole row",
+            mobileRow()
+                .substringAfter(".width(132.dp)")
+                .substringBefore("AsyncImage(")
+                .contains("posterBorderModifier(KBShapeCard)")
+        )
+    }
+
+    @Test
     fun `the rail card keeps the TV card's overlay caption`() {
         val card = railCard()
         assertTrue(
