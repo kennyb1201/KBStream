@@ -243,7 +243,12 @@ class SportsTournamentCardDetailContractTest {
             "the screen holds the tournament whose sheet is up",
             hub.contains("var detailTournament by remember { mutableStateOf<TournamentEvent?>(null) }")
         )
-        assertTrue("and raises it from the card's press", hub.contains("detailTournament?.let { event ->"))
+        assertTrue(
+            "and raises it from the card's press, through the event re-resolved from the polled " +
+                "sections so its status keeps moving while the sheet is open",
+            hub.contains("val sheetTournament: TournamentEvent? = remember(detailTournament?.id, sections)") &&
+                hub.contains("sheetTournament?.let { event ->")
+        )
         assertTrue(
             "Back dismisses the sheet before it can leave the hub",
             hub.contains("BackHandler { detailTournament = null }")

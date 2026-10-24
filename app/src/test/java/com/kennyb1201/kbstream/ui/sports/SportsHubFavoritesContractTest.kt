@@ -125,7 +125,7 @@ class SportsHubFavoritesContractTest {
                 "was thrown away by the partition's own sort, which is why the star only ever led the " +
                 "slate by luck",
             hubFlat.contains(
-                "section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs }"
+                "SportsGameOrder.upcoming(section.games.filter { it.state == GameState.UPCOMING })"
             ) &&
                 hubFlat.contains(
                     "section.games.filter { it.state == GameState.FINAL }" +

@@ -373,6 +373,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** End of the last user seek, so its own buffering is not counted as a stall. */
     private var lastSeekAtMs = 0L
 
+    // --- Stall watchdog (see [armStallWatchdog]) ---------------------------
+    //
+    // The MPV engine's copy of the main player's VOD watchdog. Same ladder,
+    // same thresholds and same cap - mpv's own signals substituted for
+    // ExoPlayer's: this engine's playhead ([positionMs], the same figure the 1 Hz
+    // clock rides), mpv's demuxer cache for "what is buffered ahead", and
+    // [retryCurrentSource] in place of Exo's seek past the buffered edge.
+    //
+    // Bumped on every arm and every disarm: a tick chain from a previous arming
+    // can never fire against a session it no longer owns.
+    private var stallWatchdogToken = 0
+
+    /** Recoveries spent on the current quiet spell; cleared by real progress. */
+    private var stallRecoveries = 0
+    private var stallLastProgressAtMs = 0L
+    private var stallLastPositionMs = 0L
+    private var stallLastBufferedMs = 0L
+
     /** The playing source's badge chips, for the row the main player shows. */
     private var currentBadges: List<StreamBadge> = emptyList()
 
@@ -1028,6 +1046,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
+        view.onPictureReady = { armStallWatchdog() }
         view.onBufferingChanged = { buffering ->
             bufferingView?.visibility = if (buffering) View.VISIBLE else View.GONE
             onMpvBufferingChanged(buffering)
@@ -3081,6 +3100,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         rebufferDownshiftGivenUp = false
         bufferingStartedAtMs = 0L
         lastSeekAtMs = 0L
+        // A different file is about to be read, so the stalled one's watchdog
+        // state goes with it: the tick chain is disarmed here and the recovery
+        // budget starts over (the next file load arms it again).
+        stallWatchdogToken++
+        stallRecoveries = 0
 
         val resumeAt = (if (positionMs > 0L) positionMs else startPositionMs).coerceAtLeast(0L)
         currentUrl = newUrl
@@ -4591,6 +4615,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
         Log.i(TAG, "playing ${itemTitle()} via MPV (fallback=$isFallbackSession)")
         mediaTitle?.let { Log.i(TAG, "MPV media-title: $it") }
+        // The file is open and playing, so the stall watchdog may start judging
+        // it (see armStallWatchdog). This is the load-complete arm; the video
+        // output's first configuration and a resume arm it too.
+        armStallWatchdog()
     }
 
     private fun onProgress(position: Long, duration: Long) {
@@ -4646,6 +4674,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (paused) {
             if (scrobbleStarted) scrobble("pause")
             saveProgress(reason = "pause")
+        } else {
+            // A resume is one of the three moments a session proves it is
+            // playing, so the quiet window starts again from here: a stall is
+            // never declared against time spent deliberately paused (see
+            // armStallWatchdog, whose pause guard is the other half).
+            armStallWatchdog()
         }
     }
 
@@ -5502,6 +5536,179 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         )
     }
 
+    // --- Stall watchdog ------------------------------------------------------
+
+    /**
+     * Arms the VOD stall watchdog, and is the only thing that starts its tick.
+     *
+     * The engine's copy of the main player's watchdog: ExoPlayer recovers from
+     * a hung stream on its own, and mpv - until this - sat on a frozen frame
+     * until the viewer pressed something. Ported rather than reinvented, so the
+     * thresholds and the ladder are the main player's own (see
+     * NativePlayerActivity.armStallWatchdog and its constants); only the signals
+     * differ, because mpv reports a playhead and a demuxer cache instead of a
+     * media3 position and buffer.
+     *
+     * Called from the three moments a session proves it has picture and is
+     * playing: the video output's first configuration, the file loading, and a
+     * resume. Each call restarts the quiet window, so a session that has just
+     * shown it is playing is never judged on progress from before it stopped.
+     * It does NOT reset [stallRecoveries]: an arm after a recovery's reload
+     * would otherwise hand the session an unlimited budget of reloads.
+     */
+    private fun armStallWatchdog() {
+        if (errorContainer?.visibility == View.VISIBLE) return
+        if (endedHandled) return
+        if (!fileLoaded) return
+        if (surface?.isPaused() == true) return
+        val token = ++stallWatchdogToken
+        restartStallWindow()
+        handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+    }
+
+    /** Restarts the quiet window: the session is considered progressing now. */
+    private fun restartStallWindow() {
+        stallLastProgressAtMs = System.currentTimeMillis()
+        stallLastPositionMs = positionMs
+        stallLastBufferedMs = bufferedAheadMs()
+    }
+
+    /** mpv's demuxer cache ahead of the playhead, 0 when it reports none. */
+    private fun bufferedAheadMs(): Long =
+        runCatching { surface?.cacheAheadMs() ?: 0L }.getOrDefault(0L)
+
+    /**
+     * One watchdog tick, every [STALL_TICK_MS] while the session is live.
+     *
+     * A stall is a full [STALL_NO_PROGRESS_MS] with neither the playhead nor
+     * mpv's buffered end moving more than [STALL_PROGRESS_MS]. Everything that
+     * makes stopping "the viewer's intent, not a stall" - a pause, a seek, a
+     * load in flight, the error card, the end of the file - leaves the window
+     * alone rather than counting against it.
+     */
+    private fun tickStallWatchdog(token: Int) {
+        if (token != stallWatchdogToken) return
+        if (errorContainer?.visibility == View.VISIBLE) return
+        if (endedHandled) return
+        if (!fileLoaded) return
+        val view = surface ?: return
+        // Pause is intent. Disarmed by returning, re-armed on the resume.
+        if (view.isPaused()) return
+        // A load is bringing a file up (the initial one, a source switch, or this
+        // watchdog's own reload): what the quiet window measured belongs to a
+        // file that is not on screen yet, and a slow first byte is not a stall.
+        if (loadingContainer?.visibility == View.VISIBLE) {
+            restartStallWindow()
+            handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+            return
+        }
+        // A scrub is in flight, or a seek just landed: the window restarts after
+        // it, so a scrub is never interrupted by a recovery of our own.
+        if (scrubbing || lastSeekAtMs > stallLastProgressAtMs) {
+            restartStallWindow()
+            handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+            return
+        }
+
+        val position = positionMs
+        val buffered = bufferedAheadMs()
+        val now = System.currentTimeMillis()
+
+        // Any forward motion - playhead OR downloaded runway - means data is
+        // flowing. Real progress also clears the recovery count: the cap bounds
+        // a RUN of failures, not a long session's total.
+        if (position > stallLastPositionMs + STALL_PROGRESS_MS ||
+            buffered > stallLastBufferedMs + STALL_PROGRESS_MS
+        ) {
+            stallRecoveries = 0
+            restartStallWindow()
+            handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+            return
+        }
+
+        if (now - stallLastProgressAtMs < STALL_NO_PROGRESS_MS) {
+            handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+            return
+        }
+
+        // Read BEFORE the window resets: the log used to print this after the
+        // reset and always claimed a zero-second quiet spell.
+        val quietMs = now - stallLastProgressAtMs
+        val where = "pos=${position}ms ahead=${buffered}ms quiet=${quietMs}ms"
+
+        if (stallRecoveries >= STALL_MAX_RECOVERIES) {
+            // The manual recovery that already exists is now the only sensible
+            // next step, so the session lands on the card that offers it - and
+            // the watchdog stops, so this cannot become an hour-long loop.
+            stallWatchdogToken++
+            Log.w(
+                "MPV_STALL",
+                "No data for ${quietMs}ms ($where) \u2014 giving up after " +
+                    "$stallRecoveries recoveries"
+            )
+            noteStall(
+                "MPV stall gave up",
+                "$where after $stallRecoveries recoveries"
+            )
+            showError(
+                "The stream stalled - no data for ${quietMs / 1000}s.",
+                "The player stopped reconnecting after ${STALL_MAX_RECOVERIES} " +
+                    "attempts. Retry, switch engine, or pick another source."
+            )
+            return
+        }
+
+        stallRecoveries++
+        stallLastProgressAtMs = now
+        stallLastPositionMs = position
+        stallLastBufferedMs = buffered
+
+        // A runway still ahead of the playhead means the picture stopping is not
+        // the download stopping. Re-opening the file here would discard exactly
+        // that runway and ask a struggling host for it again, turning a slow
+        // source into a dead one - so keep the buffer, count the recovery (so
+        // this still terminates) and wait another full window.
+        if (buffered > STALL_BUFFER_KEEP_MS) {
+            Log.w(
+                "MPV_STALL",
+                "No playhead progress ($where) \u2014 keeping the buffer " +
+                    "(recovery $stallRecoveries/$STALL_MAX_RECOVERIES)"
+            )
+            noteStall(
+                "MPV stall, buffer kept",
+                "$where (recovery $stallRecoveries/$STALL_MAX_RECOVERIES)"
+            )
+            handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+            return
+        }
+
+        Log.w(
+            "MPV_STALL",
+            "No data ($where) \u2014 reloading the source at ${position}ms " +
+                "(recovery $stallRecoveries/$STALL_MAX_RECOVERIES)"
+        )
+        noteStall(
+            "MPV stall, reloading the source",
+            "$where (recovery $stallRecoveries/$STALL_MAX_RECOVERIES)"
+        )
+        // The manual retry's own path, not a second mechanism: same reload, same
+        // position, same "Reconnecting to this source" state, and the same
+        // rebuffer-downshift reset it carries. The counter above is why the
+        // reload cannot loop forever.
+        retryCurrentSource()
+        handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+    }
+
+    /** Writes a stall line into the diagnostics ring the MPV errors also use. */
+    private fun noteStall(cause: String, detail: String) {
+        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                cause = cause,
+                detail = detail
+            )
+        )
+    }
+
     /**
      * The overlay's visibility, its wall clock, its auto-hide timer and its
      * D-pad focus order all live in the shared [PlayerChrome] now. These are thin
@@ -6014,6 +6221,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         sleepTimerSection?.release()
         addonSubtitleFetchJob?.cancel()
         addonSubtitleFetchJob = null
+        // Disarm the stall watchdog before its handler is cleared: a tick that
+        // was already queued must not run against the released surface below.
+        stallWatchdogToken++
         handler.removeCallbacksAndMessages(null)
         clockHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
@@ -6308,6 +6518,25 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         private const val COMPLETION_THRESHOLD_RATIO = 0.95f
         private const val MIN_RESUME_POSITION_MS = 10_000L
         private const val SEEK_STEP_MS = 10_000L
+
+        /**
+         * How often the stall watchdog looks. Same cadence as the main player's
+         * (NativePlayerActivity.stallTickMs): often enough to catch a stall
+         * promptly, lazy enough to cost nothing.
+         */
+        private const val STALL_TICK_MS = 2_000L
+
+        /** A full quiet window with no progress at all is a declared stall. */
+        private const val STALL_NO_PROGRESS_MS = 30_000L
+
+        /** Playhead or buffered-end motion beyond this counts as progress. */
+        private const val STALL_PROGRESS_MS = 500L
+
+        /** Recoveries per quiet spell, before the session gives up (Exo's cap). */
+        private const val STALL_MAX_RECOVERIES = 4
+
+        /** This much runway still ahead means "keep the buffer", not "reload". */
+        private const val STALL_BUFFER_KEEP_MS = 1_000L
 
         /**
          * How far into an episode a MEDIA_PREVIOUS press still means "rewind

@@ -192,6 +192,18 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     var onVideoFrameRateChanged: ((Double) -> Unit)? = null
 
+    /**
+     * The video output has been configured — mpv has a frame to draw.
+     *
+     * The mirror of the main player's `firstFrameRendered`, and the moment the
+     * stall watchdog is allowed to start judging the session (see
+     * [MpvPlayerActivity.armStallWatchdog]): before it, a slow first byte is a
+     * legitimate wait, not a stall. May fire more than once for one file (a
+     * resolution change reconfigure), which is harmless — each arming only
+     * restarts the quiet window.
+     */
+    var onPictureReady: (() -> Unit)? = null
+
     private var initialized = false
 
     /**
@@ -622,6 +634,32 @@ class MpvPlayerView @JvmOverloads constructor(
     fun positionMs(): Long = lastPositionMs
 
     fun durationMs(): Long = lastDurationMs
+
+    /**
+     * How much media mpv has cached AHEAD of the playhead, in ms.
+     *
+     * What the stall watchdog needs to tell a starved source from a slow one:
+     * with a runway of cached media the picture can stop while the download is
+     * still catching up, and re-opening the file then would throw that runway
+     * away and ask a struggling host for more (see
+     * [MpvPlayerActivity.tickStallWatchdog]).
+     *
+     * Read from mpv's demuxer cache: `demuxer-cache-time` is the timestamp of
+     * the end of the cache, so ahead is that minus the playhead;
+     * `demuxer-cache-duration` is mpv's own answer for the same question and is
+     * the fallback for a build that does not expose the first. 0 when mpv
+     * reports neither — an unknown cache must never read as "plenty buffered".
+     */
+    fun cacheAheadMs(): Long {
+        if (!initialized || released) return 0L
+        val cacheEnd = getPropertyDoubleOrNull("demuxer-cache-time")
+        if (cacheEnd != null) {
+            val ahead = (cacheEnd * 1000.0).toLong() - lastPositionMs
+            if (ahead >= 0L) return ahead
+        }
+        val duration = getPropertyDoubleOrNull("demuxer-cache-duration") ?: return 0L
+        return (duration * 1000.0).toLong().coerceAtLeast(0L)
+    }
 
     fun isPaused(): Boolean = pauseState
 
@@ -2132,6 +2170,9 @@ class MpvPlayerView @JvmOverloads constructor(
                 // Second chance: a stream whose headers carried no rate reports
                 // one once the first frames have been decoded.
                 publishVideoFrameRate()
+                // There is picture to draw: the session is playing for real, so
+                // the stall watchdog may start judging it (see onPictureReady).
+                post { onPictureReady?.invoke() }
             }
         }
     }

@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -228,6 +229,25 @@ fun SportsHubScreenMobile(
     }
 
     val sheetOpen = detailGame != null || detailTournament != null
+
+    // The sheet draws the game the POLL last reported, not the instance it was
+    // opened with: held, its score and status froze at open time while the stats
+    // under them kept updating (the TV sheet's own bug, and the same fix). The
+    // tapped snapshot is the fallback for a game that has left the slate.
+    val sheetGame: SportsGame? = remember(detailGame?.id, sections) {
+        val open = detailGame ?: return@remember null
+        sections.asSequence()
+            .flatMap { it.games.asSequence() }
+            .firstOrNull { it.id == open.id }
+            ?: open
+    }
+    val sheetTournament: TournamentEvent? = remember(detailTournament?.id, sections) {
+        val open = detailTournament ?: return@remember null
+        sections.asSequence()
+            .flatMap { it.tournaments.asSequence() }
+            .firstOrNull { it.id == open.id }
+            ?: open
+    }
 
     // The sheet's fetch policy, exactly as on TV: a live game's summary is read
     // while its sheet is open, and closing it stops the tick.
@@ -497,7 +517,7 @@ fun SportsHubScreenMobile(
             )
         }
 
-        detailGame?.let { game ->
+        sheetGame?.let { game ->
             GameDetailSheetMobile(
                 game = game,
                 channels = matches[game.id].orEmpty(),
@@ -513,7 +533,7 @@ fun SportsHubScreenMobile(
             )
         }
 
-        detailTournament?.let { event ->
+        sheetTournament?.let { event ->
             TournamentDetailSheetMobile(
                 event = event,
                 channels = matches[event.id].orEmpty(),
@@ -726,13 +746,38 @@ private fun LeagueBodyMobile(
         favoriteKeys
     )
     val upcoming = SportsGameOrder.favoritesFirst(
-        section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs },
+        SportsGameOrder.upcoming(section.games.filter { it.state == GameState.UPCOMING }),
         favoriteKeys
     )
     val final = SportsGameOrder.favoritesFirst(
         section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs },
         favoriteKeys
     )
+
+    // The TV rule, on the phone: when live games land ABOVE what is being read,
+    // go to them. Without it the LIVE NOW block inserts off-screen and the hub
+    // reads as having no live games at all - the exact field report the TV body
+    // answers ("i have to scroll up to see the live games", 2026-10-10), which
+    // this screen never got.
+    //
+    // Only an ARRIVAL, and only while the viewer has not moved: the top is
+    // sampled BEFORE the live games exist (the list anchors its position to the
+    // first visible KEY, so after the insert the index has already moved and a
+    // "is it still at 0" check would fail on the very insert it exists for). A
+    // viewer's own scroll rewrites the sample, which is the guard.
+    val leaguePath = section.league.path
+    var atTopBeforeLive by remember(leaguePath) { mutableStateOf(false) }
+    if (live.isEmpty()) {
+        LaunchedEffect(listState, leaguePath) {
+            snapshotFlow {
+                listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset == 0
+            }.collect { atTopBeforeLive = it }
+        }
+    }
+    LaunchedEffect(live.isNotEmpty()) {
+        if (live.isNotEmpty() && atTopBeforeLive) listState.scrollToItem(0)
+    }
 
     // One pulse for the whole league, held while a sheet is over it.
     val livePulse = rememberLivePulseMobile(enabled = pulseEnabled)
@@ -1355,13 +1400,24 @@ private fun StandingsBodyMobile(
             // 900dp+ of width, which is the TV's own threshold.
             val columns = SportsStandingsLayout.columns(groups, widthDp = 0)
             val shown = columns.firstOrNull().orEmpty()
+            // A table of its own league starts at its top: the list state is
+            // remembered across a league change (same call site), so the next
+            // table opened at the previous one's depth.
+            val tableState = remember(league.path) {
+                androidx.compose.foundation.lazy.LazyListState()
+            }
             LazyColumn(
+                state = tableState,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                shown.forEach { group ->
-                    item(key = "std-head-" + group.name) {
+                shown.forEachIndexed { index, group ->
+                    // Position as well as name: two same-named groups in one
+                    // column (a flattened college table) are duplicate keys,
+                    // which is a crash.
+                    val groupKey = "std-$index-" + group.name
+                    item(key = "$groupKey-head") {
                         StandingsGroupHeaderMobile(
                             name = group.name,
                             count = group.entries.size
@@ -1370,8 +1426,7 @@ private fun StandingsBodyMobile(
                     itemsIndexed(
                         items = group.entries,
                         key = { _, entry ->
-                            "std-" + group.name + "-" + entry.abbreviation + "-" +
-                                entry.displayName
+                            "$groupKey-" + entry.abbreviation + "-" + entry.displayName
                         },
                         contentType = { _, _ -> "standing-row" }
                     ) { _, entry ->

@@ -185,7 +185,7 @@ class SportsReturnToSheetContractTest {
         assertTrue(
             "a card tap and the reopen raise the same state",
             hub.contains("onOpenDetail = { detailGame = it }") &&
-                hub.contains("detailGame?.let { game ->")
+                hub.contains("sheetGame?.let { game ->")
         )
         assertTrue(
             "so the sheet's own fetch policy - openDetail on a live game, closeDetail on close - is unchanged",

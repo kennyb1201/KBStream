@@ -34,7 +34,15 @@ class SportsGameDetailSheetContractTest {
         assertTrue(
             "the screen raises the sheet from a tapped game",
             hub.contains("onOpenDetail = { detailGame = it }") &&
-                hub.contains("detailGame?.let { game ->")
+                hub.contains("val sheetGame: SportsGame? = remember(detailGame?.id, sections)") &&
+                hub.contains("sheetGame?.let { game ->")
+        )
+        assertTrue(
+            "and the sheet is drawn from the game RE-RESOLVED out of the polled sections, so its score " +
+                "and clock keep moving while it is open; the tapped snapshot is only the fallback once " +
+                "the game has left the slate",
+            hub.contains(".firstOrNull { it.id == open.id }") &&
+                hub.contains("?: open")
         )
     }
 

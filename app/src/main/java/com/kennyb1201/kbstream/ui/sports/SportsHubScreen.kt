@@ -467,6 +467,31 @@ fun SportsHubScreen(
     // opened.
     val sheetOpen = detailGame != null || detailTournament != null
 
+    // The sheet renders the game the POLL last reported, not the instance it was
+    // opened with.
+    //
+    // [detailGame] holds what was tapped, and the same held object was what the
+    // sheet drew - so its score, clock and status froze at open time while the
+    // LIVE STATS under them kept updating (the summary IS re-read on the tick,
+    // see [refreshDetailSummary]), and a game that ended with the sheet open
+    // kept an LIVE header over a finished board. Re-resolved by id from the
+    // polled sections; the tapped snapshot is the fallback for a game that has
+    // left the slate, because an empty sheet would be worse than a stale one.
+    val sheetGame: SportsGame? = remember(detailGame?.id, sections) {
+        val open = detailGame ?: return@remember null
+        sections.asSequence()
+            .flatMap { it.games.asSequence() }
+            .firstOrNull { it.id == open.id }
+            ?: open
+    }
+    val sheetTournament: TournamentEvent? = remember(detailTournament?.id, sections) {
+        val open = detailTournament ?: return@remember null
+        sections.asSequence()
+            .flatMap { it.tournaments.asSequence() }
+            .firstOrNull { it.id == open.id }
+            ?: open
+    }
+
     // The sheet's fetch policy, in one place: opening a game asks the hub for its
     // summary - lazily, and only for a live one - and closing clears it, so the
     // live tick stops refreshing a sheet nobody is looking at.
@@ -849,7 +874,7 @@ fun SportsHubScreen(
             )
         }
 
-        detailGame?.let { game ->
+        sheetGame?.let { game ->
             // Back dismisses the sheet before it can leave the hub; focus comes
             // back to the card that raised it, because the sheet is its own
             // dialog window and closing it returns to the tree behind.
@@ -880,7 +905,7 @@ fun SportsHubScreen(
             )
         }
 
-        detailTournament?.let { event ->
+        sheetTournament?.let { event ->
             // Back dismisses the sheet before it can leave the hub; focus comes
             // back to the card that raised it, because the sheet is its own
             // dialog window and closing it returns to the tree behind - the same
@@ -1276,7 +1301,7 @@ private fun LeagueBody(
     }
     val upcoming = remember(section.games, favoriteKeys) {
         SportsGameOrder.favoritesFirst(
-            section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs },
+            SportsGameOrder.upcoming(section.games.filter { it.state == GameState.UPCOMING }),
             favoriteKeys
         )
     }
@@ -2796,20 +2821,27 @@ private fun StandingsBody(
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
                 ) {
-                    columns.forEach { columnGroups ->
+                    columns.forEachIndexed { index, columnGroups ->
                         // One scroll state per column, and the two report which
                         // of them holds the D-pad so the screen's scroll
                         // fallback knows which list a Down/Up should move.
-                        val columnState = rememberLazyGridState()
-                        StandingsColumn(
-                            groups = columnGroups,
-                            listState = columnState,
-                            leaguePath = league.path,
-                            favoriteKeys = favoriteKeys,
-                            onToggleTeam = onToggleTeam,
-                            onColumnFocusChanged = onColumnFocusChanged,
-                            modifier = Modifier.weight(1f)
-                        )
+                        //
+                        // Keyed by league: an unkeyed state is remembered across
+                        // a league change (same call site, same slot), so the
+                        // next table opened at the previous one's scroll depth -
+                        // mid-division, under a heading the viewer never passed.
+                        key(league.path, index) {
+                            val columnState = rememberLazyGridState()
+                            StandingsColumn(
+                                groups = columnGroups,
+                                listState = columnState,
+                                leaguePath = league.path,
+                                favoriteKeys = favoriteKeys,
+                                onToggleTeam = onToggleTeam,
+                                onColumnFocusChanged = onColumnFocusChanged,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             } else {
@@ -2854,6 +2886,12 @@ private fun StandingsColumn(
     onColumnFocusChanged: ((LazyGridState, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // Entering the table starts at its top. The single-column body shares the
+    // screen's list state with the games grid, and the two-column body's states
+    // are keyed by league above - so without this a GAMES -> STANDINGS toggle
+    // opened the new table at the depth the cards were left at.
+    LaunchedEffect(leaguePath) { listState.scrollToItem(0) }
+
     HubList(
         listState = listState,
         modifier = modifier.then(
@@ -2866,15 +2904,20 @@ private fun StandingsColumn(
             }
         )
     ) {
-        groups.forEach { group ->
-            item(key = "std-head-" + group.name) {
+        groups.forEachIndexed { index, group ->
+            // The group's POSITION is in every key as well as its name: two
+            // same-named groups in one column (a flattened college table is the
+            // real case) used to produce duplicate keys, which is a crash, not a
+            // mis-sort.
+            val groupKey = "std-$index-" + group.name
+            item(key = "$groupKey-head") {
                 StandingsGroupHeader(name = group.name, count = group.entries.size)
             }
-            item(key = "std-cols-" + group.name) { StandingsColumnHeader() }
+            item(key = "$groupKey-cols") { StandingsColumnHeader() }
             itemsIndexed(
                 group.entries,
                 key = { _, entry ->
-                    "std-" + group.name + "-" + entry.abbreviation + "-" + entry.displayName
+                    "$groupKey-" + entry.abbreviation + "-" + entry.displayName
                 }
             ) { _, entry ->
                 // The row is a real action now: OK follows/unfollows the team it
@@ -3101,6 +3144,11 @@ private fun TournamentDetailSheet(
     // The game sheet's own explicit D-pad walk, for the same reason: the pills
     // live in a scroll container where directional search is a guess.
     val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
+    // The game sheet's top anchor, for the same reason it has one - and here it
+    // is also the ONLY focusable node a sheet with no feed can offer: a
+    // tournament has no stat rows, so with no channel there was nothing for the
+    // D-pad to land on at all and the sheet read as frozen until Back.
+    val topAnchor = remember { FocusRequester() }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
@@ -3177,6 +3225,18 @@ private fun TournamentDetailSheet(
                 // backup feed's focus ring is landed clear of the bottom edge
                 // here too.
                 SheetScrollBody {
+                    // The same invisible stop the game sheet draws (see there):
+                    // 1dp and non-interactive, first in the body, so whatever
+                    // takes focus in here lands the scroll at the top.
+                    Box(
+                        modifier = Modifier
+                            .size(1.dp)
+                            .focusRequester(topAnchor)
+                            .focusDownTo(backupButtons.firstOrNull() ?: watchButton)
+                            .focusProperties { canFocus = true }
+                            .focusable()
+                    )
+
                     // Every row is already filtered to the non-blanks, so a stop
                     // with no venue and no note simply draws fewer rows.
                     SportsDetailRules.detailRows(event).forEach { row ->
@@ -3292,26 +3352,40 @@ private fun TournamentDetailSheet(
                              attempts++
                          }
                      }
-                 } else {
-                     // Not focusable: a disabled action must not be a D-pad
-                     // stop. It carries the reason instead of the action's name,
-                     // from the same shared rule the game sheet uses.
-                     Surface(
-                         modifier = Modifier
-                             .fillMaxWidth()
-                             .padding(top = 10.dp),
-                         shape = KBShapePill,
-                         colors = SurfaceDefaults.colors(
-                             containerColor = KBSurfaceRaised,
-                             contentColor = KBTextLo
-                         )
-                     ) {
-                         WatchButtonLabel(
-                             label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
-                             enabled = false
-                         )
-                     }
-                 }
+                } else {
+                    // No WATCH, so the footer offers no stop - and a tournament
+                    // has no stat rows, so without this the sheet opened with
+                    // focus nowhere at all and the D-pad looked dead. The anchor
+                    // is the sheet's only focusable node in that state; claim it.
+                    LaunchedEffect(Unit) {
+                        var landed = false
+                        var attempts = 0
+                        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                            awaitFrame()
+                            landed = runCatching { topAnchor.requestFocus() }
+                                .getOrDefault(false)
+                            attempts++
+                        }
+                    }
+                    // Not focusable: a disabled action must not be a D-pad
+                    // stop. It carries the reason instead of the action's name,
+                    // from the same shared rule the game sheet uses.
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        shape = KBShapePill,
+                        colors = SurfaceDefaults.colors(
+                            containerColor = KBSurfaceRaised,
+                            contentColor = KBTextLo
+                        )
+                    ) {
+                        WatchButtonLabel(
+                            label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                            enabled = false
+                        )
+                    }
+                }
              }
          }
      }
@@ -3551,6 +3625,21 @@ private fun GameDetailSheet(
                         }
                     }
                 } else {
+                    // With no WATCH the pinned footer has no focusable node. An
+                    // upcoming game has no stat rows either (its summary is
+                    // never fetched), so the sheet's only node was the invisible
+                    // anchor - and focus landing nowhere visible reads as a dead
+                    // D-pad until Back. The anchor IS the stop here.
+                    LaunchedEffect(Unit) {
+                        var landed = false
+                        var attempts = 0
+                        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                            awaitFrame()
+                            landed = runCatching { topAnchor.requestFocus() }
+                                .getOrDefault(false)
+                            attempts++
+                        }
+                    }
                     // Not focusable: a disabled action must not be a D-pad stop.
                     Surface(
                         modifier = Modifier

@@ -72,15 +72,17 @@ class SportsHubStandingsContractTest {
     fun `the table is grouped with a heading and the column labels once per group`() {
         assertTrue(
             "groups come from the feed and are drawn in order",
-            hub.contains("groups.forEach { group ->")
+            hub.contains("groups.forEachIndexed { index, group ->")
         )
         assertTrue(
-            "each group has its own heading, keyed on its name so two divisions cannot collide",
-            hub.contains("item(key = \"std-head-\" + group.name)")
+            "each group has its own heading, keyed on its POSITION and name so two same-named " +
+                "divisions in one column cannot collide into a duplicate key",
+            hub.contains("val groupKey = \"std-\$index-\" + group.name") &&
+                hub.contains("item(key = \"\$groupKey-head\")")
         )
         assertTrue(
             "and one column header per group, not one for the whole screen",
-            hub.contains("item(key = \"std-cols-\" + group.name) { StandingsColumnHeader() }")
+            hub.contains("item(key = \"\$groupKey-cols\") { StandingsColumnHeader() }")
         )
         assertTrue(
             "the labels are the spec's, in order",
@@ -167,10 +169,13 @@ class SportsHubStandingsContractTest {
 
     @Test
     fun `a standings failure shows the cached table or the empty state, never a crash`() {
-        val parse = slice(repository, "internal fun parseStandings(", "private fun espnStandingEntries(")
+        // The parse FAILS (null) rather than answering an empty table: an empty
+        // table is a SUCCESS, and a successful empty response used to overwrite
+        // the cached standing for six hours. Null takes the stale-cache path.
+        val parse = slice(repository, "internal fun parseStandingsOrNull(", "internal fun parseStandings(")
         assertTrue(
-            "a payload that is not standings yields no groups",
-            parse.contains("runCatching { JSONObject(json) }.getOrNull() ?: return emptyList()")
+            "a payload that is not standings yields null, so the cache is kept",
+            parse.contains("runCatching { JSONObject(json) }.getOrNull() ?: return null")
         )
         assertTrue(
             "and an empty group is skipped rather than drawn as a heading",
@@ -193,7 +198,7 @@ class SportsHubStandingsContractTest {
         )
         assertTrue(
             "each column stacks its own conference's divisions",
-            hub.contains("columns.forEach { columnGroups ->") &&
+            hub.contains("columns.forEachIndexed { index, columnGroups ->") &&
                 hub.contains("StandingsColumn( groups = columnGroups, listState = columnState,")
         )
         assertTrue(

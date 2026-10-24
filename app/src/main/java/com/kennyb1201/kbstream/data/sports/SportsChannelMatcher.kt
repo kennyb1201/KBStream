@@ -58,7 +58,16 @@ data class TeamVariants(
  *     network - national, an RSN, or a team channel - without knowing the
  *     network in advance. A single-team hit is a pregame show or a repeat, not
  *     the game, and a hit that names one side by its CITY alone is weaker
- *     still: it is only used when no full hit exists (see [guideFeeds]).
+ *     still: it is only used when no full hit exists (see [guideFeeds]). That
+ *     description pass is what the tests call tier 1b; the name pass below is
+ *     1c.
+ *  1c. **Channel-name matchup.** The channel's OWN NAME names the game - a
+ *     per-game League Pass feed called "Timberwolves @ Magic". This runs on
+ *     every game, not as a fallback: a provider generates that name for this
+ *     game tonight, so it is carriage evidence, while a guide row is a schedule
+ *     claim that outlives schedule changes. It is also the only tier that can
+ *     see a matchup channel with NO guide data at all, which is how those feeds
+ *     ship (see [nameHits]).
  *  2. **Broadcast network match.** ESPN's own `broadcasts[].names` resolved
  *     against the playlist by normalized name. "ESPN" must not land on "ESPN2"
  *     - or on "ESPN AU" - when an ESPN feed is in the playlist: exact, then the
@@ -241,8 +250,9 @@ internal object SportsChannelMatcher {
      * The head is exactly what [match] has always returned; everything behind it
      * is a feed the playlist also holds for the same game, in the order a viewer
      * would want to fall to: the rest of tier 1 (another channel the guide says
-     * is airing it), then the networks the feed names, then the teams' own
-     * regional networks.
+     * is airing it), a channel whose own name names the matchup, then the
+     * networks the feed names, then the teams' own regional networks - and, when
+     * nothing stronger answered, a lone team channel.
      *
      * [remembered] is the viewer's own correction memory, keyed by a team's
      * [SportsTeam.favoriteKey]. It is a lambda so the matcher stays pure - the
@@ -296,13 +306,39 @@ internal object SportsChannelMatcher {
             remembered(game.home.favoriteKey),
             remembered(game.away.favoriteKey),
         ).filter { it.id in present }
-        val epg = guideFeeds(game, programs, channelById, variants, channelIndex)
-        if (epg.isNotEmpty()) return leadWith(recalled, cap(epg))
+        val guide = guideFeeds(game, programs, channelById, variants, channelIndex)
+        // The channel-name tier ALWAYS runs, and it is not a fallback for an
+        // empty guide. The field case (2026-10-23) is exactly why: a
+        // Timberwolves @ Magic game listed two team channels whose guide rows
+        // named the matchup, so the guide answered and the list closed on two
+        // feeds that were not carrying it - while the matchup-named League Pass
+        // channel for the game, with no guide data at all, was never even looked
+        // at. The guide cannot know a feed is dark; the channel's own name can
+        // say it is carrying the game tonight.
+        val named = nameHits(game, variants, channelIndex)
+        if (guide.primary.isNotEmpty() || guide.strangers.isNotEmpty()) {
+            // Where the names sit depends on what the guide found. Beside strong
+            // guide hits they are the same evidence class, and they outrank a
+            // STRANGER's guide row deliberately: a per-game generated channel
+            // name is the provider asserting carriage of this game tonight, while
+            // a stranger's guide row is a schedule claim that survives schedule
+            // changes. When the guide only has WEAK rows (a city alone), a
+            // both-teams name leads them, for the same reason.
+            val ordered = if (guide.strong) {
+                guide.primary + named.strong + guide.strangers
+            } else {
+                named.strong + guide.primary + guide.strangers
+            }
+            return leadWith(recalled, cap(ordered))
+        }
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
         val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
         val networkHits = cap(networks.flatMap { channelIndex.channelsFor(it) })
-        return leadWith(recalled, networkHits)
+        // A matchup name leads the networks (the provider asserted this game),
+        // and a lone team channel trails them - a 24/7 channel is a viewer's
+        // last resort, never a fabrication.
+        return leadWith(recalled, cap(named.strong + networkHits + named.weak))
     }
 
     /**
@@ -546,6 +582,10 @@ internal object SportsChannelMatcher {
      * rather than behind it, which is the point of rule A - the old short-circuit
      * is what hid ESPN's row - and it reads only the rows inside
      * [EPG_WINDOW_MS], the same window the description pass always read.
+     *
+     * The answer is split into the guide's LEADING group and its strangers (see
+     * [GuideFeeds]) solely so the channel-name tier can be slotted between them;
+     * the groups and their order are exactly the single list this used to return.
      */
     private fun guideFeeds(
         game: SportsGame,
@@ -553,13 +593,13 @@ internal object SportsChannelMatcher {
         channelById: Map<String, IptvChannel>,
         variants: TeamVariants,
         channelIndex: ChannelIndex,
-    ): List<IptvChannel> {
+    ): GuideFeeds {
         val titleHits = guideHits(game, programs, channelById, variants, title = true) { it.title }
         val descriptionHits =
             guideHits(game, programs, channelById, variants, title = false) {
                 it.description.orEmpty()
             }
-        if (titleHits.isEmpty() && descriptionHits.isEmpty()) return emptyList()
+        if (titleHits.isEmpty() && descriptionHits.isEmpty()) return GuideFeeds.EMPTY
 
         val agreement = broadcastAgreement(game, channelIndex)
         // Titles before descriptions, whatever group a hit lands in: the
@@ -575,7 +615,11 @@ internal object SportsChannelMatcher {
         if (strongAgreeing.isNotEmpty() || strongStrangers.isNotEmpty()) {
             val head = strongAgreeing.ordered(agreement)
             val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
-            return head + fill + strongStrangers.ordered(emptyMap())
+            return GuideFeeds(
+                primary = head + fill,
+                strangers = strongStrangers.ordered(emptyMap()),
+                strong = true,
+            )
         }
 
         // Weak hits only: still a last resort, and still behind the network the
@@ -584,8 +628,101 @@ internal object SportsChannelMatcher {
         val weakStrangers = strangers.filterNot { it.strong }
         val head = weakAgreeing.ordered(agreement)
         val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
-        return head + fill + weakStrangers.ordered(emptyMap())
+        return GuideFeeds(
+            primary = head + fill,
+            strangers = weakStrangers.ordered(emptyMap()),
+            strong = false,
+        )
     }
+
+    /**
+     * The guide's answer, SPLIT where the channel-name tier slots in.
+     *
+     * Same groups, same order inside each, as the single list this used to
+     * return: [primary] is what the guide leads with (its agreeing hits, and the
+     * named network's fill-in when nothing agreed) and [strangers] is everyone
+     * else it placed. The split exists only so [matches] can put the channel-name
+     * hits between the two, which is the one place the tiers now interleave.
+     */
+    private data class GuideFeeds(
+        val primary: List<IptvChannel>,
+        val strangers: List<IptvChannel>,
+        /**
+         * True when a STRONG hit existed anywhere - both sides by a real name.
+         * Rule C applies inside the guide's own groups (weak guide rows are not
+         * mixed in with strong ones); this only says which group [primary] holds,
+         * so a both-teams channel name can lead a weak-only guide answer.
+         */
+        val strong: Boolean,
+    ) {
+        companion object {
+            val EMPTY = GuideFeeds(emptyList(), emptyList(), strong = false)
+        }
+    }
+
+    // ── Tier 1c: the channel's own name ─────────────────────────────
+
+    /**
+     * The playlist's channels whose own NAME names this game.
+     *
+     * The field case (Kenny, 2026-10-23): Timberwolves @ Magic, and the hub
+     * listed an "Orlando Magic" channel and a "Timberwolves" channel - neither
+     * showing the game - while the League Pass feed that WAS showing it, named
+     * "Timberwolves @ Magic", carried no guide data at all and so was invisible
+     * to every tier. That is not an unlucky playlist: providers name their
+     * per-game feeds for the matchup and routinely ship them without EPG. The
+     * name IS the carriage evidence, generated for this game tonight, and until
+     * this tier nothing anywhere tested a channel's own name against the teams.
+     *
+     * Strength uses the guide's own machinery and its own two tests, so the two
+     * tiers cannot disagree about what naming a team means:
+     *
+     *  - **Strong**: the name names BOTH sides ([namesBothTeamsStrength]'s
+     *    both-teams test, cities allowed - "Timberwolves @ Magic", "MIN vs
+     *    ORL"). Separators like `@`, `vs` and `at` are just words between the
+     *    names, never team tokens.
+     *  - **Weak**: the name names ONE side by a real name ([namesStrongTeam]) -
+     *    a 24/7 team channel. A city alone is not enough: "Orlando" on its own
+     *    is the Magic in one league and a tourism channel in another, the same
+     *    reason the guide tier refuses a lone city.
+     *  - Neither: nothing.
+     *
+     * Order inside each bucket is playlist order. Two strong names for one game
+     * are both generated feeds for it (a provider's HD and SD spellings);
+     * nothing here knows which is better, and the cap keeps the list honest.
+     *
+     * The names come from the pass's own [ChannelIndex], which normalized every
+     * channel once already (see [ChannelIndex.forEachNamed]); this reads those
+     * tokens and does no normalization of its own, so a full slate pays nothing
+     * per game beyond the scan the network tier already does.
+     */
+    private fun nameHits(
+        game: SportsGame,
+        variants: TeamVariants,
+        channelIndex: ChannelIndex,
+    ): NameHits {
+        val strong = ArrayList<IptvChannel>()
+        val weak = ArrayList<IptvChannel>()
+        channelIndex.forEachNamed { nameWords, channel ->
+            val awayStrong = namesStrongTeam(nameWords, variants.away)
+            val homeStrong = namesStrongTeam(nameWords, variants.home)
+            val namesBoth =
+                (awayStrong || cityNamesTeam(nameWords, game.away)) &&
+                    (homeStrong || cityNamesTeam(nameWords, game.home))
+            when {
+                namesBoth -> strong += channel
+                awayStrong || homeStrong -> weak += channel
+                else -> Unit
+            }
+        }
+        return NameHits(strong = strong, weak = weak)
+    }
+
+    /** What the channel-name tier found, in the two strengths [matches] orders by. */
+    private data class NameHits(
+        val strong: List<IptvChannel>,
+        val weak: List<IptvChannel>,
+    )
 
     /**
      * The rows whose [textOf] names both sides, with the facts the grouping
@@ -868,6 +1005,12 @@ internal object SportsChannelMatcher {
             /** The channel's name through the alias table and the RSN fold. */
             val canonical: String,
             /**
+             * The raw name's normalized tokens, which is what the channel-name
+             * tier reads (see [forEachNamed]). Computed here because the first
+             * word below already needed them.
+             */
+            val nameWords: List<String>,
+            /**
              * The raw name's first word, which is where a broadcast name lands
              * - "ESPN HD" is the same feed under a qualified name, while "ESPN2"
              * is a different channel sharing the prefix.
@@ -919,6 +1062,21 @@ internal object SportsChannelMatcher {
         fun channelsFor(network: String): List<IptvChannel> =
             byNetwork.getOrPut(network) { networkChannels(network) }
 
+        /**
+         * Visits every channel in the pass with the name tokens this index has
+         * already normalized, in playlist order.
+         *
+         * The channel-name tier's read (see [SportsChannelMatcher.nameHits]).
+         * Handed out rather than re-derived for the same reason the network tier
+         * reads precomputed strings: a pass of sixty cards visits every channel
+         * for every card, and re-tokenizing forty thousand names per card is the
+         * cost that took this loop to a minute before the index existed. Nothing
+         * is allocated here - the lists the index already holds are handed over.
+         */
+        fun forEachNamed(visit: (nameWords: List<String>, channel: IptvChannel) -> Unit) {
+            facts.forEach { visit(it.nameWords, it.channel) }
+        }
+
         private fun networkChannels(network: String): List<IptvChannel> {
             val target = canonicalNetwork(network)
             if (target.isEmpty()) return emptyList()
@@ -958,6 +1116,7 @@ internal object SportsChannelMatcher {
                             val nameWords = words(name)
                             Fact(
                                 canonical = canonicalNetwork(name),
+                                nameWords = nameWords,
                                 firstWord = nameWords.firstOrNull().orEmpty(),
                                 international = nameWords.isInternationalVariant(),
                                 length = compact(name).length,

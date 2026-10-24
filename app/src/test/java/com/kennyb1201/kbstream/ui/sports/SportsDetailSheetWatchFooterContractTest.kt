@@ -91,9 +91,19 @@ class SportsDetailSheetWatchFooterContractTest {
                 sheetCall.contains("watchButton.requestFocus()") &&
                 sheetCall.contains("while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {")
         )
+        // Two now, one per mutually exclusive branch: the action's when there is
+        // a channel, and the anchor's when there is not (with no channel the
+        // footer has no focusable node at all, so the sheet used to open with
+        // focus nowhere and the D-pad read as dead). Both are outside the scroll.
+        assertTrue(
+            "both branches claim focus, and neither request lives in the scroll",
+            sheetCall.contains("landed = runCatching { watchButton.requestFocus() }") &&
+                sheetCall.contains("landed = runCatching { topAnchor.requestFocus() }") &&
+                !body.contains("requestFocus")
+        )
         assertEquals(
-            "exactly one focus request in the whole sheet: the action's, and it is outside the scroll",
-            1,
+            "exactly these two focus requests in the whole sheet: the action's and the anchor's",
+            2,
             Regex("requestFocus\\(\\)").findAll(sheet).count()
         )
         assertFalse(

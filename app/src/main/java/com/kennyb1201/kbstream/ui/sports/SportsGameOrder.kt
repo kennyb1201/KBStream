@@ -18,6 +18,20 @@ import com.kennyb1201.kbstream.data.sports.involvesFavorite
 internal object SportsGameOrder {
 
     /**
+     * An UPCOMING group's order: the soonest start first, and an undated fixture
+     * LAST.
+     *
+     * Sorting on the raw number put `dateMs` 0 at the very top of the group - so
+     * a TBD fixture with no date at all led the viewer's next-games list, and the
+     * label under it said "Today" (see SportsDetailRules.upcomingLabel). An
+     * undated item is the one thing the feed could not say, never the next one
+     * on. Everything dated keeps the feed's own order among equal times, as
+     * before, because `sortedWith` is stable.
+     */
+    fun upcoming(games: List<SportsGame>): List<SportsGame> =
+        games.sortedWith(compareBy({ it.dateMs <= 0L }, { it.dateMs }))
+
+    /**
      * [games] with the followed ones first, by [keys] (a set of
      * [com.kennyb1201.kbstream.data.sports.SportsTeam.favoriteKey] strings).
      *

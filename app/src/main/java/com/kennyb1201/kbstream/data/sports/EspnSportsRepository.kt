@@ -68,10 +68,13 @@ class EspnSportsRepository(
     suspend fun scoreboard(leaguePath: String): List<SportsGame> {
         val cached = scoreboards[leaguePath]
         val now = clock()
-        if (cached != null && now - cached.atMs < ttlMs(cached.value.any { it.state == GameState.LIVE })) {
+        if (cached != null && now - cached.atMs < ttlMsForGames(cached.value, now)) {
             return cached.value
         }
-        val fetched = fetch(leaguePath)?.let { body -> parseScoreboard(body, leaguePath) }
+        // The STRICT parse: a body that is not a scoreboard must take the
+        // failure path below, not be published as an empty slate (see
+        // [parseScoreboardOrNull]).
+        val fetched = fetch(leaguePath)?.let { body -> parseScoreboardOrNull(body, leaguePath) }
         if (fetched == null) {
             // The cached list, however stale, beats an empty one: a scoreboard
             // from twenty minutes ago still names the games and the networks.
@@ -87,10 +90,11 @@ class EspnSportsRepository(
     suspend fun tournamentEvents(leaguePath: String): List<TournamentEvent> {
         val cached = tournaments[leaguePath]
         val now = clock()
-        if (cached != null && now - cached.atMs < ttlMs(cached.value.any { it.state == GameState.LIVE })) {
+        if (cached != null && now - cached.atMs < ttlMsForEvents(cached.value, now)) {
             return cached.value
         }
-        val fetched = fetch(leaguePath)?.let { body -> parseTournamentEvents(body, leaguePath) }
+        // The STRICT parse, for the same reason as the scoreboard's.
+        val fetched = fetch(leaguePath)?.let { body -> parseTournamentEventsOrNull(body, leaguePath) }
         if (fetched == null) {
             failed += leaguePath
             return cached?.value.orEmpty()
@@ -113,7 +117,9 @@ class EspnSportsRepository(
         val cached = tableCache[leaguePath]
         val now = clock()
         if (cached != null && now - cached.atMs < STANDINGS_TTL_MS) return cached.value
-        val fetched = fetchStandings(leaguePath)?.let(::parseStandings)
+        // The STRICT parse: an unreadable body must not be cached as an empty
+        // table for six hours (see [parseStandingsOrNull]).
+        val fetched = fetchStandings(leaguePath)?.let(::parseStandingsOrNull)
         if (fetched == null) {
             tableFailed += leaguePath
             return cached?.value.orEmpty()
@@ -178,6 +184,30 @@ class EspnSportsRepository(
     fun lastStandingsFetchFailed(leaguePath: String): Boolean = leaguePath in tableFailed
 
     private fun ttlMs(live: Boolean): Long = if (live) LIVE_TTL_MS else IDLE_TTL_MS
+
+    /**
+     * The TTL a games slate has earned - judged on what it is ABOUT to do as
+     * well as what it is doing.
+     *
+     * The old rule read only `state == LIVE`, from the CACHED list, and that is
+     * exactly backwards at the moment a viewer opens the hub: a slate fetched at
+     * 6:55 PM holds only UPCOMING games, so it earns the 15-minute idle TTL - and
+     * every read after the 7:00 tip-off, including the hub's own 30-second beat,
+     * got that same pre-game cache until 7:10. A game going live is the one
+     * transition people open this screen for, and it was the slowest thing the
+     * cache did.
+     *
+     * So a slate with a start inside the idle window - or with a start that has
+     * already passed while ESPN still calls it UPCOMING - is treated as live for
+     * freshness purposes. Nothing about the live TTL itself changed: this only
+     * decides which of the two a given slate is worth.
+     */
+    private fun ttlMsForGames(games: List<SportsGame>, nowMs: Long): Long =
+        ttlMs(EspnCacheRules.gamesNeedLiveTtl(games, nowMs, IDLE_TTL_MS))
+
+    /** The tournament twin of [ttlMsForGames]. */
+    private fun ttlMsForEvents(events: List<TournamentEvent>, nowMs: Long): Long =
+        ttlMs(EspnCacheRules.eventsNeedLiveTtl(events, nowMs, IDLE_TTL_MS))
 
     private suspend fun fetch(leaguePath: String): String? =
         httpGet(SCOREBOARD_BASE + leaguePath + "/scoreboard", "scoreboard $leaguePath")
@@ -296,16 +326,39 @@ internal fun espnGameState(
     state: String?,
     eventEndMs: Long = 0L,
     nowMs: Long = System.currentTimeMillis(),
+    /**
+     * ESPN's `status.type.completed`, where the feed publishes it: null when the
+     * field is absent, which is NOT the same as false. This is the only thing
+     * that separates a game that was played from one that was rained out - both
+     * carry state "post" - and the word alone used to send a postponed game to
+     * FINAL, with no score, indistinguishable from a real result.
+     */
+    completed: Boolean? = null,
 ): GameState {
     if (eventEndMs > 0L && nowMs > eventEndMs + STALE_STATE_BUFFER_MS) {
         return GameState.FINAL
     }
     return when (state?.trim()?.lowercase()) {
         "in" -> GameState.LIVE
-        "post" -> GameState.FINAL
+        // "post" is the END of the scheduled slot, not proof the game was played:
+        // a postponed or canceled game keeps the slot and carries the reason in
+        // its status detail. Only an explicitly un-completed post is UPCOMING;
+        // an absent field keeps today's FINAL, because inventing UPCOMING for
+        // every league that omits it would strand finished games on the slate.
+        "post" -> if (completed == false) GameState.UPCOMING else GameState.FINAL
         else -> GameState.UPCOMING
     }
 }
+
+/**
+ * ESPN's `status.type.completed`, or null when the field is absent.
+ *
+ * `optBoolean` answers false for a missing key, which would read every "post"
+ * in a league that does not publish the flag as an unplayed game - so presence
+ * is checked first and absence stays absent.
+ */
+private fun espnCompleted(statusType: JSONObject?): Boolean? =
+    statusType?.let { if (it.has("completed")) it.optBoolean("completed") else null }
 
 /** `2024-01-01T00:30Z` -> epoch millis; 0 when unparseable. */
 internal fun espnDateMs(raw: String?): Long =
@@ -328,13 +381,42 @@ private fun espnEventEndMs(event: JSONObject, competition: JSONObject?): Long =
     espnDateMs(event.optString("endDate", "")).takeIf { it > 0L }
         ?: espnDateMs(competition?.optString("endDate", ""))
 
-internal fun parseScoreboard(json: String, leaguePath: String): List<SportsGame> {
-    val events = runCatching { JSONObject(json).optJSONArray("events") }.getOrNull()
-        ?: return emptyList()
-    return (0 until events.length()).mapNotNull { index ->
+/**
+ * The scoreboard's games, or null when the body is not a scoreboard at all.
+ *
+ * The strict form is what the repository reads, because "no games" and "this is
+ * not a scoreboard" are different answers and only one of them may overwrite a
+ * good cached slate (see [scoreboards]). [parseScoreboard] is the lenient form
+ * for callers that only render what they are given.
+ */
+internal fun parseScoreboardOrNull(json: String, leaguePath: String): List<SportsGame>? {
+    // NULL, not empty, when this is not a scoreboard document at all: a
+    // truncated response, an HTML error page from a proxy, a shape change. The
+    // difference is the whole of A1 - an empty list was being treated as a
+    // SUCCESS, so one bad body cleared the failure flag and OVERWROTE a good
+    // cached slate with "No games today", with no error state and no retry
+    // (see `scoreboard`). A missing `events` array is that case; an EMPTY one
+    // is a real slate with nothing on.
+    val events = espnEventsArray(json) ?: return null
+    val games = (0 until events.length()).mapNotNull { index ->
         events.optJSONObject(index)?.let { event -> espnEventToGame(event, leaguePath) }
     }
+    // Events that all failed to parse are the same class of fault: a league
+    // whose payload no longer carries what a game needs (a missing home flag is
+    // the live example) would otherwise render as a permanently empty tab that
+    // never says why. Reporting it as a failure keeps the last good slate and
+    // shows the hub's error state instead.
+    if (events.length() > 0 && games.isEmpty()) return null
+    return games
 }
+
+/** [parseScoreboardOrNull], answering an empty list for an unreadable body. */
+internal fun parseScoreboard(json: String, leaguePath: String): List<SportsGame> =
+    parseScoreboardOrNull(json, leaguePath).orEmpty()
+
+/** The body's `events` array, or null when the body is not a scoreboard. */
+private fun espnEventsArray(json: String): JSONArray? =
+    runCatching { JSONObject(json).optJSONArray("events") }.getOrNull()
 
 private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? {
     val id = event.optString("id", "").ifBlank { return null }
@@ -364,6 +446,7 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
     val state = espnGameState(
         state = status?.optString("state"),
         eventEndMs = espnEventEndMs(event, competition),
+        completed = espnCompleted(status),
     )
     val statusDetail = status?.optString("shortDetail", "")
         ?.takeIf { it.isNotBlank() }
@@ -471,11 +554,19 @@ internal fun espnGameLeaders(competition: JSONObject?): List<GameLeader> {
  * A group with no entries is skipped rather than drawn as an empty heading, and
  * a payload that is not standings yields no groups rather than throwing.
  */
-internal fun parseStandings(json: String): List<StandingGroup> {
-    val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyList()
+internal fun parseStandingsOrNull(json: String): List<StandingGroup>? {
+    // NULL for a body that is not a standings document at all (an HTML error
+    // page, a truncated read): the caller keeps the last table and reports the
+    // failure. Treating it as an empty table was worse here than anywhere else
+    // in the repository - the empty result was cached under the six-hour TTL, so
+    // one bad response blanked a league's standings until the evening.
+    val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
     val out = ArrayList<StandingGroup>()
     val conferences = root.optJSONArray("children")
     if (conferences == null || conferences.length() == 0) {
+        // ...and a document with no `standings` block either is that same fault,
+        // not a table with no rows in it.
+        if (root.optJSONObject("standings") == null) return null
         // A flat payload (no conference grouping) is one group of its own.
         val entries = espnStandingEntries(root)
         if (entries.isNotEmpty()) {
@@ -509,6 +600,10 @@ internal fun parseStandings(json: String): List<StandingGroup> {
     }
     return out
 }
+
+/** [parseStandingsOrNull], answering an empty table for an unreadable body. */
+internal fun parseStandings(json: String): List<StandingGroup> =
+    parseStandingsOrNull(json).orEmpty()
 
 private fun espnStandingEntries(node: JSONObject): List<StandingEntry> {
     val entries = node.optJSONObject("standings")?.optJSONArray("entries") ?: return emptyList()
@@ -687,6 +782,49 @@ private fun espnTeamOf(row: JSONObject, homeAway: String, leaguePath: String): S
 }
 
 /**
+ * Whether a cached slate must be re-read on the live cadence.
+ *
+ * Pure and internal so the rule is a unit test instead of a field report. The
+ * rule it replaces asked only "is anything LIVE in the CACHED list", which is
+ * blind in exactly one direction and the wrong one: a 6:55 PM slate holds a
+ * 7:00 tip-off as UPCOMING, so it earned the fifteen-minute idle TTL and the
+ * kick-off itself was the slowest thing the hub ever showed (see
+ * [EspnSportsRepository.scoreboard]).
+ */
+internal object EspnCacheRules {
+
+    /**
+     * A live item, or an UPCOMING one whose start is inside the idle window -
+     * including one whose start has already passed while ESPN still calls it
+     * upcoming, which is the state every slate lands in at kickoff.
+     */
+    fun gamesNeedLiveTtl(games: List<SportsGame>, nowMs: Long, idleTtlMs: Long): Boolean =
+        games.any { it.state == GameState.LIVE } ||
+            games.any {
+                it.state == GameState.UPCOMING && startsWithin(it.dateMs, nowMs, idleTtlMs)
+            }
+
+    /** The tournament twin of [gamesNeedLiveTtl]. */
+    fun eventsNeedLiveTtl(
+        events: List<TournamentEvent>,
+        nowMs: Long,
+        idleTtlMs: Long,
+    ): Boolean =
+        events.any { it.state == GameState.LIVE } ||
+            events.any {
+                it.state == GameState.UPCOMING && startsWithin(it.dateMs, nowMs, idleTtlMs)
+            }
+
+    /**
+     * An undated item cannot be imminent: there is no number to compare, and
+     * treating "no date" as "now" would hold every TBD fixture on the short TTL
+     * for ever.
+     */
+    private fun startsWithin(dateMs: Long, nowMs: Long, idleTtlMs: Long): Boolean =
+        dateMs > 0L && dateMs <= nowMs + idleTtlMs
+}
+
+/**
  * The networks airing an event.
  *
  * ESPN puts them either on the event or on its first competition, depending on
@@ -705,43 +843,74 @@ private fun espnBroadcasts(event: JSONObject, competition: JSONObject?): List<St
             }
     }.distinct()
 
-internal fun parseTournamentEvents(json: String, leaguePath: String): List<TournamentEvent> {
-    val events = runCatching { JSONObject(json).optJSONArray("events") }.getOrNull()
-        ?: return emptyList()
-    // Golf and F1 both publish ONE event object for the whole tournament; the
-    // first is the tournament itself.
-    val event = events.optJSONObject(0) ?: return emptyList()
-    val id = event.optString("id", "").ifBlank { return emptyList() }
+internal fun parseTournamentEventsOrNull(
+    json: String,
+    leaguePath: String,
+): List<TournamentEvent>? {
+    // Null on a body that is not a scoreboard at all - see parseScoreboardOrNull.
+    val events = espnEventsArray(json) ?: return null
+    val out = (0 until events.length()).mapNotNull { index ->
+        events.optJSONObject(index)?.let { event -> espnEventToTournament(event, leaguePath) }
+    }
+    if (events.length() > 0 && out.isEmpty()) return null
+    return out
+}
+
+/** [parseTournamentEventsOrNull], answering an empty list for an unreadable body. */
+internal fun parseTournamentEvents(json: String, leaguePath: String): List<TournamentEvent> =
+    parseTournamentEventsOrNull(json, leaguePath).orEmpty()
+
+/**
+ * One tournament event, or null when the object is not one (no id).
+ *
+ * EVERY event in the body is read, not just the first. Golf and F1 publish one
+ * event for the whole tournament, but the parser used to stop at `events[0]` -
+ * so a feed that carries a weekend in several event objects (a tour stop that
+ * publishes each day, a racing weekend that names practice and the race) could
+ * only ever show whichever one ESPN happened to put first.
+ */
+private fun espnEventToTournament(event: JSONObject, leaguePath: String): TournamentEvent? {
+    val id = event.optString("id", "").ifBlank { return null }
     val competition = event.optJSONArray("competitions")?.optJSONObject(0)
     val status = event.optJSONObject("status")?.optJSONObject("type")
-    return listOf(
-        TournamentEvent(
-            id = id,
-            league = leaguePath,
-            name = event.optString("name", "").ifBlank { event.optString("shortName", "") },
-            dateMs = espnDateMs(event.optString("date", "")),
-            // A tournament's end time is what stops ESPN's days-stale "in" from
-            // showing a finished tournament as LIVE (see espnGameState).
-            state = espnGameState(
-                state = status?.optString("state"),
-                eventEndMs = espnEventEndMs(event, competition),
-            ),
-            statusDetail = status?.optString("shortDetail", "")
-                ?.takeIf { it.isNotBlank() }
-                ?: status?.optString("detail", "").orEmpty(),
-            leaders = espnLeaders(competition?.optJSONArray("competitors")),
-            broadcastNames = espnBroadcasts(event, competition),
-            // A race names its track on the event (`circuit`); a golf round or
-            // a tennis tournament names a venue there instead.
-            venue = espnVenue(
-                event.optJSONObject("circuit"),
-                event.optJSONObject("venue"),
-                competition?.optJSONObject("venue")
-            ),
-            note = espnNote(competition?.optJSONArray("notes"), event.optJSONArray("notes")),
-        )
+    return TournamentEvent(
+        id = id,
+        league = leaguePath,
+        name = event.optString("name", "").ifBlank { event.optString("shortName", "") },
+        dateMs = espnDateMs(event.optString("date", "")),
+        // A tournament's end time is what stops ESPN's days-stale "in" from
+        // showing a finished tournament as LIVE (see espnGameState).
+        state = espnGameState(
+            state = status?.optString("state"),
+            eventEndMs = espnEventEndMs(event, competition),
+            completed = espnCompleted(status),
+        ),
+        statusDetail = status?.optString("shortDetail", "")
+            ?.takeIf { it.isNotBlank() }
+            ?: status?.optString("detail", "").orEmpty(),
+        leaders = espnLeaders(competition?.optJSONArray("competitors")),
+        broadcastNames = espnBroadcasts(event, competition),
+        // A race names its track on the event (`circuit`); a golf round or
+        // a tennis tournament names a venue there instead.
+        venue = espnVenue(
+            event.optJSONObject("circuit"),
+            event.optJSONObject("venue"),
+            competition?.optJSONObject("venue")
+        ),
+        note = espnNote(competition?.optJSONArray("notes"), event.optJSONArray("notes")),
     )
 }
+
+/**
+ * A leaderboard score as a number, where the feed's own string means one.
+ *
+ * Golf writes even par as "E", which does not parse - so it sorted as
+ * `Double.MAX_VALUE` and an even-par golfer ranked behind every over-par one,
+ * out of the top five entirely. Par is 0: better than +1 and worse than -1, the
+ * only honest reading of the letter.
+ */
+private fun golfScoreOrNull(score: String): Double? =
+    if (score.trim().equals("E", ignoreCase = true)) 0.0 else score.toDoubleOrNull()
 
 /**
  * The top five of a tournament field.
@@ -773,7 +942,7 @@ private fun espnLeaders(competitors: JSONArray?): List<Leader> {
             flagUrl = row.optJSONObject("athlete")
                 ?.optJSONObject("flag")?.optString("href", "")
                 ?.takeIf { it.isNotBlank() },
-        ) to (row.optInt("order", i) to score.toDoubleOrNull())
+        ) to (row.optInt("order", i) to golfScoreOrNull(score))
     }
     return rows
         .sortedWith(compareBy({ it.second.second ?: Double.MAX_VALUE }, { it.second.first }))

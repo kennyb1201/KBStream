@@ -204,7 +204,11 @@ internal object SportsDetailRules {
         // that is only a time adds nothing, so it is only shown when it says
         // something else (a delayed start, a suspension).
         return when {
-            when_.isBlank() -> detail.ifBlank { "Today" }
+            // No date is not "today": an undated fixture is the one thing the
+            // feed could not say, and labelling it Today presented a TBD game
+            // as the next one on. TBD is the honest word, and ESPN's own detail
+            // (a postponed start, a suspension) beats it when it has one.
+            when_.isBlank() -> detail.ifBlank { "TBD" }
             detail.isBlank() || detail.contains("PM", ignoreCase = true) ||
                 detail.contains("AM", ignoreCase = true) -> when_
             else -> "$when_ • $detail"

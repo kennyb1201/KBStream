@@ -70,6 +70,53 @@ internal object SportsLivePollRules {
         state == GameState.UPCOMING && dateMs > 0L && dateMs <= nowMs + KICKOFF_ARM_MS
 
     /**
+     * How long the poll should sleep, when nothing in its tab is live, until
+     * that tab's next scheduled start - or null when the tab has none left.
+     *
+     * The loop used to simply END the first beat that found nothing live and no
+     * kickoff inside [KICKOFF_ARM_MS], and that is the doubleheader bug reported
+     * on 2026-10-23: game 1 goes final, game 2 tips off forty minutes later, and
+     * a hub left open on that tab never polls again - game 2 sits there reading
+     * UPCOMING while it is being played, until a manual refresh or a tab switch.
+     * Waiting for the next start is the smallest correct answer: the tick wakes
+     * exactly when there is something new to see, and stays asleep for the gap.
+     *
+     * Undated items cannot arm anything, exactly as in [hasKickoffArmed]. The
+     * wait is clamped to [MAX_REARM_MS] so a game two days out is re-checked
+     * rather than slept through (an ESPN date can move), and floored at the
+     * poll interval so a start that has just passed cannot spin the loop.
+     */
+    fun delayUntilNextStartMs(
+        sections: List<LeagueSection>,
+        paths: List<String>,
+        nowMs: Long,
+    ): Long? {
+        if (nowMs <= 0L) return null
+        val nextStart = paths
+            .mapNotNull { path ->
+                val section = sections.firstOrNull { it.league.path == path }
+                    ?: return@mapNotNull null
+                val games = section.games
+                    .filter { it.state == GameState.UPCOMING && it.dateMs > nowMs }
+                    .minOfOrNull { it.dateMs } ?: Long.MAX_VALUE
+                val tournaments = section.tournaments
+                    .filter { it.state == GameState.UPCOMING && it.dateMs > nowMs }
+                    .minOfOrNull { it.dateMs } ?: Long.MAX_VALUE
+                minOf(games, tournaments).takeIf { it != Long.MAX_VALUE }
+            }
+            .minOrNull()
+            ?: return null
+        return (nextStart - nowMs).coerceIn(POLL_INTERVAL_MS, MAX_REARM_MS)
+    }
+
+    /**
+     * The furthest ahead the tick will sleep for one unplayed start. Six hours:
+     * long enough to cover a doubleheader's gap or an evening's break, short
+     * enough that a date ESPN moved is noticed the same day.
+     */
+    const val MAX_REARM_MS = 6L * 60L * 60_000L
+
+    /**
      * The leagues one poll must refetch for the tab the viewer is on, in the
      * order the sections are in. Empty means "do not poll at all".
      *

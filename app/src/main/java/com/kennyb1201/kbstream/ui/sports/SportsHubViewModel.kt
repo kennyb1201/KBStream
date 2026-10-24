@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
@@ -414,6 +415,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private var lastMatchLineupGeneration = -1
 
     /**
+     * Bumped every time a guide import finishes (see [observeGuideImports]).
+     *
+     * The match pass has always been keyed on the CARDS and the LINEUP, and
+     * nothing in the hub observed the guide - so a pass that ran while the EPG
+     * was still importing locked every guide-dependent game into "Not in your
+     * playlist" for the life of the slate. Field shape (2026-10-23): open the
+     * hub during the 12-hour refresh or a first launch's import and a game the
+     * guide lists seconds later never appears, through any number of live ticks;
+     * only a correction, a lineup retry, a profile switch or a restart escaped
+     * it. This is the missing term in the key.
+     */
+    private var guideGeneration = 0
+    private var lastMatchGuideGeneration = -1
+
+    /**
      * Which cards a pass is about, as one comparable string.
      *
      * Ids only, deliberately: a score or a game state changing is not a reason
@@ -438,6 +454,42 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         prewarmLineup()
         refresh()
         observeProfileSwitches()
+        observeGuideImports()
+    }
+
+    /**
+     * Watches the guide import, and re-matches when a pass finishes.
+     *
+     * A guide that arrives after the hub's first match pass is exactly the case
+     * the skip could not see: the cards are unchanged and so is the lineup, so
+     * the EPG lookups were never asked again and a game the new guide carries
+     * stayed "Not in your playlist". The generation above is what breaks that
+     * skip, and the pass is kicked here so the fix does not wait for a poll the
+     * tab may not be earning (a slate with nothing live has no tick at all).
+     *
+     * Both terminal shapes count: a viewer's pass closes with an outcome
+     * published (see GuideImportProgress.finish), while a background pass -
+     * the 12-hour refresh - closes by clearing the line, so the transition back
+     * to null is a completion too. Skipped while the hub is behind the player:
+     * the resume's own refresh carries the new generation and re-matches then.
+     */
+    private fun observeGuideImports() {
+        viewModelScope.launch {
+            var passWasOpen = GuideImportProgress.state.value != null
+            GuideImportProgress.state.collect { state ->
+                val open = state != null && state.outcome == null
+                val finished = passWasOpen && !open
+                passWasOpen = open
+                if (!finished) return@collect
+                guideGeneration++
+                if (pollPaused || _sections.value.isEmpty()) return@collect
+                // Through refresh() rather than a bare resolveMatches pass: it
+                // owns the job, so any pass already in flight is cancelled
+                // instead of racing this one, and it re-reads the slate before
+                // matching (which the guide change may have moved anyway).
+                refresh()
+            }
+        }
     }
 
     /**
@@ -868,10 +920,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 delay(SportsLivePollRules.POLL_INTERVAL_MS)
                 // A failed poll keeps the last good scores (the repository
                 // hands back its cache) and simply tries again on the next
-                // beat - never an error card from a background poll. The loop
-                // ends the moment nothing in play remains, which is what stops
-                // the tick without waiting for the hub to close.
-                if (!refreshLeagues(paths)) break
+                // beat - never an error card from a background poll.
+                if (refreshLeagues(paths)) continue
+                // Nothing in play and no kickoff inside the arm. This used to
+                // END the loop, and that was the doubleheader bug: game 1 goes
+                // final, game 2 tips off forty minutes later, and a hub left
+                // open on that tab never polls again - game 2 sits there
+                // reading UPCOMING while it is being played, until a manual
+                // refresh or a tab switch. So wait for the tab's own next start
+                // instead, and let the loop pick it up from there.
+                val waitMs = SportsLivePollRules.delayUntilNextStartMs(
+                    sections = _sections.value,
+                    paths = paths,
+                    nowMs = System.currentTimeMillis(),
+                ) ?: break
+                delay(waitMs)
             }
         }
     }
@@ -990,6 +1053,12 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * no playable channel is still a useful hub.
      */
     private suspend fun resolveMatches(sections: List<LeagueSection>) {
+        // The guide generation this pass will actually READ with. Captured here,
+        // not read again when the pass finishes: an import completing mid-pass
+        // changes nothing about the candidates this pass queried, so recording
+        // the NEWER number would claim the pass had seen guide data it never
+        // saw - and the skip would then suppress the re-run that change needs.
+        val guideAtPassStart = guideGeneration
         val games = sections.flatMap { it.games }
         val events = sections.flatMap { it.tournaments }
         // What the EPG stage is keyed on: which cards exist. A beat that only
@@ -1004,6 +1073,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // scratch, however unchanged the cards are.
             if (matchKey == lastMatchKey &&
                 lastMatchLineupGeneration == lineupGeneration &&
+                lastMatchGuideGeneration == guideAtPassStart &&
                 _matches.value.isNotEmpty()
             ) {
                 // Nothing new to look up. The map is left as it is, and
@@ -1182,6 +1252,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // tell "the same cards, same lineup" from "the same cards, new lineup".
         lastMatchKey = matchKey
         lastMatchLineupGeneration = lineupGeneration
+        lastMatchGuideGeneration = guideAtPassStart
         _matchingDone.value = true
     }
 

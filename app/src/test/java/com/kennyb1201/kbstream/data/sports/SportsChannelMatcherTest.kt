@@ -1478,4 +1478,183 @@ class SportsChannelMatcherTest {
         assertEquals(setOf("espn", "poker"), index.ids)
         assertEquals(emptySet<String>(), SportsChannelMatcher.ChannelIndex.EMPTY.ids)
     }
+
+    // ── Tier 1c: the channel's own name ─────────────────────────────
+    //
+    // The field case (Kenny, 2026-10-23): Timberwolves @ Magic listed an
+    // "Orlando Magic" channel and a "Timberwolves" channel - neither showing the
+    // game - because their GUIDE rows named the matchup and the guide answered
+    // first. The League Pass feed that WAS showing it, named "Timberwolves @
+    // Magic", carries no guide data at all, so no guide-only tier could ever see
+    // it. A per-game feed's own name is the provider asserting carriage of THIS
+    // game tonight; a guide row is a schedule claim that survives schedule
+    // changes, which is why a both-teams name outranks a stranger's row.
+
+    private val wolves = team("MIN", "Minnesota Timberwolves", home = false)
+    private val magic = team("ORL", "Orlando Magic", home = true)
+
+    private val leaguePass = channel("lp", "Timberwolves @ Magic")
+    private val wolvesChannel = channel("min", "Timberwolves")
+    private val magicChannel = channel("orl", "Orlando Magic")
+
+    @Test
+    fun `the field case - a matchup-named feed leads the team channels the guide found`() {
+        // Both team channels have a guide row naming the game, and the schedule
+        // rows are real: they stay, behind the feed that was actually carrying it.
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic),
+            channels = listOf(magicChannel, wolvesChannel, leaguePass),
+            programs = listOf(
+                program("orl", "Timberwolves at Magic", firstPitch, firstPitch + 180 * minute),
+                program("min", "Timberwolves at Magic", firstPitch, firstPitch + 180 * minute),
+            ),
+        )
+
+        assertEquals(
+            "the League Pass feed carries this game's name and leads; the two team " +
+                "channels stay as backups",
+            listOf(leaguePass, magicChannel, wolvesChannel),
+            feeds,
+        )
+    }
+
+    @Test
+    fun `the name tier always runs, so a guide answer never closes the list again`() {
+        val named = channel("lp", "Timberwolves @ Magic")
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic),
+            channels = listOf(channel("orl", "Orlando Magic"), named),
+            programs = listOf(
+                program("orl", "Timberwolves at Magic", firstPitch, firstPitch + 180 * minute)
+            ),
+        )
+
+        assertEquals(
+            "the guide's stranger row is not the end of the answer",
+            listOf(named, channel("orl", "Orlando Magic")),
+            feeds,
+        )
+    }
+
+    @Test
+    fun `an agreeing guide hit still leads a matchup name`() {
+        val espn = channel("espn", "ESPN")
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic, broadcasts = listOf("ESPN")),
+            channels = listOf(leaguePass, espn),
+            programs = listOf(
+                program("espn", "Timberwolves vs. Magic", firstPitch, firstPitch + 180 * minute)
+            ),
+        )
+
+        assertEquals(
+            "the guide's agreeing hit keeps the head; the named feed is its backup",
+            listOf(espn, leaguePass),
+            feeds,
+        )
+    }
+
+    @Test
+    fun `a matchup name outranks a stranger's guide row`() {
+        val stranger = channel("other", "Some Sports Channel")
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic),
+            channels = listOf(stranger, leaguePass),
+            programs = listOf(
+                program("other", "Timberwolves at Magic", firstPitch, firstPitch + 180 * minute)
+            ),
+        )
+
+        assertEquals(
+            "a generated channel name is carriage tonight; a stranger's row is a schedule claim",
+            listOf(leaguePass, stranger),
+            feeds,
+        )
+    }
+
+    @Test
+    fun `with no guide data a matchup name leads the named network`() {
+        val espn = channel("espn", "ESPN")
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic, broadcasts = listOf("ESPN")),
+            channels = listOf(espn, leaguePass),
+            programs = emptyList(),
+        )
+
+        assertEquals(listOf(leaguePass, espn), feeds)
+    }
+
+    @Test
+    fun `a lone team channel is the last resort, behind the network tier`() {
+        val espn = channel("espn", "ESPN")
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic, broadcasts = listOf("ESPN")),
+            channels = listOf(wolvesChannel, espn),
+            programs = emptyList(),
+        )
+
+        assertEquals(
+            "a 24/7 team channel is offered, but only after everything stronger",
+            listOf(espn, wolvesChannel),
+            feeds,
+        )
+    }
+
+    @Test
+    fun `cities and abbreviations name the matchup too`() {
+        listOf("Minnesota vs Orlando", "MIN vs ORL", "Timberwolves at Magic").forEach { name ->
+            val named = channel("lp", name)
+            assertEquals(
+                "\"$name\" names both sides",
+                listOf(named),
+                SportsChannelMatcher.matches(
+                    game = game(wolves, magic),
+                    channels = listOf(named),
+                    programs = emptyList(),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `a channel named for one city alone is not evidence`() {
+        // "Orlando" is the Magic in one league and a tourism channel in another -
+        // the same reason the guide tier refuses a lone city.
+        val lone = channel("lone", "Orlando")
+
+        assertEquals(
+            emptyList<IptvChannel>(),
+            SportsChannelMatcher.matches(
+                game = game(wolves, magic),
+                channels = listOf(lone),
+                programs = emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun `a feed the guide and its name both found is offered once`() {
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wolves, magic),
+            channels = listOf(leaguePass),
+            programs = listOf(
+                program("lp", "Timberwolves at Magic", firstPitch, firstPitch + 180 * minute)
+            ),
+        )
+
+        assertEquals("one channel, one row", listOf(leaguePass), feeds)
+    }
+
+    @Test
+    fun `the name tier reads the pass's tokens, however the index was built`() {
+        val channels = listOf(leaguePass, wolvesChannel, magicChannel, channel("espn", "ESPN"))
+        val shared = SportsChannelMatcher.ChannelIndex.of(channels)
+        val card = game(wolves, magic, broadcasts = listOf("ESPN"))
+
+        assertEquals(
+            "a shared index must answer a name tier exactly as one built for the card would",
+            SportsChannelMatcher.matches(card, channels, emptyList()),
+            SportsChannelMatcher.matches(card, channels, emptyList(), channelIndex = shared),
+        )
+    }
 }

@@ -92,8 +92,9 @@ class SportsDetailRulesTest {
         )
         // A live game with no clock still says the one thing that matters.
         assertEquals("LIVE", SportsDetailRules.statusLine(game(state = GameState.LIVE)))
-        // An upcoming game with no date and no detail falls back to "Today".
-        assertEquals("Today", SportsDetailRules.statusLine(game()))
+        // An upcoming game with no date and no detail is not "Today": an
+        // undated fixture is the one thing the feed could not say.
+        assertEquals("TBD", SportsDetailRules.statusLine(game()))
     }
 
     @Test
@@ -303,8 +304,8 @@ class SportsDetailRulesTest {
         // A live round with no detail still says the one thing that matters.
         assertEquals("LIVE", SportsDetailRules.statusLine(tournament(state = GameState.LIVE)))
         assertEquals("Final", SportsDetailRules.statusLine(tournament(state = GameState.FINAL)))
-        // Same fallback as a game's: no clock and no detail reads as "Today".
-        assertEquals("Today", SportsDetailRules.statusLine(tournament()))
+        // Same fallback as a game's: no clock and no detail reads as "TBD".
+        assertEquals("TBD", SportsDetailRules.statusLine(tournament()))
     }
 
     @Test
