@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListWatchedSnapshot
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
@@ -80,7 +81,7 @@ data class LibraryCalendarUiState(
  */
 class LibraryCalendarViewModel(
     application: Application
-) : AndroidViewModel(application) {
+) : AndroidViewModel(application), MemoryPressure.Releasable {
 
     private val appContext = application.applicationContext
 
@@ -127,10 +128,17 @@ class LibraryCalendarViewModel(
         var lastPublishedAt = 0L
     }
 
-    private val progress = HashMap<YearMonth, MonthProgress>()
+    private val progress = LinkedHashMap<YearMonth, MonthProgress>()
 
     init {
         observeProfileSwitches()
+        // The calendar is the one pane that walks a viewer through month after
+        // month of a library, and each month it keeps is a month of resolved
+        // shows. Registered like every other browsing cache, so a tight heap (or
+        // the player opening) can take it back instead of it sitting on the
+        // memory the next screen needs; the sizes are what a field report reads
+        // in Diagnostics (see MemoryPressure).
+        MemoryPressure.register(this)
     }
 
     /**
@@ -220,6 +228,59 @@ class LibraryCalendarViewModel(
             }
         }
     }
+
+    /**
+     * Holds the session's built months to [MAX_CACHED_MONTHS].
+     *
+     * Paging through a year used to keep every month it had built, and a month
+     * is a whole library's episodes. The cap is small on purpose: the month on
+     * screen is in the UI state either way, and a month dropped here only costs
+     * the TMDB/tracker re-read that a first visit to it costs - which the
+     * per-show [MonthProgress] then makes incremental again.
+     */
+    private fun trimMonthCache(keep: YearMonth) {
+        while (monthCache.size > MAX_CACHED_MONTHS) {
+            val oldest = monthCache.keys.firstOrNull { it != keep } ?: return
+            monthCache.remove(oldest)
+        }
+    }
+
+    /**
+     * Holds the session's INTERRUPTED builds to [MAX_CACHED_MONTHS] as well.
+     *
+     * These exist so a build the viewer paged away from resumes where it left
+     * off, which is what made a future month's first look open on rows instead
+     * of a blank grid. Keeping a year of half-built months made that the same
+     * unbounded store as the month cache.
+     */
+    private fun trimProgress(keep: YearMonth) {
+        while (progress.size > MAX_CACHED_MONTHS) {
+            val oldest = progress.keys.firstOrNull { it != keep } ?: return
+            progress.remove(oldest)
+        }
+    }
+
+    /**
+     * Gives the session's caches back: the month build behind the pane keeps its
+     * published rows (they are in the UI state), so nothing on screen changes.
+     */
+    override fun releaseCaches() {
+        details.clear()
+        monthCache.clear()
+        progress.clear()
+    }
+
+    /**
+     * The calendar's caches against their caps, for the diagnostics dump.
+     *
+     * [details] is bounded by construction - one entry per candidate show, and
+     * the candidate set itself is capped at [MAX_CALENDAR_SHOWS] - so its cap is
+     * that number rather than a second constant to keep in step.
+     */
+    override fun cacheStats(): String =
+        "calendar: months=${monthCache.size}/$MAX_CACHED_MONTHS" +
+            " details=${details.size}/$MAX_CALENDAR_SHOWS" +
+            " progress=${progress.size}/$MAX_CACHED_MONTHS"
 
     /** Drops every per-profile fact this session gathered. */
     private fun forgetEverything() {
@@ -337,6 +398,7 @@ class LibraryCalendarViewModel(
         }
 
         val build = progress.getOrPut(month) { MonthProgress() }
+        trimProgress(keep = month)
         val selectedWhenStarted = _uiState.value.selected
 
         _uiState.value = _uiState.value.copy(
@@ -385,6 +447,7 @@ class LibraryCalendarViewModel(
             days = calendarSortedDays(build.days)
         )
         monthCache[month] = built
+        trimMonthCache(keep = month)
         progress.remove(month)
 
         // The viewer may have walked the grid while this was landing; their day
@@ -666,5 +729,8 @@ class LibraryCalendarViewModel(
 
         /** Quiet gap between two partial month publishes, in milliseconds. */
         const val PARTIAL_PUBLISH_MS = 180L
+
+        /** Built months (and interrupted builds) the session keeps. */
+        const val MAX_CACHED_MONTHS = 4
     }
 }

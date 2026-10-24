@@ -576,6 +576,21 @@ private fun CalendarDayCell(
             .onPreviewKeyEvent { event ->
                 if (touch || event.type != KeyEventType.KeyDown) {
                     false
+                } else if (event.nativeKeyEvent.repeatCount > 0) {
+                    // A KEY HELD DOWN IS ONE PAGE, NOT ONE PER REPEAT. Both the
+                    // paging arms and the Down-into-the-list arm ask the page to
+                    // do real work (a month page cancels the build in flight and
+                    // fans out over every tracked show again), and a remote's
+                    // auto-repeat arrives as a stream of KeyDowns with a rising
+                    // repeatCount - so holding Right on a month's last column
+                    // used to page months as fast as the remote could repeat,
+                    // starting a full TMDB/TVmaze fan-out per repeat. On the
+                    // field report ("scrolled through the calendar quickly and
+                    // it kicked me out to launcher, nothing in Sentry") that is
+                    // the app asking the box for far more than it can hold at
+                    // once. The first press still does the thing; the repeats of
+                    // that same press do nothing at all.
+                    false
                 } else {
                     when {
                         event.key == Key.DirectionLeft && isFirstColumn -> {

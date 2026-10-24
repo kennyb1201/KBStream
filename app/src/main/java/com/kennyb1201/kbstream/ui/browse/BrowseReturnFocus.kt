@@ -247,6 +247,19 @@ internal const val BROWSE_RETURN_FOCUS_DELAY_MS = 40L
  * neighbour leaves the tree (see `PosterContextMenu`'s `onBeforeHide`) is not
  * this: there the node is known to be attached and the ask has to be made in
  * that same frame, so it stays a direct request.
+ *
+ * The FIRST ask is made SYNCHRONOUSLY, inside the caller's own callback, and
+ * that ordering is the fix for the reported "marking something as watched
+ * scrolls the screen up a little": a hand-back launched on the composition's
+ * scope is queued behind the frame that is already disposing the menu, so there
+ * is a moment with no focused node at all, and the framework fills it with the
+ * page's own default - a rail above, the search field, the grid's first card.
+ * Focus arriving there scrolls the page to it (bringIntoView), and the verified
+ * retry that lands on the raised tile a frame later cannot undo that scroll, so
+ * the tile the viewer was on ends up out of sight. Asking while the menu is
+ * still composed means the raised node takes the focus over directly and the
+ * page never had to move; the retry stays for the node that misses (an
+ * unattached card, a rail that is still rebuilding).
  */
 @Composable
 internal fun rememberFocusHandBack(): FocusHandBack {
@@ -261,8 +274,26 @@ internal class FocusHandBack(private val scope: CoroutineScope) {
     private var inFlight: Job? = null
 
     operator fun invoke(requester: FocusRequester?) {
+        if (requester == null) return
         inFlight?.cancel()
-        inFlight = scope.launch { landFocusOn(requester) }
+
+        // The same-frame ask, seeded into the verdict so a single acceptance
+        // cannot pass for a landing (see FocusLandingVerdict): it counts as the
+        // first of the two consecutive answers the retry below needs.
+        val verdict = FocusLandingVerdict()
+        verdict.accepted(runCatching { requester.requestFocus() }.getOrDefault(false))
+
+        inFlight = scope.launch {
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+                delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+                landed = verdict.accepted(
+                    runCatching { requester.requestFocus() }.getOrDefault(false)
+                )
+                attempts++
+            }
+        }
     }
 }
 

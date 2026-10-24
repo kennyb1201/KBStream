@@ -171,6 +171,61 @@ class LibraryCalendarSurfaceContractTest {
     }
 
     @Test
+    fun `a held key pages one month, not one per auto-repeat`() {
+        assertTrue(
+            "the grid pages on a FRESH press only: a remote's auto-repeat arrives " +
+                "as a stream of KeyDowns, and every repeat used to page the month - " +
+                "which cancels the build in flight and fans out over every tracked " +
+                "show again, the 'scrolled through the calendar quickly and it " +
+                "kicked me out to launcher' report",
+            pane.contains("} else if (event.nativeKeyEvent.repeatCount > 0) {") &&
+                pane.indexOf("repeatCount > 0") <
+                pane.indexOf("event.key == Key.DirectionLeft && isFirstColumn")
+        )
+        assertTrue(
+            "and the first press still does the thing - no arm was removed to " +
+                "make that true",
+            pane.contains("event.key == Key.DirectionLeft && isFirstColumn") &&
+                pane.contains("event.key == Key.DirectionRight && isLastColumn") &&
+                pane.contains("event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow") &&
+                pane.contains("onPrevMonth() true") &&
+                pane.contains("onNextMonth() true") &&
+                pane.contains("onEnterDayList() true")
+        )
+    }
+
+    @Test
+    fun `the calendar's session caches are bounded and releasable`() {
+        assertTrue(
+            "a session keeps a handful of built months and interrupted builds, not " +
+                "a year of them: each one is a whole library's episodes",
+            viewModel.contains("const val MAX_CACHED_MONTHS = 4") &&
+                viewModel.contains("private fun trimMonthCache(keep: YearMonth) {") &&
+                viewModel.contains("while (monthCache.size > MAX_CACHED_MONTHS) {") &&
+                viewModel.contains("private fun trimProgress(keep: YearMonth) {") &&
+                viewModel.contains("while (progress.size > MAX_CACHED_MONTHS) {")
+        )
+        assertTrue(
+            "and both trims are reached from the paths that grow them",
+            viewModel.contains("monthCache[month] = built trimMonthCache(keep = month)") &&
+                viewModel.contains(
+                    "val build = progress.getOrPut(month) { MonthProgress() } " +
+                        "trimProgress(keep = month)"
+                )
+        )
+        assertTrue(
+            "the caches are on the app's memory registry as well, so a tight heap or " +
+                "the player opening takes them back instead of the box taking the " +
+                "process (which is how a death on a 1.7 GB box arrives with nothing " +
+                "in Sentry)",
+            viewModel.contains("MemoryPressure.Releasable") &&
+                viewModel.contains("MemoryPressure.register(this)") &&
+                viewModel.contains("override fun releaseCaches() {") &&
+                viewModel.contains("override fun cacheStats(): String =")
+        )
+    }
+
+    @Test
     fun `a profile switch forgets every per-profile fact`() {
         assertTrue(
             "show set, details, months and partial builds all belong to the " +

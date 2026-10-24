@@ -37,13 +37,29 @@ class FocusHandBackContractTest {
         normalized(stripComments(File(findMainSourceRoot(), relativePath).readText()))
 
     @Test
-    fun `the shared hand-back is verified and cancels a superseded one`() {
+    fun `the shared hand-back asks in the caller's callback, then verifies`() {
         val browse = source("com/kennyb1201/kbstream/ui/browse/BrowseReturnFocus.kt")
         assertTrue(
-            "the helper reads the request's own answer through the app's one " +
-                "landing rule instead of assuming a single ask landed",
+            "the FIRST ask is made synchronously, while the menu is still in the " +
+                "tree to hand the focus over. A hand-back queued behind the frame " +
+                "leaves a moment with no focus owner, the framework fills it with " +
+                "the page's own default target, and the scroll goes with that - " +
+                "the reported 'marking a title as watched scrolls the screen up so " +
+                "you cannot see what you were on'",
             browse.contains("internal fun rememberFocusHandBack(): FocusHandBack") &&
-                browse.contains("inFlight = scope.launch { landFocusOn(requester) }")
+                browse.contains("operator fun invoke(requester: FocusRequester?) {") &&
+                browse.contains("val verdict = FocusLandingVerdict()") &&
+                browse.contains("verdict.accepted(runCatching { requester.requestFocus() }") &&
+                browse.indexOf("verdict.accepted(runCatching { requester.requestFocus() }") <
+                browse.indexOf("inFlight = scope.launch {")
+        )
+        assertTrue(
+            "and the frame-retried landing is still there for the node that misses, " +
+                "read through the app's one landing rule instead of assumed",
+            browse.contains("inFlight = scope.launch {") &&
+                browse.contains("landed = verdict.accepted(") &&
+                browse.contains("attempts < BROWSE_RETURN_FOCUS_STEPS") &&
+                browse.contains("internal suspend fun landFocusOn(requester: FocusRequester?)")
         )
         assertTrue(
             "and a newer hand-back cancels the landing still waiting on a frame, " +
