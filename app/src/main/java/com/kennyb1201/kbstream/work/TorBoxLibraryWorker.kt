@@ -83,9 +83,16 @@ class TorBoxLibraryWorker(
          * only the one-time migration above is allowed to assume a mark is
          * trustworthy. It is also the escape for a parse-failure mark - if the
          * name parser learns a shape it refused, a Resync revisits that name.
+         *
+         * The ownership cleanup is re-armed in the same breath: its one-shot is
+         * spent by the first round that ran with a live profile, however little
+         * it removed, so without this the press could not reach the half of the
+         * cure the viewer was pressing it for.
          */
         fun resyncNow(context: Context) {
-            TorBoxCloudStore(context).clearAllMarks()
+            val store = TorBoxCloudStore(context)
+            store.clearAllMarks()
+            store.clearOwnershipRemediation()
             syncScheduleForPrefs(context, runImmediate = true)
         }
 

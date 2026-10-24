@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.data.debrid
 
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.LibraryOrigin
+import com.kennyb1201.kbstream.data.library.LibrarySource
 import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -244,14 +247,16 @@ class TorBoxLibraryProfileFilterTest {
                 remediation.contains("store.markOwnershipRemediated()")
         )
         assertTrue(
-            "it only ever considers rows positively owned by another profile",
-            remediation.contains("titleOwnedByAnotherProfile(")
+            "the per-row decision is ONE pure rule, so the arms are pinned by a " +
+                "JVM test instead of by branches buried in a Context-bound method",
+            remediation.contains("torboxRowLeakedFromAnotherProfile(")
         )
         assertTrue(
-            "two kinds of row: the sync's own marker, and (from a pre-marker " +
-                "build) a row whose title is in the shared cloud",
-            remediation.contains("entry.origin == LibraryOrigin.TORBOX_SYNC") &&
-                remediation.contains("titleIdentityName(entry.title) in cloudTitles")
+            "the rule is handed the cloud's titles, the siblings' titles and the " +
+                "live profile",
+            remediation.contains("cloudTitles = cloudTitles") &&
+                remediation.contains("siblingTitles = siblingTitles") &&
+                remediation.contains("liveProfileId = liveProfileId")
         )
         assertTrue(
             "and it goes through the store's own removal, one write",
@@ -275,7 +280,7 @@ class TorBoxLibraryProfileFilterTest {
         val cloud = cloudStore.replace(Regex("\\s+"), " ")
         assertTrue(
             "the version flag lives with the marks it cleans, in the profile's own file",
-            cloud.contains("private const val OWNERSHIP_REMEDIATION_VERSION = 1") &&
+            cloud.contains("private const val OWNERSHIP_REMEDIATION_VERSION = 2") &&
                 cloud.contains(
                     "private const val KEY_OWNERSHIP_REMEDIATION_VERSION = " +
                         "\"torbox_library_ownership_remediation_version\""
@@ -290,11 +295,181 @@ class TorBoxLibraryProfileFilterTest {
         )
     }
 
+    // ── The corrected attribution (arm B) ──────────────────────────────────
+
+    private fun row(
+        title: String,
+        origin: LibraryOrigin = LibraryOrigin.MANUAL,
+        mediaType: String = "series"
+    ) = LibraryItem(
+        source = LibrarySource.LOCAL,
+        mediaType = mediaType,
+        title = title,
+        year = null,
+        posterUrl = null,
+        imdbId = "tt1",
+        tmdbId = 1,
+        origin = origin
+    )
+
+    @Test
+    fun `an unmarked cloud title with a sibling copy is a leak, a lone one is not`() {
+        val cloud = setOf("bluey")
+
+        assertTrue(
+            "the field case: a kids' title from the shared cloud, never watched " +
+                "here, mirrored pre-fix - no owner is recorded for it, and the " +
+                "sibling's copy is the evidence",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = emptyMap(),
+                entry = row("Bluey"),
+                cloudTitles = cloud,
+                siblingTitles = setOf("bluey"),
+                liveProfileId = "profile-1"
+            )
+        )
+        assertFalse(
+            "a cloud title in NO sibling list has no leak shape at all: this " +
+                "profile's own download stays",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = emptyMap(),
+                entry = row("Bluey"),
+                cloudTitles = cloud,
+                siblingTitles = setOf("moana"),
+                liveProfileId = "profile-1"
+            )
+        )
+        assertFalse(
+            "and a sibling copy of a title the cloud does not hold is not a leak " +
+                "either - that is a title someone added by hand elsewhere",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = emptyMap(),
+                entry = row("Moana"),
+                cloudTitles = cloud,
+                siblingTitles = setOf("moana"),
+                liveProfileId = "profile-1"
+            )
+        )
+    }
+
+    @Test
+    fun `the veto protects this profile's own rows from both arms`() {
+        val owners = mapOf("title:series:bluey" to "profile-1")
+
+        assertFalse(
+            "watched here: this profile's, whatever the cloud and the siblings say",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = owners,
+                entry = row("Bluey"),
+                cloudTitles = setOf("bluey"),
+                siblingTitles = setOf("bluey"),
+                liveProfileId = "profile-1"
+            )
+        )
+        assertFalse(
+            "and the veto outranks the marker too",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = owners,
+                entry = row("Bluey", LibraryOrigin.TORBOX_SYNC),
+                cloudTitles = setOf("bluey"),
+                siblingTitles = setOf("bluey"),
+                liveProfileId = "profile-1"
+            )
+        )
+    }
+
+    @Test
+    fun `arm A still takes a marked or cloud-matched row owned elsewhere, without siblings`() {
+        val owners = mapOf("title:series:bluey" to "profile-3")
+
+        assertTrue(
+            "a marked row is the sync's own write under the wrong profile",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = owners,
+                entry = row("Bluey", LibraryOrigin.TORBOX_SYNC),
+                cloudTitles = emptySet(),
+                siblingTitles = emptySet(),
+                liveProfileId = "profile-1"
+            )
+        )
+        assertTrue(
+            "and an unmarked cloud title with a recorded owner needs no sibling copy",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = owners,
+                entry = row("Bluey"),
+                cloudTitles = setOf("bluey"),
+                siblingTitles = emptySet(),
+                liveProfileId = "profile-1"
+            )
+        )
+        assertFalse(
+            "but a marked row that is nobody's and outside the cloud is not " +
+                "removable: the marker alone does not name a victim",
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = emptyMap(),
+                entry = row("Bluey", LibraryOrigin.TORBOX_SYNC),
+                cloudTitles = emptySet(),
+                siblingTitles = setOf("bluey"),
+                liveProfileId = "profile-1"
+            )
+        )
+    }
+
+    @Test
+    fun `a nameless row is never removed`() {
+        assertFalse(
+            torboxRowLeakedFromAnotherProfile(
+                ownerByTitleKey = mapOf("title:series:" to "profile-3"),
+                entry = row("   "),
+                cloudTitles = setOf("bluey"),
+                siblingTitles = setOf("bluey"),
+                liveProfileId = "profile-1"
+            )
+        )
+    }
+
+    // ── Re-arming, and the removal count ──────────────────────────────────
+
+    @Test
+    fun `Resync re-arms the cleanup, not just the marks`() {
+        val resync = source(WORKER).substringAfter("fun resyncNow(context: Context) {")
+            .substringBefore("fun syncScheduleForPrefs(")
+
+        assertTrue(
+            "the press must reset the cleanup's one-shot too, or the escape " +
+                "hatch cannot reach it",
+            resync.contains("clearOwnershipRemediation()")
+        )
+        assertTrue(
+            "and it still clears the marks first",
+            resync.indexOf("clearAllMarks()") in 0..<resync.indexOf("clearOwnershipRemediation()")
+        )
+        assertTrue(
+            "the version is a flag the store can remove, in the profile's own file",
+            source(TORBOX_CLOUD_STORE).contains("fun clearOwnershipRemediation()")
+        )
+    }
+
+    @Test
+    fun `the round reports how many rows the cleanup removed`() {
+        val sync = source(SYNC)
+        assertTrue(
+            "the cleanup hands its count back to the round",
+            sync.contains("val removed = remediateOwnership(") &&
+                sync.contains("removed = removed")
+        )
+        assertTrue(
+            "and the log line carries it always",
+            sync.contains("\${report.removed} removed as another profile's")
+        )
+    }
+
     private companion object {
         const val SYNC = "com/kennyb1201/kbstream/data/debrid/TorBoxLibrarySync.kt"
         const val LIBRARY_STORE = "com/kennyb1201/kbstream/data/library/LibraryModels.kt"
         const val TORBOX_CLOUD_STORE =
             "com/kennyb1201/kbstream/data/debrid/TorBoxCloudStore.kt"
+        const val WORKER = "com/kennyb1201/kbstream/work/TorBoxLibraryWorker.kt"
         const val PROFILE_SESSION = "com/kennyb1201/kbstream/data/sync/ProfileSession.kt"
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
         const val TV_SETTINGS = "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"

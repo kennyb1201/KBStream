@@ -448,6 +448,46 @@ object LocalLibraryStore {
 
     fun myList(context: Context): List<LibraryItem> = readList(context, KEY_MY_LIST)
 
+    /**
+     * Somebody else's My List, read-only, without switching profiles.
+     *
+     * The one caller is the TorBox cloud→Library cleanup
+     * ([com.kennyb1201.kbstream.data.debrid.TorBoxLibrarySync]): the pre-fix sync
+     * mirrored one shared cloud into every profile it ran under, so a leaked row
+     * sits in the sibling's list too - and that copy is the evidence the cleanup
+     * has for a row no profile has ever watched.
+     *
+     * Addresses that profile's file directly, the same way the poison sweep does,
+     * because the ambient store would otherwise resolve the ACTIVE profile and
+     * answer about the wrong library. Nothing here writes, and the [lastGood]
+     * fallback is deliberately not used: a blob that will not parse answers "no
+     * copy here", which leaves the row alone. The other direction - serving a
+     * remembered copy of someone else's list as evidence to delete with - is the
+     * one a read-only witness must not take.
+     */
+    fun myListForProfile(context: Context, profileId: String): List<LibraryItem> {
+        val id = profileId.trim()
+        if (id.isEmpty()) return emptyList()
+
+        val appContext = context.applicationContext
+        val raw = appContext.getSharedPreferences(
+            ProfileStorage.prefsName(id, BASE_NAME),
+            Context.MODE_PRIVATE
+        ).getString(KEY_MY_LIST, null) ?: return emptyList()
+
+        val parsed = runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let(::entryFromJson)
+            }
+        }.getOrNull()
+        if (parsed == null) {
+            Log.w(TAG, "profile '$id' library blob will not parse; read as no copy")
+            return emptyList()
+        }
+        return parsed
+    }
+
     // ------------------------------------------------------------------
     // Local personal lists — profile-scoped, work with no MDBList key.
     // Stored as a JSON map of listId -> { name, items[] } so ids stay

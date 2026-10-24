@@ -95,7 +95,8 @@ class TorBoxResourceBoundsContractTest {
             "@Synchronized\\s+fun lastRound\\(\\)",
             "@Synchronized\\s+fun recordRound\\(",
             "@Synchronized\\s+fun ownershipRemediationPending\\(\\)",
-            "@Synchronized\\s+fun markOwnershipRemediated\\(\\)"
+            "@Synchronized\\s+fun markOwnershipRemediated\\(\\)",
+            "@Synchronized\\s+fun clearOwnershipRemediation\\(\\)"
         ).forEach { signature ->
             assertTrue(
                 "missing lock: $signature",
@@ -104,7 +105,7 @@ class TorBoxResourceBoundsContractTest {
         }
         assertEquals(
             "no member that does not touch the stored sets should be locked",
-            14,
+            15,
             Regex("@Synchronized[\\s\\S]{0,40}?fun ").findAll(store).count()
         )
     }

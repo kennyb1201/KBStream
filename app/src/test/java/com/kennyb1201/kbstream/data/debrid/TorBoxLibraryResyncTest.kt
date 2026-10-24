@@ -82,6 +82,38 @@ class TorBoxLibraryResyncTest {
     }
 
     @Test
+    fun `a round that cleaned up says so, and one that did not stays as short as it was`() {
+        val zone = ZoneId.of("UTC")
+        val at = Instant.parse("2026-10-23T14:02:00Z").toEpochMilli()
+
+        assertEquals(
+            "the cleanup's removals are a fact of the round, appended to whatever " +
+                "the round already said - \"the pass ran\" and \"the pass removed " +
+                "nothing\" must not read the same",
+            "Last sync 14:02 — 132 in cloud, 129 already handled · " +
+                "removed 6 titles owned by another profile",
+            torboxSyncStatusLine(
+                round(scanned = 132, added = 0, skips = 129, at = at, removed = 6),
+                zone
+            )
+        )
+        assertEquals(
+            "one is a title, not titles",
+            "Last sync 14:02 — 132 in cloud, 1 added · " +
+                "removed 1 title owned by another profile",
+            torboxSyncStatusLine(
+                round(scanned = 132, added = 1, skips = 0, at = at, removed = 1),
+                zone
+            )
+        )
+        assertEquals(
+            "and with nothing removed the line is byte-for-byte what it was",
+            "Last sync 14:02 — 4 in cloud, nothing added",
+            torboxSyncStatusLine(round(scanned = 4, added = 0, skips = 0, at = at), zone)
+        )
+    }
+
+    @Test
     fun `the gate exits say which gate stopped them`() {
         val zone = ZoneId.of("UTC")
         val at = Instant.parse("2026-10-23T14:02:00Z").toEpochMilli()
@@ -100,12 +132,13 @@ class TorBoxLibraryResyncTest {
         )
     }
 
-    private fun round(scanned: Int, added: Int, skips: Int, at: Long) =
+    private fun round(scanned: Int, added: Int, skips: Int, at: Long, removed: Int = 0) =
         TorBoxCloudStore.LastRound(
             outcome = TorBoxLibrarySync.Outcome.COMPLETED,
             scanned = scanned,
             added = added,
             handledSkips = skips,
+            removed = removed,
             atMillis = at
         )
 
@@ -115,6 +148,7 @@ class TorBoxLibraryResyncTest {
             scanned = 0,
             added = 0,
             handledSkips = 0,
+            removed = 0,
             atMillis = at
         )
 
@@ -295,6 +329,7 @@ class TorBoxLibraryResyncTest {
             "KEY_LAST_SCANNED",
             "KEY_LAST_ADDED",
             "KEY_LAST_HANDLED",
+            "KEY_LAST_REMOVED",
             "KEY_LAST_AT"
         ).forEach { key ->
             assertTrue("the round record is missing $key", recorded.contains(key))

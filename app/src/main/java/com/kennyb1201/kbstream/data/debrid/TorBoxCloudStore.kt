@@ -135,6 +135,21 @@ internal class TorBoxCloudStore(context: Context) {
     }
 
     /**
+     * Re-arms the one-time ownership cleanup for this profile.
+     *
+     * The manual Resync's other half. Clearing the processed marks lets the
+     * round look at every torrent again, but a cleanup that had already spent
+     * its single pass - however little it removed - would never run again, so
+     * the escape hatch could not reach it. Both are reset together, which is
+     * what makes "RESYNC TORBOX CLOUD" a repeatable answer to "the leaked rows
+     * are still there".
+     */
+    @Synchronized
+    fun clearOwnershipRemediation() {
+        prefs.edit().remove(KEY_OWNERSHIP_REMEDIATION_VERSION).apply()
+    }
+
+    /**
      * How many rounds running this torrent's TMDB search has come back empty.
      *
      * Kept apart from [processed] because the two answer opposite questions:
@@ -208,6 +223,7 @@ internal class TorBoxCloudStore(context: Context) {
             scanned = prefs.getInt(KEY_LAST_SCANNED, 0),
             added = prefs.getInt(KEY_LAST_ADDED, 0),
             handledSkips = prefs.getInt(KEY_LAST_HANDLED, 0),
+            removed = prefs.getInt(KEY_LAST_REMOVED, 0),
             atMillis = prefs.getLong(KEY_LAST_AT, 0L)
         )
     }
@@ -220,6 +236,7 @@ internal class TorBoxCloudStore(context: Context) {
             .putInt(KEY_LAST_SCANNED, report.scanned)
             .putInt(KEY_LAST_ADDED, report.added)
             .putInt(KEY_LAST_HANDLED, report.handledSkips)
+            .putInt(KEY_LAST_REMOVED, report.removed)
             .putLong(KEY_LAST_AT, System.currentTimeMillis())
             .apply()
     }
@@ -276,6 +293,8 @@ internal class TorBoxCloudStore(context: Context) {
         val scanned: Int,
         val added: Int,
         val handledSkips: Int,
+        /** Rows the one-time cleanup took out of this profile's list. */
+        val removed: Int,
         val atMillis: Long
     )
 
@@ -303,7 +322,7 @@ internal class TorBoxCloudStore(context: Context) {
          * evidence), which re-runs it once for every profile that has already
          * been through an older version.
          */
-        private const val OWNERSHIP_REMEDIATION_VERSION = 1
+        private const val OWNERSHIP_REMEDIATION_VERSION = 2
         private const val KEY_OWNERSHIP_REMEDIATION_VERSION =
             "torbox_library_ownership_remediation_version"
 
@@ -311,6 +330,7 @@ internal class TorBoxCloudStore(context: Context) {
         private const val KEY_LAST_SCANNED = "torbox_library_last_scanned"
         private const val KEY_LAST_ADDED = "torbox_library_last_added"
         private const val KEY_LAST_HANDLED = "torbox_library_last_handled"
+        private const val KEY_LAST_REMOVED = "torbox_library_last_removed"
         private const val KEY_LAST_AT = "torbox_library_last_at"
     }
 }
@@ -332,7 +352,7 @@ internal fun torboxSyncStatusLine(
     if (round == null) return "Not run yet on this device"
     val at = DateTimeFormatter.ofPattern("HH:mm")
         .format(Instant.ofEpochMilli(round.atMillis).atZone(zone))
-    return when (round.outcome) {
+    val base = when (round.outcome) {
         // A gate exit is still a round: it says why nothing happened, which is
         // more than the silent return it replaced.
         TorBoxLibrarySync.Outcome.NO_KEY -> "Last sync $at — no TorBox key set"
@@ -359,4 +379,12 @@ internal fun torboxSyncStatusLine(
                 "Last sync $at — ${round.scanned} in cloud, nothing added"
             }
     }
+    // The cleanup's own outcome, when it had one. Appended rather than folded
+    // into the branches: a round's adds and a cleanup's removals are different
+    // facts, and "the round ran" must not read the same as "the cleanup found
+    // nothing" - which is exactly how the field's still-leaking Library looked
+    // from Settings while the pass was silently keeping every row.
+    if (round.removed <= 0) return base
+    val titles = if (round.removed == 1) "title" else "titles"
+    return "$base · removed ${round.removed} $titles owned by another profile"
 }
