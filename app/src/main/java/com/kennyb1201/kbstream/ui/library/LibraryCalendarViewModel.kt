@@ -573,10 +573,11 @@ class LibraryCalendarViewModel(
         // The detail's next_episode_to_air is a second, independent statement
         // about the schedule - the one the Home Upcoming rail builds its card
         // from. A returning show's premiere is announced there before TMDB's
-        // season payload carries it, so without this the rail already knew a
-        // date the calendar could not place. Kept only when the payloads are
-        // silent about that episode (see CalendarShow.nextEpisode).
-        val announced = announcedNextEpisode(detail.nextEpisodeToAir, seasons)
+        // season payload DATES it, so without this the rail already knew a date
+        // the calendar could not place. Always carried; the month builder skips
+        // it only when a payload row could date that episode (see
+        // CalendarShow.nextEpisode).
+        val announced = announcedNextEpisode(detail.nextEpisodeToAir)
 
         if (seasons.isEmpty() && announced == null) return null
 
@@ -611,17 +612,21 @@ class LibraryCalendarViewModel(
 
     /**
      * The detail pointer as an episode to place, or null when there is nothing
-     * to add: no pointer, no episode number, or a season payload that already
-     * lists the episode (the ordinary case, which the payloads place on their
-     * own).
+     * to place: no pointer, or no episode number.
+     *
+     * The duplicate check is NOT here, because presence is the wrong test: a
+     * season payload lists an announced episode long before it dates it (and a
+     * season list cached before the dates went in keeps the undated row for a
+     * week), so a payload that merely names the episode used to cancel the one
+     * statement that knew the date - Bad Monkey's Dec 1 premiere. The pointer
+     * is always carried and [calendarEpisodesFor] places it only when no
+     * payload row could DATE that episode, which is where the dates are known.
      */
     private fun announcedNextEpisode(
-        next: TmdbEpisodeAirInfo?,
-        seasons: Map<Int, List<ResolvedEpisode>>
+        next: TmdbEpisodeAirInfo?
     ): CalendarNextEpisode? {
         val season = next?.seasonNumber?.takeIf { it > 0 } ?: return null
         val number = next.episodeNumber?.takeIf { it > 0 } ?: return null
-        if (seasons[season].orEmpty().any { it.episodeNumber == number }) return null
 
         return CalendarNextEpisode(
             season = season,

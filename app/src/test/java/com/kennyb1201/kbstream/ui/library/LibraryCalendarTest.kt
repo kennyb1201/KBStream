@@ -231,6 +231,72 @@ class LibraryCalendarTest {
     }
 
     @Test
+    fun `an announced episode the payload lists WITHOUT a date is still on its day`() {
+        // Field report (2026-10-25): Bad Monkey's season 2 premiere is Dec 1 on
+        // the Home Upcoming rail and nowhere on the calendar. The rail reads
+        // TMDB's next_episode_to_air; the calendar reads the season payload,
+        // and season 2 exists with its ten episodes but no dates - so a
+        // presence-based duplicate check cancelled the pointer and the
+        // payload then dropped every undated row. Presence is not a date.
+        val december = YearMonth.of(2026, 12)
+        val month = buildCalendarMonth(
+            month = december,
+            shows = listOf(
+                CalendarShow(
+                    showId = "tmdb:130853",
+                    openId = "tt15203646",
+                    title = "Bad Monkey",
+                    seasons = mapOf(
+                        2 to listOf(episode(1, null), episode(2, null), episode(3, null))
+                    ),
+                    nextEpisode = CalendarNextEpisode(
+                        season = 2,
+                        episode = episode(1, "2026-12-01", name = "Episode 1")
+                    )
+                )
+            ),
+            today = today
+        )
+
+        val rows = month.episodesOn(LocalDate.of(2026, 12, 1))
+        assertEquals("the pointer's date is the only date there is", 1, rows.size)
+        assertEquals(2, rows.single().season)
+        assertEquals(1, rows.single().episode)
+        assertTrue("it opens the season", rows.single().isPremiere)
+    }
+
+    @Test
+    fun `a payload row that dates the episode keeps its day and is not doubled`() {
+        // The other side of the same rule: once the payload knows a date, it
+        // wins and the pointer adds nothing - one row, on the payload's day,
+        // even when the pointer disagrees.
+        val december = YearMonth.of(2026, 12)
+        val month = buildCalendarMonth(
+            month = december,
+            shows = listOf(
+                CalendarShow(
+                    showId = "tmdb:130853",
+                    openId = "tt15203646",
+                    title = "Bad Monkey",
+                    seasons = mapOf(2 to listOf(episode(1, "2026-12-08"))),
+                    nextEpisode = CalendarNextEpisode(
+                        season = 2,
+                        episode = episode(1, "2026-12-01")
+                    )
+                )
+            ),
+            today = today
+        )
+
+        assertEquals(
+            "nothing on the pointer's day",
+            0,
+            month.episodesOn(LocalDate.of(2026, 12, 1)).size
+        )
+        assertEquals(1, month.episodesOn(LocalDate.of(2026, 12, 8)).size)
+    }
+
+    @Test
     fun `an episode the payload already lists is never placed twice`() {
         val month = buildCalendarMonth(
             month = october,
