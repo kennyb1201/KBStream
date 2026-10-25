@@ -11,13 +11,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +46,7 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.kbFolderBrowseScreenKey
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollGridEffect
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
@@ -58,6 +62,7 @@ import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.kb.KBFolderViewModel
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.kb.kbFolderCardKey
 import com.kennyb1201.kbstream.ui.kb.visibleFolderRails
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -157,16 +162,40 @@ fun KBFolderScreenMobile(
     }
 
     val hiddenTitleKeys = rememberHiddenTitleKeys()
-    val items = remember(state.rails, selectedSourceId, hiddenTitleKeys, resolvedIds) {
+    // The rails this grid is drawing: the selected source's (or every rail for
+    // "All"), minus whatever the hidden-title rule leaves empty. Kept as the
+    // RAILS, not just their flattened items, because the grid's scroll is the
+    // paging trigger for each of them (see below).
+    val visibleRails = remember(state.rails, selectedSourceId, hiddenTitleKeys, resolvedIds) {
         val rails = if (selectedSourceId != null) {
             state.rails.filter { it.sourceId == selectedSourceId }
         } else {
             state.rails
         }
-        val seen = mutableSetOf<String>()
         visibleFolderRails(rails, hiddenTitleKeys, resolvedIds)
+    }
+    val items = remember(visibleRails) {
+        val seen = mutableSetOf<String>()
+        visibleRails
             .flatMap { rail -> rail.items }
             .filter { item -> seen.add(kbFolderCardKey(item)) }
+    }
+
+    // Which of those rails have another TMDB page. A folder's manifest rails
+    // hold a fixed list, but a TMDB-backed one (a discover or list source)
+    // loads twenty titles at a time - the TV page pages it rail by rail (see
+    // FolderRailPageHandler), while this grid pages every drawn rail at once
+    // when the viewer reaches the bottom, because a flattened grid has one
+    // scrollbar and no per-rail row to hang a sentinel on.
+    val moreRailIds = remember(visibleRails, state.pagingStates) {
+        visibleRails.mapNotNull { rail ->
+            state.pagingStates[rail.sourceId]
+                ?.takeIf { it.hasMore && !it.isLoadingMore }
+                ?.let { rail.sourceId }
+        }
+    }
+    val moreLoading = remember(visibleRails, state.pagingStates) {
+        visibleRails.any { rail -> state.pagingStates[rail.sourceId]?.isLoadingMore == true }
     }
 
     // The page a Detail visit came back for: read once the folder's load has
@@ -325,8 +354,42 @@ fun KBFolderScreenMobile(
                                 )
                             }
                         }
+
+                        // A page in flight draws at the grid's end, so the
+                        // folder does not read as finished while it is still
+                        // fetching the rest of the rail.
+                        if (moreLoading) {
+                            item(key = "more-loading", span = { GridItemSpan(maxLineSpan) }) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        color = KBAccent,
+                                        strokeWidth = 2.dp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+
+                // The folder's next page: the grid's own scroll is the
+                // sentinel (the grid twin of Home's rail trigger), so a
+                // thousand-title rail is reachable on a phone instead of
+                // ending at its first twenty. `loadMoreRail` self-guards on
+                // hasMore/isLoadingMore and keeps a failed page open, so a
+                // re-ask on the next scroll delta is a no-op, not a storm.
+                InfiniteScrollGridEffect(
+                    gridState = gridState,
+                    itemCount = items.size,
+                    hasMore = moreRailIds.isNotEmpty(),
+                    isLoadingMore = moreLoading,
+                    onLoadMore = { moreRailIds.forEach(viewModel::loadMoreRail) }
+                )
             }
         }
 

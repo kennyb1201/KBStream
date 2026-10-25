@@ -66,6 +66,7 @@ import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.armHeroSource
 import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
@@ -97,6 +98,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.home.catalogRailKey
 import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
@@ -501,6 +503,16 @@ fun HomeScreenMobile(
 
                         is HomeEntry.AddonRail -> {
                             val rail = entry.rail
+                            // The rail's pagination identity, spelled by the
+                            // one function the ViewModel keys its own
+                            // bookkeeping with ([catalogRailKey]), so the
+                            // phone's scroll sentinel below asks for exactly
+                            // the rail it is drawing.
+                            val railKey = catalogRailKey(
+                                rail.addonName,
+                                rail.catalogId,
+                                rail.type
+                            )
                             item(
                                 key = "rail:" + rail.addonName + ":" + rail.catalogId +
                                     ":" + rail.type + ":" + entry.sourceIndex,
@@ -523,7 +535,36 @@ fun HomeScreenMobile(
                                         showAddon = showRailAddon
                                     )
                                 ) {
+                                    // The row's own scroll state, so the
+                                    // sentinel below can watch it.
+                                    val railRowState = rememberLazyListState()
+
+                                    // Infinite scroll, the television's own
+                                    // rule: an add-on catalog is asked for
+                                    // `skip=0` when the rail is built and for
+                                    // the next page whenever the viewer comes
+                                    // near the end of the row (see
+                                    // HomeScreen's InfiniteRailPageHandler,
+                                    // which is the same call into the same
+                                    // ViewModel). The phone row had no trigger
+                                    // at all, so it stopped dead at whatever
+                                    // the add-on returned for its first page -
+                                    // a 1000-title catalog was unreachable past
+                                    // the first batch on a phone while the TV
+                                    // walked the whole thing. Runtime-held and
+                                    // self-guarded in the ViewModel
+                                    // (loadingRails/exhaustedRails), so a fast
+                                    // thumb asking twice is one fetch.
+                                    InfiniteScrollEffect(
+                                        listState = railRowState,
+                                        itemCount = rail.items.size,
+                                        onLoadMore = {
+                                            viewModel.loadMoreForRail(railKey)
+                                        }
+                                    )
+
                                     LazyRow(
+                                        state = railRowState,
                                         contentPadding = PaddingValues(horizontal = 16.dp),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {

@@ -158,6 +158,57 @@ class KBFolderScreenMobileContractTest {
         )
     }
 
+    /**
+     * A TMDB-backed folder rail loads twenty titles at a time. The TV page
+     * pages it from the rail's own row (see KBFolderLayouts' own
+     * FolderRailPageHandler); the phone flattens the folder into ONE grid, so
+     * there is no row to hang a sentinel on and - before this - no trigger at
+     * all: a discover-sourced collection stopped at its first twenty on a
+     * phone while the TV walked the whole rail.
+     */
+    @Test
+    fun `the mobile folder pages the rails the tv page pages`() {
+        val mobile = mobileFolder()
+        assertTrue(
+            "the grid must use the shared grid sentinel",
+            mobile.contains("ui.components.InfiniteScrollGridEffect")
+        )
+        assertTrue(
+            "the sentinel must watch the page's own grid state",
+            mobile.contains("gridState = gridState,")
+        )
+        assertTrue(
+            "the sentinel must read the grid's live item count, so every append " +
+                "re-arms the check",
+            mobile.contains("itemCount = items.size,")
+        )
+        assertTrue(
+            "the drawn rails' own paging state must gate the trigger, or every " +
+                "scroll delta would ask again",
+            mobile.contains("hasMore = moreRailIds.isNotEmpty(),") &&
+                mobile.contains("isLoadingMore = moreLoading,")
+        )
+        assertTrue(
+            "the next page must be the ViewModel's own per-rail call",
+            mobile.contains("moreRailIds.forEach(viewModel::loadMoreRail)")
+        )
+        assertTrue(
+            "rails are addressed by sourceId - the key the ViewModel's paging " +
+                "states are stored under",
+            mobile.contains("state.pagingStates[rail.sourceId]")
+        )
+        assertTrue(
+            "a page in flight must be visible at the grid's end, or the folder " +
+                "reads as finished while it is still fetching",
+            mobile.contains("if (moreLoading) {")
+        )
+        assertTrue(
+            "the TV page must still page each rail from its own row",
+            source("com/kennyb1201/kbstream/ui/kb/KBFolderLayouts.kt")
+                .contains("viewModel.loadMoreRail(rail.sourceId)")
+        )
+    }
+
     @Test
     fun `watched candidates follow the tv page's id order`() {
         assertEquals(

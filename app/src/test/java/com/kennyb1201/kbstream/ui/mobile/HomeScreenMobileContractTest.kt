@@ -492,6 +492,58 @@ class HomeScreenMobileContractTest {
         )
     }
 
+    /**
+     * A rail's pagination is the television's rule, not a phone rule: an
+     * add-on catalog is addressed by `skip`, one page at a time, and Home asks
+     * for the next page as the viewer nears the end of the row.
+     *
+     * The phone drew `rail.items` and never asked, so a catalog stopped dead at
+     * whatever the add-on returned for `skip=0` - reported as "on home rails on
+     * mobile theres no pagination and it only shows a certain amount of items".
+     * The trigger, not the fetch, was missing: `loadMoreForRail` is the same
+     * call the TV rail makes, and it is self-guarded.
+     */
+    @Test
+    fun `an add-on rail asks for the next page on the phone too`() {
+        val mobile = mobileHome()
+        assertTrue(
+            "the phone's rail row must use the shared scroll sentinel",
+            mobile.contains("ui.components.InfiniteScrollEffect")
+        )
+
+        val row = mobile.substringAfter("is HomeEntry.AddonRail -> {")
+            .substringBefore("Every rail the loader produced has been hidden")
+
+        assertTrue(
+            "the rail row must own a scroll state the sentinel can watch",
+            row.contains("val railRowState = rememberLazyListState()")
+        )
+        assertTrue(
+            "the sentinel must be driven by the rail's own LazyRow state",
+            row.contains("state = railRowState,")
+        )
+        assertTrue(
+            "the sentinel must read the rail's live item count, so every append " +
+                "re-arms the check",
+            row.contains("itemCount = rail.items.size,")
+        )
+        assertTrue(
+            "the next page must be the ViewModel's own rail paging call",
+            row.contains("viewModel.loadMoreForRail(railKey)")
+        )
+        assertTrue(
+            "the rail's key must come from the one spelling the ViewModel keys " +
+                "its pagination with (catalogRailKey), or the page lands on a " +
+                "rail the phone is not drawing",
+            row.contains("val railKey = catalogRailKey(")
+        )
+        assertTrue(
+            "the television rail must keep the same trigger - this is parity, " +
+                "not a phone-only paging rule",
+            homeScreen().contains("InfiniteRailPageHandler(")
+        )
+    }
+
     @Test
     fun `the mobile home does not edit the tv hero or rails`() {
         // The only HomeScreen edit is the dispatch; the rail-card and hero code

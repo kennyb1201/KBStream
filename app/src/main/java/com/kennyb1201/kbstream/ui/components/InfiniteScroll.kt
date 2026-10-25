@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -68,6 +69,48 @@ fun InfiniteScrollEffect(
     LaunchedEffect(listState, itemCount, hasMore, isLoadingMore) {
         snapshotFlow {
             val info = listState.layoutInfo
+            val lastVisibleIndex = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisibleIndex to info.visibleItemsInfo.size
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisibleIndex, viewportItems) ->
+                if (
+                    hasMore &&
+                    !isLoadingMore &&
+                    shouldPrefetchNextPage(lastVisibleIndex, itemCount, viewportItems)
+                ) {
+                    onLoadMore()
+                }
+            }
+    }
+}
+
+/**
+ * The grid twin of [InfiniteScrollEffect]: same rule, same runway, read off a
+ * [LazyGridState] instead of a list's.
+ *
+ * It exists because a grid has no composable slot to hang the sentinel on — a
+ * `LazyVerticalGrid`'s content lambda is a `LazyGridScope`, not a composable
+ * scope, so the effect has to be called beside the grid rather than inside it.
+ * The phone's KB collection page is the caller: it flattens a folder's rails
+ * into one poster grid, so its own scroll is the trigger for every paged rail
+ * in the folder (the TV page runs one sentinel per rail).
+ *
+ * A grid lays out items per row, so `visibleItemsInfo` counts a screenful of
+ * cells - [paginationPrefetchRunway]'s cap is what keeps a wall of posters from
+ * asking for its next page the moment the first one paints.
+ */
+@Composable
+fun InfiniteScrollGridEffect(
+    gridState: LazyGridState,
+    itemCount: Int,
+    hasMore: Boolean = true,
+    isLoadingMore: Boolean = false,
+    onLoadMore: () -> Unit
+) {
+    LaunchedEffect(gridState, itemCount, hasMore, isLoadingMore) {
+        snapshotFlow {
+            val info = gridState.layoutInfo
             val lastVisibleIndex = info.visibleItemsInfo.lastOrNull()?.index ?: -1
             lastVisibleIndex to info.visibleItemsInfo.size
         }
