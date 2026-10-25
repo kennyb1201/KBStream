@@ -19,14 +19,16 @@ import org.junit.Test
 class FreeLineupTest {
 
     @Test
-    fun `installing into an empty profile writes the playlist and both guides`() {
+    fun `installing into an empty profile writes the playlist and all six guides`() {
         val (playlists, guides) = FreeLineup.install("", "")
 
         assertEquals("$PLAYLIST_URL|Free TV", playlists)
-        // kanya first, locals second: guide sources are read primary first and
-        // each channel keeps the FIRST source that resolves it, so the locals
-        // guide may only add what kanya cannot answer.
-        assertEquals("$EPG_URL\n$LOCALS_EPG_URL", guides)
+        // kanya, locals, then the four FAST platforms: guide sources are read
+        // primary first and each channel keeps the FIRST source that resolves
+        // it, so each later source may only add what the earlier ones cannot
+        // answer. Pluto before Roku, because Pluto is the largest FAST block and
+        // Roku is the line a viewer is most likely to have added by hand.
+        assertEquals(ALL_GUIDES.joinToString("\n"), guides)
         assertTrue(FreeLineup.isInstalled(playlists))
     }
 
@@ -38,7 +40,7 @@ class FreeLineupTest {
         )
 
         assertEquals("http://host/mine.m3u|Mine\n$PLAYLIST_URL|Free TV", playlists)
-        assertEquals("http://host/guide.xml\n$EPG_URL\n$LOCALS_EPG_URL", guides)
+        assertEquals("http://host/guide.xml\n" + ALL_GUIDES.joinToString("\n"), guides)
     }
 
     @Test
@@ -58,38 +60,69 @@ class FreeLineupTest {
 
         assertEquals(oncePlaylists, twicePlaylists)
         assertEquals(onceGuides, twiceGuides)
-        assertEquals(
-            "the guide URL must not be added twice",
-            1,
-            onceGuides.split('\n').count { it.trim() == EPG_URL }
-        )
-        assertEquals(
-            "and neither must the locals guide",
-            1,
-            onceGuides.split('\n').count { it.trim() == LOCALS_EPG_URL }
-        )
+        ALL_GUIDES.forEach { guide ->
+            assertEquals(
+                "$guide must not be added twice",
+                1,
+                onceGuides.split('\n').count { it.trim() == guide }
+            )
+        }
     }
 
     @Test
     fun `the guide lines are added one at a time`() {
         // Idempotency is per LINE, not per install: a profile whose field held
-        // only kanya (every install from an older build) gains only locals, and
-        // one that held only locals gains only kanya.
+        // only kanya (every install from an older build) gains the rest, and one
+        // that held only locals gains the rest without its order being rewritten.
         val (_, kanyaOnly) = FreeLineup.install("", EPG_URL)
-        assertEquals("$EPG_URL\n$LOCALS_EPG_URL", kanyaOnly)
+        assertEquals((listOf(EPG_URL) + ALL_GUIDES - EPG_URL).joinToString("\n"), kanyaOnly)
 
         val (_, localsOnly) = FreeLineup.install("", LOCALS_EPG_URL)
         assertEquals(
             "a viewer who pasted locals first keeps locals first",
-            "$LOCALS_EPG_URL\n$EPG_URL",
+            (listOf(LOCALS_EPG_URL, EPG_URL) + FAST_GUIDES).joinToString("\n"),
             localsOnly
         )
 
-        val (_, both) = FreeLineup.install("", "$LOCALS_EPG_URL;$EPG_URL")
+        val (_, allPresent) = FreeLineup.install("", ALL_GUIDES.joinToString(";"))
         assertEquals(
-            "both present: nothing is added and the viewer's order is not rewritten",
-            "$LOCALS_EPG_URL;$EPG_URL",
-            both
+            "all six present: nothing is added and the viewer's order is not rewritten",
+            ALL_GUIDES.joinToString(";"),
+            allPresent
+        )
+    }
+
+    @Test
+    fun `a fast line pasted by hand is kept where the viewer put it`() {
+        // Kenny's guest profile: the Roku feed typed in by hand (the address the
+        // field test used). The install adds Pluto, Samsung and Plex - in
+        // canonical order, at the END - and leaves Roku exactly where it was.
+        val (_, guides) = FreeLineup.install(
+            "$PLAYLIST_URL|Free TV",
+            "$EPG_URL;$LOCALS_EPG_URL;$ROKU_EPG_URL"
+        )
+
+        assertEquals(
+            "$EPG_URL;$LOCALS_EPG_URL;$ROKU_EPG_URL;$PLUTO_EPG_URL;$SAMSUNG_EPG_URL;$PLEX_EPG_URL",
+            guides
+        )
+    }
+
+    @Test
+    fun `only one fast line present gains the other three`() {
+        val (_, guides) = FreeLineup.install(
+            "$PLAYLIST_URL|Free TV",
+            "$EPG_URL\n$LOCALS_EPG_URL\n$PLUTO_EPG_URL"
+        )
+
+        assertEquals(ALL_GUIDES.joinToString("\n"), guides)
+        assertEquals(
+            "and the separator the field uses is kept",
+            "$EPG_URL;$LOCALS_EPG_URL;$PLUTO_EPG_URL;$SAMSUNG_EPG_URL;$PLEX_EPG_URL;$ROKU_EPG_URL",
+            FreeLineup.install(
+                "$PLAYLIST_URL|Free TV",
+                "$EPG_URL;$LOCALS_EPG_URL;$PLUTO_EPG_URL"
+            ).second
         )
     }
 
@@ -102,7 +135,7 @@ class FreeLineupTest {
         )
 
         assertEquals("the playlist entry is left exactly as it was", "$PLAYLIST_URL|Free TV", playlists)
-        assertEquals("$EPG_URL\n$LOCALS_EPG_URL", guides)
+        assertEquals(ALL_GUIDES.joinToString("\n"), guides)
     }
 
     @Test
@@ -117,10 +150,10 @@ class FreeLineupTest {
     }
 
     @Test
-    fun `removing takes out exactly the three entries it added`() {
+    fun `removing takes out exactly the seven entries it added`() {
         val (playlists, guides) = FreeLineup.remove(
             "http://host/mine.m3u|Mine\n$PLAYLIST_URL|Free TV",
-            "http://host/guide.xml\n$EPG_URL\n$LOCALS_EPG_URL"
+            "http://host/guide.xml\n" + ALL_GUIDES.joinToString("\n")
         )
 
         assertEquals("http://host/mine.m3u|Mine", playlists)
@@ -129,13 +162,14 @@ class FreeLineupTest {
     }
 
     @Test
-    fun `removing takes the locals guide out too`() {
-        // A locals guide for a lineup that is no longer installed is dead
-        // weight the importer would keep downloading - the same reason the
-        // kanya line leaves with the playlist.
+    fun `removing takes every lineup guide out`() {
+        // A guide for a lineup that is no longer installed is dead weight the
+        // importer would keep downloading - the reason the kanya line leaves
+        // with the playlist, applied to the locals file and to four multi-MB
+        // FAST feeds as well.
         val (_, guides) = FreeLineup.remove(
             "$PLAYLIST_URL|Free TV",
-            "http://host/mine.xml\n$EPG_URL\n$LOCALS_EPG_URL"
+            "http://host/mine.xml\n" + ALL_GUIDES.joinToString("\n")
         )
 
         assertEquals("http://host/mine.xml", guides)
@@ -176,6 +210,18 @@ class FreeLineupTest {
             "the US locals guide, from the public listing rather than us.m3u's header",
             "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz",
             FreeLineup.LOCALS_EPG_URL
+        )
+        assertEquals("https://i.mjh.nz/PlutoTV/us.xml.gz", FreeLineup.PLUTO_EPG_URL)
+        assertEquals(
+            "the US Samsung feed only: the non-US variants never fill",
+            "https://i.mjh.nz/SamsungTVPlus/us.xml.gz",
+            FreeLineup.SAMSUNG_EPG_URL
+        )
+        assertEquals("https://i.mjh.nz/Plex/us.xml.gz", FreeLineup.PLEX_EPG_URL)
+        assertEquals(
+            "the Roku feed the field test used against Midsomer Murders",
+            "https://i.mjh.nz/Roku/all.xml.gz",
+            FreeLineup.ROKU_EPG_URL
         )
         assertEquals(
             "the dead address stays named so old installs can be recognised",
@@ -249,8 +295,8 @@ class FreeLineupTest {
         val (_, guides) = FreeLineup.install("$PLAYLIST_URL|Free TV", LEGACY_EPG_URL)
 
         assertEquals(
-            "the dead address is swapped in place and locals appended after it",
-            "$EPG_URL\n$LOCALS_EPG_URL",
+            "the dead address is swapped in place and the rest appended after it",
+            ALL_GUIDES.joinToString("\n"),
             guides
         )
     }
@@ -277,8 +323,97 @@ class FreeLineupTest {
         assertTrue(FreeLineup.isFreeLineupEpgEntry(EPG_URL))
         assertTrue(FreeLineup.isFreeLineupEpgEntry(LEGACY_EPG_URL))
         assertTrue("the locals guide belongs to the lineup too", FreeLineup.isFreeLineupEpgEntry(LOCALS_EPG_URL))
+        FAST_GUIDES.forEach { guide ->
+            assertTrue(
+                "the FAST platform guides belong to the lineup too: $guide",
+                FreeLineup.isFreeLineupEpgEntry(guide)
+            )
+        }
         assertFalse(FreeLineup.isFreeLineupEpgEntry("http://host/mine.xml"))
         assertFalse(FreeLineup.isFreeLineupEpgEntry(""))
+    }
+
+    // ── The one-time FAST-platform-guides migration ─────────────────────────
+
+    @Test
+    fun `the fast migration appends only the missing lines in canonical order`() {
+        assertEquals(
+            "an install from before the FAST feeds gains all four, after kanya and locals",
+            FreeLineup.FastGuideDecision.Append(ALL_GUIDES.joinToString("\n")),
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "$PLAYLIST_URL|Free TV",
+                extraEpgUrls = "$EPG_URL\n$LOCALS_EPG_URL",
+                alreadyApplied = false
+            )
+        )
+        assertEquals(
+            "an empty field (the oldest install) gains them from nothing",
+            FreeLineup.FastGuideDecision.Append(FAST_GUIDES.joinToString("\n")),
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "$PLAYLIST_URL|Free TV",
+                extraEpgUrls = "",
+                alreadyApplied = false
+            )
+        )
+    }
+
+    @Test
+    fun `the fast migration keeps a hand-pasted line where the viewer typed it`() {
+        // The guest-profile case: Roku added by hand for the field test, the
+        // other three missing. Roku must not move (or be duplicated), and the
+        // field's ';' separator is kept.
+        assertEquals(
+            FreeLineup.FastGuideDecision.Append(
+                "$EPG_URL;$LOCALS_EPG_URL;$ROKU_EPG_URL;" +
+                    "$PLUTO_EPG_URL;$SAMSUNG_EPG_URL;$PLEX_EPG_URL"
+            ),
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "$PLAYLIST_URL|Free TV",
+                extraEpgUrls = "$EPG_URL;$LOCALS_EPG_URL;$ROKU_EPG_URL",
+                alreadyApplied = false
+            )
+        )
+    }
+
+    @Test
+    fun `the fast migration records four hand-pasted lines without writing`() {
+        // Order does not matter for the decision: all four present is done.
+        assertEquals(
+            FreeLineup.FastGuideDecision.RecordOnly,
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "$PLAYLIST_URL|Free TV",
+                extraEpgUrls = "$ROKU_EPG_URL\n$PLEX_EPG_URL\n$SAMSUNG_EPG_URL\n$PLUTO_EPG_URL",
+                alreadyApplied = false
+            )
+        )
+    }
+
+    @Test
+    fun `the fast migration never touches a finished or lineup-less profile`() {
+        assertEquals(
+            "already applied: a FAST line the viewer deleted stays deleted",
+            FreeLineup.FastGuideDecision.Skip,
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "$PLAYLIST_URL|Free TV",
+                extraEpgUrls = ALL_GUIDES.joinToString("\n"),
+                alreadyApplied = true
+            )
+        )
+        assertEquals(
+            "Free TV not installed: a profile with its own playlist gains nothing, " +
+                "and the flag stays unset for the next entry",
+            FreeLineup.FastGuideDecision.Skip,
+            FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = "http://host/mine.m3u|Mine",
+                extraEpgUrls = "http://host/mine.xml",
+                alreadyApplied = false
+            )
+        )
+        assertEquals(
+            "and an empty profile has no lineup to migrate for",
+            FreeLineup.FastGuideDecision.Skip,
+            FreeLineup.fastGuideDecision("", "", alreadyApplied = false)
+        )
     }
 
     // ── The one-time locals-guide migration ─────────────────────────────────
@@ -352,5 +487,15 @@ class FreeLineupTest {
         const val LOCALS_EPG_URL =
             "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz"
         const val LEGACY_EPG_URL = "https://iptv-org.github.io/epg/guides/all.xml"
+        const val PLUTO_EPG_URL = "https://i.mjh.nz/PlutoTV/us.xml.gz"
+        const val SAMSUNG_EPG_URL = "https://i.mjh.nz/SamsungTVPlus/us.xml.gz"
+        const val PLEX_EPG_URL = "https://i.mjh.nz/Plex/us.xml.gz"
+        const val ROKU_EPG_URL = "https://i.mjh.nz/Roku/all.xml.gz"
+
+        /** The FAST platform guides, in the order an install appends them. */
+        val FAST_GUIDES = listOf(PLUTO_EPG_URL, SAMSUNG_EPG_URL, PLEX_EPG_URL, ROKU_EPG_URL)
+
+        /** Everything an install writes, in import order. */
+        val ALL_GUIDES = listOf(EPG_URL, LOCALS_EPG_URL) + FAST_GUIDES
     }
 }

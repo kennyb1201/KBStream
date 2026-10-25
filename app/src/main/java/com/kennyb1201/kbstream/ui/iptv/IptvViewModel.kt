@@ -22,6 +22,9 @@ import com.kennyb1201.kbstream.data.iptv.EpgWindow
 import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.GuideImportOutcome
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
+import com.kennyb1201.kbstream.data.iptv.GuideRefreshStatus
+import com.kennyb1201.kbstream.data.iptv.GuideSourceStamps
 import com.kennyb1201.kbstream.data.iptv.epgEntryImportCoolingDown
 import com.kennyb1201.kbstream.data.iptv.GuideImportState
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
@@ -175,23 +178,32 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (installJob?.isActive == true) return
         installJob = viewModelScope.launch {
             _freeLineupInstalling.value = true
+            // A tap that wrote a guide line must import it: the opt-in is a
+            // source-list edit PLUS the import behind it (§3.4), or the new
+            // feeds' channels stay blank until somebody presses IMPORT GUIDE.
+            var guideLineWritten = false
             try {
                 if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) {
+                    val guidesBefore = _extraEpgUrls.value
                     val (playlists, guides) = FreeLineup.install(
                         extraPlaylistUrls = _extraPlaylistUrls.value,
                         extraEpgUrls = _extraEpgUrls.value
                     )
+                    guideLineWritten = guides != guidesBefore
                     writeSources(playlists, guides)
-                    // This install wrote both guide lines (kanya, then locals),
-                    // so the one-time locals migration has nothing to add for
-                    // this profile and must never resurrect a line the viewer
-                    // deletes later. Marked only in this branch: a tap on an
-                    // ALREADY-installed lineup is a reload, not a re-install.
+                    // This install wrote every guide line (kanya, locals, then
+                    // the four FAST platforms), so the one-time migrations have
+                    // nothing to add for this profile and must never resurrect a
+                    // line the viewer deletes later. Marked only in this branch:
+                    // a tap on an ALREADY-installed lineup is a reload, not a
+                    // re-install.
                     markFreeLineupLocalsEpgApplied()
+                    markFreeLineupFastEpgApplied()
                 }
                 // SKIPPED (an EPG import holds the load) is not a failure:
                 // the install stays, and the next load is the retry.
-                _freeLineupFailed.value = loadLineup() == LoadOutcome.FAILED
+                _freeLineupFailed.value =
+                    loadLineup(forceGuideRefresh = guideLineWritten) == LoadOutcome.FAILED
                 // The load this install just ran wrote the filtered cache, so
                 // the one-time migration has nothing to do for this profile.
                 if (!_freeLineupFailed.value) markFreeLineupUsFilterApplied()
@@ -310,13 +322,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * and an already-applied profile is never touched - so a viewer who deletes
      * the line keeps it deleted, and the only way back is a fresh install.
      *
-     * Nothing is imported here. The locals fill on the next IMPORT GUIDE, or the
-     * next background refresh that re-reads the source list.
+     * Nothing is imported HERE. A line that was actually written is reported
+     * back to the restore, which starts the import the new list needs (§3.4) -
+     * otherwise the locals fill only on the next IMPORT GUIDE, which is exactly
+     * the "added the line, still blank" gap this migration used to leave.
+     *
+     * @return true when a NEW guide line was written into the field.
      */
-    private fun migrateFreeLineupLocalsEpg() {
+    private fun migrateFreeLineupLocalsEpg(): Boolean {
         val applied = prefs.getBoolean(KEY_FREE_TV_LOCALS_EPG_APPLIED, false)
-        if (applied) return
-        if (_isImportingGuide.value) return
+        if (applied) return false
+        if (_isImportingGuide.value) return false
         when (
             val decision = FreeLineup.localsGuideDecision(
                 extraPlaylistUrls = _extraPlaylistUrls.value,
@@ -327,6 +343,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             FreeLineup.LocalsGuideDecision.Skip -> Unit
             FreeLineup.LocalsGuideDecision.RecordOnly -> {
                 // Pasted by hand already: record it, do not duplicate or move it.
+                // Nothing new to import either - the line was already there.
                 markFreeLineupLocalsEpgApplied()
             }
             is FreeLineup.LocalsGuideDecision.Append -> {
@@ -334,13 +351,70 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 saveInputs()
                 markFreeLineupLocalsEpgApplied()
                 Log.i(TAG, "FREE LINEUP LOCALS EPG migration: locals guide source added")
+                return true
             }
         }
+        return false
     }
 
     /** Records that this profile has been offered the locals guide. */
     private fun markFreeLineupLocalsEpgApplied() {
         prefs.edit().putBoolean(KEY_FREE_TV_LOCALS_EPG_APPLIED, true).apply()
+    }
+
+    /**
+     * The one-time FAST-platform-guides migration for installs that predate it.
+     *
+     * kanya is a broadcast/cable guide and the locals file carries affiliates,
+     * so neither answers a FAST channel - after both, the blanks left on the
+     * field device were the Pluto / Samsung / Plex / Roku blocks, which is
+     * precisely what four platform feeds fill. On the first entry into an
+     * install that predates them, the missing lines are appended where the field
+     * already points, and the profile remembers it did.
+     *
+     * [FreeLineup.fastGuideDecision] owns the rules; this applies them, with the
+     * same two guards the locals migration has and for the same reasons: a guide
+     * import owns the fetch/write window (the flag stays UNSET so the next entry
+     * retries), and an already-applied profile is never touched - so a viewer who
+     * deletes a FAST line keeps it deleted, and the only way back is a fresh
+     * install.
+     *
+     * Nothing is imported HERE: a write is reported back to the restore, which
+     * starts the import the new list needs (§3.4) instead of leaving the FAST
+     * channels on "added the line, still blank until import".
+     *
+     * @return true when at least one NEW guide line was written into the field.
+     */
+    private fun migrateFreeLineupFastEpg(): Boolean {
+        val applied = prefs.getBoolean(KEY_FREE_TV_FAST_EPG_APPLIED, false)
+        if (applied) return false
+        if (_isImportingGuide.value) return false
+        when (
+            val decision = FreeLineup.fastGuideDecision(
+                extraPlaylistUrls = _extraPlaylistUrls.value,
+                extraEpgUrls = _extraEpgUrls.value,
+                alreadyApplied = applied
+            )
+        ) {
+            FreeLineup.FastGuideDecision.Skip -> Unit
+            FreeLineup.FastGuideDecision.RecordOnly -> {
+                // Pasted by hand already: record it, do not duplicate or move it.
+                markFreeLineupFastEpgApplied()
+            }
+            is FreeLineup.FastGuideDecision.Append -> {
+                _extraEpgUrls.value = decision.extraEpgUrls
+                saveInputs()
+                markFreeLineupFastEpgApplied()
+                Log.i(TAG, "FREE LINEUP FAST EPG migration: platform guide sources added")
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Records that this profile has been offered the FAST platform guides. */
+    private fun markFreeLineupFastEpgApplied() {
+        prefs.edit().putBoolean(KEY_FREE_TV_FAST_EPG_APPLIED, true).apply()
     }
 
     /**
@@ -504,6 +578,20 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * Null whenever nothing is importing — see [GuideImportProgress].
      */
     val guideImport: StateFlow<GuideImportState?> = GuideImportProgress.state
+
+    private val _guideStatus = MutableStateFlow(GuideRefreshStatus())
+
+    /**
+     * Whether this profile's guide is being kept fresh: which source last
+     * imported and when, and whether the background refresh has given up (see
+     * [GuideRefreshStatus]).
+     *
+     * Republished on every entry check and after every import pass — the two
+     * moments the answer can change. A background pass that runs while no
+     * screen is open is picked up by the next entry, which is exactly when a
+     * viewer could read it.
+     */
+    internal val guideStatus: StateFlow<GuideRefreshStatus> = _guideStatus.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -1195,7 +1283,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 // An install from before the locals guide carries only kanya:
                 // add the second source first, so the guide machinery (and the
                 // import the viewer may hit next) already sees it.
-                migrateFreeLineupLocalsEpg()
+                val localsLineAdded = migrateFreeLineupLocalsEpg()
+                // An install from before the FAST platform guides carries only
+                // kanya (+ locals): add the missing platform feeds too, before
+                // the cache read, for the same reason.
+                val fastLinesAdded = migrateFreeLineupFastEpg()
+                // A line that was just written is not in any guide yet: the
+                // import below (or after the load) reads the list (§3.4).
+                val guideSourceAdded = localsLineAdded || fastLinesAdded
                 // An install from before the US filter still holds its old,
                 // unfiltered rows: rewrite the cache before this restore reads
                 // it (see [migrateFreeLineupUsFilter], spec §3).
@@ -1221,7 +1316,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // the user manually reloads (applyPlaylist merges them).
                     applyPlaylist(cachedPlaylist)
                     Log.w(TAG, "CACHE RESTORE HIT channels=${cachedPlaylist.channels.size} source=${Redaction.url(url)}")
-                    refreshIfNeeded()
+                    refreshIfNeeded(forceGuide = guideSourceAdded)
                 } else {
                     // URL is configured but nothing cached (first entry after
                     // clearing app storage, a provider purge, or a profile
@@ -1232,7 +1327,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // guide usable meanwhile: channels appear the moment the
                     // fetch + cache write finish.
                     Log.w(TAG, "CACHE RESTORE MISS source=${Redaction.url(url)} — auto-loading playlist")
-                    load()
+                    if (guideSourceAdded) loadWithGuideRefresh() else load()
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -1258,13 +1353,27 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * [load] for a load that must be followed by a guide import whatever the
+     * window says - the Free TV opt-in, whose tap just wrote new guide lines
+     * (see [startGuideImportForNewSource]).
+     */
+    private fun loadWithGuideRefresh() {
+        if (_isImportingGuide.value) {
+            _error.value = "EPG import is in progress. Please wait before loading the playlist."
+            return
+        }
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch { loadLineup(forceGuideRefresh = true) }
+    }
+
+    /**
      * The one load pipeline, answering whether a lineup is now in hand.
      *
      * Suspending rather than fire-and-forget so an install can report its own
      * outcome (see [installFreeLineup]): the free lineup's screens have to say
      * whether it worked, and a launcher cannot tell.
      */
-    private suspend fun loadLineup(): LoadOutcome {
+    private suspend fun loadLineup(forceGuideRefresh: Boolean = false): LoadOutcome {
         val url = effectiveLineupUrl()
         val name = lineupLoadName()
         // No primary playlist and no extras: there is nothing to load at all.
@@ -1300,7 +1409,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             // is in place. refreshIfNeeded's own guards make it safe: it
             // no-ops with no EPG URL, with a fresh guide, while an import
             // is in flight, and during the stall cooldown.
-            refreshIfNeeded()
+            refreshIfNeeded(forceGuide = forceGuideRefresh)
             LoadOutcome.LOADED
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -1567,25 +1676,60 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         target.value = prefix + buildMessage(error)
     }
 
-    private fun refreshIfNeeded() {
-        if (refreshJob?.isActive == true) return
+    private suspend fun refreshIfNeeded(forceGuide: Boolean = false) {
+        if (refreshJob?.isActive == true) {
+            // A newly added guide line still gets its import: the pass already
+            // running owns the playlist half, not this source.
+            if (forceGuide) startGuideImportForNewSource()
+            return
+        }
         val playlistNeedsRefresh = isStale(KEY_PLAYLIST_UPDATED_AT, PLAYLIST_REFRESH_MS)
+        // Where the stored window actually ENDS decides. The age gate below is
+        // the secondary signal: it is what lets a guide sit 12 hours old
+        // against a 20-hour window, and it says nothing at all about one whose
+        // window has already run out (see GuideRefreshPolicy).
+        val guideEndsAtMs = if (allEpgUrls().isNotEmpty()) guideDataEndsAt() else null
+        publishGuideStatus(guideEndsAtMs)
+        val guideUrgency = GuideRefreshPolicy.urgency(
+            endsAtMs = guideEndsAtMs,
+            nowMs = System.currentTimeMillis(),
+            ageStale = isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved()
+        )
+        // forceGuide: a NEW source line was just written and this profile has
+        // not imported since, so the list it would match against has changed
+        // (see startGuideImportForNewSource and the Free TV opt-in).
         val guideNeedsRefresh = allEpgUrls().isNotEmpty() &&
-            (isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved())
+            (forceGuide || GuideRefreshPolicy.needsImport(guideUrgency))
         // A source the watchdog just failed stays quiet on ENTRY: the failed
         // run could not write KEY_EPG_UPDATED_AT, so every later entry saw a
         // stale guide and started another import, which wedged again. The
         // banner from that failure is what the viewer keeps seeing; the manual
         // button is how they ask for another attempt, and it skips this.
-        val guideCoolingDown = guideNeedsRefresh && guideStalledRecently()
+        // A newly written source line is not a provider that just wedged, so
+        // the cooldown does not hold it back: an import already in flight is
+        // the only reason to skip that one (§3.4).
+        val guideCoolingDown = guideNeedsRefresh && !forceGuide && guideStalledRecently()
         // An import already in flight is not restarted by a staleness tick: the
         // guide is stale precisely BECAUSE that import has not finished, and
         // replacing it would restart a multi-minute download every half hour.
         // (This used to be implicit - the import shared the refresh job's
         // lifetime - and stays explicit now that it has a handle of its own.)
-        val guideBusy = guideImportJob?.isActive == true
+        // The flag half covers a pass the repository itself is running (the
+        // worker's), which this ViewModel has no handle for.
+        val guideBusy = guideImportJob?.isActive == true || _isImportingGuide.value
         val canImportGuide = guideNeedsRefresh && !guideCoolingDown && !guideBusy
         if (!playlistNeedsRefresh && !canImportGuide) return
+        if (canImportGuide) {
+            // The line the field check greps: what the window looked like and
+            // how urgent it was. An entry import is never deferred by playback
+            // (only the SAVE phase is paced), so URGENT means "the grid is
+            // thinning right now" - import anyway.
+            Log.i(
+                TAG,
+                "GUIDE ENTRY REFRESH urgency=$guideUrgency endsAt=$guideEndsAtMs " +
+                    "forced=$forceGuide sources=${allEpgUrls().size}"
+            )
+        }
         refreshJob = viewModelScope.launch {
             if (playlistNeedsRefresh) {
                 runCatchingCancellable { refreshPlaylistInBackground() }.onFailure { error ->
@@ -1605,6 +1749,52 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             prefs.getLong(KEY_EPG_LAST_STALL_AT, 0L),
             System.currentTimeMillis()
         )
+
+    /**
+     * Starts a guide import because a NEW source line was just written - the
+     * Free TV opt-in and the one-time source migrations (§3.4).
+     *
+     * Writing a guide line imports nothing by itself: the importer reads the
+     * source LIST when a pass starts, so a list edit with no pass behind it
+     * leaves the new feed's channels blank until somebody presses IMPORT GUIDE.
+     * That is the gap that made "install Free TV and locals just fill in" false
+     * even with the lines in place, on a profile whose guide was otherwise
+     * fresh enough that the entry refresh correctly declined.
+     *
+     * An import already in flight IS the import - it is the same pass the
+     * button would start, and it re-reads the list when it opens - so this does
+     * not start a second one. Everything else about the pass is the ordinary
+     * in-app import: no worker budget, progress shown on the setup screen.
+     */
+    private fun startGuideImportForNewSource() {
+        if (allEpgUrls().isEmpty()) return
+        if (_isImportingGuide.value || guideImportJob?.isActive == true) {
+            Log.i(TAG, "GUIDE IMPORT for a new source skipped: a pass is already running")
+            return
+        }
+        Log.i(TAG, "GUIDE IMPORT started for a newly added source sources=${allEpgUrls().size}")
+        launchGuideImport()
+    }
+
+    /**
+     * Republishes [guideStatus] from this profile's prefs and the window end.
+     *
+     * Called at the two moments the answer can change: an entry check (which
+     * already read the window end to decide whether to import) and the end of
+     * an import pass. Cheap on purpose - a pref read and a map walk.
+     */
+    private fun publishGuideStatus(endsAtMs: Long?) {
+        val urls = allEpgUrls()
+        val stamps = GuideSourceStamps.read(prefs)
+        val newest = stamps.maxByOrNull { entry -> entry.value }
+        _guideStatus.value = GuideRefreshStatus(
+            endsAtMs = endsAtMs,
+            lastGoodSource = newest?.key,
+            lastGoodAtMs = newest?.value,
+            failing = prefs.getBoolean(KEY_EPG_REFRESH_FAILING, false),
+            sourceCount = urls.size
+        )
+    }
 
     private suspend fun refreshPlaylistInBackground() {
         val url = effectiveLineupUrl()
@@ -1668,6 +1858,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                         )
                     }
                     imported++
+                    // Per SOURCE, at once: Playlist Setup's "last imported
+                    // from" line reads these, and a source that really landed
+                    // must be credited even when a later one in the same pass
+                    // fails (§3.6).
+                    GuideSourceStamps.recordSuccess(prefs, url)
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
                     if (t is EpgStalledException) {
@@ -1680,6 +1875,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
             if (imported == 0) {
+                // Nothing landed: the window is unchanged, and the status line
+                // has to show what it still is rather than go blank.
+                guideEndsAtMs = guideDataEndsAt()
                 lastError?.let { throw it }
                 return
             }
@@ -1737,6 +1935,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         } finally {
             _isImportingGuide.value = false
             GuideImportProgress.finish(outcome, guideEndsAtMs)
+            // The pass just moved the window (or failed to): the setup screen's
+            // freshness line is republished from what it left behind.
+            publishGuideStatus(guideEndsAtMs)
         }
     }
 
@@ -2085,6 +2286,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * never re-adds a locals line the viewer deleted.
          */
         const val KEY_FREE_TV_LOCALS_EPG_APPLIED = "free_tv_locals_epg_applied"
+
+        /**
+         * Whether this profile has been offered the Free TV FAST platform
+         * guides (Pluto, Samsung, Plex, Roku).
+         *
+         * Device-local and profile-scoped, beside the locals flag and for the
+         * same reason: it records what happened to THIS profile's source list,
+         * not a preference that travels - and once set, the one-time migration
+         * never re-adds a FAST line the viewer deleted.
+         */
+        const val KEY_FREE_TV_FAST_EPG_APPLIED = "free_tv_fast_epg_applied"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
 
         /**
@@ -2102,6 +2314,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * new name yet.
          */
         const val KEY_EPG_DB_NAME = "epg_db_name"
+
+        /**
+         * Whether the background guide refresh has hit its bound of empty
+         * passes, written by `EpgRefreshWorker` and read by the setup screen's
+         * status line (§3.6).
+         *
+         * The schedule is never cancelled for it (that was the bug: a week of
+         * failures used to end the periodic work), so this is the honest state
+         * a viewer can act on rather than a silent stop.
+         */
+        const val KEY_EPG_REFRESH_FAILING = "epg_refresh_failing"
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
         const val MAX_GUIDE_CHANNELS_PER_REQUEST = 80
@@ -2130,6 +2353,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // paid for.
         const val GUIDE_FUTURE_WINDOW_MS = EpgWindow.READ_FUTURE_MS
         const val PLAYLIST_REFRESH_MS = 6 * 60 * 60 * 1000L
+
+        /**
+         * The AGE half of the entry refresh, and since guide windows decide
+         * first it is the SECONDARY signal (see [GuideRefreshPolicy]): it only
+         * has to catch what window end cannot - a guide that holds nothing at
+         * all, and a partial pass that left one source behind while its
+         * siblings kept the window ahead.
+         */
         const val EPG_REFRESH_MS = 12 * 60 * 60 * 1000L
 
         // First catch-up refresh after the guide pipeline starts, and the
@@ -2139,10 +2370,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
         /**
          * Guide freshness is re-checked every 15th clock tick, i.e. every
-         * 30 minutes. The check is a pref read that no-ops until the guide is
-         * actually older than [EPG_REFRESH_MS], and the worker normally
-         * refreshes it first, so this fires roughly never - it is the safety
-         * net for a process that stays up (and for a worker Android deferred).
+         * 30 minutes. The check is one window-end read plus a pref read, and it
+         * no-ops while the guide's schedule still reaches past
+         * [GuideRefreshPolicy.LEAD_MS]; the worker normally refreshes it first,
+         * so this fires roughly never - it is the safety net for a process that
+         * stays up (and for a worker Android deferred), which is exactly the
+         * TV that used to sit on a guide that had aged out from under it.
          */
         const val GUIDE_STALENESS_CHECK_EVERY_TICKS = 15
     }

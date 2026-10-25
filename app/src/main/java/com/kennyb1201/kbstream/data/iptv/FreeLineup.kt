@@ -77,6 +77,63 @@ object FreeLineup {
     const val LOCALS_EPG_URL =
         "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz"
 
+    /**
+     * The PLUTO TV guide, the first of the four FAST platform guides.
+     *
+     * kanya is a broadcast/cable guide and the locals file carries affiliates,
+     * so neither answers a FAST channel: after kanya + locals the blanks left on
+     * the field device were FAST (screenshots 2026-10-25 12:38, phone), and
+     * `us.m3u` carries 214 Pluto streams - the largest FAST block by far.
+     *
+     * Provenance, stated because it is not `us.m3u`'s header either: this
+     * address comes from the same public free-EPG listing as the locals guide
+     * (free-codecs.com, "Free EPG URLs", 2026-10-07), published by i.mjh.nz,
+     * which turns each platform's own schedule into a guide file and keeps it
+     * updated. Verified live 2026-10-25: gzipped XMLTV, 430 channels, 8754
+     * programmes dated 20261025-20261026, and 172 of the playlist's 214 Pluto
+     * channels match it by display name. Community-hosted; nothing here is
+     * hosted by KBStream, and a re-scheme is an app update that re-points THIS
+     * constant.
+     */
+    const val PLUTO_EPG_URL = "https://i.mjh.nz/PlutoTV/us.xml.gz"
+
+    /**
+     * The SAMSUNG TV PLUS guide (US feed) - verified live 2026-10-25 (588
+     * channels, programmes dated 20261025, 30 of the playlist's 56 Samsung
+     * streams matched by name).
+     *
+     * The US feed only. Most raw `samsung` hits in `us.m3u` are the non-US
+     * variants (`samsungau`, `samsunguk`, `samsungnz`, `samsungse`) that the
+     * US-only filter drops, so those stay blank and that is not a miss.
+     */
+    const val SAMSUNG_EPG_URL = "https://i.mjh.nz/SamsungTVPlus/us.xml.gz"
+
+    /**
+     * The PLEX guide (US feed) - verified live 2026-10-25 (696 channels, 45420
+     * programmes dated 20261024-20261026, 4 of the playlist's 12 Plex streams
+     * matched by name; the file covers the whole Plex lineup, of which this
+     * playlist carries a dozen).
+     */
+    const val PLEX_EPG_URL = "https://i.mjh.nz/Plex/us.xml.gz"
+
+    /**
+     * The ROKU guide - the one feed of the four with field proof behind it.
+     *
+     * Kenny added this exact address by hand on 2026-10-25 13:03 and an IMPORT
+     * GUIDE filled `MidsomerMurders.us@SD` (`all3media-midsomer-1-us.roku.wurl.tv`),
+     * a single-brand FAST channel kanya does not carry, by display-name
+     * matching - so the mechanism needs no matcher change. It carries The Roku
+     * Channel lineup, not standalone Roku developer channels (American Horrors
+     * stayed blank under the same import, which is the platform's own gap, not
+     * this feed's). Verified live 2026-10-25: 728 channels, 67122 programmes,
+     * 9 of the playlist's 14 Roku streams matched by name.
+     *
+     * LAST of the four because it is the line a viewer is most likely to have
+     * pasted by hand already, and a hand-added line is never moved - see
+     * [install] and [fastGuideDecision].
+     */
+    const val ROKU_EPG_URL = "https://i.mjh.nz/Roku/all.xml.gz"
+
     /** The display name the lineup's channels are grouped under. */
     const val NAME = "Free TV"
 
@@ -153,22 +210,27 @@ object FreeLineup {
     /**
      * Whether ONE stored extra-EPG entry belongs to the free lineup.
      *
-     * True for the living address, the locals one and the legacy one, so every
-     * path that detects, strips or deduplicates the lineup's guides treats an
-     * install from any build as this lineup's entry - which is what makes
-     * [remove] complete on a not-yet-repaired install, and what takes the
-     * locals guide back out with the playlist it exists for.
+     * True for the living address, the locals one, the four FAST platform
+     * guides and the legacy one, so every path that detects, strips or
+     * deduplicates the lineup's guides treats an install from any build as this
+     * lineup's entry - which is what makes [remove] complete on a not-yet-repaired
+     * install, and what takes every guide back out with the playlist they exist
+     * for.
      *
      * The locals rule follows [remove]'s existing precedent: a kanya line the
-     * viewer typed by hand is removed with the lineup too. A viewer who wants
-     * the locals guide for some other playlist after removing Free TV re-adds
-     * it in one paste.
+     * viewer typed by hand is removed with the lineup too. The FAST lines follow
+     * it as well - a Pluto feed left behind after Free TV is removed is a guide
+     * the importer would keep downloading for a lineup that is gone, which is
+     * the dead weight this removes for the other two. A viewer who wants a FAST
+     * guide for another playlist after removing Free TV re-adds it in one paste;
+     * that is the documented tradeoff, not a bug.
      */
     fun isFreeLineupEpgEntry(entry: String): Boolean {
         val url = entry.trim()
         return url.equals(EPG_URL, ignoreCase = true) ||
             url.equals(LOCALS_EPG_URL, ignoreCase = true) ||
-            url.equals(LEGACY_EPG_URL, ignoreCase = true)
+            url.equals(LEGACY_EPG_URL, ignoreCase = true) ||
+            FAST_GUIDES.any { url.equals(it, ignoreCase = true) }
     }
 
     /**
@@ -177,14 +239,15 @@ object FreeLineup {
      * Idempotent PER LINE, not per install: an entry that is already there is
      * left exactly as written (a viewer who renamed it keeps their name), and
      * each guide line is appended only when that line is missing. So a field
-     * holding kanya but not locals gains only locals, one holding locals but
-     * not kanya gains only kanya, and one holding both is returned untouched -
-     * including a viewer who pasted the locals guide FIRST, whose order is not
-     * rewritten into the canonical one.
+     * holding kanya + locals + Roku but not Pluto, Samsung and Plex gains ONLY
+     * those three, appended at the end in canonical order; one holding all six
+     * is returned untouched - including a viewer who pasted a FAST guide first,
+     * whose order is not rewritten into the canonical one (and whose line is not
+     * moved).
      *
      * A lone dead legacy line is still repaired in place ([repairEpgEntry]) and
      * then counted as kanya, so an older install is brought forward and gains
-     * locals in the same tap.
+     * the rest in the same tap.
      */
     fun install(
         extraPlaylistUrls: String,
@@ -196,10 +259,13 @@ object FreeLineup {
             append(extraPlaylistUrls, ENTRY)
         }
         val repaired = repairEpgEntry(playlists, extraEpgUrls) ?: extraEpgUrls
-        // Kanya first, locals second. Order is load-bearing: guide sources are
-        // read primary first and each channel keeps the FIRST source that
-        // resolves it, so kanya must stay ahead of locals - the locals guide
-        // only ADDS the affiliates kanya cannot answer.
+        // Kanya, locals, then the FAST platforms. Order is load-bearing: guide
+        // sources are read primary first and each channel keeps the FIRST source
+        // that resolves it, so kanya must stay ahead of locals and both ahead of
+        // the FAST feeds - each later source only ADDS what the earlier ones
+        // cannot answer. Within FAST, Pluto (the largest block) comes first and
+        // Roku last, because Roku is the line most likely to have been pasted
+        // by hand already.
         val guides = INSTALLED_GUIDES.fold(repaired) { blob, url ->
             if (hasGuide(blob, url)) blob else append(blob, url)
         }
@@ -216,6 +282,53 @@ object FreeLineup {
 
         /** Write this blob (the line appended), then record it. */
         data class Append(val extraEpgUrls: String) : LocalsGuideDecision
+    }
+
+    /** What [fastGuideDecision] decided for one profile entry. */
+    internal sealed interface FastGuideDecision {
+        /** Leave both prefs alone: already applied, or Free TV is not installed. */
+        data object Skip : FastGuideDecision
+
+        /** Every FAST line is already in the field: record it, write nothing. */
+        data object RecordOnly : FastGuideDecision
+
+        /** Write this blob (the missing lines appended), then record it. */
+        data class Append(val extraEpgUrls: String) : FastGuideDecision
+    }
+
+    /**
+     * The one-time FAST-platform-guides migration's decision for one profile
+     * entry - [localsGuideDecision]'s shape, over the four FAST lines as a set.
+     *
+     *  - already applied -> [FastGuideDecision.Skip], which is what keeps a line
+     *    the viewer deleted from coming back;
+     *  - Free TV not installed -> [FastGuideDecision.Skip], so a profile with its
+     *    own playlist (Profile 1, which never ran Free TV) is untouched;
+     *  - all four lines present (pasted by hand, as Kenny's guest profile had
+     *    Roku) -> [FastGuideDecision.RecordOnly], never a duplicate or a move;
+     *  - otherwise -> [FastGuideDecision.Append] with ONLY the missing lines,
+     *    appended in canonical order, existing lines unmoved.
+     *
+     * The "guide import in progress" guard is the caller's: it is transient
+     * state, and the flag must stay unset so the next entry retries.
+     *
+     * Adding the lines imports NOTHING: the FAST channels fill on the next
+     * IMPORT GUIDE, the next background refresh, or the companion freshness
+     * spec's opt-in trigger. This is the same gap the locals migration has.
+     */
+    internal fun fastGuideDecision(
+        extraPlaylistUrls: String,
+        extraEpgUrls: String,
+        alreadyApplied: Boolean
+    ): FastGuideDecision = when {
+        alreadyApplied -> FastGuideDecision.Skip
+        !isInstalled(extraPlaylistUrls) -> FastGuideDecision.Skip
+        FAST_GUIDES.all { hasGuide(extraEpgUrls, it) } -> FastGuideDecision.RecordOnly
+        else -> FastGuideDecision.Append(
+            FAST_GUIDES.fold(extraEpgUrls) { blob, url ->
+                if (hasGuide(blob, url)) blob else append(blob, url)
+            }
+        )
     }
 
     /**
@@ -282,10 +395,11 @@ object FreeLineup {
     /**
      * Both prefs after removal.
      *
-     * Removes the playlist entry AND both guide entries together (kanya and the
-     * locals file, plus a not-yet-repaired legacy line) - a guide for a lineup
-     * that is no longer in the sources is dead weight the importer would keep
-     * downloading. Everything else the viewer configured is kept.
+     * Removes the playlist entry AND every guide entry together (kanya, the
+     * locals file, the four FAST platform guides, plus a not-yet-repaired legacy
+     * line) - a guide for a lineup that is no longer in the sources is dead
+     * weight the importer would keep downloading, and a multi-MB FAST feed is a
+     * lot of weight. Everything else the viewer configured is kept.
      */
     fun remove(
         extraPlaylistUrls: String,
@@ -304,8 +418,17 @@ object FreeLineup {
     private fun hasGuide(extraEpgUrls: String, url: String): Boolean =
         entries(extraEpgUrls).any { it.equals(url, ignoreCase = true) }
 
+    /**
+     * The FAST platform guides, in canonical order: largest block first, Roku
+     * last. One list, so [install], [fastGuideDecision] and
+     * [isFreeLineupEpgEntry] cannot drift apart about which lines the lineup
+     * owns.
+     */
+    private val FAST_GUIDES =
+        listOf(PLUTO_EPG_URL, SAMSUNG_EPG_URL, PLEX_EPG_URL, ROKU_EPG_URL)
+
     /** The guides an install writes, in the order they must be read in. */
-    private val INSTALLED_GUIDES = listOf(EPG_URL, LOCALS_EPG_URL)
+    private val INSTALLED_GUIDES = listOf(EPG_URL, LOCALS_EPG_URL) + FAST_GUIDES
 
     /**
      * Appends one entry, keeping the separator the field already uses: both

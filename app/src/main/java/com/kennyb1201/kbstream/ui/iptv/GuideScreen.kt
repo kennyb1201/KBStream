@@ -89,6 +89,7 @@ import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.PlaylistSources
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.GuideRefreshStatus
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
@@ -192,6 +193,7 @@ fun GuideScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
     val guideImport by viewModel.guideImport.collectAsStateWithLifecycle()
+    val guideStatus by viewModel.guideStatus.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val guideError by viewModel.guideError.collectAsStateWithLifecycle()
     val playlistUrl by viewModel.playlistUrl.collectAsStateWithLifecycle()
@@ -1200,6 +1202,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 state = guideImport,
                 nowMs = System.currentTimeMillis()
             ),
+            guideStatus = guideStatus,
             error = error,
             guideError = guideError,
             playlist = playlist,
@@ -1930,6 +1933,7 @@ private fun SetupPanel(
     isLoading: Boolean,
     isImportingGuide: Boolean,
     guideImportLabel: String,
+    guideStatus: GuideRefreshStatus,
     error: String?,
     guideError: String?,
     playlist: IptvPlaylist?,
@@ -2242,6 +2246,27 @@ private fun SetupPanel(
             Text(
                 text = guideImportLabel,
                 color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
+        // Which source last landed here, and whether the background refresh
+        // has given up: the two facts that say a guide is going stale BEFORE
+        // it reads blank, on the screen that owns the button that fixes it.
+        if (guideStatus.lastGoodLabel().isNotBlank()) {
+            Text(
+                text = guideStatus.lastGoodLabel(),
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
+        if (guideStatus.failing) {
+            Text(
+                text = GuideRefreshStatus.FAILING_LABEL,
+                color = KBRust,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp)
             )

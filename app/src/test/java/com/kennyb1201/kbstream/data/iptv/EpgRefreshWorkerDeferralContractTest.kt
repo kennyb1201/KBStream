@@ -23,9 +23,8 @@ class EpgRefreshWorkerDeferralContractTest {
 
     /**
      * `doWork`'s gate, from the decision it makes up to the import it guards.
-     * Bounded on the import side so the worker's later `Result.failure()` —
-     * the bounded empty-runs give-up, which has nothing to do with this gate —
-     * is not read as part of it.
+     * Bounded on the import side so the pass's own result handling — which has
+     * nothing to do with this gate — is not read as part of it.
      */
     private val gate: String by lazy {
         worker.readText()

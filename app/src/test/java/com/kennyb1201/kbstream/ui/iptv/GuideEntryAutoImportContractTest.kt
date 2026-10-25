@@ -32,7 +32,7 @@ class GuideEntryAutoImportContractTest {
         // install can report its own outcome; load() is the launcher around it.
         // Both halves are asserted: the launcher must still own the job that
         // runs the work, and the pipeline must still ask for the guide last.
-        val load = body("private suspend fun loadLineup(): LoadOutcome")
+        val load = body("private suspend fun loadLineup(forceGuideRefresh: Boolean = false): LoadOutcome")
 
         assertTrue(
             "the channel list has to exist before the import matches against it",
@@ -46,11 +46,11 @@ class GuideEntryAutoImportContractTest {
         val success = load.substringBefore("} catch")
         assertTrue(
             "the fresh-install path must ask for the guide, like the cache-hit path",
-            success.contains("refreshIfNeeded()")
+            success.contains("refreshIfNeeded(forceGuide = forceGuideRefresh)")
         )
         assertTrue(
             "the ask happens after applyPlaylist and the playlist stamp",
-            success.indexOf("refreshIfNeeded()") >
+            success.indexOf("refreshIfNeeded(") >
                 success.indexOf("markUpdated(KEY_PLAYLIST_UPDATED_AT)")
         )
         assertTrue(
@@ -61,7 +61,7 @@ class GuideEntryAutoImportContractTest {
 
     @Test
     fun `a failed load never starts an import`() {
-        val load = body("private suspend fun loadLineup(): LoadOutcome")
+        val load = body("private suspend fun loadLineup(forceGuideRefresh: Boolean = false): LoadOutcome")
         val failure = load.substringAfter("} catch")
 
         assertFalse(
@@ -72,7 +72,7 @@ class GuideEntryAutoImportContractTest {
 
     @Test
     fun `the call is guarded by the shared entry rules`() {
-        val entry = body("private fun refreshIfNeeded() {")
+        val entry = body("private suspend fun refreshIfNeeded(forceGuide: Boolean = false) {")
 
         assertTrue(
             "no configured URL is a no-op, so a user without EPG sees no change",

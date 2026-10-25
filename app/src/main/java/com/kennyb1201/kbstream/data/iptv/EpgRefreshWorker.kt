@@ -123,21 +123,31 @@ class EpgRefreshWorker(
         // next periodic run covers anyway.
         if (imported == 0) {
             // A source list that is entirely dead (an expired playlist host, a
-            // box that lost the network) used to retry forever: every attempt
-            // re-downloads the whole guide only to fail again, and WorkManager
-            // backs off but never stops, so the box kept waking to burn battery
-            // for a guide that was never coming back. Stop after a bounded run
-            // of consecutive empty imports; the periodic schedule still fires,
-            // and a source that recovers simply imports again and resets this.
+            // box that lost the network) must not hammer: the bound below is
+            // what stops a permanently dead set from re-downloading itself
+            // forever on every backoff.
+            //
+            // It must NOT stop the SCHEDULE though. This used to return
+            // Result.failure() at the bound, and failure cancels periodic work
+            // outright - so a bad week quietly ended the install's guide
+            // refreshes, and the only thing that ever brought them back was the
+            // next app launch re-enqueueing (UPDATE). A guide could then go
+            // blank with nothing anywhere saying why, which is the field report
+            // this whole change answers. Retry keeps WorkManager's backoff and
+            // the schedule alive; the run of empty passes is recorded instead,
+            // and Playlist Setup shows it (§3.6).
             val consecutive = prefs.getInt(KEY_EPG_EMPTY_RUNS, 0) + 1
-            prefs.edit().putInt(KEY_EPG_EMPTY_RUNS, consecutive).apply()
-            if (consecutive >= MAX_EMPTY_RUNS) {
+            val failing = consecutive >= MAX_EMPTY_RUNS
+            prefs.edit()
+                .putInt(KEY_EPG_EMPTY_RUNS, consecutive)
+                .putBoolean(KEY_EPG_REFRESH_FAILING, failing)
+                .apply()
+            if (failing) {
                 Log.w(
                     TAG,
-                    "GUIDE REFRESH GIVING UP after $consecutive empty runs; " +
-                        "waiting for the next scheduled run"
+                    "GUIDE REFRESH FAILING after $consecutive empty runs; " +
+                        "schedule kept, manual IMPORT GUIDE is the recovery"
                 )
-                return Result.failure()
             }
             return Result.retry()
         }
@@ -149,7 +159,7 @@ class EpgRefreshWorker(
     }
 
     /**
-     * Records [url] as imported at [now] and republishes the global freshness
+     * Records [url] as imported now and republishes the global freshness
      * marker as the oldest stamp among [urls].
      *
      * A source with no stamp counts as 0, i.e. never imported, which is what
@@ -163,34 +173,18 @@ class EpgRefreshWorker(
         url: String,
         urls: List<String>
     ) {
-        val now = System.currentTimeMillis()
-        val stamps = readSourceStamps(prefs).toMutableMap()
-        stamps[url] = now
-        val oldest =
-            urls.map { target -> if (target == url) now else stamps[target] ?: 0L }
-                .minOrNull()
-                ?: now
+        val stamps = GuideSourceStamps.recordSuccess(prefs, url)
+        val oldest = GuideSourceStamps.oldest(stamps, urls)
         prefs.edit()
-            .putString(
-                KEY_EPG_SOURCE_STAMPS,
-                stamps.entries.joinToString("\n") { (key, at) -> "$at|$key" }
-            )
             .putLong(KEY_EPG_UPDATED_AT, oldest)
             .putString(KEY_EPG_DB_NAME, activeGuideName())
             .putInt(KEY_EPG_EMPTY_RUNS, 0)
+            // Any source landing is what clears the "refresh failing" state:
+            // the state is about the SET importing nothing, not about one
+            // provider being broken.
+            .putBoolean(KEY_EPG_REFRESH_FAILING, false)
             .apply()
     }
-
-    /** `url -> last import` from the persisted "<epochMs>|<url>" lines. */
-    private fun readSourceStamps(prefs: SharedPreferences): Map<String, Long> =
-        prefs.getString(KEY_EPG_SOURCE_STAMPS, "").orEmpty()
-            .lineSequence()
-            .mapNotNull { line ->
-                val at = line.substringBefore('|').toLongOrNull() ?: return@mapNotNull null
-                val key = line.substringAfter('|', "")
-                if (key.isBlank()) null else key to at
-            }
-            .toMap()
 
     /**
      * Imports one guide source, giving it the per-source time budget.
@@ -264,11 +258,17 @@ class EpgRefreshWorker(
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
         const val KEY_EPG_DB_NAME = "epg_db_name"
 
-        /** `"<epochMs>|<url>"` lines: when each configured source last imported. */
-        const val KEY_EPG_SOURCE_STAMPS = "epg_source_stamps"
-
-        /** Consecutive all-sources-failed runs before this worker stops retrying. */
+        /** Consecutive all-sources-failed runs before the failing state is shown. */
         const val KEY_EPG_EMPTY_RUNS = "epg_empty_runs"
         const val MAX_EMPTY_RUNS = 5
+
+        /**
+         * The durable "guide refresh failing" state (§3.6).
+         *
+         * Shared with `IptvViewModel`, which shows it in Playlist Setup beside
+         * the button that retries. Spelled out here as well as there because the
+         * worker runs outside any screen - the two keys must stay identical.
+         */
+        const val KEY_EPG_REFRESH_FAILING = "epg_refresh_failing"
     }
 }

@@ -104,7 +104,8 @@ class FreeLineupWiringContractTest {
     fun `a failure is honest and stays removable`() {
         assertTrue(
             "the install reports its own outcome instead of assuming success",
-            viewModel.contains("_freeLineupFailed.value = loadLineup() == LoadOutcome.FAILED")
+            viewModel.contains("_freeLineupFailed.value =") &&
+                viewModel.contains("loadLineup(forceGuideRefresh = guideLineWritten) == LoadOutcome.FAILED")
         )
         assertTrue(
             "a failed load caches nothing, so the lineup stays MISSING",
@@ -313,11 +314,11 @@ class FreeLineupWiringContractTest {
             .substringBefore("private fun markFreeLineupLocalsEpgApplied()")
         assertTrue(
             "a guide import in progress skips it and leaves the flag unset to retry",
-            migration.contains("if (_isImportingGuide.value) return")
+            migration.contains("if (_isImportingGuide.value) return false")
         )
         assertTrue(
             "an already-applied profile is never touched, so a deleted line stays deleted",
-            migration.contains("if (applied) return")
+            migration.contains("if (applied) return false")
         )
         val installBlock = viewModel
             .substringAfter("if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) {")
@@ -325,6 +326,55 @@ class FreeLineupWiringContractTest {
         assertTrue(
             "a fresh install writes both lines itself and records the migration there",
             installBlock.contains("markFreeLineupLocalsEpgApplied()")
+        )
+    }
+
+    /**
+     * An install from before the FAST platform guides carries only kanya and
+     * locals, and neither answers a FAST channel - the blanks left on the field
+     * device were the Pluto / Samsung / Plex / Roku blocks, which is what four
+     * platform feeds fill. The entry restore adds the missing lines once and
+     * remembers it.
+     */
+    @Test
+    fun `an older install gains the fast platform guides once`() {
+        val restore = viewModel
+            .substringAfter("restoreJob = viewModelScope.launch {")
+            .substringBefore("} catch (t: Throwable)")
+        assertTrue(
+            "the FAST lines are written before the restore reads the sources back",
+            restore.indexOf("migrateFreeLineupFastEpg()") in 0 until
+                restore.indexOf("loadCachedExtrasLineup()")
+        )
+        assertTrue(
+            "the rules are FreeLineup's, not this screen's, and every branch is applied",
+            viewModel.contains("private fun migrateFreeLineupFastEpg()") &&
+                viewModel.contains("FreeLineup.fastGuideDecision(")
+        )
+        assertTrue(
+            "the flag lives beside the locals one: device-local, profile-scoped",
+            viewModel.contains(
+                "const val KEY_FREE_TV_FAST_EPG_APPLIED = \"free_tv_fast_epg_applied\""
+            )
+        )
+        val migration = viewModel
+            .substringAfter("private fun migrateFreeLineupFastEpg()")
+            .substringBefore("private fun markFreeLineupFastEpgApplied()")
+        assertTrue(
+            "a guide import in progress skips it and leaves the flag unset to retry",
+            migration.contains("if (_isImportingGuide.value) return false")
+        )
+        assertTrue(
+            "an already-applied profile is never touched, so a deleted line stays deleted",
+            migration.contains("if (applied) return false")
+        )
+        val installBlock = viewModel
+            .substringAfter("if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) {")
+            .substringBefore("}")
+        assertTrue(
+            "a fresh install writes every line itself and records both migrations there",
+            installBlock.contains("markFreeLineupLocalsEpgApplied()") &&
+                installBlock.contains("markFreeLineupFastEpgApplied()")
         )
     }
 

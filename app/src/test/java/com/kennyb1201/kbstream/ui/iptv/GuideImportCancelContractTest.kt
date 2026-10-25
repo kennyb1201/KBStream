@@ -86,7 +86,7 @@ class GuideImportCancelContractTest {
 
     @Test
     fun `the entry refresh starts the guide import on the shared handle`() {
-        val entry = body("private fun refreshIfNeeded() {")
+        val entry = body("private suspend fun refreshIfNeeded(forceGuide: Boolean = false) {")
         assertTrue(
             "the entry import has to be cancellable from the button too",
             entry.contains("launchGuideImport()")
@@ -105,7 +105,7 @@ class GuideImportCancelContractTest {
 
     @Test
     fun `a staleness tick never restarts an import already in flight`() {
-        val entry = body("private fun refreshIfNeeded() {")
+        val entry = body("private suspend fun refreshIfNeeded(forceGuide: Boolean = false) {")
         assertTrue(
             "the guide is stale precisely BECAUSE the import has not finished",
             entry.contains("guideImportJob?.isActive")
@@ -116,7 +116,7 @@ class GuideImportCancelContractTest {
 
     @Test
     fun `entry skips the automatic import while a stall is cooling down`() {
-        val entry = body("private fun refreshIfNeeded() {")
+        val entry = body("private suspend fun refreshIfNeeded(forceGuide: Boolean = false) {")
         assertTrue(
             "the cooldown has to gate the automatic import",
             entry.contains("guideStalledRecently()")

@@ -67,6 +67,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.GuideRefreshStatus
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
@@ -174,6 +175,7 @@ fun GuideScreenMobile(
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
         val guideImport by viewModel.guideImport.collectAsStateWithLifecycle()
+        val guideStatus by viewModel.guideStatus.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
         val guideError by viewModel.guideError.collectAsStateWithLifecycle()
         val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
@@ -446,6 +448,7 @@ fun GuideScreenMobile(
                 isLoading = isLoading,
                 isImportingGuide = isImportingGuide,
                 guideImportLabel = guideImportLabel,
+                guideStatus = guideStatus,
                 error = error,
                 guideError = guideError,
                 channelCount = visibleChannels.size,
@@ -693,6 +696,27 @@ fun GuideScreenMobile(
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
+            // Which source last landed here, and whether the background
+            // refresh has given up: the two facts that say a guide is going
+            // stale BEFORE it reads blank, beside the button that fixes it.
+            if (guideStatus.lastGoodLabel().isNotBlank()) {
+                Text(
+                    text = guideStatus.lastGoodLabel(),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+            }
+            if (guideStatus.failing) {
+                Text(
+                    text = GuideRefreshStatus.FAILING_LABEL,
+                    color = KBDanger,
+                    style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
                 )
             }
@@ -1314,6 +1338,7 @@ private fun MobileGuideSetup(
     isLoading: Boolean,
     isImportingGuide: Boolean,
     guideImportLabel: String,
+    guideStatus: GuideRefreshStatus,
     error: String?,
     guideError: String?,
     channelCount: Int,
