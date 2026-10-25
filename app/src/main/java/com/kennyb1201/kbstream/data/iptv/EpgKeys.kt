@@ -92,7 +92,93 @@ internal fun simplifyEpgChannelName(value: String): String? {
 }
 
 /** Which of the matcher's passes produced a match. */
-internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED }
+internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED, CALLSIGN }
+
+/**
+ * The callsigns a playlist channel answers to, as matcher keys.
+ *
+ * Field report (2026-10-25, phone): the epgshare01 US locals guide was
+ * configured, IMPORT GUIDE succeeded, and every local affiliate still read "No
+ * program data" - ABC KERO-TV, KGTV, KGUN-TV, KITV ...; CBS KMTV-TV, KUTV ...
+ * The guide identifies a local by its CALLSIGN alone (`<channel id="KMTV">`),
+ * while iptv-org's playlist spells the same station `CBS.us@KMTVTV` and calls it
+ * `CBS KMTV-TV` - and neither spelling, at any of the matcher's three passes,
+ * intersects `kmtv`. Two characters of station suffix and one word of network
+ * are the whole difference.
+ *
+ * So the identity this returns is the callsign and only the callsign: FCC
+ * callsigns name one station each, which is why `WFTV` stays `WFTV` whatever
+ * network it carries this season. The network is in the playlist's own tvg-id
+ * and is never part of a key here.
+ *
+ * Both spellings of a station suffix are returned, so a guide that omits it
+ * still hits: `KMTVTV` also answers `kmtv`, `KMTV-TV` likewise, while `WFTV`
+ * answers only `wftv` (stripping would leave `wf`, below the floor).
+ */
+internal fun playlistCallsignKeys(channel: IptvChannel): Set<String> =
+    epgCallsignKeys(
+        tvgId = channel.tvgId,
+        names = listOf(channel.tvgName, channel.displayName, channel.name)
+    )
+
+/**
+ * The callsign keys of one channel identity, independent of where it is stored.
+ *
+ * [playlistCallsignKeys] is this over an [IptvChannel]; the in-player guide and
+ * catch-up resolve hold a published lineup entry instead and pass the same
+ * fields, so the guide screen and the player cannot disagree about a local.
+ *
+ *  - **The tvg-id feed suffix is the primary source.** iptv-org spells a local
+ *    `<Network>.us@<CALLSIGN>` (`ABC.us@KGTV`, `CBS.us@KMTVTV`), so everything
+ *    after the first `@` is the callsign.
+ *  - **Only with no `@` at all** does the last whitespace token of the first
+ *    non-blank name stand in - the fallback for provider playlists that carry
+ *    no iptv-org ids (`CBS KMTV-TV`). It never runs when a feed suffix exists,
+ *    so a name can never override the id's callsign.
+ *  - **The guard is the tier's whole safety.** A key must look like a US
+ *    callsign: `k`/`w` first, 3-6 characters. That is what keeps `East`, `HD`,
+ *    `ABC`, `CBS` and a Mexican `XH...` station out - those keep today's
+ *    behaviour rather than gaining a wrong match.
+ */
+internal fun epgCallsignKeys(tvgId: String?, names: List<String?>): Set<String> {
+    val raw = tvgId?.takeIf { it.contains('@') }?.substringAfter('@')
+        ?: names.firstOrNull { !it.isNullOrBlank() }
+            ?.trim()
+            ?.split(WHITESPACE)
+            ?.lastOrNull()
+        ?: return emptySet()
+
+    return callsignKeysOf(raw)
+}
+
+/**
+ * The keys one raw callsign token is addressable under, or none when it is not
+ * a US callsign (see [epgCallsignKeys] for the guard).
+ */
+private fun callsignKeysOf(raw: String?): Set<String> {
+    val base = raw
+        ?.lowercase(Locale.US)
+        ?.replace(NON_ALPHANUMERIC, "")
+        ?.takeIf { it.isNotEmpty() }
+        ?: return emptySet()
+
+    // `k`/`w` and 3-6 characters: the shape of a US call sign, and nothing else.
+    if (base.length !in CALLSIGN_LENGTH..CALLSIGN_MAX_LENGTH) return emptySet()
+    if (base[0] != 'k' && base[0] != 'w') return emptySet()
+
+    val keys = LinkedHashSet<String>(2)
+    keys.add(base)
+
+    // A station suffix the guide may or may not spell: KMTVTV / KMTV-TV and
+    // KMTV are the same station. The remainder has to look like a callsign on
+    // its own, so WFTV does not become a two-letter key that would collide
+    // with everything.
+    val suffix = CALLSIGN_STATION_SUFFIXES.firstOrNull { base.endsWith(it) }
+    if (suffix != null && base.length - suffix.length >= CALLSIGN_LENGTH) {
+        keys.add(base.dropLast(suffix.length))
+    }
+    return keys
+}
 
 /**
  * Picks the guide channel for one playlist channel, trying the spellings in the
@@ -103,9 +189,15 @@ internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED }
  *  2. **The display names as spelled**, normalized (case/decoration/punctuation
  *     only). This keeps `Sky Sports 1` separate from `Sky Sports 2`.
  *  3. **The names simplified**, with quality qualifiers stripped, so
- *     `BBC One HD` still finds `BBC One`. This pass is last on purpose: it
- *     folds `HD`, `US`, `4K` and the like, which can rarely collide two
- *     genuinely different channels, so it only runs when nothing above matched.
+ *     `BBC One HD` still finds `BBC One`. This pass is deliberately after the
+ *     exact one: it folds `HD`, `US`, `4K` and the like, which can rarely
+ *     collide two genuinely different channels, so it only runs when nothing
+ *     above matched.
+ *  4. **The callsign**, [playlistCallsignKeys], so a local affiliate whose
+ *     guide channel is identified by callsign alone (`KMTV`) is reachable from
+ *     a playlist that spells it `CBS.us@KMTVTV` / `CBS KMTV-TV`. Last for the
+ *     same reason: an exact or name match must never be displaced, and the
+ *     callsign is the weaker claim (it says which station, not which feed).
  *
  * Without pass 3 the alias keys built by [epgAliasKeys] were half-wired: the
  * guide's simplified spelling was stored, but the playlist side was only ever
@@ -118,7 +210,13 @@ internal fun <T> matchEpgChannel(
     idCandidates: List<String?>,
     nameCandidates: List<String?>,
     byId: Map<String, T>,
-    byName: Map<String, T>
+    byName: Map<String, T>,
+    /**
+     * Callsign keys ([playlistCallsignKeys] of a local), tried LAST - see the
+     * fourth pass below. Empty by default, so a caller that has no callsigns to
+     * offer (and every existing test) behaves exactly as before.
+     */
+    callsignCandidates: List<String?> = emptyList()
 ): Pair<T, EpgMatchKind>? {
     for (candidate in idCandidates) {
         val key = candidate?.trim()
@@ -142,6 +240,25 @@ internal fun <T> matchEpgChannel(
             ?.let(::simplifyEpgChannelName)
             ?: continue
         byName[key]?.let { return it to EpgMatchKind.SIMPLIFIED }
+    }
+
+    // Pass 4: the callsign. LAST, deliberately - a channel that matched on its
+    // own id or its own name keeps that match, so a national feed that already
+    // resolves to its network's guide channel is never pulled onto a local
+    // affiliate's schedule, and two affiliates of one network in different
+    // markets cannot collapse onto one guide channel (their callsigns differ,
+    // and any exact match they have would already have won).
+    //
+    // Callsign keys carry no dots, so lookup and simplified spellings coincide
+    // here; both indexes are still probed because a guide may key a local by
+    // its id (`<channel id="KMTV">`) or only by a display name.
+    for (candidate in callsignCandidates) {
+        val key = candidate?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(::epgLookupKey)
+            ?: continue
+        byId[key]?.let { return it to EpgMatchKind.CALLSIGN }
+        byName[key]?.let { return it to EpgMatchKind.CALLSIGN }
     }
 
     return null
@@ -180,6 +297,15 @@ internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
                     simplifyEpgChannelName(name)?.let(keys::add)
                 }
         }
+        // Pass 4: the callsign, so a local's guide channel survives the prune.
+        //
+        // Without this the tier would be half-wired in the way that leaves no
+        // trace: the matcher would be able to resolve `CBS.us@KMTVTV` to a
+        // guide channel id `KMTV`, while the importer had already thrown that
+        // channel's programs away because no playlist key reached it. The
+        // field symptom is a successful import reporting a small kept count and
+        // a lineup of locals reading "No program data".
+        keys.addAll(playlistCallsignKeys(channel))
     }
     return keys
 }
@@ -262,3 +388,18 @@ private val NON_ALPHANUMERIC = Regex("""[^a-z0-9]+""")
 private val CHANNEL_QUALIFIERS = Regex(
     """\b(hd|uhd|fhd|sd|4k|1080p|720p|hevc|h265|h264|hdr|aac|fps|usa|us|uk|ca|au)\b"""
 )
+
+/**
+ * The station suffixes a US call sign may carry, and the reason `KMTVTV`,
+ * `KMTV-TV` and `KMTV` are one station: the guide and the playlist spell the
+ * same call sign with and without the suffix, so both keys are offered.
+ */
+private val CALLSIGN_STATION_SUFFIXES = listOf("tv", "dt", "ld", "cd")
+
+/** Shortest call sign the tier will key on; below this it is a fragment. */
+private const val CALLSIGN_LENGTH = 3
+
+/** Longest US call sign: four letters, plus the two-character station suffix. */
+private const val CALLSIGN_MAX_LENGTH = 6
+
+private val WHITESPACE = Regex("""\s+""")

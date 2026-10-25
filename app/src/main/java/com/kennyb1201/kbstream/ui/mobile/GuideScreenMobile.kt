@@ -1389,7 +1389,9 @@ private fun MobileGuideSetup(
                         text = if (freeLineupInstalling) {
                             "Loading the free channels…"
                         } else {
-                            "News, local stations and free channels."
+                            // The same US-only line the TV form carries: the
+                            // lineup's own filter (see FreeLineup.isUsChannel).
+                            "US channels only: news, local stations and free channels."
                         },
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall
@@ -1418,8 +1420,8 @@ private fun MobileGuideSetup(
                     modifier = Modifier.fillMaxWidth()
                 ) { onInstallFreeLineup() }
                 Text(
-                    text = "News, local stations and free sports channels, built in. " +
-                        "Media links only - add your own playlist any time.",
+                    text = "US channels only: news, local stations and free sports, " +
+                        "built in. Media links only - add your own playlist any time.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -1506,22 +1508,25 @@ private fun MobileGuideSetup(
 
             // Extra sources: the ViewModel merges additional M3Us into the
             // lineup and matches guide data against every EPG source. Both
-            // fields take several entries separated by ';' (the same parse the
-            // ViewModel runs), because a single-line field cannot hold a
-            // pasted list.
+            // fields take several entries, one per line (or ';'-separated, an
+            // older spelling that keeps parsing). Both are multiline because
+            // the label has always promised "one per line" and a single-line
+            // field could never deliver it - Enter was the keyboard's Done.
             SetupField(
                 label = "EXTRA PLAYLISTS (OPTIONAL)",
                 value = extraPlaylistUrls,
-                placeholder = "Separate sources with ;",
+                placeholder = "One URL per line",
                 keyboardType = KeyboardType.Uri,
+                multiline = true,
                 onValueChange = onExtraPlaylistUrlsChanged
             )
 
             SetupField(
                 label = "EXTRA EPG SOURCES (OPTIONAL)",
                 value = extraEpgUrls,
-                placeholder = "Separate sources with ;",
+                placeholder = "One URL per line",
                 keyboardType = KeyboardType.Uri,
+                multiline = true,
                 onValueChange = onExtraEpgUrlsChanged
             )
 
@@ -1632,7 +1637,9 @@ private fun SetupField(
     value: String,
     placeholder: String,
     keyboardType: KeyboardType,
-    onValueChange: (String) -> Unit
+    onValueChange: (String) -> Unit,
+    /** True for the two "one per line" list fields; single-value fields stay one line. */
+    multiline: Boolean = false
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
@@ -1650,6 +1657,7 @@ private fun SetupField(
                 onValueChange = onValueChange,
                 placeholder = placeholder,
                 keyboardType = keyboardType,
+                multiline = multiline,
                 modifier = Modifier.weight(1f)
             )
             KBPasteChip(onPaste = onValueChange)

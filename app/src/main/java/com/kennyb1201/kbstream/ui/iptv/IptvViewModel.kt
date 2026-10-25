@@ -186,6 +186,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 // SKIPPED (an EPG import holds the load) is not a failure:
                 // the install stays, and the next load is the retry.
                 _freeLineupFailed.value = loadLineup() == LoadOutcome.FAILED
+                // The load this install just ran wrote the filtered cache, so
+                // the one-time migration has nothing to do for this profile.
+                if (!_freeLineupFailed.value) markFreeLineupUsFilterApplied()
             } finally {
                 _freeLineupInstalling.value = false
                 withContext(NonCancellable) {
@@ -239,6 +242,49 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _extraEpgUrls.value = repaired
         saveInputs()
         Log.i(TAG, "FREE LINEUP guide source upgraded to the current address")
+    }
+
+    /**
+     * The one-time reload an install from before the US filter needs.
+     *
+     * The filter is a LOAD rule (see [IptvRepository.loadPlaylist]): it rewrites
+     * the cache as the playlist is read. An app update alone therefore purges
+     * nothing - the foreign rows an older build cached are still there, and the
+     * cached restore reads them straight back. On the first entry into a profile
+     * that has the built-in lineup installed, this reloads that one playlist
+     * through the ordinary path, whose cache write re-applies the filter (behind
+     * [com.kennyb1201.kbstream.data.iptv.EpgWriteGate], so it waits out playback
+     * like every other write), and then remembers that it did.
+     *
+     * A reload that fails leaves the flag UNSET: the next entry tries again, and
+     * the old rows stay until one lands - the honest state, rather than a claim
+     * that the update cleaned something it did not.
+     */
+    private suspend fun migrateFreeLineupUsFilter() {
+        if (prefs.getBoolean(KEY_FREE_TV_US_FILTER_APPLIED, false)) return
+        if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) return
+        // A guide import owns the database's write window; the same reason
+        // refreshPlaylistInBackground skips itself. The flag stays unset, so
+        // the next entry (after the import) runs this then.
+        if (_isImportingGuide.value) return
+        Log.i(TAG, "FREE LINEUP US FILTER migration: reloading the installed lineup once")
+        val reloaded = runCatchingCancellable {
+            loadPlaylistResilient(FreeLineup.PLAYLIST_URL, FreeLineup.NAME)
+        }.getOrNull()
+        if (reloaded == null) {
+            Log.w(
+                TAG,
+                "FREE LINEUP US FILTER migration did not land; retrying on the next entry"
+            )
+            return
+        }
+        markFreeLineupUsFilterApplied()
+        Log.i(TAG, "FREE LINEUP US FILTER migration done channels=${reloaded.channels.size}")
+    }
+
+    /** Records that this profile's cache has been through the US filter. */
+    private fun markFreeLineupUsFilterApplied() {
+        prefs.edit().putBoolean(KEY_FREE_TV_US_FILTER_APPLIED, true).apply()
     }
 
     /**
@@ -1090,6 +1136,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         Log.w(TAG, "CACHE RESTORE START source=${Redaction.url(url)}")
         restoreJob = viewModelScope.launch {
             try {
+                // An install from before the US filter still holds its old,
+                // unfiltered rows: rewrite the cache before this restore reads
+                // it (see [migrateFreeLineupUsFilter], spec §3).
+                migrateFreeLineupUsFilter()
                 // No primary playlist means the extras ARE the lineup, so the
                 // cache read is the extras' own (see loadCachedExtrasLineup).
                 val cachedPlaylist = if (_playlistUrl.value.isBlank()) {
@@ -1958,6 +2008,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val KEY_PLAYLIST_APPLIED_URL = "playlist_applied_url"
         const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"
         const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"
+
+        /**
+         * Whether this profile's cached Free TV lineup has been through the
+         * US-only filter. Device-local and profile-scoped: it is about the rows
+         * in THIS profile's cache, not a preference that travels.
+         */
+        const val KEY_FREE_TV_US_FILTER_APPLIED = "free_tv_us_filter_applied"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
 
         /**

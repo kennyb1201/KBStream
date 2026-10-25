@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
+import com.kennyb1201.kbstream.data.iptv.epgCallsignKeys
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 
 /**
@@ -144,11 +145,11 @@ internal fun needsGuideMatch(channel: LiveChannelZapRegistry.ZapChannel): Boolea
  *
  * The candidates mirror the guide screen's matcher exactly - ids first
  * (`tvg-id`, then the provider's own id), then names (`tvg-name`, the display
- * name) - so a channel resolves to the same guide channel whichever side ran
- * the match. The provider id matters: a playlist that leaves `tvg-id` blank
- * keeps its channel id in `channel-id`/`id`/`cuid`, and the guide screen matches
- * on it, so a player that skipped it left exactly those channels reading
- * "No guide data" while the guide screen was fully populated.
+ * name), then the callsign - so a channel resolves to the same guide channel
+ * whichever side ran the match. The provider id matters: a playlist that leaves
+ * `tvg-id` blank keeps its channel id in `channel-id`/`id`/`cuid`, and the
+ * guide screen matches on it, so a player that skipped it left exactly those
+ * channels reading "No guide data" while the guide screen was fully populated.
  */
 internal fun guideMatchQueryFor(
     channel: LiveChannelZapRegistry.ZapChannel
@@ -186,6 +187,15 @@ internal fun guideMatchQueryForSource(
         key = channel.channelId,
         epgUrl = epgUrl,
         idCandidates = listOf(channel.tvgId, channel.providerChannelId),
-        nameCandidates = listOf(channel.tvgName, channel.name)
+        nameCandidates = listOf(channel.tvgName, channel.name),
+        // The fourth pass, from the same fields the guide screen derives it
+        // from. A local is identified in the guide by callsign alone, so a
+        // query without these would resolve nothing while the guide screen
+        // resolved it - the overlay reading "No guide data" for a channel whose
+        // programs are in the database. See epgCallsignKeys.
+        callsignCandidates = epgCallsignKeys(
+            tvgId = channel.tvgId,
+            names = listOf(channel.tvgName, channel.name)
+        ).toList()
     )
 }

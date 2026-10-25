@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -43,10 +44,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +61,25 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private val KBFieldShape = KBShapeCard
+
+/**
+ * How many lines a multiline [KBTextField] shows before it scrolls inside
+ * itself.
+ *
+ * Four is the working compromise for the Playlist Setup lists: a primary URL
+ * plus a couple of extras stays fully visible, and a long pasted list stops
+ * growing before it pushes the form's RELOAD / IMPORT actions off the screen.
+ * Shared with the touch twin (ui/components/touch/TouchTextField.kt) so both
+ * surfaces bound the same way.
+ */
+internal const val MULTILINE_FIELD_MAX_LINES = 4
+
+/**
+ * The height [MULTILINE_FIELD_MAX_LINES] of `bodyMedium` needs, plus room for
+ * the caret. A dp bound rather than a measured one: the field has to be able to
+ * cap itself inside a Row that has already been measured by its caller.
+ */
+private val KBMultilineFieldMaxHeight = 96.dp
 
 /**
  * Reads plain text from the system clipboard. Returns null silently when the
@@ -155,7 +177,24 @@ fun KBTextField(
      * it kept would leave the field editable forever and no further Back could
      * ever reach the screen behind it.
      */
-    endEditingSignal: Int = 0
+    endEditingSignal: Int = 0,
+    /**
+     * Whether the field holds a LIST, one entry per line, instead of a single
+     * value.
+     *
+     * Playlist Setup's "one per line" fields are the callers: their label
+     * promised a newline the single-line field could never insert, because
+     * Enter was the IME's Done. Multiline changes what Enter and the D-pad mean
+     * and nothing else - same surface, border, cursor and `String` value, and
+     * the separators stay the parser's business (see GuideFiles).
+     *
+     * While a multiline field is being edited:
+     *  - Enter inserts a newline at the caret instead of finishing the session;
+     *  - D-pad Up/Down move the caret between lines, and only a caret already on
+     *    the first/last line hands the press on to focus navigation;
+     *  - Done/Back still end the session, and focus stays on the field.
+     */
+    multiline: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     // Manual mode starts inert: the field only becomes editable (and only then
@@ -213,87 +252,118 @@ fun KBTextField(
         }
     }
 
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        readOnly = !editing,
-        singleLine = true,
-        textStyle = TextStyle(
-            color = KBTextHi,
-            fontSize = MaterialTheme.typography.bodyMedium.fontSize
-        ),
-        cursorBrush = SolidColor(KBAccent),
-        keyboardOptions = KeyboardOptions(
-            imeAction = ImeAction.Done,
-            keyboardType = keyboardType
-        ),
-        visualTransformation = visualTransformation,
-        keyboardActions = KeyboardActions(onDone = { finishEditing() }),
-        decorationBox = { innerTextField ->
-            Row(
+    // A multiline field keeps its own caret: D-pad Up/Down must move INSIDE the
+    // text, and that decision needs a selection offset the String overload
+    // never exposes. The single-line field keeps the String overload and its
+    // exact previous behavior; this state is simply unused by it.
+    var caret by remember {
+        mutableStateOf(TextFieldValue(value, TextRange(value.length)))
+    }
+    // Adopt writes that did not come from typing - the PASTE chip replaces the
+    // whole value, a restored pref arrives after first composition - without
+    // stomping the caret while the viewer is typing here.
+    LaunchedEffect(value) {
+        if (caret.text != value) caret = TextFieldValue(value, TextRange(value.length))
+    }
+
+    val fieldTextStyle = TextStyle(
+        color = KBTextHi,
+        fontSize = MaterialTheme.typography.bodyMedium.fontSize
+    )
+
+    // The plate, border, cursor and placeholder are shared by both variants;
+    // only what a keypress MEANS differs between them.
+    val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { innerTextField ->
+        Row(
+            modifier = Modifier
+                .clip(KBFieldShape)
+                .background(KBSurfaceRaised)
+                .border(
+                    width = if (focused) 2.dp else 1.dp,
+                    color = if (focused) KBAccent
+                    else KBTextLo.copy(alpha = 0.20f),
+                    shape = KBFieldShape
+                )
+                .padding(horizontal = 14.dp, vertical = 13.dp),
+            // A list starts at its first line rather than centred against a box
+            // that has grown to several.
+            verticalAlignment = if (multiline) Alignment.Top else Alignment.CenterVertically
+        ) {
+            if (leading != null) {
+                leading()
+                Spacer(modifier = Modifier.width(10.dp))
+            }
+            Box(
                 modifier = Modifier
-                    .clip(KBFieldShape)
-                    .background(KBSurfaceRaised)
-                    .border(
-                        width = if (focused) 2.dp else 1.dp,
-                        color = if (focused) KBAccent
-                        else KBTextLo.copy(alpha = 0.20f),
-                        shape = KBFieldShape
+                    .weight(1f)
+                    // Bounded growth: a long list scrolls INSIDE the field
+                    // (BasicTextField keeps the caret in view) instead of
+                    // pushing a form's actions off the screen.
+                    .then(
+                        if (multiline) Modifier.heightIn(max = KBMultilineFieldMaxHeight)
+                        else Modifier
                     )
-                    .padding(horizontal = 14.dp, vertical = 13.dp),
-                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (leading != null) {
-                    leading()
-                    Spacer(modifier = Modifier.width(10.dp))
+                if (value.isBlank()) {
+                    Text(
+                        text = placeholder,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = if (multiline) MULTILINE_FIELD_MAX_LINES else 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-                Box(modifier = Modifier.weight(1f)) {
-                    if (value.isBlank()) {
-                        Text(
-                            text = placeholder,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    innerTextField()
-                }
+                innerTextField()
             }
-        },
-        modifier = modifier
-            .then(
-                if (focusRequester != null) Modifier.focusRequester(focusRequester)
-                else Modifier
-            )
-            .onFocusChanged {
-                focused = it.isFocused
-                // Blurring a manual-mode (or closeKeyboardOnBlur) field ends its
-                // editing state, so it is inert again the next time the D-pad
-                // lands on it instead of pulling the IME back up over whatever
-                // the user navigated to.
-                //
-                // ...but only when the viewer actually went somewhere else in
-                // THIS app. A blur that arrives while the app window is not the
-                // focused window is the system keyboard taking the focus, not a
-                // navigation: on Fire TV the leanback keyboard is a separate
-                // window, and the field is blurred the moment it opens. Ending
-                // the session there left the field readOnly while the IME was
-                // still connected, so every letter pressed on that keyboard
-                // landed nowhere and the box read blank - until ENTER on the
-                // keyboard re-armed editing through the key handler below,
-                // which is exactly the reported "blank until I hit enter".
-                if (!it.isFocused && !editingWhenLeft && windowInfo.isWindowFocused) {
-                    editing = false
-                }
-                onFocusChanged?.invoke(it.isFocused)
+        }
+    }
+
+    val fieldModifier = modifier
+        .then(
+            if (focusRequester != null) Modifier.focusRequester(focusRequester)
+            else Modifier
+        )
+        .onFocusChanged {
+            focused = it.isFocused
+            // Blurring a manual-mode (or closeKeyboardOnBlur) field ends its
+            // editing state, so it is inert again the next time the D-pad
+            // lands on it instead of pulling the IME back up over whatever
+            // the user navigated to.
+            //
+            // ...but only when the viewer actually went somewhere else in
+            // THIS app. A blur that arrives while the app window is not the
+            // focused window is the system keyboard taking the focus, not a
+            // navigation: on Fire TV the leanback keyboard is a separate
+            // window, and the field is blurred the moment it opens. Ending
+            // the session there left the field readOnly while the IME was
+            // still connected, so every letter pressed on that keyboard
+            // landed nowhere and the box read blank - until ENTER on the
+            // keyboard re-armed editing through the key handler below,
+            // which is exactly the reported "blank until I hit enter".
+            if (!it.isFocused && !editingWhenLeft && windowInfo.isWindowFocused) {
+                editing = false
             }
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) {
-                    false
-                } else {
-                    when (event.key) {
-                        Key.DirectionDown -> {
+            onFocusChanged?.invoke(it.isFocused)
+        }
+        .onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) {
+                false
+            } else {
+                when (event.key) {
+                    Key.DirectionDown -> {
+                        // While editing a list, Down belongs to the caret: a
+                        // viewer can type a second URL only if they can also
+                        // walk onto it. Only a caret already on the last
+                        // line falls through to focus navigation.
+                        val walked = if (editing && multiline) {
+                            moveCaretVertically(caret, 1)
+                        } else {
+                            null
+                        }
+                        if (walked != null) {
+                            caret = walked
+                            true
+                        } else {
                             val moved = focusManager.moveFocus(FocusDirection.Down)
                             if (moved) {
                                 keyboardController?.hide()
@@ -301,7 +371,18 @@ fun KBTextField(
                             }
                             moved
                         }
-                        Key.DirectionUp -> {
+                    }
+                    Key.DirectionUp -> {
+                        // Mirror of Down: the caret climbs the list first.
+                        val walked = if (editing && multiline) {
+                            moveCaretVertically(caret, -1)
+                        } else {
+                            null
+                        }
+                        if (walked != null) {
+                            caret = walked
+                            true
+                        } else {
                             val moved = focusManager.moveFocus(FocusDirection.Up)
                             if (moved) {
                                 keyboardController?.hide()
@@ -309,46 +390,99 @@ fun KBTextField(
                             }
                             moved
                         }
-                        // OK on a remote. In manual mode it is what starts
-                        // editing; in the default mode the IME owns it.
-                        Key.DirectionCenter -> {
-                            if (editing) {
-                                false
-                            } else {
-                                editing = true
-                                true
-                            }
-                        }
-                        Key.Enter, Key.NumPadEnter -> {
-                            if (!editing) {
-                                editing = true
-                                true
-                            } else {
-                                finishEditing()
-                                true
-                            }
-                        }
-                        // Back while editing normally belongs to the IME (it
-                        // closes the keyboard). When it reaches the app instead
-                        // it must end editing, not fall through to the screen's
-                        // back handler and drop the whole form — which is
-                        // exactly what Fire OS does: its keyboard closes AND
-                        // hands the press on, so one Back used to take the
-                        // guide's search overlay with it. [closeKeyboardOnBlur]
-                        // fields are included for that reason.
-                        Key.Back -> {
-                            if (editing && (!openKeyboardOnFocus || closeKeyboardOnBlur)) {
-                                finishEditing()
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        else -> false
                     }
+                    // OK on a remote. In manual mode it is what starts
+                    // editing; in the default mode the IME owns it.
+                    Key.DirectionCenter -> {
+                        if (editing) {
+                            false
+                        } else {
+                            editing = true
+                            true
+                        }
+                    }
+                    Key.Enter, Key.NumPadEnter -> {
+                        if (!editing) {
+                            editing = true
+                            true
+                        } else if (multiline) {
+                            // The press belongs to the field's own text
+                            // input, which inserts the newline at the caret.
+                            // Swallowing it here is exactly what turned Enter
+                            // into Done on the "one per line" lists.
+                            false
+                        } else {
+                            finishEditing()
+                            true
+                        }
+                    }
+                    // Back while editing normally belongs to the IME (it
+                    // closes the keyboard). When it reaches the app instead
+                    // it must end editing, not fall through to the screen's
+                    // back handler and drop the whole form — which is
+                    // exactly what Fire OS does: its keyboard closes AND
+                    // hands the press on, so one Back used to take the
+                    // guide's search overlay with it. [closeKeyboardOnBlur]
+                    // fields are included for that reason.
+                    Key.Back -> {
+                        if (editing && (!openKeyboardOnFocus || closeKeyboardOnBlur)) {
+                            finishEditing()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
                 }
             }
-    )
+        }
+
+    if (multiline) {
+        BasicTextField(
+            value = caret,
+            onValueChange = { next ->
+                caret = next
+                if (next.text != value) onValueChange(next.text)
+            },
+            readOnly = !editing,
+            singleLine = false,
+            textStyle = fieldTextStyle,
+            cursorBrush = SolidColor(KBAccent),
+            keyboardOptions = KeyboardOptions(
+                // Default, not Done: a list field's Enter has to insert a
+                // newline. Done/Back still end the session through the key
+                // handler above.
+                imeAction = ImeAction.Default,
+                keyboardType = keyboardType
+            ),
+            visualTransformation = visualTransformation,
+            // Enter never reaches this: with a default IME action the keyboard
+            // inserts the newline itself, and a raw ENTER is handed to the
+            // field by the handler above (see the multiline arm there). A
+            // keyboard that still offers a Done key ends the session here,
+            // which is what the field has always promised Done would do.
+            keyboardActions = KeyboardActions(onDone = { finishEditing() }),
+            decorationBox = fieldDecoration,
+            modifier = fieldModifier
+        )
+    } else {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            readOnly = !editing,
+            singleLine = true,
+            textStyle = fieldTextStyle,
+            cursorBrush = SolidColor(KBAccent),
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Done,
+                keyboardType = keyboardType
+            ),
+            visualTransformation = visualTransformation,
+            keyboardActions = KeyboardActions(onDone = { finishEditing() }),
+            decorationBox = fieldDecoration,
+            modifier = fieldModifier
+        )
+    }
 }
 
 /**
@@ -361,6 +495,42 @@ fun KBTextField(
  */
 internal fun secretFieldTransformation(revealed: Boolean): VisualTransformation =
     if (revealed) VisualTransformation.None else PasswordVisualTransformation()
+
+/**
+ * Moves a multiline field's caret one line up ([delta] -1) or down (+1),
+ * keeping the column where it fits.
+ *
+ * Returns null when there is no such line - the caret is already on the first
+ * or last one, or the text has a single line - which is the signal the key
+ * handler uses to hand the press back to focus navigation. Getting this
+ * distinction right is the whole point: without it a viewer could type a second
+ * URL but never navigate onto it, because Down would jump to the next field
+ * instead.
+ *
+ * Pure, so the RULE is unit tested (see KBMultilineFieldCaretTest) rather than
+ * only being read out of a composable this module's test suite cannot run.
+ */
+internal fun moveCaretVertically(state: TextFieldValue, delta: Int): TextFieldValue? {
+    val text = state.text
+    val lines = text.split('\n')
+    if (lines.size < 2) return null
+
+    // Which line holds the caret, and how far into it.
+    val caret = state.selection.start.coerceIn(0, text.length)
+    var line = 0
+    var column = caret
+    while (line < lines.size - 1 && column > lines[line].length) {
+        column -= lines[line].length + 1
+        line++
+    }
+
+    val target = line + delta
+    if (target !in lines.indices) return null
+
+    var offset = column.coerceAtMost(lines[target].length)
+    for (i in 0 until target) offset += lines[i].length + 1
+    return state.copy(selection = TextRange(offset))
+}
 
 /**
  * Whether a revealed key goes back to dots.

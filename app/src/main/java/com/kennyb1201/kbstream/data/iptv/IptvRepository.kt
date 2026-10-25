@@ -65,7 +65,19 @@ data class GuideMatchQuery(
     val key: String,
     val epgUrl: String,
     val idCandidates: List<String?>,
-    val nameCandidates: List<String?>
+    val nameCandidates: List<String?>,
+    /**
+     * The channel's callsign keys ([epgCallsignKeys]) for the matcher's fourth
+     * pass.
+     *
+     * Callers MUST fill this in: the guide screen resolves locals through it,
+     * and a query left at the default would keep the player overlay and
+     * catch-up history blank for exactly the channels the lineup now fills -
+     * the "guide screen has programs, the player says no guide data" split this
+     * module already carries a comment about. Empty stays the default so an
+     * older caller and every existing test keep their behaviour.
+     */
+    val callsignCandidates: List<String?> = emptyList()
 )
 
 /**
@@ -281,12 +293,37 @@ class IptvRepository(
             )
         }
 
-        val playlist = withContext(Dispatchers.Default) {
+        val parsed = withContext(Dispatchers.Default) {
             m3uParser.parse(
                 content = playlistContent,
                 sourceUrl = normalizedUrl,
                 playlistName = playlistName
             )
+        }
+
+        // The built-in lineup's US-only rule, at the one choke point every load
+        // of it passes through (see [FreeLineup.isUsChannel]): `us.m3u` is a
+        // country list that still carries a few international feeds, and the
+        // filter has to be a LOAD rule rather than an install step - the
+        // install, a refresh, and the same URL pasted into the primary or the
+        // extras slot all arrive here, and each write replaces every cached row
+        // for this URL, so a refreshed playlist cannot leak a foreign entry
+        // back in.
+        //
+        // Scoped to that URL deliberately. Any other playlist - a provider's, a
+        // custom one - keeps every channel it has, whatever country its ids
+        // name; "US only" is a promise about THIS lineup, not a global filter.
+        val playlist = if (normalizedUrl.equals(FreeLineup.PLAYLIST_URL, ignoreCase = true)) {
+            val kept = parsed.channels.filter(FreeLineup::isUsChannel)
+            Log.i(
+                TAG,
+                "PLAYLIST US FILTER kept=${kept.size} " +
+                    "dropped=${parsed.channels.size - kept.size} " +
+                    "source=${Redaction.url(normalizedUrl)}"
+            )
+            parsed.copy(channels = kept)
+        } else {
+            parsed
         }
 
         Log.d(
@@ -621,7 +658,8 @@ class IptvRepository(
                     idCandidates = query.idCandidates,
                     nameCandidates = query.nameCandidates,
                     byId = snapshot.guideById,
-                    byName = snapshot.guideByDisplayName
+                    byName = snapshot.guideByDisplayName,
+                    callsignCandidates = query.callsignCandidates
                 )?.first?.id?.let { matched -> out[query.key] = matched }
             }
         }
@@ -954,6 +992,10 @@ class IptvRepository(
     ): ResolvedEpgMatch {
         val idCandidates = listOf(channel.tvgId, channel.providerChannelId)
         val nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name)
+        // Hoisted out of the source loop: it is the channel's identity, not the
+        // source's, and a local has to reach the same guide channel whichever
+        // approved source is asked.
+        val callsignCandidates = playlistCallsignKeys(channel).toList()
 
         epgUrls.forEach { epgUrl ->
             val snapshot = snapshots.firstOrNull { it.sourceUrl == epgUrl }
@@ -968,7 +1010,8 @@ class IptvRepository(
                 idCandidates = idCandidates,
                 nameCandidates = nameCandidates,
                 byId = snapshot.guideById,
-                byName = snapshot.guideByDisplayName
+                byName = snapshot.guideByDisplayName,
+                callsignCandidates = callsignCandidates
             ) ?: return@forEach
 
             return ResolvedEpgMatch(
@@ -1432,7 +1475,8 @@ class IptvRepository(
                     key = channel.id,
                     epgUrl = guideUrl,
                     idCandidates = listOf(channel.tvgId, channel.providerChannelId),
-                    nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name)
+                    nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name),
+                    callsignCandidates = playlistCallsignKeys(channel).toList()
                 )
             )
         )[channel.id]

@@ -207,8 +207,95 @@ class FreeLineupWiringContractTest {
         )
     }
 
+    /**
+     * The lineup is US channels only, applied where its cache is WRITTEN.
+     *
+     * `us.m3u` is a country list that still carries international feeds. The
+     * filter has to be a load rule at the one choke point every load of that URL
+     * passes through - the built-in install, a refresh, or the same URL pasted
+     * into the primary or an extras slot - because that is what makes it
+     * unavoidable and what makes a refresh re-apply it. See
+     * [FreeLineup.isUsChannel] for the decision itself, which is unit-tested.
+     */
+    @Test
+    fun `the us filter sits where the lineup's cache is written`() {
+        val repository = read(REPOSITORY)
+        val load = repository
+            .substringAfter("suspend fun loadPlaylist(")
+            .substringBefore("suspend fun importGuide(")
+
+        assertTrue(
+            "the filter keys off the built-in lineup's URL, not the install path",
+            load.contains("if (normalizedUrl.equals(FreeLineup.PLAYLIST_URL, ignoreCase = true)) {")
+        )
+        assertTrue(
+            "it drops channels through FreeLineup's own rule",
+            load.contains("val kept = parsed.channels.filter(FreeLineup::isUsChannel)")
+        )
+        assertTrue(
+            "and every row written to the cache is the filtered list",
+            load.contains("channels = playlist.channels.mapIndexed { index, channel ->")
+        )
+        assertTrue(
+            "kept/dropped counts are logged with the URL redacted, like the " +
+                "cache write logs beside them",
+            load.contains("\"PLAYLIST US FILTER kept=") &&
+                load.contains("Redaction.url(normalizedUrl)")
+        )
+    }
+
+    /**
+     * An install from before the US filter still has its old, unfiltered rows
+     * cached - and the filter only runs as a load rewrites that cache, so the
+     * update alone cleans nothing. The entry restore reloads the lineup once and
+     * remembers it; a reload that did not land leaves the flag unset so the next
+     * entry tries again.
+     */
+    @Test
+    fun `an older install is reloaded once through the us filter`() {
+        assertTrue(
+            "the migration reloads the built-in lineup through the ordinary load path",
+            viewModel.contains("loadPlaylistResilient(FreeLineup.PLAYLIST_URL, FreeLineup.NAME)")
+        )
+        val restore = viewModel
+            .substringAfter("restoreJob = viewModelScope.launch {")
+            .substringBefore("} catch (t: Throwable)")
+        assertTrue(
+            "and the cached restore runs it BEFORE reading the cache back",
+            restore.indexOf("migrateFreeLineupUsFilter()") in 0 until
+                restore.indexOf("loadCachedExtrasLineup()")
+        )
+        assertTrue(
+            "the flag is per profile, in the same store as the playlist config",
+            viewModel.contains(
+                "const val KEY_FREE_TV_US_FILTER_APPLIED = \"free_tv_us_filter_applied\""
+            )
+        )
+        assertTrue(
+            "a reload that did not land leaves the flag unset",
+            viewModel.contains("if (reloaded == null) {")
+        )
+        assertTrue(
+            "a fresh install's own load already wrote the filtered cache",
+            viewModel.contains("if (!_freeLineupFailed.value) markFreeLineupUsFilterApplied()")
+        )
+    }
+
+    /** The form says the lineup is US channels only, on both form factors. */
+    @Test
+    fun `both forms say the lineup is us channels only`() {
+        listOf("the TV form" to tvGuide, "the phone form" to mobileGuide).forEach { (form, src) ->
+            assertTrue(
+                "$form must explain that the built-in lineup is US channels only, so " +
+                    "a channel the viewer finds on iptv-org but not here is not a mystery",
+                src.contains("US channels only:")
+            )
+        }
+    }
+
     private companion object {
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt"
+        const val REPOSITORY = "com/kennyb1201/kbstream/data/iptv/IptvRepository.kt"
         const val GUIDE_TV = "com/kennyb1201/kbstream/ui/iptv/GuideScreen.kt"
         const val GUIDE_MOBILE = "com/kennyb1201/kbstream/ui/mobile/GuideScreenMobile.kt"
         const val HUB_TV = "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt"

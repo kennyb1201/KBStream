@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
+import com.kennyb1201.kbstream.data.iptv.playlistCallsignKeys
 import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -1425,6 +1426,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     epgUrl = source,
                     idCandidates = listOf(channel.tvgId, channel.providerChannelId),
                     nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name),
+                    // The matcher's fourth pass, from the same fields the guide
+                    // screen uses: a local is identified in the guide by
+                    // callsign alone, so a game on one would otherwise lose its
+                    // channel line here while the guide screen filled it.
+                    callsignCandidates = playlistCallsignKeys(channel).toList(),
                 )
             }
         }

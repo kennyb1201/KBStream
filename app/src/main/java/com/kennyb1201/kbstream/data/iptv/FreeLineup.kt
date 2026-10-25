@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import java.util.Locale
+
 /**
  * The free lineup a profile with no playlist can start from.
  *
@@ -67,6 +69,48 @@ object FreeLineup {
      * in themselves.
      */
     const val INSTALLED_LABEL = "$NAME (built-in)"
+
+    /**
+     * The country an entry's `tvg-id` names, lowercased, or null when the id
+     * does not carry one.
+     *
+     * iptv-org spells a channel's id as `<name>.<country>@<feed>`
+     * (`ABC.us@WFTV`, `TNTInternational.ru@SD`), so the country is the segment
+     * after the LAST dot of the part before the `@` - the feed half is a
+     * callsign, `SD`/`HD` or a regional marker and is never a country.
+     *
+     * Null is "unknown", not "not US": an id with no dot, an empty tail, or no
+     * id at all says nothing about where a channel is from.
+     */
+    fun countryOf(tvgId: String?): String? {
+        val id = tvgId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val withoutFeed = id.substringBefore('@')
+        return withoutFeed.substringAfterLast('.', "")
+            .trim()
+            .takeIf { it.isNotEmpty() }
+            ?.lowercase(Locale.US)
+    }
+
+    /**
+     * Whether one parsed entry belongs in the built-in lineup - "just US
+     * stuff", by the country in its `tvg-id`.
+     *
+     * `us.m3u` is not cleanly US: it carries a handful of international feeds
+     * (LBC International `.lb`, Star Channel International `.gr`, TNT
+     * International `.ru`) beside the US entries. The lineup's promise is US
+     * CHANNELS, which is a country question and never a language one - a US
+     * channel broadcasting in French or Spanish (`3ABNFrench.us@SD`) stays.
+     *
+     * The rule is positive evidence only: a 2-letter code other than `us` drops
+     * the entry, and anything unprovable - no `tvg-id`, no dot, an empty tail -
+     * is KEPT. Losing a real US affiliate because its provider left the id
+     * malformed costs the viewer a channel; keeping an unidentifiable foreign
+     * one costs a row they can hide.
+     */
+    fun isUsChannel(channel: IptvChannel): Boolean {
+        val country = countryOf(channel.tvgId) ?: return true
+        return country == "us"
+    }
 
     /** True when either the playlist or the EPG half of the install is present. */
     fun isInstalled(extraPlaylistUrls: String): Boolean =

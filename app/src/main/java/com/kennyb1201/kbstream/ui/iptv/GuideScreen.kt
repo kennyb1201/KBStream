@@ -2147,6 +2147,10 @@ private fun SetupPanel(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
+            // Multiline: the label above says one per line, so Enter has to
+            // insert a newline here instead of ending the session (see
+            // KBTextField). Pressing Enter on a TV IME is what the field
+            // promised and could not do while it was single-line.
             KBTextField(
                 value = extraEpgUrls,
                 onValueChange = onExtraEpgUrlsChanged,
@@ -2154,6 +2158,7 @@ private fun SetupPanel(
                 keepFocusOnDone = true,
                 openKeyboardOnFocus = false,
                 keyboardType = KeyboardType.Uri,
+                multiline = true,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -2183,6 +2188,8 @@ private fun SetupPanel(
                 placeholder = "http://host/other.m3u|Name",
                 keepFocusOnDone = true,
                 openKeyboardOnFocus = false,
+                // Same list semantics as the EPG field directly above.
+                multiline = true,
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -2352,7 +2359,10 @@ private fun FreeLineupSetupBlock(
                         text = if (installing) {
                             "Loading the free channels…"
                         } else {
-                            "News, local stations and free channels."
+                            // Says US-only, so a channel the viewer finds on
+                            // the iptv-org site but not in the app is explained
+                            // rather than mysterious (see FreeLineup.isUsChannel).
+                            "US channels only: news, local stations and free channels."
                         },
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall
@@ -2395,8 +2405,9 @@ private fun FreeLineupSetupBlock(
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "News, local stations and free sports channels, built " +
-                            "in. Media links only - add your own playlist any time.",
+                        text = "US channels only: news, local stations and free " +
+                            "sports, built in. Media links only - add your own playlist " +
+                            "any time.",
                         color = KBTextLo,
                         style = MaterialTheme.typography.bodySmall
                     )

@@ -430,4 +430,36 @@ class ChannelGuideProgramsTest {
             guideMatchQueriesFor(entry).first().nameCandidates
         )
     }
+
+    @Test
+    fun `a local's callsign rides along as the matcher's fourth pass`() {
+        // The player and catch-up resolve build their own query instead of
+        // reading the lineup's resolved match, and the locals guide identifies a
+        // station by callsign alone - so a query without callsign candidates
+        // would read "No guide data" for a channel the guide screen had just
+        // filled (see epgCallsignKeys).
+        val entry = channel(
+            "a",
+            epgUrl = "http://epg/one",
+            tvgId = "CBS.us@KMTVTV",
+            tvgName = "CBS KMTV-TV"
+        )
+
+        assertEquals(
+            listOf("kmtvtv", "kmtv"),
+            guideMatchQueryFor(entry)?.callsignCandidates
+        )
+    }
+
+    @Test
+    fun `a national feed offers no callsign candidates`() {
+        val entry = channel(
+            "a",
+            epgUrl = "http://epg/one",
+            tvgId = "AE.us@East",
+            tvgName = "A&E"
+        )
+
+        assertEquals(emptyList<String>(), guideMatchQueryFor(entry)?.callsignCandidates)
+    }
 }

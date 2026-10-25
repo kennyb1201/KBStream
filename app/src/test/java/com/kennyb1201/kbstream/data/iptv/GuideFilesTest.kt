@@ -33,6 +33,32 @@ class GuideFilesTest {
     }
 
     @Test
+    fun `a list typed one per line parses exactly like one typed with semicolons`() {
+        // Playlist Setup's two list fields are multiline now, so a list can
+        // arrive with real newlines - the spelling the label always promised.
+        // ';' was the workaround while Enter could only finish the field. Both
+        // reach this one parse, so a value typed either way keeps working, and
+        // an older ';' list is neither rewritten nor re-split on load.
+        val perLine = "http://b/m3u\nhttp://c/m3u"
+        val semicolons = "http://b/m3u;http://c/m3u"
+
+        assertEquals(
+            listOf("http://a/m3u", "http://b/m3u", "http://c/m3u"),
+            playlistUrlsOf("http://a/m3u", perLine)
+        )
+        assertEquals(
+            playlistUrlsOf("http://a/m3u", semicolons),
+            playlistUrlsOf("http://a/m3u", perLine)
+        )
+        // A list that mixes the two spellings - what a viewer who pasted part of
+        // it and typed the rest would produce - is still one list.
+        assertEquals(
+            playlistUrlsOf("http://a/m3u", semicolons),
+            playlistUrlsOf("http://a/m3u", "http://b/m3u\n\nhttp://c/m3u")
+        )
+    }
+
+    @Test
     fun `a playlist listed twice is one playlist`() {
         assertEquals(
             listOf("http://a/m3u"),

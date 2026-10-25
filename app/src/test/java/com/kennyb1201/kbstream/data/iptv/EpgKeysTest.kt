@@ -200,6 +200,215 @@ class EpgKeysTest {
         )
     }
 
+    // ── Callsign keys (locals, and only locals) ──────────────────────────
+
+    @Test
+    fun `a local's callsign comes from its tvg-id feed suffix`() {
+        // Field report (2026-10-25): the locals guide identifies a station by
+        // callsign alone, and iptv-org spells the same station
+        // `<Network>.us@<CALLSIGN>` - so the suffix is the callsign.
+        assertEquals(
+            setOf("kmtvtv", "kmtv"),
+            playlistCallsignKeys(channel("c1", name = "CBS KMTV-TV", tvgId = "CBS.us@KMTVTV"))
+        )
+        assertEquals(
+            "KGTV strips to kg, below the floor, so it keeps its own spelling only",
+            setOf("kgtv"),
+            playlistCallsignKeys(channel("c2", name = "ABC KGTV", tvgId = "ABC.us@KGTV"))
+        )
+        assertEquals(
+            setOf("wftv"),
+            playlistCallsignKeys(channel("c3", name = "ABC WFTV", tvgId = "ABC.us@WFTV"))
+        )
+    }
+
+    @Test
+    fun `a national feed's suffix is never a callsign`() {
+        // `East`, `HD` and a bare network are what a national feed carries; the
+        // k/w guard is what keeps the tier from keying on them.
+        assertEquals(
+            emptySet<String>(),
+            playlistCallsignKeys(channel("c4", name = "ABC East", tvgId = "ABC.us@East"))
+        )
+        assertEquals(
+            emptySet(),
+            playlistCallsignKeys(channel("c5", name = "A&E East", tvgId = "AE.us@East"))
+        )
+        assertEquals(
+            emptySet(),
+            playlistCallsignKeys(channel("c6", name = "Channel HD", tvgId = "Channel.uk@HD"))
+        )
+    }
+
+    @Test
+    fun `a name token stands in only when the id has no feed suffix`() {
+        assertEquals(
+            setOf("kmtvtv", "kmtv"),
+            playlistCallsignKeys(channel("c7", name = "CBS KMTV-TV", tvgId = null))
+        )
+        // The id's suffix is authoritative: a name can never override it.
+        assertEquals(
+            setOf("kgtv"),
+            playlistCallsignKeys(channel("c8", name = "CBS KMTV-TV", tvgId = "ABC.us@KGTV"))
+        )
+    }
+
+    @Test
+    fun `the guard keeps fragments and non-US shapes out`() {
+        assertEquals(
+            "two characters is a fragment, not a callsign",
+            emptySet<String>(),
+            playlistCallsignKeys(channel("c9", name = "KW", tvgId = "Net.us@KW"))
+        )
+        assertEquals(
+            "longer than a callsign plus its station suffix",
+            emptySet(),
+            playlistCallsignKeys(channel("c10", name = "Too Long", tvgId = "Net.us@KMTVTVX"))
+        )
+        assertEquals(
+            "a Mexican station keeps today's behavior: no key, no regression",
+            emptySet(),
+            playlistCallsignKeys(channel("c11", name = "XEW", tvgId = "Net.mx@XEW"))
+        )
+        assertEquals(
+            "and the network name is not a callsign either",
+            emptySet(),
+            playlistCallsignKeys(channel("c12", name = "ABC", tvgId = "ABC.us@ABC"))
+        )
+    }
+
+    @Test
+    fun `every station suffix a guide may spell is folded`() {
+        listOf(
+            "KMTVTV" to "kmtv",
+            "WABC-DT" to "wabc",
+            "KNBC-LD" to "knbc",
+            "KCAL-CD" to "kcal"
+        ).forEach { (callsign, stripped) ->
+            assertEquals(
+                "$callsign answers its own spelling and the stripped one",
+                setOf(callsign.lowercase().replace("-", ""), stripped),
+                playlistCallsignKeys(channel("c", name = callsign, tvgId = "Net.us@$callsign"))
+            )
+        }
+    }
+
+    // ── The callsign is the matcher's LAST pass ───────────────────────────
+
+    private val kmtv = channel("kmtv", name = "CBS KMTV-TV", tvgId = "CBS.us@KMTVTV")
+
+    private fun callsigns(channel: IptvChannel) = playlistCallsignKeys(channel).toList()
+
+    @Test
+    fun `an exact id beats the callsign`() {
+        assertEquals(
+            "guide-id" to EpgMatchKind.ID,
+            matchEpgChannel(
+                idCandidates = listOf(kmtv.tvgId),
+                nameCandidates = listOf(kmtv.name),
+                byId = mapOf("cbs.uskmtvtv" to "guide-id", "kmtv" to "guide-callsign"),
+                byName = emptyMap(),
+                callsignCandidates = callsigns(kmtv)
+            )
+        )
+    }
+
+    @Test
+    fun `an exact name beats the callsign`() {
+        assertEquals(
+            "guide-name" to EpgMatchKind.NAME,
+            matchEpgChannel(
+                idCandidates = listOf(kmtv.tvgId),
+                nameCandidates = listOf(kmtv.name),
+                byId = emptyMap(),
+                byName = mapOf("cbskmtvtv" to "guide-name", "kmtv" to "guide-callsign"),
+                callsignCandidates = callsigns(kmtv)
+            )
+        )
+    }
+
+    @Test
+    fun `the simplified name beats the callsign`() {
+        assertEquals(
+            "guide-simplified" to EpgMatchKind.SIMPLIFIED,
+            matchEpgChannel(
+                idCandidates = listOf(kmtv.tvgId),
+                nameCandidates = listOf("CBS KMTV-TV HD"),
+                byId = emptyMap(),
+                byName = mapOf("cbskmtvtv" to "guide-simplified", "kmtv" to "guide-callsign"),
+                callsignCandidates = callsigns(kmtv)
+            )
+        )
+    }
+
+    @Test
+    fun `the callsign resolves the channel the first three passes miss`() {
+        // The field case: the guide's channel id is `KMTV`, the playlist spells
+        // the station `CBS.us@KMTVTV` / `CBS KMTV-TV`, and nothing above hits.
+        assertEquals(
+            "guide-kmtv" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(kmtv.tvgId),
+                nameCandidates = listOf(kmtv.name),
+                byId = mapOf("kmtv" to "guide-kmtv"),
+                byName = emptyMap(),
+                callsignCandidates = callsigns(kmtv)
+            )
+        )
+    }
+
+    @Test
+    fun `another station's callsign does not match`() {
+        val wftv = channel("wftv", name = "ABC WFTV", tvgId = "ABC.us@WFTV")
+
+        assertNull(
+            "two affiliates of one network live in different markets",
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.name),
+                byId = mapOf("kgtv" to "guide-kgtv"),
+                byName = mapOf("kgtv" to "guide-kgtv"),
+                callsignCandidates = callsigns(wftv)
+            )
+        )
+    }
+
+    // ── Import-time pruning has to carry the same keys ────────────────────
+
+    @Test
+    fun `a callsign-only guide channel is kept for a local`() {
+        // The other half of the field bug: with no callsign key in the playlist
+        // set, the importer pruned these programs before the matcher could ever
+        // see the channel - a successful import reporting a small kept count.
+        val keys = playlistEpgMatchKeys(listOf(kmtv))
+
+        assertTrue("kmtvtv" in keys)
+        assertTrue("kmtv" in keys)
+        assertTrue(
+            "the guide's bare callsign",
+            guideChannelCanMatch("KMTV", listOf("KMTV"), keys)
+        )
+        assertTrue(
+            "and the guide's suffixed spelling of it",
+            guideChannelCanMatch("KMTV-TV", listOf("KMTV-TV"), keys)
+        )
+    }
+
+    @Test
+    fun `a callsign never keeps another station's channel`() {
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c1", name = "ABC WFTV", tvgId = "ABC.us@WFTV"))
+        )
+        assertFalse(guideChannelCanMatch("KMTV", listOf("KMTV"), keys))
+
+        // And the network name is not a callsign: the guide's bare "ABC"
+        // channel must not be pulled in by this tier.
+        val kgtv = playlistEpgMatchKeys(
+            listOf(channel("c2", name = "ABC KGTV", tvgId = "ABC.us@KGTV"))
+        )
+        assertFalse(guideChannelCanMatch("ABC", listOf("ABC"), kgtv))
+    }
+
     // ── Guide-window fingerprint ─────────────────────────────────────────
 
     private val loaded = setOf("bbc1", "itv1")
