@@ -53,8 +53,7 @@ fun TagScreenMobile(
         SectionsBrowseMobile(
             header = SectionsHeader(
                 eyebrow = if (isKeyword) "Keyword" else "Genre",
-                title = name,
-                subtitle = if (type.lowercase() == "tv") "Series" else "Movies"
+                title = name
             ),
             onBack = onBack,
             sectionsRaw = sections,

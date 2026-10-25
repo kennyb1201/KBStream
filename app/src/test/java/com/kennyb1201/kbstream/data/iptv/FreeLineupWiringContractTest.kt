@@ -281,6 +281,53 @@ class FreeLineupWiringContractTest {
         )
     }
 
+    /**
+     * An install from before the locals guide carries only kanya, and kanya
+     * answers no local affiliate - every one reads "No program data" until a
+     * second guide is pasted by hand, which is what the field report had to do.
+     * The entry restore adds that line once and remembers it.
+     */
+    @Test
+    fun `an older install gains the locals guide once`() {
+        val restore = viewModel
+            .substringAfter("restoreJob = viewModelScope.launch {")
+            .substringBefore("} catch (t: Throwable)")
+        assertTrue(
+            "the locals line is written before the restore reads the sources back",
+            restore.indexOf("migrateFreeLineupLocalsEpg()") in 0 until
+                restore.indexOf("loadCachedExtrasLineup()")
+        )
+        assertTrue(
+            "the rules are FreeLineup's, not this screen's, and every branch is applied",
+            viewModel.contains("private fun migrateFreeLineupLocalsEpg()") &&
+                viewModel.contains("FreeLineup.localsGuideDecision(")
+        )
+        assertTrue(
+            "the flag lives beside the US-filter one: device-local, profile-scoped",
+            viewModel.contains(
+                "const val KEY_FREE_TV_LOCALS_EPG_APPLIED = \"free_tv_locals_epg_applied\""
+            )
+        )
+        val migration = viewModel
+            .substringAfter("private fun migrateFreeLineupLocalsEpg()")
+            .substringBefore("private fun markFreeLineupLocalsEpgApplied()")
+        assertTrue(
+            "a guide import in progress skips it and leaves the flag unset to retry",
+            migration.contains("if (_isImportingGuide.value) return")
+        )
+        assertTrue(
+            "an already-applied profile is never touched, so a deleted line stays deleted",
+            migration.contains("if (applied) return")
+        )
+        val installBlock = viewModel
+            .substringAfter("if (!FreeLineup.isInstalled(_extraPlaylistUrls.value)) {")
+            .substringBefore("}")
+        assertTrue(
+            "a fresh install writes both lines itself and records the migration there",
+            installBlock.contains("markFreeLineupLocalsEpgApplied()")
+        )
+    }
+
     /** The form says the lineup is US channels only, on both form factors. */
     @Test
     fun `both forms say the lineup is us channels only`() {

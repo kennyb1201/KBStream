@@ -55,6 +55,28 @@ object FreeLineup {
      */
     const val LEGACY_EPG_URL = "https://iptv-org.github.io/epg/guides/all.xml"
 
+    /**
+     * The US LOCAL stations guide, installed beside [EPG_URL] rather than as
+     * the primary one.
+     *
+     * kanya answers the national feeds a `us.m3u` `tvg-id` names, and nothing
+     * for a local affiliate - on 2026-10-25 every local sampled (ABC KERO-TV,
+     * KGTV, KGUN-TV, KITV ...; CBS KMTV-TV, KUTV ...) read "No program data"
+     * after a kanya-only import. This file carries them, keyed by callsign
+     * (`WFTV-DT.us_locals1`).
+     *
+     * Provenance, stated because it differs from [EPG_URL]: this address is NOT
+     * in `us.m3u`'s header. It comes from a public free-EPG listing
+     * (free-codecs.com, "Free EPG URLs", 2026-10-07), and was verified live by
+     * downloading it on 2026-10-25 (channels `WFTV-DT.us_locals1`,
+     * `WTVQ-DT.us_locals1`, `WDIO-DT.us_locals1`, with programmes dated
+     * 20261024-20261025). It is community-hosted and tens of MB; if epgshare01
+     * ever re-schemes, an app update re-points THIS constant, exactly as with
+     * the other two. Nothing here is hosted by KBStream.
+     */
+    const val LOCALS_EPG_URL =
+        "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz"
+
     /** The display name the lineup's channels are grouped under. */
     const val NAME = "Free TV"
 
@@ -129,25 +151,40 @@ object FreeLineup {
         urlOf(entry).equals(PLAYLIST_URL, ignoreCase = true)
 
     /**
-     * Whether ONE stored extra-EPG entry is the free lineup's guide.
+     * Whether ONE stored extra-EPG entry belongs to the free lineup.
      *
-     * True for the living address and for the legacy one, so every path that
-     * detects, strips or deduplicates the lineup's guide treats an install from
-     * either build as this lineup's entry - which is what makes [remove]
-     * complete on a not-yet-repaired install.
+     * True for the living address, the locals one and the legacy one, so every
+     * path that detects, strips or deduplicates the lineup's guides treats an
+     * install from any build as this lineup's entry - which is what makes
+     * [remove] complete on a not-yet-repaired install, and what takes the
+     * locals guide back out with the playlist it exists for.
+     *
+     * The locals rule follows [remove]'s existing precedent: a kanya line the
+     * viewer typed by hand is removed with the lineup too. A viewer who wants
+     * the locals guide for some other playlist after removing Free TV re-adds
+     * it in one paste.
      */
     fun isFreeLineupEpgEntry(entry: String): Boolean {
         val url = entry.trim()
         return url.equals(EPG_URL, ignoreCase = true) ||
+            url.equals(LOCALS_EPG_URL, ignoreCase = true) ||
             url.equals(LEGACY_EPG_URL, ignoreCase = true)
     }
 
     /**
      * Both prefs after installing, ready for ONE `SharedPreferences` edit.
      *
-     * Idempotent: an entry that is already there is left exactly as written
-     * (a viewer who renamed it keeps their name), and the two strings are
-     * returned untouched when both halves are already present.
+     * Idempotent PER LINE, not per install: an entry that is already there is
+     * left exactly as written (a viewer who renamed it keeps their name), and
+     * each guide line is appended only when that line is missing. So a field
+     * holding kanya but not locals gains only locals, one holding locals but
+     * not kanya gains only kanya, and one holding both is returned untouched -
+     * including a viewer who pasted the locals guide FIRST, whose order is not
+     * rewritten into the canonical one.
+     *
+     * A lone dead legacy line is still repaired in place ([repairEpgEntry]) and
+     * then counted as kanya, so an older install is brought forward and gains
+     * locals in the same tap.
      */
     fun install(
         extraPlaylistUrls: String,
@@ -158,14 +195,57 @@ object FreeLineup {
         } else {
             append(extraPlaylistUrls, ENTRY)
         }
-        val guides = if (hasEpg(extraEpgUrls)) {
-            // An install already carries a guide line; if it is the legacy one,
-            // bring it forward rather than leaving the dead address in place.
-            repairEpgEntry(playlists, extraEpgUrls) ?: extraEpgUrls
-        } else {
-            append(extraEpgUrls, EPG_URL)
+        val repaired = repairEpgEntry(playlists, extraEpgUrls) ?: extraEpgUrls
+        // Kanya first, locals second. Order is load-bearing: guide sources are
+        // read primary first and each channel keeps the FIRST source that
+        // resolves it, so kanya must stay ahead of locals - the locals guide
+        // only ADDS the affiliates kanya cannot answer.
+        val guides = INSTALLED_GUIDES.fold(repaired) { blob, url ->
+            if (hasGuide(blob, url)) blob else append(blob, url)
         }
         return playlists to guides
+    }
+
+    /** What [localsGuideDecision] decided for one profile entry. */
+    internal sealed interface LocalsGuideDecision {
+        /** Leave both prefs alone: already applied, or Free TV is not installed. */
+        data object Skip : LocalsGuideDecision
+
+        /** The line is already in the field: record it, write nothing. */
+        data object RecordOnly : LocalsGuideDecision
+
+        /** Write this blob (the line appended), then record it. */
+        data class Append(val extraEpgUrls: String) : LocalsGuideDecision
+    }
+
+    /**
+     * The one-time locals-guide migration's decision for one profile entry.
+     *
+     * Pure on purpose, so every branch of the spec is testable off-device:
+     *
+     *  - already applied -> [LocalsGuideDecision.Skip], which is what keeps a
+     *    line the viewer deleted from coming back;
+     *  - Free TV not installed -> [LocalsGuideDecision.Skip], so a profile with
+     *    its own playlist is untouched;
+     *  - the line is already there (pasted by hand, as the field report did) ->
+     *    [LocalsGuideDecision.RecordOnly], never a duplicate or a move;
+     *  - otherwise -> [LocalsGuideDecision.Append].
+     *
+     * The "guide import in progress" guard is the caller's: it is transient
+     * state, and the flag must stay unset so the next entry retries.
+     *
+     * Adding the line imports NOTHING: the locals stay empty until a guide
+     * import (or the next background refresh) re-reads the source list.
+     */
+    internal fun localsGuideDecision(
+        extraPlaylistUrls: String,
+        extraEpgUrls: String,
+        alreadyApplied: Boolean
+    ): LocalsGuideDecision = when {
+        alreadyApplied -> LocalsGuideDecision.Skip
+        !isInstalled(extraPlaylistUrls) -> LocalsGuideDecision.Skip
+        hasGuide(extraEpgUrls, LOCALS_EPG_URL) -> LocalsGuideDecision.RecordOnly
+        else -> LocalsGuideDecision.Append(append(extraEpgUrls, LOCALS_EPG_URL))
     }
 
     /**
@@ -202,9 +282,10 @@ object FreeLineup {
     /**
      * Both prefs after removal.
      *
-     * Removes the playlist entry AND the guide entry together - a guide for a
-     * lineup that is no longer in the sources is dead weight the importer would
-     * keep downloading. Everything else the viewer configured is kept.
+     * Removes the playlist entry AND both guide entries together (kanya and the
+     * locals file, plus a not-yet-repaired legacy line) - a guide for a lineup
+     * that is no longer in the sources is dead weight the importer would keep
+     * downloading. Everything else the viewer configured is kept.
      */
     fun remove(
         extraPlaylistUrls: String,
@@ -219,8 +300,12 @@ object FreeLineup {
         return playlists to guides
     }
 
-    private fun hasEpg(extraEpgUrls: String): Boolean =
-        entries(extraEpgUrls).any(::isFreeLineupEpgEntry)
+    /** Whether one exact guide URL is among the extra-EPG lines. */
+    private fun hasGuide(extraEpgUrls: String, url: String): Boolean =
+        entries(extraEpgUrls).any { it.equals(url, ignoreCase = true) }
+
+    /** The guides an install writes, in the order they must be read in. */
+    private val INSTALLED_GUIDES = listOf(EPG_URL, LOCALS_EPG_URL)
 
     /**
      * Appends one entry, keeping the separator the field already uses: both

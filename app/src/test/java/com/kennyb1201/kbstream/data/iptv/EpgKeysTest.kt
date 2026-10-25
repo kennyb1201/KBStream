@@ -208,17 +208,29 @@ class EpgKeysTest {
         // callsign alone, and iptv-org spells the same station
         // `<Network>.us@<CALLSIGN>` - so the suffix is the callsign.
         assertEquals(
-            setOf("kmtvtv", "kmtv"),
+            setOf("kmtv", "kmtvtv", "kmtvdt", "kmtvld", "kmtvcd"),
             playlistCallsignKeys(channel("c1", name = "CBS KMTV-TV", tvgId = "CBS.us@KMTVTV"))
         )
         assertEquals(
-            "KGTV strips to kg, below the floor, so it keeps its own spelling only",
-            setOf("kgtv"),
+            "KGTV strips to kg, below the floor, so kgtv is the core",
+            setOf("kgtv", "kgtvtv", "kgtvdt", "kgtvld", "kgtvcd"),
             playlistCallsignKeys(channel("c2", name = "ABC KGTV", tvgId = "ABC.us@KGTV"))
         )
         assertEquals(
-            setOf("wftv"),
+            setOf("wftv", "wftvtv", "wftvdt", "wftvld", "wftvcd"),
             playlistCallsignKeys(channel("c3", name = "ABC WFTV", tvgId = "ABC.us@WFTV"))
+        )
+    }
+
+    @Test
+    fun `the keys are ordered core, then tv, dt, ld, cd`() {
+        // Load-bearing: the matcher takes the first candidate that hits, and a
+        // guide carrying both WFTV-DT and WFTV-LD must resolve the full-power
+        // DT feed. Sorting these alphabetically would put `cd` before `dt`
+        // and silently change which feed wins.
+        assertEquals(
+            listOf("wftv", "wftvtv", "wftvdt", "wftvld", "wftvcd"),
+            playlistCallsignKeys(channel("c", name = "ABC WFTV", tvgId = "ABC.us@WFTV")).toList()
         )
     }
 
@@ -243,12 +255,12 @@ class EpgKeysTest {
     @Test
     fun `a name token stands in only when the id has no feed suffix`() {
         assertEquals(
-            setOf("kmtvtv", "kmtv"),
+            setOf("kmtv", "kmtvtv", "kmtvdt", "kmtvld", "kmtvcd"),
             playlistCallsignKeys(channel("c7", name = "CBS KMTV-TV", tvgId = null))
         )
         // The id's suffix is authoritative: a name can never override it.
         assertEquals(
-            setOf("kgtv"),
+            setOf("kgtv", "kgtvtv", "kgtvdt", "kgtvld", "kgtvcd"),
             playlistCallsignKeys(channel("c8", name = "CBS KMTV-TV", tvgId = "ABC.us@KGTV"))
         )
     }
@@ -278,19 +290,33 @@ class EpgKeysTest {
     }
 
     @Test
-    fun `every station suffix a guide may spell is folded`() {
+    fun `every station suffix a guide may spell is offered`() {
         listOf(
             "KMTVTV" to "kmtv",
             "WABC-DT" to "wabc",
             "KNBC-LD" to "knbc",
-            "KCAL-CD" to "kcal"
-        ).forEach { (callsign, stripped) ->
+            "KCAL-CD" to "kcal",
+            "WTVQDT" to "wtvq",
+            "WDIODT" to "wdio",
+            "KSTPTV" to "kstp",
+            "WSYX" to "wsyx"
+        ).forEach { (callsign, core) ->
             assertEquals(
-                "$callsign answers its own spelling and the stripped one",
-                setOf(callsign.lowercase().replace("-", ""), stripped),
+                "$callsign answers every suffix spelling of $core",
+                setOf(core, core + "tv", core + "dt", core + "ld", core + "cd"),
                 playlistCallsignKeys(channel("c", name = callsign, tvgId = "Net.us@$callsign"))
             )
         }
+    }
+
+    @Test
+    fun `a core too long for a suffix is keyed bare`() {
+        // Five characters plus even the shortest suffix is seven, above the
+        // six-character cap - so only the core itself may be offered.
+        assertEquals(
+            setOf("kabce"),
+            playlistCallsignKeys(channel("c", name = "KABCE", tvgId = "Net.us@KABCE"))
+        )
     }
 
     // ── The callsign is the matcher's LAST pass ───────────────────────────
@@ -373,7 +399,109 @@ class EpgKeysTest {
         )
     }
 
+    @Test
+    fun `a bare playlist callsign reaches the guide's suffixed display name`() {
+        // The exact field case (2026-10-25, 09:04): the US locals guide ships
+        // `<channel id="WFTV-DT.us_locals1">`, display `WFTV-DT`, so its id
+        // looks up as `wftvdt.uslocals1` and its display as `wftvdt`. The
+        // playlist says `ABC.us@WFTV` / `ABC WFTV`. Nothing above the callsign
+        // pass hits, and only the generated `wftvdt` spelling reaches it.
+        val wftv = channel("wftv", name = "ABC WFTV", tvgId = "ABC.us@WFTV")
+
+        // The guide's id lookup is `wftvdt.uslocals1`, which no callsign key
+        // ever equals - so a test that put `wftvdt` in byId would not prove
+        // this fix. The display-name index is the one that has to hit.
+        assertFalse("wftvdt.uslocals1" in callsigns(wftv))
+
+        assertEquals(
+            "guide-wftvdt" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.name),
+                byId = mapOf("wftvdt.uslocals1" to "guide-wftvdt"),
+                byName = mapOf("wftvdt" to "guide-wftvdt"),
+                callsignCandidates = callsigns(wftv)
+            )
+        )
+    }
+
+    @Test
+    fun `the DT feed wins over the LD feed and LD is the fallback`() {
+        val wftv = channel("wftv", name = "ABC WFTV", tvgId = "ABC.us@WFTV")
+        val byName = mapOf("wftvdt" to "guide-dt", "wftvld" to "guide-ld")
+
+        assertEquals(
+            "a full-power station's DT feed is its schedule, not a coin flip",
+            "guide-dt" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.name),
+                byId = emptyMap(),
+                byName = byName,
+                callsignCandidates = callsigns(wftv)
+            )
+        )
+        assertEquals(
+            "with no DT channel in the guide, the low-power LD one is used",
+            "guide-ld" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.name),
+                byId = emptyMap(),
+                byName = mapOf("wftvld" to "guide-ld"),
+                callsignCandidates = callsigns(wftv)
+            )
+        )
+    }
+
+    @Test
+    fun `expanded keys still never collapse two markets`() {
+        // The suffixes are shared across every station, so this is the check
+        // that a generated key cannot match another callsign's guide channel:
+        // WFTV's `wftvdt` is not KGTV's `kgtvdt`.
+        val wftv = channel("wftv", name = "ABC WFTV", tvgId = "ABC.us@WFTV")
+        val kgtv = channel("kgtv", name = "ABC KGTV", tvgId = "ABC.us@KGTV")
+
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.name),
+                byId = emptyMap(),
+                byName = mapOf("kgtvdt" to "guide-kgtvdt"),
+                callsignCandidates = callsigns(wftv)
+            )
+        )
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(kgtv.tvgId),
+                nameCandidates = listOf(kgtv.name),
+                byId = emptyMap(),
+                byName = mapOf("wftvdt" to "guide-wftvdt"),
+                callsignCandidates = callsigns(kgtv)
+            )
+        )
+    }
+
     // ── Import-time pruning has to carry the same keys ────────────────────
+
+    @Test
+    fun `a suffixed locals guide channel is kept by the generated keys`() {
+        // The prune half of the field bug: the guide id is
+        // `WFTV-DT.us_locals1` and its only reachable alias is the display
+        // `WFTV-DT`. With no `wftvdt` in the playlist key set its programmes
+        // were dropped before the matcher could ever see the channel.
+        val keys = playlistEpgMatchKeys(
+            listOf(channel("c1", name = "ABC WFTV", tvgId = "ABC.us@WFTV"))
+        )
+        assertTrue("wftvdt" in keys)
+        assertTrue(
+            guideChannelCanMatch(
+                channelId = "WFTV-DT.us_locals1",
+                aliasKeys = epgAliasKeys("WFTV-DT.us_locals1", listOf("WFTV-DT")),
+                playlistKeys = keys
+            )
+        )
+    }
 
     @Test
     fun `a callsign-only guide channel is kept for a local`() {

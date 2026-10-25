@@ -111,9 +111,12 @@ internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED, CALLSIGN }
  * network it carries this season. The network is in the playlist's own tvg-id
  * and is never part of a key here.
  *
- * Both spellings of a station suffix are returned, so a guide that omits it
- * still hits: `KMTVTV` also answers `kmtv`, `KMTV-TV` likewise, while `WFTV`
- * answers only `wftv` (stripping would leave `wf`, below the floor).
+ * Every spelling of a station suffix is returned, not just the one the
+ * playlist used, so a guide that omits it, carries it, or carries a different
+ * one still hits: `WFTV` answers `wftv`, `wftvtv`, `wftvdt`, `wftvld` and
+ * `wftvcd`, which is what makes `WFTV` reach a guide's `WFTV-DT` (the shape the
+ * US locals guide actually ships). See [callsignKeysOf] for the cap and the
+ * order.
  */
 internal fun playlistCallsignKeys(channel: IptvChannel): Set<String> =
     epgCallsignKeys(
@@ -154,6 +157,22 @@ internal fun epgCallsignKeys(tvgId: String?, names: List<String?>): Set<String> 
 /**
  * The keys one raw callsign token is addressable under, or none when it is not
  * a US callsign (see [epgCallsignKeys] for the guard).
+ *
+ * The guide and the playlist disagree about the station SUFFIX far more often
+ * than about the callsign: iptv-org has `ABC.us@WFTV` (bare) and
+ * `CBS.us@WTVQDT` (suffixed), while the US locals guide ships `WFTV-DT`,
+ * `WFTV-LD`, `WTVQ-DT`. Stripping a suffix only helps the already-suffixed
+ * playlist rows, so every playlist row whose guide spelling carries a suffix
+ * the playlist omitted still read "No program data" (field report 2026-10-25: 1484
+ * channels, only WTVQ-DT and WDIO-DT filled). So a core is derived first and
+ * then spelled with every suffix the tier knows.
+ *
+ * Order is load-bearing: the core comes first, then `tv`, `dt`, `ld`, `cd` in
+ * [CALLSIGN_STATION_SUFFIXES] order, and the matcher takes the first candidate
+ * that hits. A guide carrying both `WFTV-DT` and `WFTV-LD` must resolve the
+ * full-power `-DT` feed; `-LD` is the fallback when no `-DT` exists. Do not
+ * sort these keys alphabetically at any call site — `cd` would come before
+ * `dt` and change which feed wins.
  */
 private fun callsignKeysOf(raw: String?): Set<String> {
     val base = raw
@@ -166,16 +185,24 @@ private fun callsignKeysOf(raw: String?): Set<String> {
     if (base.length !in CALLSIGN_LENGTH..CALLSIGN_MAX_LENGTH) return emptySet()
     if (base[0] != 'k' && base[0] != 'w') return emptySet()
 
-    val keys = LinkedHashSet<String>(2)
-    keys.add(base)
+    // The callsign without the station suffix. Stripping is only allowed when
+    // the remainder still looks like a callsign on its own, so `WFTV` does not
+    // become a two-letter key that would collide with everything.
+    val strippedSuffix = CALLSIGN_STATION_SUFFIXES.firstOrNull { base.endsWith(it) }
+    val core = if (strippedSuffix != null && base.length - strippedSuffix.length >= CALLSIGN_LENGTH) {
+        base.dropLast(strippedSuffix.length)
+    } else {
+        base
+    }
 
-    // A station suffix the guide may or may not spell: KMTVTV / KMTV-TV and
-    // KMTV are the same station. The remainder has to look like a callsign on
-    // its own, so WFTV does not become a two-letter key that would collide
-    // with everything.
-    val suffix = CALLSIGN_STATION_SUFFIXES.firstOrNull { base.endsWith(it) }
-    if (suffix != null && base.length - suffix.length >= CALLSIGN_LENGTH) {
-        keys.add(base.dropLast(suffix.length))
+    // The core, then every suffix spelling of it that still fits a US callsign.
+    // The base spelling is always among them by construction: either it IS the
+    // core, or it is the core plus the suffix it originally carried.
+    val keys = LinkedHashSet<String>(1 + CALLSIGN_STATION_SUFFIXES.size)
+    keys.add(core)
+    CALLSIGN_STATION_SUFFIXES.forEach { suffix ->
+        val spelled = core + suffix
+        if (spelled.length <= CALLSIGN_MAX_LENGTH) keys.add(spelled)
     }
     return keys
 }
@@ -194,8 +221,9 @@ private fun callsignKeysOf(raw: String?): Set<String> {
  *     collide two genuinely different channels, so it only runs when nothing
  *     above matched.
  *  4. **The callsign**, [playlistCallsignKeys], so a local affiliate whose
- *     guide channel is identified by callsign alone (`KMTV`) is reachable from
- *     a playlist that spells it `CBS.us@KMTVTV` / `CBS KMTV-TV`. Last for the
+ *     guide channel is identified by callsign alone (`KMTV`) or by a suffixed
+ *     spelling of it (`WFTV-DT`) is reachable from a playlist that spells it
+ *     `CBS.us@KMTVTV` / `ABC.us@WFTV`. Last for the
  *     same reason: an exact or name match must never be displaced, and the
  *     callsign is the weaker claim (it says which station, not which feed).
  *
@@ -391,8 +419,10 @@ private val CHANNEL_QUALIFIERS = Regex(
 
 /**
  * The station suffixes a US call sign may carry, and the reason `KMTVTV`,
- * `KMTV-TV` and `KMTV` are one station: the guide and the playlist spell the
- * same call sign with and without the suffix, so both keys are offered.
+ * `KMTV-TV`, `KMTV-DT` and `KMTV` are one station: the guide and the playlist
+ * spell the same call sign with and without the suffix, and often with
+ * different ones, so every spelling is offered. Order matters - see
+ * [callsignKeysOf].
  */
 private val CALLSIGN_STATION_SUFFIXES = listOf("tv", "dt", "ld", "cd")
 

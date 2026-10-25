@@ -438,6 +438,10 @@ class ChannelGuideProgramsTest {
         // station by callsign alone - so a query without callsign candidates
         // would read "No guide data" for a channel the guide screen had just
         // filled (see epgCallsignKeys).
+        //
+        // The keys are the tier's own set, in its own order: the core first,
+        // then every suffix spelling, so `KMTVTV` also reaches a guide's
+        // `KMTV-DT` - and the first candidate that hits wins.
         val entry = channel(
             "a",
             epgUrl = "http://epg/one",
@@ -446,7 +450,7 @@ class ChannelGuideProgramsTest {
         )
 
         assertEquals(
-            listOf("kmtvtv", "kmtv"),
+            listOf("kmtv", "kmtvtv", "kmtvdt", "kmtvld", "kmtvcd"),
             guideMatchQueryFor(entry)?.callsignCandidates
         )
     }

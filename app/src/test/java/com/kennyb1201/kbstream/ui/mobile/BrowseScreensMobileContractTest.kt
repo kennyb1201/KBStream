@@ -279,6 +279,54 @@ class BrowseScreensMobileContractTest {
     }
 
     @Test
+    fun `the tag header names the page, not the media type it was opened from`() {
+        val mobile = tagMobile()
+        assertTrue(
+            "the keyword/genre wording stays as the eyebrow",
+            mobile.contains("eyebrow = if (isKeyword) \"Keyword\" else \"Genre\"")
+        )
+        // The page lists BOTH media types - `getByKeyword`/`getByGenre` never
+        // filter by the route's `type`, so a "Movies" label sat above a page
+        // that also drew SERIES rails.
+        assertFalse(
+            "no Movies/Series subtitle under the header",
+            mobile.contains("subtitle") ||
+                mobile.contains("\"Series\"") ||
+                mobile.contains("\"Movies\"")
+        )
+        assertTrue(
+            "the type still reaches the load and the return-screen key",
+            mobile.contains("viewModel.load(id, isKeyword, type)") &&
+                mobile.contains("tagBrowseScreenKey(id, isKeyword, type)")
+        )
+        val shared = sharedPage()
+        assertTrue(
+            "the field stays for any future caller, still skipped when blank",
+            shared.contains("val subtitle: String? = null") &&
+                shared.contains("header.subtitle?.takeIf { it.isNotBlank() }")
+        )
+    }
+
+    @Test
+    fun `the header fan is measured at its drawn width`() {
+        val shared = sharedPage()
+        assertTrue(
+            "the fan's geometry is computed from the poster widths",
+            shared.contains("posterFanGeometry(")
+        )
+        assertTrue(
+            "and the fan claims that visual width, so the title beside it keeps " +
+                "the space the overlap gives back",
+            shared.contains(".width(geometry.width.dp)") &&
+                shared.contains("geometry.offsets[index].dp")
+        )
+        assertFalse(
+            "a Row measured the UN-overlapped widths and squeezed the title",
+            shared.contains("(-10 * index).dp")
+        )
+    }
+
+    @Test
     fun `the collection keeps release order, the override chain and its part actions`() {
         val mobile = collectionMobile()
         assertTrue(

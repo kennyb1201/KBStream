@@ -124,6 +124,50 @@ internal data class SectionsHeader(
     val logoUrls: List<String> = emptyList()
 )
 
+/**
+ * Where a header fan's posters are DRAWN, and how wide that fan really is.
+ *
+ * `Modifier.offset` moves where a child is drawn; it does not change how much
+ * room the parent MEASURES for it. Five posters totalling 246dp that visually
+ * overlap into 206dp therefore claimed 246dp of the header row, and the title
+ * column beside them (`weight(1f)`) lost 40dp it was never meant to give up -
+ * the phone's "hallowee / n" mid-word break on a long keyword.
+ *
+ * Pure arithmetic on dp values, no Compose types: the shape is the contract,
+ * so it is unit tested without a device.
+ */
+internal data class PosterFanGeometry(
+    /** The drawn x of each poster, in dp, in draw order. */
+    val offsets: List<Float>,
+    /** How wide the fan LOOKS: the last offset plus the last poster's width. */
+    val width: Float
+)
+
+/**
+ * The fan's drawn offsets and visual width, for posters [widths] wide where
+ * each overlaps the one before it by [overlap].
+ *
+ * Poster 0 sits at 0; poster i sits [overlap] short of the previous poster's
+ * right edge. The fan's width is every poster except the last minus the
+ * overlap, plus the last poster at full width. An empty list draws nothing.
+ */
+internal fun posterFanGeometry(
+    widths: List<Float>,
+    overlap: Float = 10f
+): PosterFanGeometry {
+    if (widths.isEmpty()) return PosterFanGeometry(emptyList(), 0f)
+    val offsets = ArrayList<Float>(widths.size)
+    var x = 0f
+    widths.forEach { width ->
+        offsets += x
+        x += width - overlap
+    }
+    var width = 0f
+    widths.dropLast(1).forEach { width += it - overlap }
+    width += widths.last()
+    return PosterFanGeometry(offsets = offsets, width = width)
+}
+
 /** The media type the app compares watched state under. */
 internal fun sectionsMediaType(mediaType: String?): String =
     when (mediaType?.trim()?.lowercase()) {
@@ -589,28 +633,40 @@ private fun BrowseHeaderPanel(
                     .padding(start = 12.dp)
             )
 
-            fanUrls.isNotEmpty() -> Row(
-                modifier = Modifier.padding(start = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            fanUrls.isNotEmpty() -> {
                 // A small fan, the touch reading of the TV header: the top
                 // titles' own posters, overlapped and tilted, with the middle
                 // one forward.
                 val rotations = listOf(-9f, -4f, 0f, 4f, 9f)
                 val widths = listOf(44.dp, 50.dp, 58.dp, 50.dp, 44.dp)
                 val heights = listOf(66.dp, 75.dp, 87.dp, 75.dp, 66.dp)
-                fanUrls.take(5).forEachIndexed { index, url ->
-                    AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .offset(x = (-10 * index).dp)
-                            .rotate(rotations[index])
-                            .clip(KBShapeCard)
-                            .width(widths[index])
-                            .height(heights[index])
-                    )
+                val posters = fanUrls.take(widths.size)
+                // A Box, not a Row: the overlap is a DRAWN offset, so a Row
+                // would measure all five posters end to end and hand the
+                // title beside them 40dp less than the fan actually covers.
+                val geometry = posterFanGeometry(
+                    widths = posters.indices.map { widths[it].value }
+                )
+                Box(
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .width(geometry.width.dp)
+                        .height(posters.indices.maxOf { heights[it] })
+                ) {
+                    posters.forEachIndexed { index, url ->
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .offset(x = geometry.offsets[index].dp)
+                                .rotate(rotations[index])
+                                .clip(KBShapeCard)
+                                .width(widths[index])
+                                .height(heights[index])
+                        )
+                    }
                 }
             }
         }

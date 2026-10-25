@@ -182,6 +182,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                         extraEpgUrls = _extraEpgUrls.value
                     )
                     writeSources(playlists, guides)
+                    // This install wrote both guide lines (kanya, then locals),
+                    // so the one-time locals migration has nothing to add for
+                    // this profile and must never resurrect a line the viewer
+                    // deletes later. Marked only in this branch: a tap on an
+                    // ALREADY-installed lineup is a reload, not a re-install.
+                    markFreeLineupLocalsEpgApplied()
                 }
                 // SKIPPED (an EPG import holds the load) is not a failure:
                 // the install stays, and the next load is the retry.
@@ -285,6 +291,56 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Records that this profile's cache has been through the US filter. */
     private fun markFreeLineupUsFilterApplied() {
         prefs.edit().putBoolean(KEY_FREE_TV_US_FILTER_APPLIED, true).apply()
+    }
+
+    /**
+     * The one-time locals guide migration for installs that predate it.
+     *
+     * The built-in lineup's own guide (kanya) answers the national feeds and
+     * nothing for a local affiliate, so an install from before
+     * [FreeLineup.LOCALS_EPG_URL] existed shows every local as "No program
+     * data" unless the viewer pastes a second guide by hand - which is exactly
+     * what the field report had to do. On the first entry into such a profile
+     * the locals line is appended where the field already points, and the
+     * profile remembers it did.
+     *
+     * [FreeLineup.localsGuideDecision] owns the rules; this applies them. Two
+     * guards live here because they are this screen's state: a guide import owns
+     * the fetch/write window (the flag stays UNSET so the next entry retries),
+     * and an already-applied profile is never touched - so a viewer who deletes
+     * the line keeps it deleted, and the only way back is a fresh install.
+     *
+     * Nothing is imported here. The locals fill on the next IMPORT GUIDE, or the
+     * next background refresh that re-reads the source list.
+     */
+    private fun migrateFreeLineupLocalsEpg() {
+        val applied = prefs.getBoolean(KEY_FREE_TV_LOCALS_EPG_APPLIED, false)
+        if (applied) return
+        if (_isImportingGuide.value) return
+        when (
+            val decision = FreeLineup.localsGuideDecision(
+                extraPlaylistUrls = _extraPlaylistUrls.value,
+                extraEpgUrls = _extraEpgUrls.value,
+                alreadyApplied = applied
+            )
+        ) {
+            FreeLineup.LocalsGuideDecision.Skip -> Unit
+            FreeLineup.LocalsGuideDecision.RecordOnly -> {
+                // Pasted by hand already: record it, do not duplicate or move it.
+                markFreeLineupLocalsEpgApplied()
+            }
+            is FreeLineup.LocalsGuideDecision.Append -> {
+                _extraEpgUrls.value = decision.extraEpgUrls
+                saveInputs()
+                markFreeLineupLocalsEpgApplied()
+                Log.i(TAG, "FREE LINEUP LOCALS EPG migration: locals guide source added")
+            }
+        }
+    }
+
+    /** Records that this profile has been offered the locals guide. */
+    private fun markFreeLineupLocalsEpgApplied() {
+        prefs.edit().putBoolean(KEY_FREE_TV_LOCALS_EPG_APPLIED, true).apply()
     }
 
     /**
@@ -1136,6 +1192,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         Log.w(TAG, "CACHE RESTORE START source=${Redaction.url(url)}")
         restoreJob = viewModelScope.launch {
             try {
+                // An install from before the locals guide carries only kanya:
+                // add the second source first, so the guide machinery (and the
+                // import the viewer may hit next) already sees it.
+                migrateFreeLineupLocalsEpg()
                 // An install from before the US filter still holds its old,
                 // unfiltered rows: rewrite the cache before this restore reads
                 // it (see [migrateFreeLineupUsFilter], spec §3).
@@ -2015,6 +2075,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * in THIS profile's cache, not a preference that travels.
          */
         const val KEY_FREE_TV_US_FILTER_APPLIED = "free_tv_us_filter_applied"
+
+        /**
+         * Whether this profile has been offered the Free TV LOCALS guide.
+         *
+         * Device-local and profile-scoped, beside the US-filter flag and for
+         * the same reason: it records what happened to THIS profile's source
+         * list, not a preference that travels. Once set, the one-time migration
+         * never re-adds a locals line the viewer deleted.
+         */
+        const val KEY_FREE_TV_LOCALS_EPG_APPLIED = "free_tv_locals_epg_applied"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
 
         /**
