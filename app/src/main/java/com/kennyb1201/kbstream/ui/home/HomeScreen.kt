@@ -133,6 +133,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
+import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
@@ -188,7 +189,6 @@ import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -217,23 +217,12 @@ private val HomeRailGap = 12.dp
 private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
 
 /**
- * Frames Home will keep asking for focus before it gives up.
- *
- * The bar's and the menus' hand-backs name a node that may not be attached yet
- * - the bar animates in, a menu's overlay is leaving the tree - and an
- * unattached request answers false rather than throwing, so one ask is not
- * evidence of anything (see [restoreFocus]). Twelve frames is the same budget
- * the app's other landings use (KBStatusMessage, the CW rail, the browse
- * pages), and is far longer than either surface actually needs.
- */
-private const val HOME_FOCUS_RETRY_FRAMES = 12
-
-/**
  * The most frames the top bar's focus hand-off keeps asking for focus before it
  * gives up, loudly.
  *
- * This is a runaway guard, not a budget the way [HOME_FOCUS_RETRY_FRAMES] is a
- * budget for the hand-back DOWN to a card. The hand-off into the bar now runs
+ * This is a runaway guard, not a budget the way a menu's hand-back is a budget
+ * for the landing DOWN to a card (see [rememberFocusHandBack]). The hand-off
+ * into the bar now runs
  * for as long as the bar is showing and focus has not landed inside it, so the
  * only thing bounded here is a bar that can never take focus at all. Three
  * seconds at 60 fps is an order of magnitude past any fade the ask can race, and
@@ -4308,44 +4297,26 @@ fun HomeScreen(
         topBarSummons++
     }
 
-    // The scope the focus hand-backs below run in: they have to survive the
-    // frame the surface they are leaving is disposed on, so they cannot be a
-    // bare request from the click callback.
-    val focusScope = rememberCoroutineScope()
-
     /**
      * Hands focus back to [requester] and makes sure it really landed.
      *
-     * The top bar is inside an `AnimatedVisibility` and the poster menus are
-     * overlays, so the ask can race the frame that attaches (or re-attaches)
-     * the node it names. requestFocus() answers FALSE for a node that is not
-     * attached rather than throwing, so a bare `?.requestFocus()` discarded the
-     * only signal there was and left the D-pad with nothing focused - the bar
-     * closed onto no card at all, which is exactly the "dismiss does nothing"
-     * report. Retried across frames here, with the request's own answer as the
-     * success test (see KBStatusMessage, which documents the trap).
+     * The shared menu hand-back, not a loop of Home's own: its FIRST ask is made
+     * synchronously, inside the callback that raised it, while the menu is still
+     * composed and can hand the focus over. Home used to start every hand-back on
+     * the composition scope with an `awaitFrame` in front of it, which put a
+     * frame with NO focused node between the menu's dismissal and the card's
+     * re-focus; the framework fills that gap with the page's own default target,
+     * and arriving there scrolls the rails column to it (bringIntoView). The
+     * verified retry then landed on the card a frame later but could not undo the
+     * scroll - the reported "I marked a movie as watched on Home and it lost
+     * focus of the card and the screen scrolled up". Asking first closes the gap,
+     * so the page never moves; the retries still cover a card that is not
+     * attached yet (see [rememberFocusHandBack], which documents the same trap
+     * for the browse pages' menus).
      */
-    // The landing in flight, cancelled by the next hand-back (see [restoreFocus]).
-    var focusRestoreJob by remember { mutableStateOf<Job?>(null) }
+    val handFocusBack = rememberFocusHandBack()
 
-    fun restoreFocus(requester: FocusRequester?) {
-        if (requester == null) return
-        // A newer hand-back cancels the one still waiting on a frame. The loop
-        // below is a retry, so without this a dismiss the viewer has already
-        // superseded keeps asking for its own card and can land it a moment
-        // after the next one moved - the focus jumping back to where they were.
-        focusRestoreJob?.cancel()
-        focusRestoreJob = focusScope.launch {
-            var landed = false
-            var attempts = 0
-            while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {
-                awaitFrame()
-                landed = runCatching { requester.requestFocus() }
-                    .getOrDefault(false)
-                attempts++
-            }
-        }
-    }
+    fun restoreFocus(requester: FocusRequester?) = handFocusBack(requester)
 
     fun dismissTopBar() {
         showTopBar = false
@@ -4619,9 +4590,10 @@ fun HomeScreen(
         viewModel.refreshWatchedStatusForCurrentRails()
     }
 
-    // The scope a resume's root re-verification runs in. Separate from
-    // [focusScope] because it is not a focus hand-back: it survives the click
-    // and hands the navigation back when the lookup answers (or gives up).
+    // The scope a resume's root re-verification runs in. Its own scope because
+    // it is not a focus hand-back: it survives the click and hands the
+    // navigation back when the lookup answers (or gives up), while the
+    // hand-backs close over [rememberFocusHandBack]'s own scope.
     val resumeVerifyScope = rememberCoroutineScope()
 
     fun openUpNext(

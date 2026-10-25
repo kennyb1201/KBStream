@@ -248,4 +248,70 @@ class LibraryCalendarTest {
 
         assertEquals(1, month.episodesOn(LocalDate.of(2026, 10, 14)).size)
     }
+
+    /**
+     * Reported from Sentry on the TV: `IllegalArgumentException: Key
+     * "tmdb:214162|s5|e4" was already used` - the day list's LazyColumn keys
+     * each row by show/season/episode, so one duplicated row crashes the pane.
+     *
+     * The duplicate came from the show set, not from the payload: a source can
+     * name one show twice (Simkl hands over both its IMDb and its TMDB key),
+     * and each candidate resolved to its own CalendarShow with the same
+     * showId. Two shows in, one show's worth of rows out.
+     */
+    @Test
+    fun `a show resolved under two candidate ids is still one row per episode`() {
+        val airDate = "2026-10-14"
+        val month = buildCalendarMonth(
+            month = october,
+            shows = listOf(
+                CalendarShow(
+                    showId = "tmdb:214162",
+                    openId = "tt214162",
+                    title = "Animal Control",
+                    seasons = mapOf(5 to listOf(episode(4, airDate)))
+                ),
+                // The same show, reached by its other id.
+                CalendarShow(
+                    showId = "tmdb:214162",
+                    openId = "tt214162",
+                    title = "Animal Control",
+                    seasons = mapOf(5 to listOf(episode(4, airDate)))
+                )
+            ),
+            today = today
+        )
+
+        val rows = month.episodesOn(LocalDate.of(2026, 10, 14))
+        assertEquals("one episode, one row - the day list's keys must not collide", 1, rows.size)
+    }
+
+    @Test
+    fun `a day's rows are unique by their watched key`() {
+        val one = CalendarEpisode(
+            showId = "tmdb:214162",
+            openId = "tt214162",
+            showTitle = "Animal Control",
+            poster = null,
+            backdrop = null,
+            season = 5,
+            episode = 4,
+            episodeTitle = "Sled Dogs and Kitty Litter",
+            airDate = LocalDate.of(2026, 10, 14),
+            isPremiere = false,
+            isFinale = false
+        )
+
+        val sorted = calendarSortedDays(
+            mapOf(one.airDate to listOf(one, one.copy(episodeTitle = "a second copy")))
+        )
+
+        val rows = sorted.getValue(one.airDate)
+        assertEquals(1, rows.size)
+        assertEquals(
+            "the first copy wins, so the row keeps the payload's title",
+            "Sled Dogs and Kitty Litter",
+            rows.single().episodeTitle
+        )
+    }
 }

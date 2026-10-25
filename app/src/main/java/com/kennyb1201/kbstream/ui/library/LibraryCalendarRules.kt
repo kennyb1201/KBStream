@@ -357,11 +357,27 @@ internal fun calendarEpisodesFor(
     return days
 }
 
-/** [days] with each day's rows in [calendarEpisodeOrder]. */
+/**
+ * [days] with each day's rows in [calendarEpisodeOrder], and one row per
+ * episode.
+ *
+ * The de-duplication is what the day list needs to be drawable at all: its
+ * LazyColumn keys each row by show/season/episode (the same identity
+ * [calendarWatchedKey] carries), and Compose throws "Key was already used" on
+ * a repeat. Nothing here is expected to repeat - one show's payload is one
+ * list - but a show reachable under two ids is folded once per id by the
+ * ViewModel's builder, and a payload that lists an episode twice (TMDB has
+ * done it) would crash the pane rather than draw. Kept at this one funnel so
+ * every path that publishes a month gets the same guarantee.
+ */
 internal fun calendarSortedDays(
     days: Map<LocalDate, Collection<CalendarEpisode>>
 ): Map<LocalDate, List<CalendarEpisode>> =
-    days.mapValues { (_, episodes) -> episodes.sortedWith(calendarEpisodeOrder) }
+    days.mapValues { (_, episodes) ->
+        episodes
+            .distinctBy { calendarWatchedKey(it.showId, it.season, it.episode) }
+            .sortedWith(calendarEpisodeOrder)
+    }
 
 /**
  * Every episode of [shows] that lands in [month], indexed by day.

@@ -82,11 +82,9 @@ class HomeTopBarHandOffContractTest {
         )
         assertTrue(
             "the cap is a runaway guard measured against seconds at frame rate, " +
-                "not the twelve-frame budget the DOWN hand-back uses",
+                "not the shared menu hand-back's budget for the landing DOWN",
             home.contains("private const val HOME_TOP_BAR_DRIVE_MAX_FRAMES = 180") &&
-                home.contains(
-                    "attempts < HOME_FOCUS_RETRY_FRAMES"
-                )
+                home.contains("val handFocusBack = rememberFocusHandBack()")
         )
     }
 
@@ -128,10 +126,15 @@ class HomeTopBarHandOffContractTest {
             )
         )
         assertTrue(
-            "and the hand-back DOWN keeps its own verified retry, which is a " +
-                "different failure shape",
-            home.contains("landed = runCatching { requester.requestFocus() }") &&
-                home.contains("while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {")
+            "and the hand-back DOWN still asks in the caller's own frame and " +
+                "then verifies the landing - a deferred first ask left a frame " +
+                "with no focus owner, and the scroll went with the framework's " +
+                "stopgap (the reported watched-mark jump)",
+            home.contains(
+                "fun restoreFocus(requester: FocusRequester?) = " +
+                    "handFocusBack(requester)"
+            ) &&
+                home.contains("import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack")
         )
     }
 

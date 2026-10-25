@@ -143,19 +143,23 @@ class FocusHandBackContractTest {
     }
 
     @Test
-    fun `Home's hand-back is the same rule with its own cadence`() {
+    fun `Home's hand-back is the shared same-frame rule`() {
         val home = source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt")
         assertTrue(
-            "Home's landing reads the request's own answer across frames (see " +
-                "restoreFocus), which is the rule; it keeps its frame cadence " +
-                "because the bar it lands in is an AnimatedVisibility",
-            home.contains("fun restoreFocus(requester: FocusRequester?)") &&
-                home.contains("landed = runCatching { requester.requestFocus() }")
+            "Home delegates to the one helper instead of running a hand-back of " +
+                "its own on the composition scope: the reported 'marking a movie " +
+                "as watched loses the card and scrolls the screen up' was exactly " +
+                "the frame with no focus owner that a deferred first ask leaves",
+            home.contains("val handFocusBack = rememberFocusHandBack()") &&
+                home.contains(
+                    "fun restoreFocus(requester: FocusRequester?) = " +
+                        "handFocusBack(requester)"
+                )
         )
-        assertTrue(
-            "and a newer hand-back cancels the one still retrying, so a " +
-                "superseded dismiss cannot move the focus back",
-            home.contains("var focusRestoreJob by remember") &&
+        assertFalse(
+            "and no local retry loop is left behind, because its first ask came " +
+                "a frame late (the menu was already gone)",
+            home.contains("var focusRestoreJob by remember") ||
                 home.contains("focusRestoreJob?.cancel()")
         )
         assertTrue(

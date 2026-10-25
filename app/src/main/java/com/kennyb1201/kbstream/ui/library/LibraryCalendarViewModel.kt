@@ -126,6 +126,19 @@ class LibraryCalendarViewModel(
     private class MonthProgress {
         val days = HashMap<LocalDate, MutableList<CalendarEpisode>>()
         val resolved = HashSet<String>()
+
+        /**
+         * The shows already folded into [days], by their resolved TMDB id.
+         *
+         * A candidate id is not a show: the sources name the same show by an
+         * IMDb id and by a `tmdb:` key (Simkl hands over both, and the local
+         * history may use the other spelling again), so two candidates can
+         * resolve to one show. Folding both would draw every one of its
+         * episodes twice on its day, and the day list keys its rows by
+         * show/season/episode - a duplicate is a Compose crash ("Key was
+         * already used"), which is exactly what was reported from the TV.
+         */
+        val shows = HashSet<String>()
         var lastPublishedAt = 0L
     }
 
@@ -472,7 +485,10 @@ class LibraryCalendarViewModel(
     ) {
         build.resolved += candidateId
         var gained = false
-        if (show != null) {
+        // One show, folded once - however many candidate ids named it (see
+        // MonthProgress.shows). A repeat is still marked resolved so it is not
+        // asked about again.
+        if (show != null && build.shows.add(show.showId)) {
             for ((day, episodes) in calendarEpisodesFor(month, show, LocalDate.now())) {
                 build.days.getOrPut(day) { ArrayList() } += episodes
                 gained = true

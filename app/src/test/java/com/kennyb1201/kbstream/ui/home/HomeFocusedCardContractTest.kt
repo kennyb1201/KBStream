@@ -62,10 +62,21 @@ class HomeFocusedCardContractTest {
                 "throws) was discarded by runCatching, the bar closed onto no " +
                 "card, and the D-pad went dead",
             !home.contains("(focusedCardRequester ?: lastPosterFocusRequester)?.requestFocus()") &&
-                home.contains("fun restoreFocus(requester: FocusRequester?) {") &&
-                home.contains("landed = runCatching { requester.requestFocus() }") &&
-                home.contains("getOrDefault(false)") &&
-                home.contains("while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {")
+                home.contains("val handFocusBack = rememberFocusHandBack()") &&
+                home.contains(
+                    "fun restoreFocus(requester: FocusRequester?) = " +
+                        "handFocusBack(requester)"
+                )
+        )
+        assertTrue(
+            "and the hand-back is the shared one, whose FIRST ask happens inside " +
+                "the caller's callback: Home's own loop asked a frame late, after " +
+                "the menu had left the tree, so the framework filled the empty " +
+                "focus owner with the page's default target and scrolled to it - " +
+                "the reported 'marked a movie as watched and it lost focus of the " +
+                "card and the screen scrolled up'",
+            !home.contains("var focusRestoreJob by remember") &&
+                home.contains("import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack")
         )
         assertTrue(
             "and every other hand-back goes through it too, so no path can " +
