@@ -200,6 +200,162 @@ class EpgKeysTest {
         )
     }
 
+    // ── Numbered parallel feeds (a channel that only exists with a number) ──
+
+    private val abcNewsLive3 = channel(
+        "anl3",
+        name = "ABC News Live 3",
+        tvgId = "ABCNewsLive3.us@SD"
+    )
+
+    @Test
+    fun `a numbered feed reaches the base channel's guide entry`() {
+        // Field case (2026-10-25, phone): ten distinct ABC News Live feeds with
+        // ten distinct streams, and one guide channel named "ABC News Live".
+        // Passes 1-3 all miss on the trailing digit, and there is no callsign
+        // here to offer - the base forms have to be.
+        assertEquals(emptySet<String>(), playlistCallsignKeys(abcNewsLive3))
+
+        assertEquals(
+            "guide-anl" to EpgMatchKind.NUMBERED_VARIANT,
+            matchEpgChannel(
+                idCandidates = listOf(abcNewsLive3.tvgId),
+                nameCandidates = listOf(abcNewsLive3.tvgName, abcNewsLive3.name),
+                byId = mapOf("abcnewslive.us" to "guide-anl"),
+                byName = mapOf("abcnewslive" to "guide-anl")
+            )
+        )
+    }
+
+    @Test
+    fun `a two-digit feed number is stripped as one run`() {
+        val anl10 = channel("anl10", name = "ABC News Live 10", tvgId = "ABCNewsLive10.us@SD")
+
+        assertEquals(
+            "guide-anl" to EpgMatchKind.NUMBERED_VARIANT,
+            matchEpgChannel(
+                idCandidates = listOf(anl10.tvgId),
+                nameCandidates = listOf(anl10.tvgName, anl10.name),
+                byId = emptyMap(),
+                // The guide carries the base channel only, never `...10`.
+                byName = mapOf("abcnewslive" to "guide-anl")
+            )
+        )
+    }
+
+    @Test
+    fun `amp 2 reaches the guide's amp channel`() {
+        val amp2 = channel("amp2", name = "AMP 2", tvgId = "AMP2.us@SD")
+
+        assertEquals(
+            "guide-amp" to EpgMatchKind.NUMBERED_VARIANT,
+            matchEpgChannel(
+                idCandidates = listOf(amp2.tvgId),
+                nameCandidates = listOf(amp2.tvgName, amp2.name),
+                byId = emptyMap(),
+                byName = mapOf("amp" to "guide-amp")
+            )
+        )
+    }
+
+    @Test
+    fun `a channel with its own guide entry keeps it`() {
+        // The counter-rule the exact-name pass exists for: a trailing number IS
+        // identity for these, so ESPN2 and Sky Sports 1 must never fall through
+        // to `espn` / `skysports`.
+        val espn2 = channel("espn2", name = "ESPN2", tvgId = "ESPN2.us")
+        assertEquals(
+            "guide-espn2" to EpgMatchKind.NAME,
+            matchEpgChannel(
+                idCandidates = listOf(espn2.tvgId),
+                nameCandidates = listOf(espn2.tvgName, espn2.name),
+                byId = emptyMap(),
+                byName = mapOf("espn2" to "guide-espn2", "espn" to "guide-espn")
+            )
+        )
+
+        val sky1 = channel("sky1", name = "Sky Sports 1", tvgId = "SkySports1.uk")
+        assertEquals(
+            "guide-sky1" to EpgMatchKind.NAME,
+            matchEpgChannel(
+                idCandidates = listOf(sky1.tvgId),
+                nameCandidates = listOf(sky1.tvgName, sky1.name),
+                byId = emptyMap(),
+                byName = mapOf("skysports1" to "guide-sky1", "skysports2" to "guide-sky2")
+            )
+        )
+    }
+
+    @Test
+    fun `a stripped base that is not a guide channel matches nothing`() {
+        // The last-resort pass only ever reaches a channel that exists: it
+        // invents no guide entry, so a miss stays a miss.
+        val mystery = channel("mystery3", name = "Mystery Feed 3", tvgId = "MysteryFeed3.us")
+
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(mystery.tvgId),
+                nameCandidates = listOf(mystery.tvgName, mystery.name),
+                byId = emptyMap(),
+                byName = mapOf("otherchannel" to "guide-other")
+            )
+        )
+    }
+
+    @Test
+    fun `a stripped base shorter than three characters is not a key`() {
+        assertEquals(emptyList<String>(), numberedVariantKeys("TV 5"))
+        assertEquals(emptyList<String>(), numberedVariantKeys("7"))
+        assertEquals("no trailing digits, so nothing to restate", emptyList<String>(), numberedVariantKeys("AMC"))
+        // Documented edge: `Channel 5` with no guide entry of its own may borrow
+        // a guide channel literally named "Channel".
+        assertEquals(listOf("channel"), numberedVariantKeys("Channel 5"))
+    }
+
+    @Test
+    fun `the callsign still wins over a numbered variant`() {
+        // A numbered local feed whose base name also resolves: which station
+        // beats which feed family, every time - the callsign runs first.
+        val wftv2 = channel("wftv2", name = "ABC WFTV 2", tvgId = "ABC.us@WFTV2")
+        val callsignKeys = playlistCallsignKeys(wftv2).toList()
+        assertEquals(listOf("wftv2"), callsignKeys)
+
+        assertEquals(
+            "guide-callsign" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(wftv2.tvgId),
+                nameCandidates = listOf(wftv2.tvgName, wftv2.name),
+                byId = mapOf("wftv2" to "guide-callsign"),
+                byName = mapOf("abcwftv" to "guide-base"),
+                callsignCandidates = callsignKeys
+            )
+        )
+    }
+
+    @Test
+    fun `a numbered feed keeps the base guide channel through the prune`() {
+        val keys = playlistEpgMatchKeys(listOf(abcNewsLive3))
+
+        assertTrue("abcnewslive" in keys)
+        assertTrue(
+            "the guide's only reachable alias is its display name",
+            guideChannelCanMatch(
+                channelId = "ABCNewsLive.us",
+                aliasKeys = epgAliasKeys("ABCNewsLive.us", listOf("ABC News Live")),
+                playlistKeys = keys
+            )
+        )
+        // Load-bearing, not incidental: without the stripped key the importer
+        // drops the channel's programmes and pass 5 finds nothing to match.
+        assertFalse(
+            guideChannelCanMatch(
+                channelId = "ABCNewsLive.us",
+                aliasKeys = epgAliasKeys("ABCNewsLive.us", listOf("ABC News Live")),
+                playlistKeys = keys - "abcnewslive"
+            )
+        )
+    }
+
     // ── Callsign keys (locals, and only locals) ──────────────────────────
 
     @Test

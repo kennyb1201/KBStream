@@ -92,7 +92,7 @@ internal fun simplifyEpgChannelName(value: String): String? {
 }
 
 /** Which of the matcher's passes produced a match. */
-internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED, CALLSIGN }
+internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED, CALLSIGN, NUMBERED_VARIANT }
 
 /**
  * The callsigns a playlist channel answers to, as matcher keys.
@@ -208,6 +208,40 @@ private fun callsignKeysOf(raw: String?): Set<String> {
 }
 
 /**
+ * The keys a numbered parallel feed answers to: the channel's name spellings
+ * with a trailing run of digits removed.
+ *
+ * Field report (2026-10-25, phone): ABC News Live 1-10 and AMP 1-2 all read "No
+ * program data" on a guide that does carry the base channel, while the majors
+ * were filled - so the import and the matcher both work. The playlist spells
+ * each feed as its own channel (`ABCNewsLive3.us@SD` / "ABC News Live 3", ten
+ * distinct ids and ten distinct streams) while the guide has one channel named
+ * "ABC News Live", and no pass can reach `abcnewslive` from `abcnewslive3`: all
+ * ten miss on the trailing digit alone.
+ *
+ * Both spellings the matcher would otherwise probe are stripped - the
+ * simplified form and the lookup form - because a guide may key a channel by
+ * either: "ABC News Live 3" reduces to `abcnewslive` both ways, while a dotted
+ * name keeps its dots in one form only. A base shorter than
+ * [NUMBERED_BASE_MIN_LENGTH] characters is never offered (`Channel 5` must not
+ * produce `chan`, and a name that IS digits produces nothing), and a name with
+ * no trailing digits yields no keys at all, so this can never restate a
+ * spelling an earlier pass already probed.
+ */
+internal fun numberedVariantKeys(name: String): List<String> {
+    val forms = listOfNotNull(
+        simplifyEpgChannelName(name),
+        epgLookupKey(name).takeIf { it.isNotEmpty() }
+    )
+    val keys = LinkedHashSet<String>(forms.size)
+    forms.forEach { form ->
+        val stripped = form.replace(TRAILING_DIGITS, "")
+        if (stripped != form && stripped.length >= NUMBERED_BASE_MIN_LENGTH) keys.add(stripped)
+    }
+    return keys.toList()
+}
+
+/**
  * Picks the guide channel for one playlist channel, trying the spellings in the
  * order that loses the least information first.
  *
@@ -226,6 +260,15 @@ private fun callsignKeysOf(raw: String?): Set<String> {
  *     `CBS.us@KMTVTV` / `ABC.us@WFTV`. Last for the
  *     same reason: an exact or name match must never be displaced, and the
  *     callsign is the weaker claim (it says which station, not which feed).
+ *  5. **The name with its trailing feed number stripped**,
+ *     [numberedVariantKeys], so a numbered parallel feed
+ *     (`ABC News Live 3`, `AMP 2`) reaches the base channel's guide entry
+ *     instead of staying blank forever. Last of all, and never applied to the
+ *     candidates above: stripping digits up front would collapse `Sky Sports
+ *     1` onto `Sky Sports` for every pass, so a channel that has its own guide
+ *     entry keeps it and this pass can only rescue a channel that has none.
+ *     It runs after the callsign because a callsign says which STATION, which
+ *     is a stronger claim than "a feed family with this base name".
  *
  * Without pass 3 the alias keys built by [epgAliasKeys] were half-wired: the
  * guide's simplified spelling was stored, but the playlist side was only ever
@@ -240,9 +283,10 @@ internal fun <T> matchEpgChannel(
     byId: Map<String, T>,
     byName: Map<String, T>,
     /**
-     * Callsign keys ([playlistCallsignKeys] of a local), tried LAST - see the
-     * fourth pass below. Empty by default, so a caller that has no callsigns to
-     * offer (and every existing test) behaves exactly as before.
+     * Callsign keys ([playlistCallsignKeys] of a local), tried AFTER the
+     * exact-id and name passes - see the fourth pass below. Empty by default,
+     * so a caller that has no callsigns to offer (and every existing test)
+     * behaves exactly as before.
      */
     callsignCandidates: List<String?> = emptyList()
 ): Pair<T, EpgMatchKind>? {
@@ -289,6 +333,22 @@ internal fun <T> matchEpgChannel(
         byName[key]?.let { return it to EpgMatchKind.CALLSIGN }
     }
 
+    // Pass 5: the name with a trailing feed number stripped. Only the NAME
+    // index is probed: the keys are name spellings, so a guide's id index
+    // never holds them, and reconstructing an id from a stripped name (which
+    // would mean guessing the guide's country suffix) is the kind of
+    // reconstruction this file forbids elsewhere.
+    //
+    // This is an ADDITIONAL candidate list, never a normalization of the ones
+    // above: the passes 2-4 spellings are what keep `Sky Sports 1` apart from
+    // `Sky Sports 2`, and reaching this pass at all means none of them hit.
+    for (candidate in nameCandidates) {
+        val name = candidate?.trim()?.takeIf(String::isNotEmpty) ?: continue
+        for (key in numberedVariantKeys(name)) {
+            byName[key]?.let { return it to EpgMatchKind.NUMBERED_VARIANT }
+        }
+    }
+
     return null
 }
 
@@ -315,14 +375,20 @@ internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
                 ?.takeIf(String::isNotEmpty)
                 ?.let { keys.add(epgLookupKey(it)) }
         }
-        // Passes 2 and 3: the names as spelled, and simplified with quality
-        // qualifiers stripped - the two spellings the matcher tries.
+        // Passes 2, 3 and 5: the names as spelled, simplified with quality
+        // qualifiers stripped, and with a trailing feed number stripped - the
+        // three spellings the matcher tries against the guide's name index.
         listOf(channel.tvgName, channel.displayName, channel.name).forEach { candidate ->
             candidate?.trim()
                 ?.takeIf(String::isNotEmpty)
                 ?.let { name ->
                     keys.add(epgLookupKey(name))
                     simplifyEpgChannelName(name)?.let(keys::add)
+                    // Pass 5: without these the matcher could reach a numbered
+                    // parallel feed's base guide channel while the importer had
+                    // already thrown its programs away - the same half-wiring
+                    // that made a missing callsign key look like a guide gap.
+                    keys.addAll(numberedVariantKeys(name))
                 }
         }
         // Pass 4: the callsign, so a local's guide channel survives the prune.
@@ -433,3 +499,12 @@ private const val CALLSIGN_LENGTH = 3
 private const val CALLSIGN_MAX_LENGTH = 6
 
 private val WHITESPACE = Regex("""\s+""")
+
+/** The feed number a numbered parallel variant is distinguished by. */
+private val TRAILING_DIGITS = Regex("""[0-9]+$""")
+
+/**
+ * Shortest base the numbered-variant pass will key on. Below this a stripped
+ * name is a fragment (`Channel 5` -> `chan`), not a channel.
+ */
+private const val NUMBERED_BASE_MIN_LENGTH = 3
