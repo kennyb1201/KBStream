@@ -231,11 +231,11 @@ class EpgKeysTest {
             playlistCallsignKeys(channel("c4", name = "ABC East", tvgId = "ABC.us@East"))
         )
         assertEquals(
-            emptySet(),
+            emptySet<String>(),
             playlistCallsignKeys(channel("c5", name = "A&E East", tvgId = "AE.us@East"))
         )
         assertEquals(
-            emptySet(),
+            emptySet<String>(),
             playlistCallsignKeys(channel("c6", name = "Channel HD", tvgId = "Channel.uk@HD"))
         )
     }
@@ -262,17 +262,17 @@ class EpgKeysTest {
         )
         assertEquals(
             "longer than a callsign plus its station suffix",
-            emptySet(),
+            emptySet<String>(),
             playlistCallsignKeys(channel("c10", name = "Too Long", tvgId = "Net.us@KMTVTVX"))
         )
         assertEquals(
             "a Mexican station keeps today's behavior: no key, no regression",
-            emptySet(),
+            emptySet<String>(),
             playlistCallsignKeys(channel("c11", name = "XEW", tvgId = "Net.mx@XEW"))
         )
         assertEquals(
             "and the network name is not a callsign either",
-            emptySet(),
+            emptySet<String>(),
             playlistCallsignKeys(channel("c12", name = "ABC", tvgId = "ABC.us@ABC"))
         )
     }
