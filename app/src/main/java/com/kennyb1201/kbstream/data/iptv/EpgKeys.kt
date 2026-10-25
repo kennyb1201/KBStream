@@ -92,7 +92,14 @@ internal fun simplifyEpgChannelName(value: String): String? {
 }
 
 /** Which of the matcher's passes produced a match. */
-internal enum class EpgMatchKind { ID, NAME, SIMPLIFIED, CALLSIGN, NUMBERED_VARIANT }
+internal enum class EpgMatchKind {
+    ID,
+    NAME,
+    SIMPLIFIED,
+    CALLSIGN,
+    NUMBERED_VARIANT,
+    PLATFORM_AFFIX,
+}
 
 /**
  * The callsigns a playlist channel answers to, as matcher keys.
@@ -260,6 +267,51 @@ internal fun numberedVariantKeys(name: String): List<String> {
 }
 
 /**
+ * The keys a platform-affixed channel answers to: its simplified name with one
+ * leading or trailing platform token removed.
+ *
+ * Field report (2026-10-25, phone, build 0.9.65): of 1,424 Free TV channels, 660
+ * matched and 764 did not, and the Pluto block matched ONE channel out of 430
+ * stored Pluto guide channels - while `BET Pluto TV` did match, exactly. The
+ * shape is the same channel under two spellings: the playlist says `BET Classics
+ * Pluto TV` (the platform's own branding appended to the name) and the guide says
+ * `BET Classics`, and same-stream verification confirmed they are one channel.
+ *
+ * Nothing above this pass can reach it: the id pass can never fire (Pluto guide
+ * ids are hex ObjectIDs, playlist tvg-ids are iptv-org slugs), the callsign pass
+ * is dead for these rows (`@SD` is two characters, below the callsign floor), and
+ * NAME/SIMPLIFIED only hit when the spellings are equal - which the affix is
+ * precisely what breaks.
+ *
+ * Only the SIMPLIFIED form is stripped, and only ONE token, so "Pluto TV" (the
+ * one affix with a verified same-channel case, see [PLATFORM_AFFIXES]) becomes
+ * the single token `plutotv` after simplification: `betclassicsplutotv` ->
+ * `betclassics`, `plutotvstoragewars` -> `storagewars`. A base shorter than
+ * [PLATFORM_AFFIX_BASE_MIN_LENGTH] characters is never offered, and a name that
+ * IS the affix yields nothing - the whole name is never stripped away.
+ *
+ * Deliberately not generalized to every platform that brands its channels: an
+ * affix renames a channel only when the guide and the playlist name the same
+ * feed differently, and only Pluto has a verified case. A guessed affix would
+ * borrow schedules on a name coincidence, which is worse than a blank row.
+ */
+internal fun platformAffixKeys(name: String): List<String> {
+    val simplified = simplifyEpgChannelName(name) ?: return emptyList()
+    val keys = LinkedHashSet<String>(PLATFORM_AFFIXES.size)
+    PLATFORM_AFFIXES.forEach { affix ->
+        val stripped = when {
+            simplified.startsWith(affix) -> simplified.removePrefix(affix)
+            simplified.endsWith(affix) -> simplified.removeSuffix(affix)
+            else -> return@forEach
+        }
+        if (stripped != simplified && stripped.length >= PLATFORM_AFFIX_BASE_MIN_LENGTH) {
+            keys.add(stripped)
+        }
+    }
+    return keys.toList()
+}
+
+/**
  * Picks the guide channel for one playlist channel, trying the spellings in the
  * order that loses the least information first.
  *
@@ -287,6 +339,13 @@ internal fun numberedVariantKeys(name: String): List<String> {
  *     entry keeps it and this pass can only rescue a channel that has none.
  *     It runs after the callsign because a callsign says which STATION, which
  *     is a stronger claim than "a feed family with this base name".
+ *  6. **The name with a platform affix removed**, [platformAffixKeys], so a
+ *     channel the playlist spells `BET Classics Pluto TV` reaches the guide's
+ *     `BET Classics` instead of staying blank beside its own schedule.
+ *     Last of all, and an ADDITIONAL candidate list rather than a normalization
+ *     of the ones above: genuine guide names contain "Pluto TV" too (`BET Pluto
+ *     TV` matches exactly on pass 2), so stripping it up front would steal exact
+ *     matches. Reaching this pass means every stronger claim already missed.
  *
  * Without pass 3 the alias keys built by [epgAliasKeys] were half-wired: the
  * guide's simplified spelling was stored, but the playlist side was only ever
@@ -367,6 +426,21 @@ internal fun <T> matchEpgChannel(
         }
     }
 
+    // Pass 6: the name with ONE platform affix removed. The weakest claim of all,
+    // and the last thing tried - see [platformAffixKeys]. NAME index only: the
+    // keys are name spellings, so a guide's id index never holds them.
+    //
+    // Full equality only. A stripped base that merely CONTAINS a guide name (or
+    // is contained by one) is not a match: "Pluto TV Storage Wars" must not
+    // borrow "Storage Wars by A&E", which is a different name and, at best, a
+    // guide-side suffix question this pass deliberately does not touch.
+    for (candidate in nameCandidates) {
+        val name = candidate?.trim()?.takeIf(String::isNotEmpty) ?: continue
+        for (key in platformAffixKeys(name)) {
+            byName[key]?.let { return it to EpgMatchKind.PLATFORM_AFFIX }
+        }
+    }
+
     return null
 }
 
@@ -393,9 +467,10 @@ internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
                 ?.takeIf(String::isNotEmpty)
                 ?.let { keys.add(epgLookupKey(it)) }
         }
-        // Passes 2, 3 and 5: the names as spelled, simplified with quality
-        // qualifiers stripped, and with a trailing feed number stripped - the
-        // three spellings the matcher tries against the guide's name index.
+        // Passes 2, 3, 5 and 6: the names as spelled, simplified with quality
+        // qualifiers stripped, with a trailing feed number stripped, and with a
+        // platform affix stripped - the spellings the matcher tries against the
+        // guide's name index.
         listOf(channel.tvgName, channel.displayName, channel.name).forEach { candidate ->
             candidate?.trim()
                 ?.takeIf(String::isNotEmpty)
@@ -407,6 +482,11 @@ internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
                     // already thrown its programs away - the same half-wiring
                     // that made a missing callsign key look like a guide gap.
                     keys.addAll(numberedVariantKeys(name))
+                    // Pass 6, with the same reason: a `BET Classics Pluto TV` row
+                    // resolves to the guide's `BET Classics`, so that channel's
+                    // programs have to survive the import prune or the match
+                    // lands on an empty guide.
+                    keys.addAll(platformAffixKeys(name))
                 }
         }
         // Pass 4: the callsign, so a local's guide channel survives the prune.
@@ -526,3 +606,23 @@ private val TRAILING_DIGITS = Regex("""[0-9]+$""")
  * name is a fragment (`Channel 5` -> `chan`), not a channel.
  */
 private const val NUMBERED_BASE_MIN_LENGTH = 3
+
+/**
+ * Platform branding a playlist may append to (or prepend onto) a guide channel's
+ * own name, as simplified-name tokens.
+ *
+ * One entry, not a platform list: each affix here was verified by showing the
+ * playlist row and the guide channel are the SAME feed (matching stream id, not
+ * a name resemblance), and only Pluto's has been. `Pluto TV` is the confirmed
+ * case - `BET Classics Pluto TV` is the guide's `BET Classics`, same stream hex.
+ * Samsung TV Plus, Plex and Roku Channel are absent until each gets the same
+ * proof: an affix guessed in would borrow a schedule on a name coincidence.
+ */
+private val PLATFORM_AFFIXES = listOf("plutotv")
+
+/**
+ * Shortest base the platform-affix pass will key on. Below this a stripped name
+ * is a fragment rather than a channel, and the whole-name case (a row named
+ * exactly `Pluto TV`) must never reduce to an empty key.
+ */
+private const val PLATFORM_AFFIX_BASE_MIN_LENGTH = 3

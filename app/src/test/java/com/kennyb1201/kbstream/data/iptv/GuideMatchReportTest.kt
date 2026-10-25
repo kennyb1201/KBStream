@@ -166,6 +166,139 @@ class GuideMatchReportTest {
         assertNull(report.rows.single().sourceUrl)
     }
 
+    // ── report-only: guide-side `by <network>` suffixes ────────────────────
+
+    @Test
+    fun `a guide-side network suffix is counted with the row it would rescue`() {
+        // The 2026-10-25 question, answered with a number instead of the one case
+        // it came from: `Pluto TV Storage Wars` vs the guide's
+        // `Storage Wars by A&E`.
+        val pluto = GuideMatchSource(
+            url = "https://i.mjh.nz/PlutoTV/us.xml.gz",
+            byId = emptyMap(),
+            byName = mapOf(
+                epgLookupKey("Storage Wars by A&E") to "suffix-1",
+                epgLookupKey("BET Classics") to "plain-1"
+            ),
+            identityOf = { id ->
+                when (id) {
+                    "suffix-1" -> GuideChannelIdentity("suffix-1", listOf("Storage Wars by A&E"))
+                    else -> GuideChannelIdentity(id, listOf("BET Classics"))
+                }
+            }
+        )
+
+        val report = attributeGuideMatches(
+            channels = listOf(
+                channel(id = "storage", displayName = "Pluto TV Storage Wars"),
+                channel(id = "betpluto", displayName = "BET Classics Pluto TV")
+            ),
+            sources = listOf(pluto)
+        )
+
+        // One suffix candidate, and it is the one the field named.
+        assertEquals(1, report.networkSuffixCandidates.size)
+        val candidate = report.networkSuffixCandidates.single()
+        assertEquals("Storage Wars by A&E", candidate.guideName)
+        assertEquals(
+            "the affixed row is the one a strip would rescue",
+            "Pluto TV Storage Wars",
+            candidate.playlistName
+        )
+        assertEquals(1, report.networkSuffixRescues)
+
+        val lines = report.lines(Redaction::url)
+        assertTrue(
+            "the count line is greppable",
+            lines.contains(
+                "guide-side \"by\" suffix (report only): " +
+                    "unmatched-guide=1 would-rescue-playlist=1"
+            )
+        )
+        assertTrue(
+            lines.any { it == "- Storage Wars by A&E (${pluto.url}) | would match \"Pluto TV Storage Wars\"" }
+        )
+        // Report only: the affixed row is still unmatched, because nothing strips a
+        // guide-side suffix.
+        assertNull(report.rows.single { it.displayName == "Pluto TV Storage Wars" }.sourceUrl)
+    }
+
+    @Test
+    fun `a suffix nothing would reach is still listed, with no row`() {
+        val guide = GuideMatchSource(
+            url = "https://guide.example/g.xml.gz",
+            byId = emptyMap(),
+            byName = mapOf(epgLookupKey("Some Show by A&E") to "only"),
+            identityOf = { id -> GuideChannelIdentity(id, listOf("Some Show by A&E")) }
+        )
+
+        val report = attributeGuideMatches(
+            channels = listOf(channel(id = "other", displayName = "Unrelated Channel")),
+            sources = listOf(guide)
+        )
+
+        assertEquals(1, report.networkSuffixCandidates.size)
+        assertNull("no row reaches it, and the section says so rather than omitting it", report.networkSuffixCandidates.single().playlistName)
+        assertEquals(0, report.networkSuffixRescues)
+        assertTrue(
+            report.lines(Redaction::url).any { it == "- Some Show by A&E (${guide.url})" }
+        )
+    }
+
+    @Test
+    fun `a resolved guide channel is not a suffix candidate`() {
+        // `BET Pluto TV` is a real guide name and matches exactly, so it must never
+        // be reported as a by-suffix gap even though it loads into the same index.
+        val guide = GuideMatchSource(
+            url = "https://guide.example/g.xml.gz",
+            byId = emptyMap(),
+            byName = mapOf(
+                epgLookupKey("BET Pluto TV") to "resolved",
+                epgLookupKey("Storage Wars by A&E") to "suffix"
+            ),
+            identityOf = { id ->
+                when (id) {
+                    "resolved" -> GuideChannelIdentity("resolved", listOf("BET Pluto TV"))
+                    else -> GuideChannelIdentity("suffix", listOf("Storage Wars by A&E"))
+                }
+            }
+        )
+
+        val report = attributeGuideMatches(
+            channels = listOf(
+                channel(id = "betpluto", displayName = "BET Pluto TV"),
+                // One unmatched row, so the section is produced at all (it exists
+                // to explain a blank row, not to inventory a healthy guide).
+                channel(id = "other", displayName = "Unrelated Channel")
+            ),
+            sources = listOf(guide)
+        )
+
+        assertEquals(guide.url, report.rows.first().sourceUrl)
+        assertEquals(
+            "only the unresolved guide channel is counted",
+            listOf("Storage Wars by A&E"),
+            report.networkSuffixCandidates.map { it.guideName }
+        )
+    }
+
+    @Test
+    fun `a source that cannot describe its channels adds no suffix section`() {
+        val guide = GuideMatchSource(
+            url = "https://guide.example/g.xml.gz",
+            byId = emptyMap(),
+            byName = mapOf(epgLookupKey("Storage Wars by A&E") to "x")
+        )
+
+        val report = attributeGuideMatches(
+            channels = listOf(channel(id = "c", displayName = "Nothing")),
+            sources = listOf(guide)
+        )
+
+        assertTrue(report.networkSuffixCandidates.isEmpty())
+        assertTrue(report.lines(Redaction::url).none { it.startsWith("guide-side") })
+    }
+
     @Test
     fun `no lineup loaded is one line, never a silent omission`() {
         assertEquals(

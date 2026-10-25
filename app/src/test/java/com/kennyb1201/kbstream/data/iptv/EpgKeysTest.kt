@@ -356,6 +356,186 @@ class EpgKeysTest {
         )
     }
 
+    // ── Platform affix (Pluto TV's branded spellings) ────────────────────
+
+    @Test
+    fun `a trailing platform affix reaches the guide's own name`() {
+        // Field case (2026-10-25, phone): Free TV matched 660 of 1,424 channels
+        // and the Pluto block matched ONE, while its guide carried 430 channels.
+        // `BET Classics Pluto TV` is the guide's `BET Classics` - same stream.
+        val betClassics = channel(
+            "betclassics",
+            name = "BET Classics Pluto TV",
+            tvgId = "BETClassics.us@SD"
+        )
+        val byName = mapOf("betclassics" to "guide-bet-classics")
+
+        // Nothing above can reach it: the affixed spelling is what every earlier
+        // pass probes, and neither its lookup form nor its simplified form IS the
+        // guide's key.
+        assertEquals(epgLookupKey("BET Classics Pluto TV"), "betclassicsplutotv")
+        assertEquals(simplifyEpgChannelName("BET Classics Pluto TV"), "betclassicsplutotv")
+        assertFalse(
+            "without pass 6 this channel is a guaranteed miss",
+            "betclassics" in setOf(
+                epgLookupKey("BET Classics Pluto TV"),
+                simplifyEpgChannelName("BET Classics Pluto TV")
+            )
+        )
+
+        assertEquals(
+            "guide-bet-classics" to EpgMatchKind.PLATFORM_AFFIX,
+            matchEpgChannel(
+                idCandidates = listOf(betClassics.tvgId),
+                nameCandidates = listOf(betClassics.tvgName, betClassics.displayName),
+                byId = emptyMap(),
+                byName = byName
+            )
+        )
+        assertEquals(listOf("betclassics"), platformAffixKeys("BET Classics Pluto TV"))
+    }
+
+    @Test
+    fun `a leading platform affix is stripped the same way`() {
+        val baywatch = channel("baywatch", name = "Pluto TV Baywatch", tvgId = "Baywatch.us@SD")
+
+        assertEquals(
+            "guide-baywatch" to EpgMatchKind.PLATFORM_AFFIX,
+            matchEpgChannel(
+                idCandidates = listOf(baywatch.tvgId),
+                nameCandidates = listOf(baywatch.tvgName, baywatch.name),
+                byId = emptyMap(),
+                byName = mapOf("baywatch" to "guide-baywatch")
+            )
+        )
+        assertEquals(listOf("baywatch"), platformAffixKeys("Pluto TV Baywatch"))
+    }
+
+    @Test
+    fun `a genuine guide name containing the platform keeps its exact match`() {
+        // `BET Pluto TV` is a real guide name, so stripping the affix up front
+        // would steal this exact hit and misattribute it to whatever `bet` is.
+        val betPluto = channel("betpluto", name = "BET Pluto TV", tvgId = "BETPlutoTV.us@SD")
+
+        assertEquals(
+            "guide-bet-pluto-tv" to EpgMatchKind.NAME,
+            matchEpgChannel(
+                idCandidates = listOf(betPluto.tvgId),
+                nameCandidates = listOf(betPluto.tvgName, betPluto.name),
+                byId = emptyMap(),
+                byName = mapOf(
+                    "betplutotv" to "guide-bet-pluto-tv",
+                    "bet" to "guide-bet"
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `a callsign still wins over a platform affix`() {
+        // The affix pass is the weakest claim there is, so a station identified by
+        // its own callsign keeps that schedule.
+        val wftv = channel("wftv", name = "Pluto TV WFTV", tvgId = "ABC.us@WFTV")
+        val callsigns = playlistCallsignKeys(wftv).toList()
+
+        assertEquals(
+            "guide-callsign" to EpgMatchKind.CALLSIGN,
+            matchEpgChannel(
+                idCandidates = listOf(wftv.tvgId),
+                nameCandidates = listOf(wftv.tvgName, wftv.name),
+                byId = emptyMap(),
+                byName = mapOf("wftv" to "guide-callsign"),
+                callsignCandidates = callsigns
+            )
+        )
+    }
+
+    @Test
+    fun `a numbered variant still wins over a platform affix`() {
+        // `Pluto TV Baywatch 2` offers both a numbered base (`plutotvbaywatch`)
+        // and an affix-stripped one (`baywatch2`); the numbered pass runs first,
+        // which is what keeps parallel feeds on their family's own entry.
+        val baywatch2 = channel("baywatch2", name = "Pluto TV Baywatch 2", tvgId = "Baywatch2.us@SD")
+
+        assertEquals(
+            "guide-numbered" to EpgMatchKind.NUMBERED_VARIANT,
+            matchEpgChannel(
+                idCandidates = listOf(baywatch2.tvgId),
+                nameCandidates = listOf(baywatch2.tvgName, baywatch2.name),
+                byId = emptyMap(),
+                byName = mapOf(
+                    "plutotvbaywatch" to "guide-numbered",
+                    "baywatch2" to "guide-affix"
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `a guide-side network suffix is a different name, not an affix miss`() {
+        // Pinned so a later reader cannot mistake this gap for a bug here:
+        // `Pluto TV Storage Wars` is the guide's `Storage Wars by A&E`, and the
+        // affix passes leave a "by …" suffix alone on purpose.
+        val storageWars = channel("storagewars", name = "Pluto TV Storage Wars")
+
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(storageWars.tvgId),
+                nameCandidates = listOf(storageWars.tvgName, storageWars.name),
+                byId = emptyMap(),
+                byName = mapOf("storagewarsbyae" to "guide-storage-wars")
+            )
+        )
+        // And no substring borrowing either: a guide name that merely CONTAINS
+        // the stripped base is not the same channel.
+        assertNull(
+            matchEpgChannel(
+                idCandidates = listOf(storageWars.tvgId),
+                nameCandidates = listOf(storageWars.tvgName, storageWars.name),
+                byId = emptyMap(),
+                byName = mapOf("storagewarsandmore" to "guide-other")
+            )
+        )
+    }
+
+    @Test
+    fun `the affix pass has a floor and never strips a whole name`() {
+        assertEquals("a base under three characters is a fragment", emptyList<String>(), platformAffixKeys("Pluto TV TV"))
+        assertEquals("the whole name is the affix", emptyList<String>(), platformAffixKeys("Pluto TV"))
+        assertEquals("no affix, nothing to strip", emptyList<String>(), platformAffixKeys("BET Classics"))
+        // One token only, and only at an END: a platform word in the middle of a
+        // name is part of the name, not branding bolted onto it.
+        assertEquals(emptyList<String>(), platformAffixKeys("BET Pluto TV Classics"))
+    }
+
+    @Test
+    fun `an affixed channel keeps its guide channel through the prune`() {
+        val betClassics = channel(
+            "betclassics",
+            name = "BET Classics Pluto TV",
+            tvgId = "BETClassics.us@SD"
+        )
+        val keys = playlistEpgMatchKeys(listOf(betClassics))
+
+        assertTrue("betclassics" in keys)
+        assertTrue(
+            guideChannelCanMatch(
+                channelId = "5f2b9c1e",
+                aliasKeys = epgAliasKeys("5f2b9c1e", listOf("BET Classics")),
+                playlistKeys = keys
+            )
+        )
+        // Load-bearing: without the affix key the importer prunes the channel's
+        // programmes and pass 6 has an empty guide to match.
+        assertFalse(
+            guideChannelCanMatch(
+                channelId = "5f2b9c1e",
+                aliasKeys = epgAliasKeys("5f2b9c1e", listOf("BET Classics")),
+                playlistKeys = keys - "betclassics"
+            )
+        )
+    }
+
     // ── Callsign keys (locals, and only locals) ──────────────────────────
 
     @Test

@@ -682,7 +682,13 @@ class IptvRepository(
             GuideMatchSource(
                 url = snapshot.sourceUrl.ifBlank { url },
                 byId = snapshot.guideById,
-                byName = snapshot.guideByDisplayName
+                byName = snapshot.guideByDisplayName,
+                // So the report can say which guide names carry a `by <network>`
+                // suffix - report only, nothing matches on it (see
+                // GuideNetworkSuffixRow).
+                identityOf = { channel ->
+                    GuideChannelIdentity(channel.id, channel.displayNames())
+                }
             )
         }
 

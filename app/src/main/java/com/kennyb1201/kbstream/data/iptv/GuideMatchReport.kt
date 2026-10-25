@@ -19,6 +19,11 @@ package com.kennyb1201.kbstream.data.iptv
  * about what matched. It lists NO stream URL: an Xtream-style playlist puts the
  * account's username and password in the stream path, and this text is meant to
  * be pasted into a chat.
+ *
+ * A last, REPORT-ONLY section counts guide channels whose names carry a `by
+ * <network>` suffix and that nothing resolved, plus how many unmatched rows a
+ * suffix strip would reach ([GuideNetworkSuffixRow]). Nothing in the matcher
+ * reads it; it exists so a guide-side rule can be decided on numbers.
  */
 
 /**
@@ -35,7 +40,43 @@ package com.kennyb1201.kbstream.data.iptv
 internal class GuideMatchSource<T>(
     val url: String,
     val byId: Map<String, T>,
-    val byName: Map<String, T>
+    val byName: Map<String, T>,
+    /**
+     * The guide channel's own id and display names, for the report-only
+     * guide-side-suffix section (none of it is used to MATCH anything).
+     *
+     * A lambda rather than a constraint on `T` because attribution deliberately
+     * keeps the repository's entity maps unconverted (see the class doc); null
+     * means "this caller cannot describe its guide channels", and the section is
+     * then simply left out.
+     */
+    val identityOf: ((T) -> GuideChannelIdentity)? = null
+)
+
+/** What the report needs to know about one guide channel, and nothing else. */
+internal data class GuideChannelIdentity(
+    val id: String,
+    val displayNames: List<String>
+)
+
+/**
+ * One guide channel whose display name carries a network suffix (`Storage Wars
+ * by A&E`) and that no playlist row resolved, plus the playlist row the name
+ * would reach if that suffix were stripped.
+ *
+ * REPORT ONLY. Nothing in the matcher strips a guide-side suffix and nothing
+ * here changes a verdict - this exists so a follow-up can be judged on numbers
+ * instead of the single case that started the question (2026-10-25 field note:
+ * `Pluto TV Storage Wars` against the guide's `Storage Wars by A&E`).
+ *
+ * [playlistName] is null when no unmatched row would reach it even with the
+ * suffix stripped, which is the honest "this one is not a by-suffix case" shape
+ * rather than an omission.
+ */
+data class GuideNetworkSuffixRow(
+    val guideName: String,
+    val sourceUrl: String,
+    val playlistName: String?
 )
 
 /** One playlist channel's verdict: which source resolved it, if any. */
@@ -57,7 +98,15 @@ data class GuideMatchRow(
  */
 data class GuideMatchReport(
     val sources: List<String>,
-    val rows: List<GuideMatchRow>
+    val rows: List<GuideMatchRow>,
+    /**
+     * Guide channels nothing resolved whose names carry a `by <network>` suffix,
+     * and the unmatched rows a suffix strip would reach. Empty for a caller that
+     * did not describe its guide channels (see [GuideMatchSource.identityOf]).
+     */
+    val networkSuffixCandidates: List<GuideNetworkSuffixRow> = emptyList(),
+    /** Playlist rows a guide-side suffix strip would resolve; see [networkSuffixCandidates]. */
+    val networkSuffixRescues: Int = networkSuffixCandidates.count { it.playlistName != null }
 ) {
     val channelCount: Int get() = rows.size
     val matchedCount: Int get() = rows.count { it.sourceUrl != null }
@@ -67,9 +116,9 @@ data class GuideMatchReport(
     fun matchedBy(url: String): Int = rows.count { it.sourceUrl == url }
 
     /**
-     * The section, as report lines. Nothing else goes in it: the counts and the
-     * unmatched list are the whole deliverable, and a matched-channel list would
-     * triple a capture nobody reads for it.
+     * The section, as report lines. Nothing else goes in it: the counts, the
+     * unmatched list and the report-only suffix count are the whole deliverable,
+     * and a matched-channel list would triple a capture nobody reads for it.
      *
      * [redactSource] is the caller's redaction (`Redaction.url`, the same one the
      * guide line above uses) - a source URL can carry an Xtream account in its
@@ -93,6 +142,33 @@ data class GuideMatchReport(
                 add("- ${row.displayName} | tvg-id=${row.tvgId.orAbsent()} | group=${row.groupTitle.orAbsent()}")
             }
         }
+        // Last, and REPORT ONLY: what a guide-side `by <network>` strip would
+        // reach. The count is the deliverable (a follow-up on one field case
+        // should be judged on numbers), the rows are the evidence for it.
+        if (networkSuffixCandidates.isNotEmpty()) {
+            add(
+                "guide-side \"by\" suffix (report only): " +
+                    "unmatched-guide=${networkSuffixCandidates.size} " +
+                    "would-rescue-playlist=$networkSuffixRescues"
+            )
+            networkSuffixCandidates.take(NETWORK_SUFFIX_EXAMPLES).forEach { candidate ->
+                val would = candidate.playlistName
+                    ?.let { " | would match \"$it\"" }
+                    .orEmpty()
+                add("- ${candidate.guideName} (${redactSource(candidate.sourceUrl)})$would")
+            }
+            val rest = networkSuffixCandidates.size - NETWORK_SUFFIX_EXAMPLES
+            if (rest > 0) add("- … +$rest more")
+        }
+    }
+
+    private companion object {
+        /**
+         * How many of the suffix rows a capture carries. Bounded on purpose: the
+         * report is pasted into a chat, and the COUNT above it is what a follow-up
+         * is judged on.
+         */
+        const val NETWORK_SUFFIX_EXAMPLES = 10
     }
 }
 
@@ -123,29 +199,121 @@ internal fun guideMatchSectionLines(
 internal fun <T> attributeGuideMatches(
     channels: List<IptvChannel>,
     sources: List<GuideMatchSource<T>>
-): GuideMatchReport = GuideMatchReport(
-    sources = sources.map { it.url },
-    rows = channels.map { channel ->
+): GuideMatchReport {
+    // Which guide channels a playlist row actually reached, per source - the
+    // "no playlist row resolves this one" half of the suffix section below.
+    val resolvedGuideIds = HashMap<String, MutableSet<String>>()
+
+    val rows = channels.map { channel ->
         val idCandidates = channel.epgIdCandidates()
         val nameCandidates = channel.epgNameCandidates()
         val callsignCandidates = channel.epgCallsignCandidates()
-        val matchedBy = sources.firstOrNull { source ->
+        val matched = sources.firstNotNullOfOrNull { source ->
             matchEpgChannel(
                 idCandidates = idCandidates,
                 nameCandidates = nameCandidates,
                 byId = source.byId,
                 byName = source.byName,
                 callsignCandidates = callsignCandidates
-            ) != null
+            )?.let { source to it.first }
+        }
+        matched?.let { (source, guideChannel) ->
+            source.identityOf?.invoke(guideChannel)?.let { identity ->
+                resolvedGuideIds.getOrPut(source.url) { HashSet() }.add(identity.id)
+            }
         }
         GuideMatchRow(
             displayName = channel.displayName.takeIf { it.isNotBlank() } ?: channel.name,
             tvgId = channel.tvgId?.trim()?.takeIf { it.isNotEmpty() },
             groupTitle = channel.groupTitle?.trim()?.takeIf { it.isNotEmpty() },
-            sourceUrl = matchedBy?.url
+            sourceUrl = matched?.first?.url
         )
     }
-)
+
+    return GuideMatchReport(
+        sources = sources.map { it.url },
+        rows = rows,
+        networkSuffixCandidates = networkSuffixCandidates(rows, sources, resolvedGuideIds)
+    )
+}
+
+/**
+ * The guide channels a `by <network>` suffix would explain, for the report's
+ * last section.
+ *
+ * Counted, never applied: the matcher is untouched, so this can mislead nobody
+ * about a channel that already has programs. For each source that can describe
+ * its channels, it takes the channels nothing resolved whose display name ends in
+ * ` by <something>`, strips that suffix, and asks whether any UNMATCHED playlist
+ * row's own name forms would reach the stripped base - so
+ * `Pluto TV Storage Wars` counts as reachable from `Storage Wars by A&E` while a
+ * row with no relationship to the base does not.
+ *
+ * Produced only when at least one row is unmatched: the section explains a blank
+ * row, and inventorying a healthy profile's guide would be noise in a capture
+ * somebody reads on a phone.
+ */
+private fun <T> networkSuffixCandidates(
+    rows: List<GuideMatchRow>,
+    sources: List<GuideMatchSource<T>>,
+    resolvedGuideIds: Map<String, Set<String>>
+): List<GuideNetworkSuffixRow> {
+    // Each unmatched row's key forms once, not once per candidate: a big guide
+    // carries enough `by` names that recomputing them per candidate turned this
+    // into a visible pause in a capture somebody is waiting to paste.
+    val unmatched = rows.asSequence()
+        .filter { it.sourceUrl == null }
+        .map { it.displayName to it.playlistKeys() }
+        .toList()
+    if (unmatched.isEmpty()) return emptyList()
+
+    val out = ArrayList<GuideNetworkSuffixRow>()
+    sources.forEach { source ->
+        val identityOf = source.identityOf ?: return@forEach
+        val resolved = resolvedGuideIds[source.url].orEmpty()
+        // One row per guide channel, however many names it is indexed under.
+        val seen = HashSet<String>()
+        source.byName.values.forEach { guideChannel ->
+            val identity = identityOf(guideChannel)
+            if (identity.id in resolved || !seen.add(identity.id)) return@forEach
+            if (identity.displayNames.isEmpty()) return@forEach
+            val suffixMatch = identity.displayNames.firstNotNullOfOrNull { name ->
+                TRAILING_NETWORK_SUFFIX.find(name.trim())?.let { match ->
+                    name.trim().substring(0, match.range.first).trim().takeIf { it.isNotBlank() }
+                }
+            } ?: return@forEach
+            val baseKeys = buildSet {
+                add(epgLookupKey(suffixMatch))
+                simplifyEpgChannelName(suffixMatch)?.let(::add)
+            }
+            val reachable = unmatched.firstOrNull { (_, keys) -> keys.any { it in baseKeys } }
+            out += GuideNetworkSuffixRow(
+                guideName = identity.displayNames.first(),
+                sourceUrl = source.url,
+                playlistName = reachable?.first
+            )
+        }
+    }
+    return out
+}
+
+/**
+ * The key forms an unmatched playlist row brings to the matcher, used ONLY to
+ * answer "would a suffix-stripped guide name reach this row?".
+ *
+ * Same forms the matcher probes (name as spelled, simplified, numbered and
+ * affix-stripped), spelled through the same helpers - a report that disagreed
+ * with the matcher about what a row's name is would answer the wrong question.
+ */
+private fun GuideMatchRow.playlistKeys(): Set<String> = buildSet {
+    add(epgLookupKey(displayName))
+    simplifyEpgChannelName(displayName)?.let(::add)
+    addAll(numberedVariantKeys(displayName))
+    addAll(platformAffixKeys(displayName))
+}
+
+/** ` by <network>` at the END of a guide name - the prefix before it is the base. */
+private val TRAILING_NETWORK_SUFFIX = Regex("""\s+by\s+\S.*$""", RegexOption.IGNORE_CASE)
 
 /** `-` for a field the playlist left empty, so every row keeps its shape. */
 private fun String?.orAbsent(): String = this?.takeIf { it.isNotBlank() } ?: "-"
