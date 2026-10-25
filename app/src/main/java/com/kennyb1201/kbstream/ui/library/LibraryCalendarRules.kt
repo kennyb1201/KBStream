@@ -1,8 +1,11 @@
 package com.kennyb1201.kbstream.ui.library
 
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
+import com.kennyb1201.kbstream.ui.home.CaughtUpShowCandidate
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
@@ -125,7 +128,140 @@ internal data class CalendarMonth(
 }
 
 /**
- * The calendar's candidate shows, in a SOURCE-FAIR order, capped at [cap].
+ * One show the calendar MUST carry, whatever [cap] says: a show Upcoming can
+ * advertise, so the two screens cannot disagree about whether it exists.
+ *
+ * [aliases] are every id spelling this show is known by at this point. The
+ * sources name one show in different flavours (Simkl hands over an IMDb id AND
+ * a `tmdb:<n>` key, local history may use either), so a show named twice has to
+ * spend one priority slot, not two: the first spelling claims them all, and a
+ * later candidate carrying any of them is the same show.
+ */
+internal data class CalendarPriorityShow(
+    val id: String,
+    val aliases: Set<String> = emptySet()
+)
+
+/**
+ * The priority list as ids, de-duplicated by show identity and kept in the
+ * order the sources handed the shows over.
+ *
+ * Order is load-bearing: it is Upcoming's own order (Simkl's unaired-first, then
+ * most recently watched, then the other halves), which is roughly "most likely
+ * to have something coming", and it is the order the month builder resolves
+ * them in. Blank ids and ids whose aliases are all claimed are dropped.
+ */
+internal fun calendarPriorityIds(
+    shows: List<CalendarPriorityShow>
+): List<String> {
+    val claimed = HashSet<String>(shows.size * 2)
+    val out = ArrayList<String>(shows.size)
+
+    for (show in shows) {
+        val id = show.id.trim()
+        if (id.isEmpty()) continue
+
+        val aliases = (show.aliases + id)
+            .map { alias -> alias.trim().lowercase(Locale.ROOT) }
+            .filter { alias -> alias.isNotEmpty() }
+            .toSet()
+        if (aliases.isEmpty() || aliases.any { alias -> alias in claimed }) continue
+
+        claimed += aliases
+        out += id
+    }
+
+    return out
+}
+
+/**
+ * Simkl's caught-up shows as priority candidates - the half that caught the
+ * field case (a show the viewer is caught up on, whose next episode Upcoming
+ * advertises).
+ *
+ * Read through [read] so the fail-soft contract is testable: a Simkl read that
+ * throws contributes NOTHING to the priority list (tier-2 still fills the
+ * month), rather than emptying the calendar.
+ *
+ * Only ids the month builder can resolve are carried: an item with an IMDb id
+ * maps to it, one with only a TMDB id maps to `tmdb:<n>`, and an item with
+ * neither is dropped. Carrying anything else - a `simkl:` id, an empty string -
+ * would spend a priority slot on a show `detailFor` can never resolve.
+ */
+internal suspend fun simklPriorityShows(
+    read: suspend () -> List<SimklContinueWatchingItem>
+): List<CalendarPriorityShow> =
+    runCatchingCancellable { read() }
+        .getOrNull()
+        .orEmpty()
+        .mapNotNull { item -> priorityShowForSimklItem(item) }
+
+private fun priorityShowForSimklItem(
+    item: SimklContinueWatchingItem
+): CalendarPriorityShow? {
+    val imdb = item.imdbId
+        ?.trim()
+        ?.takeIf { id -> id.startsWith("tt", ignoreCase = true) }
+    val tmdb = item.tmdbId?.takeIf { id -> id > 0 }
+
+    val id = imdb ?: tmdb?.let { number -> "tmdb:$number" } ?: return null
+
+    return CalendarPriorityShow(
+        id = id,
+        // Both spellings the TMDB number can arrive under, so a local history
+        // row filed as a bare "130853" is recognised as the same show.
+        aliases = buildSet {
+            imdb?.let { add(it) }
+            tmdb?.let {
+                add("tmdb:$it")
+                add(it.toString())
+            }
+        }
+    )
+}
+
+/**
+ * The local / MDBList / Trakt caught-up candidates as priority candidates.
+ *
+ * Those builders already produce one candidate per show with the episodes each
+ * source records watched (and the caps Upcoming itself resolves them under - see
+ * [com.kennyb1201.kbstream.ui.home.localCaughtUpCandidates] and its siblings), so
+ * this only maps their parent id and the spellings that id implies.
+ */
+internal fun caughtUpPriorityShows(
+    candidates: List<CaughtUpShowCandidate>
+): List<CalendarPriorityShow> =
+    candidates.mapNotNull { candidate ->
+        val id = candidate.parentId.trim()
+        if (id.isEmpty()) return@mapNotNull null
+
+        CalendarPriorityShow(id = id, aliases = idAliases(id))
+    }
+
+/**
+ * The id spellings one parent id implies on its own: the id itself, plus the
+ * TMDB number both a bare number and `tmdb:<n>` reduce to. An IMDb id implies
+ * only itself - its TMDB twin needs a lookup, which is why a show named by
+ * Simkl (that knows both) is the one that collapses the pair.
+ */
+private fun idAliases(id: String): Set<String> {
+    val aliases = LinkedHashSet<String>(2)
+    aliases += id
+
+    val numeric = id.lowercase(Locale.ROOT)
+        .removePrefix("tmdb:")
+        .toIntOrNull()
+    if (numeric != null && numeric > 0) {
+        aliases += "tmdb:$numeric"
+        aliases += numeric.toString()
+    }
+
+    return aliases
+}
+
+/**
+ * The calendar's candidate shows, in a SOURCE-FAIR order, with [priority]
+ * always present and the four tracked sources filling the rest up to [cap].
  *
  * The tracked set arrives as four independent lists (this profile's history,
  * Simkl, MDBList, Trakt) and the calendar resolves a bounded number of shows
@@ -136,23 +272,41 @@ internal data class CalendarMonth(
  * one show from each source, then the next from each, so every source is
  * represented before any source repeats. Duplicate ids across sources are
  * collapsed on the way, keeping the earliest source that named them.
+ *
+ * [priority] is the set Upcoming can advertise (see [calendarPriorityIds]), and
+ * it is EXEMPT from [cap]: that cap is what cut Bad Monkey's December premiere
+ * off the calendar while the Home rail advertised it, because the show sat past
+ * the round-robin cut. Capping the union is what caused that; capping only the
+ * unbounded tail (every finished show ever tracked) preserves the bound's
+ * purpose - a month build stays bounded - while making "on Upcoming, in the
+ * calendar" true by construction. Do not "simplify" this back to one cap: the
+ * next library past the number reproduces the bug. Priority ids do not repeat in
+ * the tier-2 tail, and [cap] <= 0 therefore leaves just the priority list.
  */
 internal fun calendarCandidates(
     sources: List<List<String>>,
-    cap: Int
+    cap: Int,
+    priority: List<String> = emptyList()
 ): List<String> {
-    if (cap <= 0) return emptyList()
-    val cleaned = sources.map { source -> source.filter { it.isNotBlank() } }
-    val longest = cleaned.maxOfOrNull { it.size } ?: 0
-    val out = LinkedHashSet<String>(minOf(cap, cleaned.sumOf { it.size }))
+    val out = LinkedHashSet<String>(
+        priority.size + minOf(cap.coerceAtLeast(0), sources.sumOf { it.size })
+    )
 
-    for (index in 0 until longest) {
-        for (source in cleaned) {
-            val id = source.getOrNull(index) ?: continue
-            out += id
-            if (out.size >= cap) return out.toList()
+    priority.filterTo(out) { id -> id.isNotBlank() }
+
+    if (cap > 0) {
+        val cleaned = sources.map { source -> source.filter { it.isNotBlank() } }
+        val longest = cleaned.maxOfOrNull { it.size } ?: 0
+
+        for (index in 0 until longest) {
+            for (source in cleaned) {
+                val id = source.getOrNull(index) ?: continue
+                if (!out.add(id)) continue
+                if (out.size - priority.size >= cap) return out.toList()
+            }
         }
     }
+
     return out.toList()
 }
 

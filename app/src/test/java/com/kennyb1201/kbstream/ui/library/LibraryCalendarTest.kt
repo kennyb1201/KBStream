@@ -1,8 +1,11 @@
 package com.kennyb1201.kbstream.ui.library
 
+import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import java.io.IOException
 import java.time.LocalDate
 import java.time.YearMonth
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -350,6 +353,137 @@ class LibraryCalendarTest {
 
         val rows = month.episodesOn(LocalDate.of(2026, 10, 14))
         assertEquals("one episode, one row - the day list's keys must not collide", 1, rows.size)
+    }
+
+    // ---- The candidate cut (reported: a show on Upcoming missing from the
+    // calendar). Every one of these is pure, because the bug was a RULE, not a
+    // date: the show was tracked, both placement paths dated it, and it was
+    // never handed to the month builder at all.
+
+    private fun simklItem(imdbId: String?, tmdbId: Int?) =
+        SimklContinueWatchingItem(
+            id = "caught-up-${imdbId ?: tmdbId}",
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            simklId = null,
+            title = imdbId ?: "tmdb:$tmdbId",
+            year = null,
+            posterUrl = null,
+            lastWatchedAt = null,
+            progress = null,
+            upNextText = null,
+            mediaType = "series",
+            source = "watching"
+        )
+
+    @Test
+    fun `priority shows come first, in priority order, and are not repeated by the tail`() {
+        val order = calendarCandidates(
+            sources = listOf(listOf("tt1", "tt2"), listOf("tmdb:10")),
+            cap = 10,
+            priority = listOf("tt900", "tt1")
+        )
+
+        assertEquals(
+            "the priority show keeps its slot, and the interleave carries on from " +
+                "where that source left off (a duplicate does not earn a second turn)",
+            listOf("tt900", "tt1", "tmdb:10", "tt2"),
+            order
+        )
+    }
+
+    @Test
+    fun `the cap bounds the tracked tail only, so a priority show past it is still resolved`() {
+        // The field case (Bad Monkey S2E1, Dec 1): the show sat past the
+        // round-robin cut, so the month builder never saw it, while the Home
+        // Upcoming rail advertised it. With no priority the output must stay
+        // byte-identical to today's 300-show cut; with a priority list the
+        // output is that tail PLUS the priority shows.
+        val tail = (1..400).map { "tt$it" }
+        val priority = listOf("ttbadmin", "ttother")
+
+        val withoutPriority = calendarCandidates(listOf(tail), cap = 300)
+        assertEquals("today's cut is unchanged when nothing is prioritised", tail.take(300), withoutPriority)
+
+        val withPriority = calendarCandidates(listOf(tail), cap = 300, priority = priority)
+        assertEquals("300 tail shows + the 2 priority shows", 302, withPriority.size)
+        assertEquals(priority, withPriority.take(2))
+        assertEquals(tail.take(300), withPriority.drop(2))
+    }
+
+    @Test
+    fun `a show past the round-robin cut is still a candidate when Upcoming carries it`() {
+        // Bad Monkey: named by Simkl's caught-up list (so Upcoming advertises
+        // its Dec 1 premiere) but sitting at position 350 of a 400-show tracked
+        // list, i.e. past MAX_CALENDAR_SHOWS.
+        val tracked = (1..400).map { "tt$it" }
+        val badMonkey = "tt15203646"
+
+        assertTrue(
+            "without the priority list the show is cut, which is the bug",
+            badMonkey !in calendarCandidates(listOf(tracked), cap = 300)
+        )
+        assertTrue(
+            "on Upcoming must mean in the calendar, whatever the cap says",
+            badMonkey in calendarCandidates(
+                sources = listOf(tracked),
+                cap = 300,
+                priority = listOf(badMonkey)
+            )
+        )
+    }
+
+    @Test
+    fun `a show named twice in the priority list spends one slot, not two`() {
+        // Simkl hands over BOTH id forms, so a local/MDBList copy of the same
+        // show must not consume a second priority slot under its other spelling.
+        val ids = calendarPriorityIds(
+            listOf(
+                CalendarPriorityShow(
+                    id = "tt15203646",
+                    aliases = setOf("tt15203646", "tmdb:130853")
+                ),
+                CalendarPriorityShow(id = "tmdb:130853"),
+                CalendarPriorityShow(id = "tt999")
+            )
+        )
+
+        assertEquals(listOf("tt15203646", "tt999"), ids)
+    }
+
+    @Test
+    fun `a Simkl caught-up item maps to an id the month builder can resolve`() = runBlocking {
+        val shows = simklPriorityShows {
+            listOf(
+                simklItem(imdbId = "tt1", tmdbId = 11),
+                simklItem(imdbId = null, tmdbId = 22),
+                simklItem(imdbId = null, tmdbId = null)
+            )
+        }
+
+        assertEquals(
+            "IMDb first, then the tmdb: key, and nothing at all for an item " +
+                "the month builder could never resolve (a simkl: id spends a slot " +
+                "for nothing)",
+            listOf("tt1", "tmdb:22"),
+            calendarPriorityIds(shows)
+        )
+    }
+
+    @Test
+    fun `a Simkl priority read that throws leaves the tracked set intact`() = runBlocking {
+        val priority = simklPriorityShows { throw IOException("simkl is down") }
+
+        assertTrue("a failed read contributes no priority at all", priority.isEmpty())
+        assertEquals(
+            "and the calendar still fills to its cap - never an empty calendar",
+            300,
+            calendarCandidates(
+                sources = listOf((1..400).map { "tt$it" }),
+                cap = 300,
+                priority = calendarPriorityIds(priority)
+            ).size
+        )
     }
 
     @Test

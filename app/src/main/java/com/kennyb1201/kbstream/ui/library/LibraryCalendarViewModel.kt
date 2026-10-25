@@ -19,7 +19,13 @@ import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.ui.home.MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS
+import com.kennyb1201.kbstream.ui.home.MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS
+import com.kennyb1201.kbstream.ui.home.MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
+import com.kennyb1201.kbstream.ui.home.localCaughtUpCandidates
+import com.kennyb1201.kbstream.ui.home.mdbListCaughtUpCandidates
 import com.kennyb1201.kbstream.ui.home.mdbListEpisodePairs
+import com.kennyb1201.kbstream.ui.home.traktCaughtUpCandidates
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlinx.coroutines.Job
@@ -106,6 +112,13 @@ class LibraryCalendarViewModel(
      */
     private var showIds: List<String> = emptyList()
     private var showsLoadedAt = 0L
+
+    /**
+     * The shows Upcoming can advertise, which [showIds] always carries - see
+     * [calendarPriorityIds]. Kept beside [showIds] for the diagnostics line,
+     * which reports the set's real ceiling instead of an obsolete constant.
+     */
+    private var priorityIds: List<String> = emptyList()
 
     /** TMDB details, by candidate id, for the session. The repository caches too. */
     private val details = HashMap<String, TmdbDetail?>()
@@ -287,18 +300,23 @@ class LibraryCalendarViewModel(
     /**
      * The calendar's caches against their caps, for the diagnostics dump.
      *
-     * [details] is bounded by construction - one entry per candidate show, and
-     * the candidate set itself is capped at [MAX_CALENDAR_SHOWS] - so its cap is
-     * that number rather than a second constant to keep in step.
+     * [details] is bounded by construction - one entry per candidate show - so
+     * its ceiling is the candidate set's, which is [MAX_CALENDAR_SHOWS] of
+     * tier-2 PLUS the priority shows (they are exempt from that cap, see
+     * [calendarCandidates]). Reporting the bare constant here read "300/300"
+     * for a set of 300+priority, i.e. it hid exactly the shows the cap was
+     * dropping - so the priority size is printed beside it as well.
      */
     override fun cacheStats(): String =
         "calendar: months=${monthCache.size}/$MAX_CACHED_MONTHS" +
-            " details=${details.size}/$MAX_CALENDAR_SHOWS" +
+            " details=${details.size}/${MAX_CALENDAR_SHOWS + priorityIds.size}" +
+            " priority=${priorityIds.size}" +
             " progress=${progress.size}/$MAX_CACHED_MONTHS"
 
     /** Drops every per-profile fact this session gathered. */
     private fun forgetEverything() {
         showIds = emptyList()
+        priorityIds = emptyList()
         showsLoadedAt = 0L
         details.clear()
         monthCache.clear()
@@ -319,18 +337,30 @@ class LibraryCalendarViewModel(
      * concatenated, so a long local history cannot consume the whole resolution
      * allowance and leave the tracker-sourced - i.e. currently airing - shows
      * out of the calendar entirely.
+     *
+     * One thing that tail must NEVER drop is a show Upcoming can advertise. That
+     * is the priority list below (see [calendarPriorityIds]), and it is exempt
+     * from [MAX_CALENDAR_SHOWS]. Reported as "Bad Monkey's season 2 premiere is
+     * Dec 1 in Upcoming and nowhere in the calendar": the show was tracked, both
+     * placement paths would have dated it Dec 1, and it was simply never handed
+     * to the month builder because it sat past the round-robin cut.
      */
     private suspend fun loadShowIds() {
-        val local = runCatchingCancellable {
+        // Read once: the completed rows feed the tracked set AND the local
+        // caught-up half, which is the same rows Upcoming's own builder reads.
+        val historyRows = runCatchingCancellable {
             val dao = historyDao()
-            (
-                dao.getCompletedSeriesRows() + dao.getResumeRowsForLauncher()
-                )
-                .filterNot { it.type.lowercase().contains("movie") }
-                .mapNotNull { it.parentId.takeIf { parent -> parent.isNotBlank() } }
-        }.getOrNull().orEmpty()
+            dao.getCompletedSeriesRows() to dao.getResumeRowsForLauncher()
+        }.getOrNull()
 
-        val simkl = if (simklRepository.isConfigured() && simklRepository.hasToken()) {
+        val completedRows = historyRows?.first.orEmpty()
+        val local = (completedRows + historyRows?.second.orEmpty())
+            .filterNot { it.type.lowercase().contains("movie") }
+            .mapNotNull { it.parentId.takeIf { parent -> parent.isNotBlank() } }
+
+        val simklReady = simklRepository.isConfigured() && simklRepository.hasToken()
+
+        val simkl = if (simklReady) {
             runCatchingCancellable {
                 buildList {
                     addAll(simklRepository.getCompletedShowImdbIds())
@@ -346,26 +376,62 @@ class LibraryCalendarViewModel(
             emptyList()
         }
 
-        val mdbList = runCatchingCancellable {
+        val mdbListSnapshot = runCatchingCancellable {
             MdbListClient.getWatchedSnapshot(appContext)
         }.getOrNull()
+
+        val mdbList = mdbListSnapshot
             ?.startedShowKeys
             ?.toList()
             .orEmpty()
 
-        val trakt = if (traktRepository.isConfigured() && traktRepository.hasToken()) {
+        val traktSnapshot = if (traktRepository.isConfigured() && traktRepository.hasToken()) {
             runCatchingCancellable { traktRepository.watchedSnapshot() }
                 .getOrNull()
-                ?.shows
-                ?.mapNotNull { row -> preferredId(row.idKeys) }
-                .orEmpty()
+        } else {
+            null
+        }
+
+        val trakt = traktSnapshot
+            ?.shows
+            ?.mapNotNull { row -> preferredId(row.idKeys) }
+            .orEmpty()
+
+        // Upcoming's caught-up candidates, in the order Upcoming builds them:
+        // Simkl first (uncapped at source, unaired-first), then the local /
+        // MDBList / Trakt halves under their own work caps. These are exactly the
+        // shows whose next episode the rail can advertise, so the calendar must
+        // carry every one of them however long the tracked tail is. Every read
+        // fails soft: a source that is down contributes no priority at all,
+        // never an empty calendar.
+        val caughtUp = caughtUpPriorityShows(
+            localCaughtUpCandidates(
+                rows = completedRows,
+                max = MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS
+            ) +
+                mdbListCaughtUpCandidates(
+                    startedShowKeys = mdbListSnapshot?.startedShowKeys.orEmpty(),
+                    episodeKeys = mdbListSnapshot?.episodeKeys.orEmpty(),
+                    max = MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS
+                ) +
+                traktCaughtUpCandidates(
+                    snapshot = traktSnapshot ?: TraktWatchedSnapshot(),
+                    max = MAX_TRAKT_CAUGHT_UP_UPCOMING_ITEMS
+                )
+        )
+
+        val simklPriority = if (simklReady) {
+            simklPriorityShows { simklRepository.getCaughtUpUnreleasedShows() }
         } else {
             emptyList()
         }
 
+        priorityIds = calendarPriorityIds(simklPriority + caughtUp)
+
         showIds = calendarCandidates(
             sources = listOf(local, simkl, mdbList, trakt),
-            cap = MAX_CALENDAR_SHOWS
+            cap = MAX_CALENDAR_SHOWS,
+            priority = priorityIds
         )
         showsLoadedAt = System.currentTimeMillis()
     }
@@ -781,12 +847,23 @@ class LibraryCalendarViewModel(
         const val CALENDAR_CONCURRENCY = 4
 
         /**
-         * Bound on how many shows one month build will resolve.
+         * Bound on how many shows one month build will resolve FROM THE
+         * TRACKED TAIL - not on the total.
          *
-         * A bound rather than a bug fix: the candidate order is source-fair
-         * (see [calendarCandidates]), so this only ever trims a library with
-         * hundreds of tracked shows, and pages after the first cost no new
-         * detail lookups (they are cached for the session).
+         * The candidate order is source-fair (see [calendarCandidates]), so
+         * this only ever trims a library with hundreds of tracked shows, and
+         * pages after the first cost no new detail lookups (they are cached for
+         * the session).
+         *
+         * It deliberately does NOT bound the set Upcoming can advertise: those
+         * shows are added ahead of this cap and are exempt from it, because
+         * trimming one of them made the calendar and the rail disagree about a
+         * show's existence (Bad Monkey, Dec 1, reported 2026-10-25). Raising
+         * this number would move the cut, not fix it - the next library past the
+         * new number hits the same bug. The priority set is bounded instead by
+         * what the sources hand over: Simkl's caught-up list (finite, unaired
+         * first) plus three 25-capped local halves, while THIS tail is every
+         * finished show ever tracked.
          */
         const val MAX_CALENDAR_SHOWS = 300
 
