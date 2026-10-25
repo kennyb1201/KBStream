@@ -161,12 +161,7 @@ class IptvRepository(
      * "iptv_prefs" store.
      */
     private suspend fun playlistGuideMatchKeys(): Set<String> {
-        val prefs = appContext.getSharedPreferences(
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                appContext, "iptv_prefs"
-            ),
-            Context.MODE_PRIVATE
-        )
+        val prefs = iptvPrefs()
 
         // Parsed by the one rule that also names the guide file (see
         // GuideFiles): channel matching and a guide's identity have to agree on
@@ -632,6 +627,82 @@ class IptvRepository(
         .maxOrNull()
 
     /**
+     * Which guide source resolved each playlist channel, for diagnostics.
+     *
+     * This profile's playlist channels - primary plus extras, read from the
+     * CACHE, so the rows are the ones the guide lists (the Free TV US filter and
+     * every other load-time filter were applied when the cache was written) -
+     * attributed to the first source in [GuideFiles.guideUrls] order that
+     * resolves them, by the same [matchEpgChannel] the lineup query uses. It
+     * reads no program rows and never fetches: `guideStateRows` above says what
+     * each source HOLDS, this says who it is holding it FOR, and between them a
+     * pasted capture is the missing-channels list.
+     *
+     * Null when this profile has no cached playlist at all (never opened Live TV
+     * / Guide here, or the cache was cleared) - there is then no lineup to
+     * describe, and a guessed one would be worse than none.
+     *
+     * Hidden channels are left out, because the guide leaves them out: hiding is
+     * a viewer decision, not a matching failure, and a hidden channel in the
+     * unmatched list would read as one.
+     */
+    suspend fun guideMatchReport(): GuideMatchReport? = withContext(Dispatchers.IO) {
+        val prefs = iptvPrefs()
+        val playlistUrls = playlistUrlsOf(
+            playlistUrl = prefs.getString("playlist_url", ""),
+            extraPlaylistUrls = prefs.getString("extra_playlist_urls", "")
+        )
+        if (playlistUrls.isEmpty()) return@withContext null
+
+        val playlistName = prefs.getString("playlist_name", "").orEmpty()
+        val channels = ArrayList<IptvChannel>()
+        playlistUrls.forEach { url ->
+            val cached = runCatchingCancellable { loadCachedPlaylist(url, playlistName) }
+                .getOrNull()
+                ?: return@forEach
+            channels.addAll(cached.channels)
+        }
+        if (channels.isEmpty()) return@withContext null
+
+        // The same two screen-level filters the guide applies to what it lists
+        // (see IptvViewModel.visibleChannels); names/group titles only, no frame
+        // of program data involved. `hidden_channel_ids` is the key
+        // IptvViewModel.KEY_HIDDEN_CHANNEL_IDS and SyncPrefsPayload address - the
+        // same store, in the data layer where the guide file is also named.
+        val hidden = prefs.getStringSet("hidden_channel_ids", emptySet()).orEmpty()
+        val visible = KidsLiveTvFilter.visible(
+            if (hidden.isEmpty()) channels else channels.filterNot { it.id in hidden }
+        )
+
+        val sources = GuideFiles.guideUrls(appContext).map { url ->
+            val snapshot = getOrCreateGuideSnapshot(url)
+            // A source that has never landed matches nothing, and still gets a
+            // row in the by-source line with 0 - which is the difference between
+            // a dead source and a missing line.
+            GuideMatchSource(
+                url = snapshot.sourceUrl.ifBlank { url },
+                byId = snapshot.guideById,
+                byName = snapshot.guideByDisplayName
+            )
+        }
+
+        Log.i(TAG, "GUIDE MATCH REPORT channels=${visible.size} sources=${sources.size}")
+        attributeGuideMatches(visible, sources)
+    }
+
+    /**
+     * This profile's `iptv_prefs` store - the one IptvViewModel's own reads and
+     * writes address, resolved through the same profile-scoped name so a
+     * non-active profile can never answer for the active one's playlists.
+     */
+    private fun iptvPrefs() = appContext.getSharedPreferences(
+        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+            appContext, "iptv_prefs"
+        ),
+        Context.MODE_PRIVATE
+    )
+
+    /**
      * Resolves each [GuideMatchQuery] against the guide imported for its
      * [GuideMatchQuery.epgUrl], returning `key -> guide channel id` for the ones
      * that match.
@@ -990,12 +1061,12 @@ class IptvRepository(
         epgUrls: List<String>,
         snapshots: List<GuideSnapshot>
     ): ResolvedEpgMatch {
-        val idCandidates = listOf(channel.tvgId, channel.providerChannelId)
-        val nameCandidates = listOf(channel.tvgName, channel.displayName, channel.name)
+        val idCandidates = channel.epgIdCandidates()
+        val nameCandidates = channel.epgNameCandidates()
         // Hoisted out of the source loop: it is the channel's identity, not the
         // source's, and a local has to reach the same guide channel whichever
         // approved source is asked.
-        val callsignCandidates = playlistCallsignKeys(channel).toList()
+        val callsignCandidates = channel.epgCallsignCandidates()
 
         epgUrls.forEach { epgUrl ->
             val snapshot = snapshots.firstOrNull { it.sourceUrl == epgUrl }

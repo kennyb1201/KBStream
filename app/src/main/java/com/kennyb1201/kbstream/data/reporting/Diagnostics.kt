@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
+import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -88,6 +89,15 @@ object Diagnostics {
         // states a "No program data" report could not be told apart from a
         // healthy guide without this line (see IptvRepository.guideStateRows).
         guideLine(app)?.let { report.appendLine(it) }
+        // ...and which playlist channels those sources actually resolve. The
+        // guide lines above are per SOURCE, so they cannot answer "what are we
+        // missing?" - a capture of blank rows had to be turned into a
+        // missing-channel list by hand, or not at all. This is that list (see
+        // data/iptv/GuideMatchReport.kt): counts, the first source that resolved each
+        // channel, and every channel nothing resolved. It reads the cached
+        // lineup and the guide snapshots only - a diagnostics capture must
+        // never change the state it reports.
+        guideMatchLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
         // How the last source fetch ordered its results, and why the head of the
         // list is the head: the two rules that outrank every quality label
@@ -646,6 +656,28 @@ object Diagnostics {
                 append(" validators=${if (row.hasValidators) "yes" else "no"}")
             }
         }
+    }
+
+    /**
+     * Which guide source resolved each playlist channel, and which channels
+     * nothing resolved.
+     *
+     * Built from state that is already there - this profile's cached playlist
+     * and the guide snapshots the lineup query reads - so it performs no import,
+     * no playlist fetch and no program query, and costs a map walk rather than a
+     * query per channel. A profile with no cached lineup says so in one line
+     * instead of contributing nothing: an absent section would read as "every
+     * channel matched".
+     *
+     * Source URLs go through [Redaction.url], the same redaction the guide line
+     * above uses; the channel rows carry name, tvg-id and group only, never a
+     * stream URL (an Xtream provider keeps the account in that path).
+     */
+    private suspend fun guideMatchLines(context: Context): List<String> = withContext(Dispatchers.IO) {
+        val report = runCatchingCancellable {
+            IptvRepository.shared(context).guideMatchReport()
+        }.getOrNull()
+        guideMatchSectionLines(report, Redaction::url)
     }
 
     /**

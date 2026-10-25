@@ -125,6 +125,24 @@ internal fun playlistCallsignKeys(channel: IptvChannel): Set<String> =
     )
 
 /**
+ * The three candidate lists [matchEpgChannel] is asked for one playlist channel,
+ * in the order the matcher tries them.
+ *
+ * Hoisted out of the lineup query because there are now two callers - the lineup
+ * itself and the diagnostics attribution ([attributeGuideMatches]) - and a
+ * candidate list spelled differently in the second one would report a channel as
+ * unmatched while the grid showed its programs. That is the same disagreement the
+ * section exists to end, moved one layer in.
+ */
+internal fun IptvChannel.epgIdCandidates(): List<String?> = listOf(tvgId, providerChannelId)
+
+internal fun IptvChannel.epgNameCandidates(): List<String?> =
+    listOf(tvgName, displayName, name)
+
+internal fun IptvChannel.epgCallsignCandidates(): List<String> =
+    playlistCallsignKeys(this).toList()
+
+/**
  * The callsign keys of one channel identity, independent of where it is stored.
  *
  * [playlistCallsignKeys] is this over an [IptvChannel]; the in-player guide and
