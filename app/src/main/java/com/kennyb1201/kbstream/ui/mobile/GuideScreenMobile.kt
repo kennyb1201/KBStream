@@ -483,6 +483,7 @@ fun GuideScreenMobile(
                 },
                 onLoad = { viewModel.load() },
                 onImportGuide = { viewModel.importGuide() },
+                onCancelGuideImport = { viewModel.cancelGuideImport() },
                 onBack = { if (playlist == null) onBack() else showSetup = false }
             )
             return@MobileTheme
@@ -1364,6 +1365,7 @@ private fun MobileGuideSetup(
     onRemoveSource: (PlaylistSources.Source) -> Unit = {},
     onLoad: () -> Unit,
     onImportGuide: () -> Unit,
+    onCancelGuideImport: () -> Unit = {},
     onBack: () -> Unit
 ) {
     Column(
@@ -1571,9 +1573,23 @@ private fun MobileGuideSetup(
                 modifier = Modifier.fillMaxWidth()
             ) { onImportGuide() }
 
+            // The way out of a long pass, beside the live progress line below
+            // and only while one is running - the phone's copy of the TV form's
+            // own action (see IptvViewModel.cancelGuideImport).
+            if (isImportingGuide) {
+                KBButton(
+                    label = "CANCEL IMPORT",
+                    modifier = Modifier.fillMaxWidth()
+                ) { onCancelGuideImport() }
+            }
+
             if (guideImportLabel.isNotBlank()) {
                 Text(
-                    text = guideImportLabel,
+                    text = if (isImportingGuide) {
+                        "Importing guide · $guideImportLabel"
+                    } else {
+                        guideImportLabel
+                    },
                     color = KBAccent,
                     style = MaterialTheme.typography.bodySmall
                 )

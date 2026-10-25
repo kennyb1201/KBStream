@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.iptv
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -145,5 +147,65 @@ class GuideImportProgressTest {
 
         assertNull(GuideImportProgress.state.value)
         assertEquals("", label(GuideImportProgress.state.value, start))
+    }
+
+    // ------------------------------------------------ one pass, one status line
+
+    @Test
+    fun `running is the same question as having numbers`() {
+        assertFalse(GuideImportProgress.isRunning)
+
+        GuideImportProgress.begin(sourceCount = 6, startedAtMs = start)
+        assertTrue(
+            "an open pass is running AND its label carries the numbers - the two " +
+                "can never disagree, which is what left setup saying 'importing' " +
+                "with nothing behind it",
+            GuideImportProgress.isRunning &&
+                label(GuideImportProgress.state.value, start).contains("source 1/6")
+        )
+
+        GuideImportProgress.finish(GuideImportProgress.state.value!!.passId)
+        assertFalse("a closed pass is not running", GuideImportProgress.isRunning)
+    }
+
+    @Test
+    fun `a stopped pass cannot blank the pass that replaced it`() {
+        val stopped = GuideImportProgress.begin(sourceCount = 6, startedAtMs = start)
+        val replacement = GuideImportProgress.begin(sourceCount = 6, startedAtMs = start + 5_000L)
+        GuideImportProgress.rows(1_000)
+
+        // The stopped pass reaches its own `finally` after the replacement opened.
+        GuideImportProgress.finish(stopped)
+
+        val state = GuideImportProgress.state.value
+        assertTrue("the replacement is still open", GuideImportProgress.isRunning)
+        assertEquals("and still owns the line", replacement, state?.passId)
+        assertTrue(
+            "with its own counters, not cleared back to nothing",
+            label(state, start + 65_000L).contains("1,000 programs")
+        )
+    }
+
+    @Test
+    fun `a cancel reports itself and the unwinding pass cannot wipe it`() {
+        val pass = GuideImportProgress.begin(sourceCount = 3, startedAtMs = start)
+        GuideImportProgress.startSource(2)
+
+        // What the ViewModel's Cancel does: speak for the pass on the viewer's behalf.
+        GuideImportProgress.finish(pass, GuideImportOutcome.Cancelled)
+        // Then the cancelled coroutine unwinds and its `finally` reports nothing.
+        GuideImportProgress.finish(pass, outcome = null, guideEndsAtMs = null)
+
+        val state = GuideImportProgress.state.value
+        assertEquals(
+            "the cancelled state survives the unwind, distinct from a failure",
+            GuideImportOutcome.Cancelled,
+            state?.outcome
+        )
+        assertEquals(
+            "Import cancelled — your guide is unchanged",
+            label(state, start + 10_000L)
+        )
+        assertFalse("and nothing is still running", GuideImportProgress.isRunning)
     }
 }

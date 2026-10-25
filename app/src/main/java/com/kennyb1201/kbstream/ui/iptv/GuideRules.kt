@@ -403,7 +403,13 @@ internal fun buildSetupDiagnosticsText(
         if (guideImportLabel.isNotBlank()) {
             add("EPG importing: $guideImportLabel")
         } else if (isImportingGuide) {
-            add("EPG importing")
+            // Never a bare "EPG importing". An open pass always has a label now
+            // (see GuideImportProgress.isRunning: "running" and "has numbers" are
+            // the same question), so this branch is only the instant between a
+            // pass opening and its first byte - and even then it says where the
+            // pass is instead of only that one exists, which is what left the
+            // field reading "EPG importing" at a screen with nothing behind it.
+            add("EPG importing: starting…")
         }
         if (playlistName.isNotBlank()) add("Name: $playlistName")
     }.joinToString("  \u2022  ")

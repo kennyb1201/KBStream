@@ -315,8 +315,12 @@ class GuideRulesTest {
             isImportingGuide = flag,
             guideImportLabel = label
         )
+        // Never a bare "EPG importing" (the TV-guest field case: a whole
+        // six-source pass read as that one line). With one source of truth an
+        // open pass always carries its label, so this fallback only covers the
+        // instant before the first byte - and says where the pass is regardless.
         assertEquals(
-            "Playlist ready  \u2022  EPG provided  \u2022  EPG importing",
+            "Playlist ready  \u2022  EPG provided  \u2022  EPG importing: starting\u2026",
             importing("", true)
         )
         assertEquals(

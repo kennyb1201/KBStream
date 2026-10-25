@@ -200,8 +200,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     markFreeLineupLocalsEpgApplied()
                     markFreeLineupFastEpgApplied()
                 }
-                // SKIPPED (an EPG import holds the load) is not a failure:
-                // the install stays, and the next load is the retry.
+                // An in-flight import is not a failure for the install either:
+                // the load below reads the live guide and the pass refreshes the
+                // lineup when it lands, so the install stays and the next load is
+                // not a retry of anything.
                 _freeLineupFailed.value =
                     loadLineup(forceGuideRefresh = guideLineWritten) == LoadOutcome.FAILED
                 // The load this install just ran wrote the filtered cache, so
@@ -570,7 +572,21 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _isImportingGuide = MutableStateFlow(false)
+    /**
+     * Whether a guide import is running - a MIRROR of [GuideImportProgress.isRunning],
+     * never a fact of its own.
+     *
+     * It used to be the fact: this ViewModel set it at the start of its own pass
+     * and cleared it at the end, while the numbers the screens show come from
+     * [GuideImportProgress]. The two could disagree - a pass opened by another
+     * instance, or a stopped pass's `finally` clearing a newer one's line, left
+     * the setup screen saying IMPORTING… with no progress behind it, or refusing
+     * LOAD with a bare "EPG import is in progress" line. Now there is one fact,
+     * and this is it echoed: written from [GuideImportProgress] at both ends of a
+     * pass this ViewModel runs, and kept in step by [observeGuideImportPass] for a
+     * pass it did not start.
+     */
+    private val _isImportingGuide = MutableStateFlow(GuideImportProgress.isRunning)
     val isImportingGuide: StateFlow<Boolean> = _isImportingGuide.asStateFlow()
 
     /**
@@ -758,6 +774,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * [IptvRepository]'s coalescing and sat at the same 0 programs.
      */
     private var guideImportJob: Job? = null
+
+    /**
+     * [GuideImportProgress]'s id for the pass [guideImportJob] is running, so
+     * Cancel and the pass's own `finally` can both speak about it without either
+     * one clobbering a newer pass's status line (see
+     * [GuideImportProgress.finish]).
+     */
+    private var guideImportPassId: Long = 0L
 
     private var refreshJob: Job? = null
 
@@ -951,6 +975,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     init {
         repairFreeLineupGuideEntry()
+        observeGuideImportPass()
         viewModelScope.launch {
             lineupSource.collect { lineup ->
                 if (lineup.isNotEmpty()) {
@@ -970,6 +995,26 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         startGuideClockRefresh()
         restoreCachedPlaylist()
         observeProfileSwitches()
+    }
+
+    /**
+     * Keeps [isImportingGuide] equal to the pass actually open in
+     * [GuideImportProgress], including a pass this ViewModel did not start.
+     *
+     * Every place that asks "is an import running" - the setup screen's button,
+     * the guide's status line, the Load guard, the migrations - asks this
+     * ViewModel, and the pass can outlive the instance that opened it (two
+     * screens hold their own copy, an activity-scoped one survives navigation).
+     * Mirroring the shared object is what makes them all one answer; the two
+     * ends of a locally-run pass also write the mirror directly, so a guard read
+     * on the same frame as `begin()`/`finish()` is never a frame behind.
+     */
+    private fun observeGuideImportPass() {
+        viewModelScope.launch {
+            GuideImportProgress.state.collect { state ->
+                _isImportingGuide.value = state != null && state.outcome == null
+            }
+        }
     }
 
     /**
@@ -1344,10 +1389,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun load() {
-        if (_isImportingGuide.value) {
-            _error.value = "EPG import is in progress. Please wait before loading the playlist."
-            return
-        }
+        // Deliberately NOT gated on a running guide import. The pass writes only
+        // its own source's STAGED rows and promotes them in one transaction on a
+        // complete parse (see XmltvImporter), so the live guide a load reads is
+        // always a whole guide, and the lineup query has never blanked itself for
+        // an import (see the lineage note in `lineupSource`). Refusing the load
+        // instead left Playlist Setup as a dead end: the viewer could not reach
+        // the guide whose progress line would have told them the import was
+        // healthy, and LOAD was the only way out of the screen.
         loadJob?.cancel()
         loadJob = viewModelScope.launch { loadLineup() }
     }
@@ -1358,10 +1407,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * (see [startGuideImportForNewSource]).
      */
     private fun loadWithGuideRefresh() {
-        if (_isImportingGuide.value) {
-            _error.value = "EPG import is in progress. Please wait before loading the playlist."
-            return
-        }
         loadJob?.cancel()
         loadJob = viewModelScope.launch { loadLineup(forceGuideRefresh = true) }
     }
@@ -1380,10 +1425,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (url.isBlank()) {
             _error.value = "Playlist URL is required"
             return LoadOutcome.FAILED
-        }
-        if (_isImportingGuide.value) {
-            _error.value = "EPG import is in progress. Please wait before loading the playlist."
-            return LoadOutcome.SKIPPED
         }
         val hasPlaylist = _playlist.value != null
         _isLoading.value = !hasPlaylist
@@ -1429,9 +1470,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
         /** The sources could not be read; nothing new was applied. */
         FAILED,
-
-        /** Not attempted: an EPG import holds the load right now. */
-        SKIPPED,
     }
 
     /**
@@ -1549,6 +1587,40 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // automatic refresh already got, which is the two-second no-op the
         // field report came from.
         launchGuideImport(forceFresh = true)
+    }
+
+    /**
+     * Stops the running pass because the viewer asked - Playlist Setup's Cancel.
+     *
+     * Not a re-press: nothing is restarted, and the cancelled pass writes no
+     * freshness marker, so the next attempt is decided by the ordinary
+     * freshness rules rather than by this tap. What it replaces is the only
+     * way out the setup screen used to have - force-stop the app - for a pass the
+     * viewer could see running but could not stop (the field report: a six-source
+     * import on a TV guest, with LOAD refused for its whole duration).
+     *
+     * The pass is cancelled through the SAME handle every path starts it on
+     * ([launchGuideImport]), so an entry-, migration- or line-triggered import is
+     * as cancellable as a button press. The cancelled state is published here, on
+     * the viewer's behalf, BEFORE the coroutine unwinds: the pass's own `finally`
+     * then finds its id already closed and leaves that line alone
+     * (see [GuideImportProgress.finish]), which is what keeps a cancel from
+     * reading as a silent return to zero. No row is lost either way - the importer
+     * only promotes a source on a complete parse, so the live guide is exactly
+     * what it was, and the in-flight source's staged rows are never promoted.
+     */
+    fun cancelGuideImport() {
+        val job = guideImportJob ?: return
+        if (!job.isActive) return
+        val passId = guideImportPassId
+        Log.i(TAG, "GUIDE IMPORT CANCELLED by the viewer")
+        job.cancel()
+        // The handle is deliberately KEPT: a press of IMPORT EPG right after a
+        // cancel must cancel-and-join this pass before its replacement starts
+        // (see launchGuideImport), and dropping the reference here would let the
+        // two unwind at the same time over one status line.
+        GuideImportProgress.finish(passId, GuideImportOutcome.Cancelled)
+        _isImportingGuide.value = GuideImportProgress.isRunning
     }
 
     /**
@@ -1820,10 +1892,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         forceFresh: Boolean = false
     ) {
         if (epgUrl.isBlank()) return
-        _isImportingGuide.value = true
         _guideError.value = null
         val urls = allEpgUrls()
-        GuideImportProgress.begin(sourceCount = urls.size)
+        // The pass opens FIRST and the flag mirrors it, so "an import is running"
+        // and "here is how far it has got" are one fact rather than two that can
+        // drift (see the field note on [isImportingGuide]).
+        val passId = GuideImportProgress.begin(sourceCount = urls.size)
+        guideImportPassId = passId
+        _isImportingGuide.value = GuideImportProgress.isRunning
         // What this pass will say when it ends (see GuideImportProgress.finish):
         // "Imported N programs", "Guide unchanged on server" or the failure.
         // Null means the pass never got a usable answer to report, and the
@@ -1933,8 +2009,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             guideEndsAtMs = guideDataEndsAt()
             Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
-            _isImportingGuide.value = false
-            GuideImportProgress.finish(outcome, guideEndsAtMs)
+            // Scoped to THIS pass: a pass that was stopped (Cancel, a restart, a
+            // profile switch) reaches here with a newer pass possibly already
+            // open, and it must not blank that one's progress.
+            GuideImportProgress.finish(passId, outcome, guideEndsAtMs)
+            if (guideImportPassId == passId) guideImportPassId = 0L
+            // Mirrored, not asserted: a newer pass still running is still true.
+            _isImportingGuide.value = GuideImportProgress.isRunning
             // The pass just moved the window (or failed to): the setup screen's
             // freshness line is republished from what it left behind.
             publishGuideStatus(guideEndsAtMs)

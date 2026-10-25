@@ -178,8 +178,10 @@ class GuideImportCancelContractTest {
                 pass.contains("_guideError")
         )
         assertTrue(
-            "and the import has to finish with the flag down whatever happened",
-            pass.contains("_isImportingGuide.value = false")
+            "and the import has to finish with the flag MIRRORING the pass that " +
+                "actually closed: a blanket false blanks a newer pass's line and " +
+                "is what left setup saying nothing about a running import",
+            pass.contains("_isImportingGuide.value = GuideImportProgress.isRunning")
         )
     }
 

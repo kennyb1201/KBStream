@@ -1215,6 +1215,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             onLoad = { viewModel.load() },
             onReload = { viewModel.load() },
             onImportGuide = { viewModel.importGuide() },
+            onCancelGuideImport = { viewModel.cancelGuideImport() },
             onManageHidden = { showHiddenManager = true },
             onClear = {
                 viewModel.onPlaylistUrlChanged("")
@@ -1946,6 +1947,7 @@ private fun SetupPanel(
     onLoad: () -> Unit,
     onReload: () -> Unit,
     onImportGuide: () -> Unit,
+    onCancelGuideImport: () -> Unit = {},
     onManageHidden: () -> Unit,
     onClear: () -> Unit,
     freeLineupInstalled: Boolean = false,
@@ -2238,14 +2240,24 @@ private fun SetupPanel(
             )
         }
 
-        // What the last finished import DID. Shown outside `isImportingGuide`
-        // on purpose: the pass this exists for is the one that ends in a
-        // `304` (or a download) while the guide stays empty, and a finished
-        // import that reads as a silent return to zero is the report itself.
-        if (!isImportingGuide && guideImportLabel.isNotBlank()) {
+        // The live progress line, WHILE the pass runs as well as after it.
+        //
+        // It used to be gated on `!isImportingGuide`, i.e. the one screen the
+        // viewer cannot leave was the one screen that hid the numbers: a running
+        // pass read as the button saying IMPORTING… and nothing else (the field
+        // report - a six-source import on a TV guest, with LOAD refused for its
+        // whole duration). A finished pass still prints its outcome here ("Imported
+        // N programs", "Guide unchanged on server", or the cancel), because a pass
+        // that ends in a `304` or a cancel must not read as a silent return to
+        // zero.
+        if (guideImportLabel.isNotBlank()) {
             Text(
-                text = guideImportLabel,
-                color = KBTextLo,
+                text = if (isImportingGuide) {
+                    "Importing guide · $guideImportLabel"
+                } else {
+                    guideImportLabel
+                },
+                color = if (isImportingGuide) KBAccent else KBTextLo,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp)
             )
@@ -2315,6 +2327,23 @@ private fun SetupPanel(
                 KBCard(onClick = onImportGuide) {
                     Text(
                         text = if (isImportingGuide) "IMPORTING…" else "IMPORT EPG",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
+                    )
+                }
+            }
+
+            // The way out of a long pass, and the only one that does not need
+            // the app killed. Present only while a pass is running - a permanent
+            // CANCEL beside IMPORT EPG would read as a second, contradictory
+            // action. It stops THIS pass (the one the viewer can see), including
+            // one an entry trigger or a migration started (see
+            // IptvViewModel.cancelGuideImport).
+            if (isImportingGuide) {
+                KBCard(onClick = onCancelGuideImport) {
+                    Text(
+                        text = "CANCEL IMPORT",
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)

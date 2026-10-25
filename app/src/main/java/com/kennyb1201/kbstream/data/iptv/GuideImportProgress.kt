@@ -47,6 +47,18 @@ sealed interface GuideImportOutcome {
      * (or, before this guard, discarded) the guide underneath.
      */
     data object EmptyFeedKeptLive : GuideImportOutcome
+
+    /**
+     * The viewer stopped the pass with the setup screen's Cancel action.
+     *
+     * A third class beside Imported/Unchanged and Failed on purpose. Nothing
+     * went wrong, so it must not read as a failure the viewer has to act on; and
+     * the pass DID end, so it must not read as a silent return to zero either.
+     * `[XmltvImporter]` only promotes a source on a complete parse, so a
+     * cancelled pass leaves the guide exactly as it was - which is what this
+     * says.
+     */
+    data object Cancelled : GuideImportOutcome
 }
 
 /**
@@ -80,6 +92,15 @@ data class GuideImportState(
      * [GuideImportProgress.finish] so the status line can state what happened.
      */
     val outcome: GuideImportOutcome? = null,
+    /**
+     * Which pass this state belongs to (see [GuideImportProgress.begin]).
+     *
+     * Zero for a state that was never opened through [GuideImportProgress.begin]
+     * - every state a pass publishes has one, and it is what keeps a STOPPED
+     * pass's final write from blanking the status of a newer one that is already
+     * running.
+     */
+    val passId: Long = 0L,
     /**
      * The newest program end the LIVE guide held when the pass finished.
      *
@@ -119,6 +140,26 @@ object GuideImportProgress {
     /** Null when no import is running; the status line then shows nothing. */
     val state: StateFlow<GuideImportState?> = _state.asStateFlow()
 
+    /**
+     * Whether a pass is OPEN right now - the one fact every surface reads.
+     *
+     * The setup screen, the guide screen and the ViewModel's own button state
+     * all have to agree about "is an import running", and they used to be fed by
+     * different things: the ViewModel kept a boolean of its own while the
+     * numbers came from here, so a screen could show "IMPORTING…" next to no
+     * progress at all (the field report from a TV guest: a whole six-source pass
+     * read as a bare "EPG importing" line, with no source number, megabytes or
+     * clock, on the one screen the viewer could not leave). Reading the pass
+     * itself is what makes the disagreement impossible: a pass is open exactly
+     * while this object holds a state it has not closed, so "running" and "has
+     * numbers" are the same question.
+     */
+    val isRunning: Boolean
+        get() = _state.value?.let { it.outcome == null } ?: false
+
+    /** Source of [GuideImportState.passId]; only [begin] reads it. */
+    private val passCounter = java.util.concurrent.atomic.AtomicLong(0L)
+
     private val _waiting = MutableStateFlow<Set<String>>(emptySet())
 
     /**
@@ -149,16 +190,25 @@ object GuideImportProgress {
         _waiting.value = _waiting.value - key
     }
 
-    /** Opens a pass over [sourceCount] guide sources. */
+    /**
+     * Opens a pass over [sourceCount] guide sources, returning its id.
+     *
+     * The id is the pass's own handle on the shared status line: [finish] takes
+     * it back, so a pass that is stopped (by Cancel, by the button's restart, by
+     * a profile switch) can only ever write about itself.
+     */
     fun begin(
         sourceCount: Int,
         startedAtMs: Long = System.currentTimeMillis()
-    ) {
+    ): Long {
+        val passId = passCounter.incrementAndGet()
         _state.value = GuideImportState(
             sourceIndex = 1,
             sourceCount = sourceCount.coerceAtLeast(1),
-            startedAtMs = startedAtMs
+            startedAtMs = startedAtMs,
+            passId = passId
         )
+        return passId
     }
 
     /**
@@ -189,7 +239,7 @@ object GuideImportProgress {
     }
 
     /**
-     * Closes the pass, reporting [outcome] when the caller has one.
+     * Closes the pass [passId], reporting [outcome] when the caller has one.
      *
      * With no outcome this CLEARS the line, which is what the background worker
      * wants (it publishes nothing at all). A pass the viewer started reports its
@@ -197,12 +247,33 @@ object GuideImportProgress {
      * to zero, and a `304` the store could satisfy must say so - it is the
      * outcome most easily mistaken for "nothing happened".
      *
+     * A pass only ever closes ITSELF. A stopped pass reaches this from its own
+     * `finally`, after a newer pass may already have opened the line - and the
+     * unconditional write it used to do blanked that newer pass's progress, the
+     * shape that left a running import reading as a bare "importing" with
+     * nothing behind it. A pass that has already reported an outcome (the Cancel
+     * action reports one on the viewer's behalf) cannot report a second one
+     * either, so cancelling and then letting the coroutine unwind keeps the
+     * cancelled state on screen instead of wiping it.
+     *
+     * [passId] of 0 means "no handle": the write applies unconditionally, which
+     * is what tests and the terminal-state assertions use.
+     *
      * [guideEndsAtMs] is the live guide's newest program end, published so a
      * frozen feed reads as one (see [label]).
      */
-    fun finish(outcome: GuideImportOutcome? = null, guideEndsAtMs: Long? = null) {
+    fun finish(
+        passId: Long = 0L,
+        outcome: GuideImportOutcome? = null,
+        guideEndsAtMs: Long? = null
+    ) {
+        if (passId != 0L) {
+            val current = _state.value ?: return
+            if (current.passId != passId) return
+            if (current.outcome != null) return
+        }
         _state.value = outcome?.let {
-            GuideImportState(outcome = it, guideEndsAtMs = guideEndsAtMs)
+            GuideImportState(outcome = it, guideEndsAtMs = guideEndsAtMs, passId = passId)
         }
     }
 
@@ -276,6 +347,9 @@ object GuideImportProgress {
 
         is GuideImportOutcome.EmptyFeedKeptLive ->
             "Feed returned no programs — kept your existing guide"
+
+        is GuideImportOutcome.Cancelled ->
+            "Import cancelled — your guide is unchanged"
 
         is GuideImportOutcome.Failed -> outcome.message
     }

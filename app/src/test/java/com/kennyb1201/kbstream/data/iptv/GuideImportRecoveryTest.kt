@@ -339,7 +339,7 @@ class GuideImportRecoveryTest {
         assertTrue(
             "the pass must hand its outcome - and where the live schedule " +
                 "stops - to the status line",
-            vm.contains("GuideImportProgress.finish(outcome, guideEndsAtMs)") &&
+            vm.contains("GuideImportProgress.finish(passId, outcome, guideEndsAtMs)") &&
                 vm.contains("guideEndsAtMs = guideDataEndsAt()")
         )
         assertTrue(
