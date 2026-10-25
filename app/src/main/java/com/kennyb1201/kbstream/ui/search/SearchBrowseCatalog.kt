@@ -552,12 +552,15 @@ val BROWSE_KEYWORD_NAMES = listOf(
     "medieval",
     "satire",
     "mockumentary",
-    // Comedy FORMATS, not just the genre: a stand-up special and a sketch
-    // show are tagged by these names on TMDB (keyword 9716 for
-    // "stand-up comedy"; "sketch comedy" on In Living Color, SNL-adjacent
-    // series), and neither rides the plain Comedy genre rail.
+    // Comedy FORMATS, not just the genre: a stand-up special, a sketch show,
+    // a sitcom and a spoof are each tagged by these names on TMDB (keyword
+    // 9716 "stand-up comedy", 193171 "sitcom", 9755 "parody", "sketch
+    // comedy" on In Living Color and its SNL-adjacent peers), and none of
+    // them rides the plain Comedy genre rail.
     "stand-up comedy",
     "sketch comedy",
+    "sitcom",
+    "parody",
     "silent film",
     "black and white",
     "period drama",
