@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
@@ -795,6 +796,21 @@ class LibraryViewModel(
                 val year: Int?
             )
 
+            // The eye is a claim about THIS profile, so a title another profile
+            // positively owns does not get one - the same rule the Home rails
+            // apply to their own markers (see HomeViewModel.siblingOwnedRailItemIds)
+            // and the tracker cards have always applied. The resolver behind the
+            // badge is not per profile all the way down: the tracker feeds hold
+            // one library per ACCOUNT, and the first profile adopts the pre-profile
+            // history store. A kids title the kids profile started was therefore
+            // drawing the eye on profile 1, which had never watched it.
+            val badgeActiveProfileId =
+                com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+                    ?.takeIf { it.isNotBlank() }
+            val badgeTitleOwners =
+                com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                    .snapshot(appContext)
+
             suspend fun resolve(item: LibraryItem): Resolved {
                 val normalizedType = when (item.mediaType.lowercase()) {
                     "tv", "series" -> "series"
@@ -847,6 +863,21 @@ class LibraryViewModel(
                     watchedRepository.isPartiallyWatchedCached(tmdbWatchedId, normalizedType)
                 ) {
                     partiallyWatched = "$normalizedType::$tmdbWatchedId"
+                }
+
+                // Dropped only on POSITIVE ownership: an unattributed title,
+                // a device with no profiles or a title with no name all keep
+                // the badge, so the cross-device eye a profile earned on
+                // another device survives (see [titleOwnedByAnotherProfile]).
+                if (partiallyWatched != null &&
+                    titleOwnedByAnotherProfile(
+                        ownerByTitleKey = badgeTitleOwners,
+                        type = normalizedType,
+                        title = item.title,
+                        activeProfileId = badgeActiveProfileId
+                    )
+                ) {
+                    partiallyWatched = null
                 }
 
                 // Ratings come from the shared TMDB detail cache

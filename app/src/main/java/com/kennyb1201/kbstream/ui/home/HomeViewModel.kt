@@ -19,6 +19,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
@@ -436,6 +437,22 @@ class HomeViewModel(
 
     val partialWatchedKeys: StateFlow<Set<String>> =
         _partialWatchedKeys.asStateFlow()
+
+    /**
+     * Ids (IMDb or `tmdb:<n>`) of titles another profile positively owns, so
+     * their eye is never painted here however the marker was resolved.
+     *
+     * Written by the marker refresh, which is the only pass that holds both the
+     * rail items and the ownership map, and read by the watch-state collector
+     * too: a live write from a sibling's session would otherwise put the eye
+     * straight back on this profile until the next refresh.
+     */
+    @Volatile
+    private var siblingOwnedMarkerIds: Set<String> = emptySet()
+
+    /** True when [key] (`type::id`) is a title another profile owns. */
+    private fun keyOwnedByAnotherProfile(key: String): Boolean =
+        siblingOwnedMarkerIds.any { id -> key.endsWith("::$id") }
 
     private val _upNext =
         MutableStateFlow<List<UpNextItem>>(
@@ -1249,6 +1266,9 @@ Log.d(
 
                     _watchedKeys.value = emptySet()
                     _partialWatchedKeys.value = emptySet()
+                    // The incoming profile owns its own titles: the previous
+                    // profile's ownership answers nothing about this one.
+                    siblingOwnedMarkerIds = emptySet()
 
                     // Empty the rail UP FRONT: without this, the previous
                     // profile's cards stayed on screen until the new
@@ -1982,6 +2002,46 @@ Log.d(
         // Last: a title this profile just finished comes off the rail however
         // the feed still describes it.
         return dropJustCompletedTrackerCards(filtered)
+    }
+
+    /**
+     * The rail items whose title is positively owned by ANOTHER profile, by id.
+     *
+     * The ids are what the watched-marker sets are keyed by (`type::id`), so
+     * this is the shape a badge filter needs: a title this profile never
+     * watched must not wear this profile's eye however it reached the set. No
+     * owner, no live profile or no title key all answer "not owned", which is
+     * why an unattributed title keeps its badge (see
+     * [titleOwnedByAnotherProfile]).
+     */
+    private fun siblingOwnedRailItemIds(rails: List<Rail>): Set<String> {
+
+        val activeProfileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.value?.id
+                ?.takeIf { it.isNotBlank() }
+                ?: return emptySet()
+
+        val owners =
+            com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                .snapshot(getApplication())
+
+        if (owners.isEmpty()) return emptySet()
+
+        return rails
+            .asSequence()
+            .flatMap { rail -> rail.items.asSequence() }
+            .filter { meta ->
+                titleOwnedByAnotherProfile(
+                    ownerByTitleKey = owners,
+                    type = meta.type,
+                    title = meta.name,
+                    activeProfileId = activeProfileId
+                )
+            }
+            .map { meta -> meta.id.trim() }
+            .filter { id -> id.isNotEmpty() }
+            .toSet()
     }
 
     /**
@@ -9104,9 +9164,27 @@ private suspend fun calculateEpisodesRemaining(
 
 
                 // The completed checkmark wins over the eye badge when a
-                // show resolves to both.
+                // show resolves to both - and neither badge is drawn for a
+                // title another profile positively owns. The sources behind
+                // these sets are not all per profile: the tracker feeds hold
+                // one library per ACCOUNT, and a TV's history can still carry
+                // rows from before the profiles existed (the first profile
+                // adopts the pre-profile store). So a kids title the kids
+                // profile watched was drawing the eye over profile 1, where it
+                // has never been watched at all - reported as a Paw Patrol eye
+                // on profile 1 that nobody there had started. Same rule and the
+                // same evidence as the tracker cards above: drop only on
+                // POSITIVE ownership (see [titleOwnedByAnotherProfile]).
+                val siblingOwnedIds =
+                    siblingOwnedRailItemIds(rails)
+
+                siblingOwnedMarkerIds = siblingOwnedIds
+
                 _partialWatchedKeys.value =
-                    resolvedPartialWatchedKeys - resolvedWatchedKeys
+                    (resolvedPartialWatchedKeys - resolvedWatchedKeys)
+                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .toSet()
+
                 Log.d(
                     "HOME_WATCHED",
                     "marker refresh complete: " +
@@ -9299,6 +9377,8 @@ private suspend fun calculateEpisodesRemaining(
 
                 _partialWatchedKeys.value =
                     partial
+                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .toSet()
 
                 // Dynamic addon catalogs (BingeCat "Because you watched …",
                 // collections that grow as you watch) are computed from the
