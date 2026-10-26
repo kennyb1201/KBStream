@@ -132,6 +132,9 @@ fun DecadeScreen(
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // Read for the all-hidden branch below, whose only way out of the state it
+    // describes is unhiding every title.
+    val context = LocalContext.current
     // The viewer's poster choices, read as state so a pick repaints the header's
     // fan on the next frame (see ImageOverrides).
     val overridePaths = rememberImageOverridePaths()
@@ -343,6 +346,16 @@ fun DecadeScreen(
                     // The landing is what marks the page focused; a false leaves
                     // the retry to the next rail that lands behind this one.
                     focusPlaced = restoreBrowseReturn(target)
+                    // And a landing SPENDS the record. Held across the reload and
+                    // re-read here with a fresh attempt budget, it replayed this
+                    // landing on every later load of the same page - so pressing
+                    // a genre chip (which reloads the rails under the same rail
+                    // titles) threw focus back onto the card the viewer had just
+                    // returned from, or onto whatever took its position, instead
+                    // of leaving it on the chips. It is spent only once it has
+                    // LANDED: `focusPlaced` still resets on a reload, which is
+                    // what the first-card path needs.
+                    if (focusPlaced) returnTarget = null
                     return@LaunchedEffect
                 }
 
@@ -446,6 +459,25 @@ fun DecadeScreen(
                                     viewModel.selectedGenreId.value
                                 )
                             },
+                            modifier = Modifier.fillParentMaxSize()
+                        )
+                    }
+                }
+
+                // Every title this decade found is hidden, so there is nothing
+                // to draw - but the branch below would say the decade HAS no
+                // titles, which is a different fact, and it would leave the
+                // viewer with no way back from here (the same gap Home's
+                // all-hidden branch closes). `sectionsRaw` is the page the
+                // loader produced; `sections` is that page with the hidden
+                // titles dropped.
+                sectionsRaw.any { it.items.isNotEmpty() } -> {
+                    item(key = "all_hidden") {
+                        KBStatusMessage(
+                            icon = KB_STATUS_ICON_EMPTY,
+                            message = "Every title here is hidden.",
+                            onRetry = { HiddenTitles.unhideAll(context) },
+                            actionLabel = "UNHIDE ALL",
                             modifier = Modifier.fillParentMaxSize()
                         )
                     }

@@ -4,7 +4,11 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -65,6 +69,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         if (detail == null) {
             emptySet()
         } else {
+            val siblingOwned = siblingOwnedMarkerIdsFor(detail.parts, resolved)
             detail.parts
                 .flatMap { part ->
                     // The keys a part has: the resolved IMDB flavor first,
@@ -78,6 +83,12 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                         matches = watchedStatusRepository::isWatchedCached
                     )
                 }
+                .toSet()
+                // A film another profile positively owns draws no checkmark
+                // here, however the marker resolved - the same filter Home's
+                // and the actor page's sets publish through, which this rail
+                // was missing (see [siblingOwnedMarkerIdsFor]).
+                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
                 .toSet()
         }
     }.stateIn(
@@ -99,6 +110,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         if (detail == null) {
             emptySet()
         } else {
+            val siblingOwned = siblingOwnedMarkerIdsFor(detail.parts, resolved)
             detail.parts
                 .flatMap { part ->
                     WatchedStatusKeys.watchedKeysOf(
@@ -108,6 +120,10 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                         matches = watchedStatusRepository::isPartiallyWatchedCached
                     )
                 }
+                .toSet()
+                // Same ownership filter as the checkmark set above, and the same
+                // return to a Set before the subtraction.
+                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
                 .toSet() - watchedKeys.value
         }
     }.stateIn(
@@ -136,6 +152,52 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
      * cannot describe the same title differently.
      */
     fun watchedKey(id: String, type: String): String = WatchedStatusKeys.key(id, type)
+
+    /**
+     * Ids (IMDb or `tmdb:<n>`) of this collection's films that ANOTHER profile
+     * positively owns, so their badge is never painted here however the marker
+     * resolved.
+     *
+     * The watched cache key is `"type::id"` with no profile component (see
+     * WatchedStatusRepository.cacheKey) and the tracker feeds behind it are per
+     * ACCOUNT - so a kids-profile completion can badge a film on this
+     * profile's collection page, the same leak shape Home's and the actor
+     * page's fixes closed (HomeViewModel.keyOwnedByAnotherProfile,
+     * ActorViewModel.siblingOwnedMarkerIdsFor). This rail reads the same cache
+     * family through the same methods and skipped that filter.
+     */
+    private fun siblingOwnedMarkerIdsFor(
+        parts: List<TmdbCollectionPart>,
+        resolved: Map<String, String>
+    ): Set<String> {
+        val activeProfileId = ProfileManager.activeProfile.value?.id
+            ?.takeIf { it.isNotBlank() }
+            ?: return emptySet()
+
+        val owners = TitleProfileOwnership.snapshot(getApplication())
+        if (owners.isEmpty()) return emptySet()
+
+        return parts
+            .filter { part ->
+                titleOwnedByAnotherProfile(
+                    ownerByTitleKey = owners,
+                    type = "movie",
+                    title = part.title ?: part.name,
+                    activeProfileId = activeProfileId
+                )
+            }
+            .flatMap { part ->
+                listOfNotNull(
+                    WatchedStatusKeys.tmdbKeyId(part.id),
+                    resolved[lookupKey(part.id, "movie")]
+                )
+            }
+            .toSet()
+    }
+
+    /** True when [key] (`type::id`) names a title another profile owns. */
+    private fun keyOwnedByAnotherProfile(key: String, siblingOwned: Set<String>): Boolean =
+        siblingOwned.any { id -> key.endsWith("::$id") }
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
@@ -274,7 +336,23 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, "movie")
                 }.getOrNull()
-                    ?: return@launch
+
+            if (imdbId.isNullOrBlank()) {
+                // No IMDb id to key the mark under: write it under this film's
+                // own `tmdb:<n>` flavor, which the rail badge already consults
+                // (see [WatchedStatusKeys]). Returning here instead was a silent
+                // no-op on the menu row the viewer had just pressed - the actor
+                // page's marks fall back the same way.
+                runCatchingCancellable {
+                    watchedStatusRepository.markWatchedLocal(
+                        WatchedStatusKeys.tmdbKeyId(tmdbId),
+                        "movie"
+                    )
+                }.onFailure { e ->
+                    Log.e("COLLECTION_VM", "markAsWatched failed tmdb=$tmdbId", e)
+                }
+                return@launch
+            }
 
             if (_resolvedIds.value[lookup] == null) {
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
@@ -301,7 +379,20 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, "movie")
                 }.getOrNull()
-                    ?: return@launch
+
+            if (imdbId.isNullOrBlank()) {
+                // Same fallback as markAsWatched: clear under this film's own
+                // `tmdb:<n>` flavor rather than leaving the press a no-op.
+                runCatchingCancellable {
+                    watchedStatusRepository.markUnwatchedLocal(
+                        WatchedStatusKeys.tmdbKeyId(tmdbId),
+                        "movie"
+                    )
+                }.onFailure { e ->
+                    Log.e("COLLECTION_VM", "markUnwatched failed tmdb=$tmdbId", e)
+                }
+                return@launch
+            }
 
             if (_resolvedIds.value[lookup] == null) {
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)

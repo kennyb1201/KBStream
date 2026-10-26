@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -113,6 +114,9 @@ fun CollectionScreen(
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     // A hidden film drops out of its franchise rail too.
     val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // Read for the all-hidden branch below, whose only way out of the state it
+    // describes is unhiding every title.
+    val context = LocalContext.current
     val collection =
         remember(collectionRaw, resolvedIds, hiddenTitleKeys) {
             collectionRaw?.let { detail ->
@@ -335,6 +339,22 @@ fun CollectionScreen(
                     KBStatusMessage(
                         message = "We couldn't load this collection right now.",
                         onRetry = { viewModel.load(collectionId) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 4.dp)
+                    )
+                }
+
+                // Every film this collection HAS is hidden. The branch below
+                // would otherwise report the collection as listless, which is a
+                // different fact, and would leave the viewer with no way back
+                // (see the all-hidden branch on the browse pages).
+                collectionRaw?.parts?.isNotEmpty() == true -> {
+                    KBStatusMessage(
+                        icon = KB_STATUS_ICON_EMPTY,
+                        message = "Every film in this collection is hidden.",
+                        onRetry = { HiddenTitles.unhideAll(context) },
+                        actionLabel = "UNHIDE ALL",
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp, vertical = 4.dp)

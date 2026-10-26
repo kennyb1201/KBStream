@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -104,6 +105,9 @@ fun CollectionScreenMobile(
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // Read for the all-hidden branch below, whose only way out of the state it
+    // describes is unhiding every title.
+    val context = LocalContext.current
     val overridePaths = rememberImageOverridePaths()
 
     val collection = remember(collectionRaw, resolvedIds, hiddenTitleKeys) {
@@ -257,6 +261,21 @@ fun CollectionScreenMobile(
                             message = "We couldn't load this collection right now.",
                             actionLabel = "TRY AGAIN",
                             onAction = { viewModel.load(collectionId) }
+                        )
+                    }
+
+                    // Every film this collection HAS is hidden. The branch
+                    // below would otherwise report the collection as listless,
+                    // which is a different fact, and would leave the viewer with
+                    // no way back (see the TV page's branch).
+                    collectionRaw?.parts?.isNotEmpty() == true -> item(
+                        key = "all_hidden",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        MobileStatus(
+                            message = "Every film in this collection is hidden.",
+                            actionLabel = "UNHIDE ALL",
+                            onAction = { HiddenTitles.unhideAll(context) }
                         )
                     }
 

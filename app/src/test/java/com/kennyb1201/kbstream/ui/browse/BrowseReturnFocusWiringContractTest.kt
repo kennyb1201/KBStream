@@ -156,14 +156,32 @@ class BrowseReturnFocusWiringContractTest {
                         effect.contains("attemptsSpent = returnAttempts") &&
                         effect.contains("waitStartMs = returnWaitStartMs")
                 )
+                // The RELOAD branch is what holds the record: the async clear can
+                // land AFTER this effect consumed the record, and discarding it
+                // there is what reopened every Back at the first card. A
+                // genuinely different page gets fresh state from the
+                // remember(id, ...) keys, not from this branch.
+                val held = effect.substringBefore("} else if")
                 assertTrue(
-                    "a reload of the SAME page keeps its record and its wait budget: " +
-                        "the async clear can land AFTER this effect consumed the record, " +
-                        "and discarding it there is what reopened every Back at the first " +
-                        "card. A genuinely different page gets fresh state from the " +
-                        "remember(id, ...) keys, not from this branch",
-                    !effect.contains("returnTarget = null") &&
+                    "a reload of the SAME page keeps its record and its wait budget",
+                    !held.contains("returnTarget = null") &&
                         !effect.contains("returnWaitStartMs = 0L")
+                )
+                // ... but a landing SPENDS it. Held past the landing and re-read
+                // with the fresh attempt budget above, the record replayed this
+                // landing on the page's next load - which is what a genre chip
+                // does - and threw focus back onto the card the viewer had just
+                // returned from instead of leaving it on the chips. Collection
+                // and the phone pages have always spent theirs; the TV section
+                // pages did not, and the spend is only correct AFTER the landing
+                // answers true (focusPlaced must still reset on a reload for the
+                // first-card path).
+                val landing = effect.indexOf("focusPlaced = restoreBrowseReturn(target)")
+                val spent = effect.indexOf("if (focusPlaced) returnTarget = null")
+                assertTrue(
+                    "$file must SPEND the record once it lands - after the landing, " +
+                        "and never in the reload branch that holds it",
+                    landing >= 0 && spent > landing
                 )
                 assertTrue(
                     "the landing is still retried on the fresh list, with a fresh " +

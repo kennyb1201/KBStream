@@ -4,6 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.CrossBase
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
@@ -68,6 +71,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
         if (sections.isEmpty()) {
             emptySet()
         } else {
+            val siblingOwned = siblingOwnedMarkerIdsFor(sections, resolvedMap)
             sections.flatMap { it.items }
                 .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
@@ -84,6 +88,12 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                         matches = watchedStatusRepository::isWatchedCached
                     )
                 }
+                .toSet()
+                // A title another profile positively owns draws no checkmark
+                // here, however the marker resolved - the same filter Home's
+                // and the actor page's sets publish through, which these were
+                // missing (see [siblingOwnedMarkerIdsFor]).
+                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
                 .toSet()
         }
     }.stateIn(
@@ -105,6 +115,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
         if (sections.isEmpty()) {
             emptySet()
         } else {
+            val siblingOwned = siblingOwnedMarkerIdsFor(sections, resolvedMap)
             sections.flatMap { it.items }
                 .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
@@ -116,6 +127,10 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                         matches = watchedStatusRepository::isPartiallyWatchedCached
                     )
                 }
+                .toSet()
+                // Same ownership filter as the checkmark set above, and the same
+                // return to a Set before the subtraction.
+                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
                 .toSet() - watchedKeys.value
         }
     }.stateIn(
@@ -174,6 +189,54 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
+
+    /**
+     * Ids (IMDb or `tmdb:<n>`) of this page's titles that ANOTHER profile
+     * positively owns, so their badge is never painted here however the marker
+     * resolved.
+     *
+     * The watched cache key is `"type::id"` with no profile component (see
+     * WatchedStatusRepository.cacheKey) and the tracker feeds behind it are per
+     * ACCOUNT - so a kids-profile completion can badge a title on this
+     * profile's decade page, the same leak shape Home's and the actor page's
+     * fixes closed (HomeViewModel.keyOwnedByAnotherProfile,
+     * ActorViewModel.siblingOwnedMarkerIdsFor). These rails read the same cache
+     * family through the same methods and skipped that filter.
+     */
+    private fun siblingOwnedMarkerIdsFor(
+        sections: List<StudioSection>,
+        resolvedMap: Map<String, String>
+    ): Set<String> {
+        val activeProfileId = ProfileManager.activeProfile.value?.id
+            ?.takeIf { it.isNotBlank() }
+            ?: return emptySet()
+
+        val owners = TitleProfileOwnership.snapshot(getApplication())
+        if (owners.isEmpty()) return emptySet()
+
+        return sections
+            .flatMap { it.items }
+            .filter { studioItem ->
+                titleOwnedByAnotherProfile(
+                    ownerByTitleKey = owners,
+                    type = studioItem.mediaType,
+                    title = studioItem.item.title ?: studioItem.item.name,
+                    activeProfileId = activeProfileId
+                )
+            }
+            .flatMap { studioItem ->
+                val mediaType = normalizeMediaType(studioItem.mediaType)
+                listOfNotNull(
+                    WatchedStatusKeys.tmdbKeyId(studioItem.item.id),
+                    mediaType?.let { resolvedMap[lookupKey(studioItem.item.id, it)] }
+                )
+            }
+            .toSet()
+    }
+
+    /** True when [key] (`type::id`) names a title another profile owns. */
+    private fun keyOwnedByAnotherProfile(key: String, siblingOwned: Set<String>): Boolean =
+        siblingOwned.any { id -> key.endsWith("::$id") }
 
     fun load(decadeStart: Int, genreId: Int? = null) {
         // Same-route guard so Back-restore doesn't reload and clear state.
@@ -428,9 +491,15 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
 
-            if (!imdbId.isNullOrBlank()) {
-                onNavigateDetail(normalizedType, imdbId)
-            }
+            // The Detail route resolves a TMDB id itself, so a title TMDB has
+            // no IMDb id for - or one whose resolution failed offline - still
+            // opens its page instead of dying silently on the press. The
+            // actor page's cards have done this all along; the browse cards
+            // used to navigate only on a non-blank IMDb id and swallow the
+            // press otherwise.
+            val routeId = imdbId?.takeIf { it.isNotBlank() }
+                ?: WatchedStatusKeys.tmdbKeyId(tmdbId)
+            onNavigateDetail(normalizedType, routeId)
         }
     }
 
@@ -458,7 +527,23 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
-                    ?: return@launch
+
+            if (imdbId.isNullOrBlank()) {
+                // No IMDb id to key the mark under: write it under this title's
+                // own `tmdb:<n>` flavor, which the rail badge already consults
+                // (see [WatchedStatusKeys]). Returning here instead was a silent
+                // no-op on the menu row the viewer had just pressed - the actor
+                // page's marks fall back the same way.
+                runCatchingCancellable {
+                    watchedStatusRepository.markWatchedLocal(
+                        WatchedStatusKeys.tmdbKeyId(tmdbId),
+                        normalizedType
+                    )
+                }.onFailure { e ->
+                    Log.e("DECADE_VM", "markAsWatched failed tmdb=$tmdbId", e)
+                }
+                return@launch
+            }
 
             if (_resolvedIds.value[lookup] == null) {
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
@@ -489,7 +574,20 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
-                    ?: return@launch
+
+            if (imdbId.isNullOrBlank()) {
+                // Same fallback as markAsWatched: clear under this title's own
+                // `tmdb:<n>` flavor rather than leaving the press a no-op.
+                runCatchingCancellable {
+                    watchedStatusRepository.markUnwatchedLocal(
+                        WatchedStatusKeys.tmdbKeyId(tmdbId),
+                        normalizedType
+                    )
+                }.onFailure { e ->
+                    Log.e("DECADE_VM", "markUnwatched failed tmdb=$tmdbId", e)
+                }
+                return@launch
+            }
 
             if (_resolvedIds.value[lookup] == null) {
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)

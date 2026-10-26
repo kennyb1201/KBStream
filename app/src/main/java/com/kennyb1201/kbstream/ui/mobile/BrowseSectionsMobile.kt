@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -207,6 +208,9 @@ internal fun SectionsBrowseMobile(
     // A hidden title drops out of every rail, exactly as on TV - including a
     // rail that then has nothing left in it.
     val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // Read for the all-hidden branch below, whose only way out of the state it
+    // describes is unhiding every title.
+    val context = LocalContext.current
     val sections = remember(sectionsRaw, resolvedIds, hiddenTitleKeys) {
         sectionsRaw.mapNotNull { section ->
             val visible = section.items.filterNot { railItem ->
@@ -374,6 +378,22 @@ internal fun SectionsBrowseMobile(
                                 message = "Error: $error",
                                 action = "TRY AGAIN",
                                 onAction = onRetry
+                            )
+                        }
+                    }
+                }
+
+                // Every title this page found is hidden, so there is nothing to
+                // draw - but the branch below would report the page as having
+                // no titles, which is a different fact, and it would leave the
+                // phone with no way back from here (see the TV pages' branch).
+                sectionsRaw.any { it.items.isNotEmpty() } -> {
+                    item(key = "all_hidden", contentType = "status") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            BrowseStatus(
+                                message = "Every title here is hidden.",
+                                action = "UNHIDE ALL",
+                                onAction = { HiddenTitles.unhideAll(context) }
                             )
                         }
                     }

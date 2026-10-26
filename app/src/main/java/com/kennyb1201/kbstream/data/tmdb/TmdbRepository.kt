@@ -2099,7 +2099,7 @@ class TmdbRepository private constructor(context: Context) :
             year = if (base.kind == "decade") base.id else null
         )
 
-        val (items, nextPage) = deepenDiscover(
+        val rail = deepenDiscover(
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
@@ -2109,12 +2109,17 @@ class TmdbRepository private constructor(context: Context) :
 
         val filtered =
             if (isDigitalFilterEnabled()) {
-                filterByHomeAvailability(items) { it.item.id to it.mediaType }
+                filterByHomeAvailability(rail.items) { it.item.id to it.mediaType }
             } else {
-                items
+                rail.items
             }
         return kidsFilterPage(
-            TagRailPage(filtered, items.size >= 20, nextPage = nextPage)
+            TagRailPage(
+                filtered,
+                rail.items.size >= 20,
+                nextPage = rail.nextPage,
+                failed = rail.failed
+            )
         )
     }
 
@@ -2586,6 +2591,17 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * One discover-backed rail's page: its rows, the page a later "load more"
+     * should ask for, and whether page 1 could not be FETCHED at all (see
+     * [TagRailPage.failed], which is the same flag on the other rail path).
+     */
+    private data class DiscoverRail(
+        val items: List<StudioItem>,
+        val nextPage: Int,
+        val failed: Boolean = false
+    )
+
+    /**
      * The same deepening for the discover-backed rails (service, decade,
      * cross-genre), which build their own `KBFilters` instead of going through
      * [TmdbRailPages]. Returns the merged rows paired with the page a later
@@ -2597,7 +2613,7 @@ class TmdbRepository private constructor(context: Context) :
         filters: com.kennyb1201.kbstream.data.kb.KBFilters,
         page: Int,
         deepen: Boolean = true
-    ): Pair<List<StudioItem>, Int> = coroutineScope {
+    ): DiscoverRail = coroutineScope {
         val itemType = if (mediaType.equals("tv", ignoreCase = true)) "series" else "movie"
 
         // Keyed off the REQUEST rather than off the screen: two screens that
@@ -2607,12 +2623,15 @@ class TmdbRepository private constructor(context: Context) :
         // language and the vote floor.
         val cacheKey = "discover|$mediaType|$sortBy|$filters"
 
-        // `?: emptyList()`: these discover-backed rails (service, decade,
-        // cross-genre) still read a failed page as an empty one. Only the four
-        // dimension rails behind [TmdbRailPages] carry [TagRailPage.failed] so
-        // far; widening this one means teaching every "load more" caller the
-        // difference, which is a separate change.
-        suspend fun load(p: Int): List<StudioItem> =
+        // null = the page could not be FETCHED (an outage, a timeout, a 429),
+        // as opposed to a page that genuinely had no rows - the same contract
+        // [finishDeepRailPage]'s loader has. Every failure used to collapse
+        // into an empty list here, so a discover-backed rail (service, decade,
+        // cross-genre) reported an outage as a rail it does not have, and a
+        // browse page whose every rail failed handed its screen an empty page
+        // that read exactly like a category with no titles (see
+        // [BrowseRailsUnavailableException]).
+        suspend fun load(p: Int): List<StudioItem>? =
             cachedRailPage(cacheKey, p) { requestedPage ->
                 runCatchingCancellable {
                     discoverKB(
@@ -2621,16 +2640,17 @@ class TmdbRepository private constructor(context: Context) :
                         sortBy = sortBy,
                         filters = filters
                     )
-                }.getOrNull().orEmpty()
-                    .map { StudioItem(it, itemType) }
-                    .distinctBy { it.item.id }
-            } ?: emptyList()
+                }.getOrNull()
+                    ?.map { StudioItem(it, itemType) }
+                    ?.distinctBy { it.item.id }
+            }
 
         val first = load(page)
-        if (page != 1) return@coroutineScope first to (page + 1)
+            ?: return@coroutineScope DiscoverRail(emptyList(), page + 1, failed = true)
+        if (page != 1) return@coroutineScope DiscoverRail(first, page + 1)
 
         if (!deepen || first.size >= RAIL_DEPTH_TARGET_ITEMS) {
-            return@coroutineScope first.distinctBy { it.item.id } to 2
+            return@coroutineScope DiscoverRail(first.distinctBy { it.item.id }, 2)
         }
 
         // Independent pages go out together, exactly as in
@@ -2642,7 +2662,11 @@ class TmdbRepository private constructor(context: Context) :
         val merged = first.toMutableList()
         var next = 2
         for (pending in deeper) {
-            val more = pending.await()
+            // A deepening page that failed ends the merge exactly as an empty
+            // one does - page 1 answered, so this rail is a real rail with less
+            // depth for now, not a failed rail (the rule
+            // [finishDeepRailPage] applies to its own deepening pages).
+            val more = pending.await() ?: break
             if (more.isEmpty()) break
             merged += more
             next++
@@ -2651,7 +2675,7 @@ class TmdbRepository private constructor(context: Context) :
         // page shifts as items gain votes, so page 2 can repeat a row page 1
         // already had. (The [finishDeepRailPage] path is deduped by
         // [finishRailPage] instead.)
-        merged.distinctBy { it.item.id } to next
+        DiscoverRail(merged.distinctBy { it.item.id }, next)
     }
 
     suspend fun getGenreRailPage(
@@ -2733,7 +2757,7 @@ class TmdbRepository private constructor(context: Context) :
             withOriginalLanguage = browseLanguage()
         )
 
-        val (items, nextPage) = deepenDiscover(
+        val rail = deepenDiscover(
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
@@ -2742,7 +2766,14 @@ class TmdbRepository private constructor(context: Context) :
         )
 
         // A discover page caps at 20 items; a full page means more exist.
-        return kidsFilterPage(TagRailPage(items, items.size >= 20, nextPage = nextPage))
+        return kidsFilterPage(
+            TagRailPage(
+                rail.items,
+                rail.items.size >= 20,
+                nextPage = rail.nextPage,
+                failed = rail.failed
+            )
+        )
     }
 
     /**
@@ -2817,7 +2848,7 @@ class TmdbRepository private constructor(context: Context) :
                 releaseDateLte = today
             )
         }
-        val (items, nextPage) = deepenDiscover(
+        val rail = deepenDiscover(
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
@@ -2826,7 +2857,14 @@ class TmdbRepository private constructor(context: Context) :
         )
 
         // A discover page caps at 20 items; a full page means more exist.
-        return kidsFilterPage(TagRailPage(items, items.size >= 20, nextPage = nextPage))
+        return kidsFilterPage(
+            TagRailPage(
+                rail.items,
+                rail.items.size >= 20,
+                nextPage = rail.nextPage,
+                failed = rail.failed
+            )
+        )
     }
 
     // ------------------------------------------------------------------
@@ -2883,7 +2921,14 @@ class TmdbRepository private constructor(context: Context) :
                 result.items
             }
         return kidsFilterPage(
-            TagRailPage(filtered, result.hasMore, nextPage = result.nextPage)
+            TagRailPage(
+                filtered,
+                result.hasMore,
+                nextPage = result.nextPage,
+                // A decade rail that could not be fetched is reported as failed,
+                // not as a decade with nothing in it (see [TagRailPage.failed]).
+                failed = result.failed
+            )
         )
     }
 
@@ -2984,7 +3029,7 @@ class TmdbRepository private constructor(context: Context) :
                         ?.let { getServiceRailPage(it, title, 1, deepen = deepen) }
                         ?: TagRailPage(emptyList(), false)
                 }
-            }.getOrDefault(TagRailPage(emptyList(), false))
+            }.getOrDefault(TagRailPage(emptyList(), false, failed = true))
         }
     }
 
@@ -3064,7 +3109,14 @@ class TmdbRepository private constructor(context: Context) :
                 result.items
             }
         return kidsFilterPage(
-            TagRailPage(filtered, result.hasMore, nextPage = result.nextPage)
+            TagRailPage(
+                filtered,
+                result.hasMore,
+                nextPage = result.nextPage,
+                // Same as the decade rails: a provider rail that could not be
+                // fetched says so rather than reading as an empty rail.
+                failed = result.failed
+            )
         )
     }
 

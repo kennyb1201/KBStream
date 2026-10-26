@@ -2,9 +2,35 @@ package com.kennyb1201.kbstream.data.tmdb
 
 import com.kennyb1201.kbstream.data.OrderedRailPublisher
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+
+/**
+ * Thrown when EVERY rail a browse page asked for failed to load.
+ *
+ * A browse page's rails are independent, and one unreachable rail is swallowed
+ * on purpose: the page draws the others (see `streamBrowseSections`). But a
+ * TMDB outage fails all of them, and the finished rail set then looked exactly
+ * like a category that genuinely has no titles - so the screen took its empty
+ * branch ("Nothing found for <name>", no retry) instead of the error branch it
+ * already had, and the viewer had to back out and re-enter to try again. A page
+ * with nothing to draw because every rail FAILED says so; a page whose rails
+ * answered with no rows is untouched, which is why the signal has to come from
+ * here rather than from `sections.isEmpty()` on the screen.
+ *
+ * [failedRails] and [railCount] are carried for the screen and for the tests;
+ * [message] is what the browse screens render, since they publish the
+ * exception's own message as the error text.
+ */
+internal class BrowseRailsUnavailableException(
+    val failedRails: Int,
+    val railCount: Int
+) : IllegalStateException(
+    "Couldn't reach TMDB: all $railCount rails failed."
+)
+
 
 /**
  * Loads a browse screen's rails, handing each one to [onSection] as soon as it
@@ -76,6 +102,13 @@ internal suspend fun streamBrowseSections(
     // OrderedRailPublisher, shared with the KB folder screen's rail fan-out.
     val publisher = OrderedRailPublisher(titles.size, onSection)
 
+    // How many rails failed outright (see [TagRailPage.failed]). Counted here
+    // because this is the only layer that knows how many rails the page asked
+    // for: a failed rail is dropped from the finished set exactly as a rail
+    // that genuinely has no rows is, so the list alone cannot tell a TMDB
+    // outage from an empty category.
+    val failedRails = AtomicInteger(0)
+
     titles.mapIndexed { index, title ->
         async {
             // A failure in the fast path is not a failure of the rail: the
@@ -125,8 +158,25 @@ internal suspend fun streamBrowseSections(
                 // one are not held hostage to it.
                 !reported -> publisher.report(index, null)
             }
+            if (deep.failed) failedRails.incrementAndGet()
         }
     }.awaitAll()
 
-    publisher.finished()
+    val finished = publisher.finished()
+
+    // Every rail failed: report that instead of handing the caller an empty
+    // list. Per-rail failures stay swallowed - that is what keeps one flaky
+    // rail from taking the page down with it - but with nothing at all left to
+    // draw, the empty list made an outage and an empty category the same fact,
+    // and the screens' error branch (the one with the retry on it) could not
+    // be reached by the failure path at all. Every caller of this function is
+    // a browse screen that renders that branch.
+    if (finished.isEmpty() && titles.isNotEmpty() && failedRails.get() >= titles.size) {
+        throw BrowseRailsUnavailableException(
+            failedRails = failedRails.get(),
+            railCount = titles.size
+        )
+    }
+
+    finished
 }
