@@ -116,6 +116,15 @@ data class PosterContextAction(
     val label: String,
     val description: String? = null,
     val isDestructive: Boolean = false,
+    /**
+     * False for the one kind of row that is shown but cannot be pressed.
+     *
+     * The touch sheet draws it muted with [description] under it, because a
+     * disabled row with no words is a bug the viewer has to guess at (the
+     * download gate for a protected title is the case this exists for). Every
+     * other menu in the app leaves it at the default.
+     */
+    val isEnabled: Boolean = true,
     val onClick: () -> Unit
 )
 

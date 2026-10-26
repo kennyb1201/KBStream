@@ -34,7 +34,7 @@ sealed interface DownloadGate {
 
 object DownloadGates {
 
-    /** The DRM copy, kept here so the row and the Detail button cannot drift. */
+    /** The DRM copy, kept here so the row's menu and the gate cannot drift. */
     const val DRM_REASON = "Downloads aren't available for protected titles"
 
     /** What an offline press says. Playback of what is already downloaded is the offline path. */

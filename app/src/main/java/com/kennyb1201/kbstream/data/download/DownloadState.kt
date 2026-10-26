@@ -3,11 +3,11 @@ package com.kennyb1201.kbstream.data.download
 /**
  * The vocabulary one download is shown in, and nothing besides it.
  *
- * The set is closed deliberately: the Streams row, the Detail button and the
- * Downloads screen all print the same word for the same fact, so a viewer who
- * reads "Paused" in two places is reading one state rather than two opinions
- * about it. [label] is therefore the single place any of those surfaces get
- * their wording from.
+ * The set is closed deliberately: the Streams row's download menu and the
+ * Downloads screen print the same word for the same fact, so a viewer who reads
+ * "Paused" in two places is reading one state rather than two opinions about
+ * it. [label] is therefore the single place those surfaces get their wording
+ * from.
  *
  * [DELETED] is the one member a *stored* record never carries: deleting drops
  * the record outright, because the Downloads header's total and the empty state

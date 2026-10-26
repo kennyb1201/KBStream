@@ -77,6 +77,11 @@ import com.kennyb1201.kbstream.work.NewEpisodeWorker
  * menu for text nobody reads before tapping. The description strings are still
  * carried by [PosterContextAction] for the surfaces that spell the consequence
  * out elsewhere; this sheet simply stops drawing them.
+ *
+ * The one exception is a row the caller marked `isEnabled = false`: it is drawn
+ * muted, does not act, and DOES print its description - because there the words
+ * are the point, not a gloss (a protected title's download says why it cannot
+ * happen).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -244,7 +249,11 @@ fun PosterContextMenu(
             rows.forEach { action ->
                 SheetActionRow(
                     label = action.label,
+                    // Kept off enabled rows (see the class comment); a disabled
+                    // row needs it to say why it cannot be pressed.
+                    description = if (action.isEnabled) null else action.description,
                     isDestructive = action.isDestructive,
+                    isEnabled = action.isEnabled,
                     onClick = {
                         if (action.label == "Play Manually") {
                             ManualSourceSelection.request()
@@ -283,11 +292,17 @@ fun PosterContextMenu(
  * A destructive row is drawn in [KBDanger] rather than filled red; the same
  * affordance the TV row and [KBButton] use, because hiding a title is a
  * deliberate act, not an alarm.
+ *
+ * A disabled row ([isEnabled] false) is drawn in [KBTextLo], takes no press, and
+ * prints its [description] under the label - the reason it is offering nothing
+ * is the reason it is on screen at all.
  */
 @Composable
 private fun SheetActionRow(
     label: String,
+    description: String? = null,
     isDestructive: Boolean,
+    isEnabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Column(
@@ -295,16 +310,30 @@ private fun SheetActionRow(
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .clip(KBShapeCard)
-            .clickable(onClick = onClick)
+            .clickable(enabled = isEnabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Text(
             text = label,
-            color = if (isDestructive) KBDanger else KBTextHi,
+            color = when {
+                !isEnabled -> KBTextLo
+                isDestructive -> KBDanger
+                else -> KBTextHi
+            },
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        description?.takeIf { it.isNotBlank() }?.let { line ->
+            Text(
+                text = line,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
     }
 }

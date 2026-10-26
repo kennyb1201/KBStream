@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.streams
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -281,11 +282,13 @@ class StreamsRankWiringContractTest {
                 tv.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
         )
 
-        // The phone has one capped pick for both of its auto-play paths - the
-        // picker's own start, and the Detail page's Download-and-play - so the
-        // ceiling is asserted where it is applied, and each caller separately.
-        // Asserting the capped call in a screen file would pin a second copy of
-        // the decision, which is exactly the drift this test exists to prevent.
+        // The phone has one capped pick, and one caller of it: the picker's own
+        // auto-play start. The Detail page's Download-and-play that used to
+        // share it is gone (downloads are started from the picker's long-press
+        // menu), so the ceiling is asserted where it is applied, and the caller
+        // separately. Asserting the capped call in a screen file would pin a
+        // second copy of the decision, which is exactly the drift this test
+        // exists to prevent.
         val shared = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
         assertTrue(
             "autoplayPickFor must cap the automatic pick: without it a 1080p " +
@@ -293,16 +296,18 @@ class StreamsRankWiringContractTest {
             shared.contains("AutoPlayQuality.cappedPick(") &&
                 shared.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
         )
-        listOf(
-            "com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt",
-            "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
-        ).forEach { path ->
-            assertTrue(
-                "$path must reach the capped pick through autoplayPickFor, not " +
-                    "through a copy of the chain",
-                source(path).contains("autoplayPickFor(")
-            )
-        }
+        assertTrue(
+            "the phone picker must reach the capped pick through autoplayPickFor, " +
+                "not through a copy of the chain",
+            source("com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt")
+                .contains("autoplayPickFor(")
+        )
+        assertFalse(
+            "Detail no longer offers a download, so it must not re-resolve streams " +
+                "for one - that was the Detail-only silent window this change retires",
+            source("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt")
+                .contains("autoplayPickFor(")
+        )
 
         listOf(
             "com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt",

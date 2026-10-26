@@ -37,13 +37,15 @@ import kotlinx.coroutines.launch
 
 /**
  * The download half of the phone's browsing surfaces: the one place the Streams
- * row, the Detail button and the Downloads screen agree on what a download's
- * state looks like and on what pressing it does.
+ * picker's long-press menu (the phone's only download action) and the Downloads
+ * screen agree on what a download's state looks like and on what pressing it
+ * does. The Detail page reads nothing from here but [DownloadedBadge]'s record
+ * lookup - it shows that a title is here, never how to start one.
  *
- * It exists because those three surfaces are three different layouts over one
- * behaviour. Everything that could drift - the label a state shows, whether the
- * action is offered at all, and what launching a downloaded play actually hands
- * the player - is expressed once, here, and read from all three.
+ * It exists because those surfaces are different layouts over one behaviour.
+ * Everything that could drift - the label a state shows, whether the action is
+ * offered at all, and what launching a downloaded play actually hands the
+ * player - is expressed once, here, and read from all of them.
  */
 
 /**
@@ -140,12 +142,19 @@ internal fun downloadTargetFor(
 )
 
 /**
- * What a press on the Download control means, from wherever it was pressed.
+ * What a press on a Download action means, from wherever it was pressed - the
+ * phone's streams menu today.
  *
  * A FAILED row's press is a RETRY, and a retry re-resolves the row through the
  * normal resolve path instead of retrying a URL that may be dead (spec §7);
- * every other press is a fresh enqueue. Shared by the picker's rows and the
- * Detail button so the two cannot mean different things.
+ * every other press is a fresh enqueue.
+ *
+ * The press is acknowledged HERE, before the suspend work starts. Enqueueing is
+ * not instant even for a URL row - a hash row resolves through TorBox first, and
+ * every row probes its length - so a menu that only spoke when the manager
+ * returned could sit silent for seconds and read as a press that did nothing.
+ * The manager's own Toast still lands on completion (or on its refusal), so the
+ * immediate notice is the acknowledgement and the second one is the outcome.
  */
 internal fun downloadPress(
     context: Context,
@@ -154,6 +163,12 @@ internal fun downloadPress(
     record: DownloadRecord?,
     target: DownloadTarget
 ) {
+    val retrying = record?.state == DownloadState.FAILED
+    Toast.makeText(
+        context.applicationContext,
+        if (retrying) "Retrying download…" else "Preparing download…",
+        Toast.LENGTH_SHORT
+    ).show()
     scope.launch {
         if (record?.state == DownloadState.FAILED) {
             val result = DownloadsManager.retry(context.applicationContext, record.id)
@@ -253,12 +268,13 @@ internal fun DownloadedBadge(modifier: Modifier = Modifier) {
 }
 
 /**
- * One source row's Download action.
+ * One source row's Download action, as a chip.
  *
- * A chip, not a full-width button: it sits on the source card beside the row's
- * own text, and the card's whole surface is already the tap target for playing
- * it. [label] is the state's own word (see [downloadActionLabel]), so the same
- * control carries "DOWNLOAD", the percentage, and "DOWNLOADED".
+ * A chip, not a full-width button: the card's whole surface is already the tap
+ * target for playing it, so the action needs its own small target. [label] is
+ * the state's own word (see [downloadActionLabel]). The phone offers this in a
+ * long-press menu now (see [downloadPlan]); this is the inline shape, kept for a
+ * surface that wants the actions beside the row's text.
  */
 @Composable
 internal fun MobileDownloadAction(
@@ -287,11 +303,11 @@ internal fun MobileDownloadAction(
 /**
  * The row auto-play would start, by auto-play's own rules.
  *
- * The picker and the Detail page's Download button both ask this, deliberately
- * through the SAME call: the spec's rule is that a download is the row auto-play
- * would have played (spec §2.3, §4.2), and two implementations of "what would
- * auto-play pick" is exactly how the downloaded row and the played row stop
- * being the same row.
+ * The picker asks this for its own auto-play start, deliberately through the
+ * SAME call its downloadable rows are drawn from: the spec's rule is that a
+ * download is the row auto-play would have played (spec §2.3, §4.2), and two
+ * implementations of "what would auto-play pick" is exactly how the downloaded
+ * row and the played row stop being the same row.
  */
 internal fun autoplayPickFor(
     context: Context,
@@ -326,27 +342,125 @@ internal fun downloadStateColor(record: DownloadRecord) = when (record.state) {
 /** The muted colour every secondary line on this feature's surfaces uses. */
 internal val DownloadSecondaryColor = KBTextLo
 
-/** The chip text for a source row whose Download action is offered but waiting on a resolve. */
-internal const val DownloadLabel = "DOWNLOAD"
+/**
+ * The word for a row that has no download yet.
+ *
+ * Sentence case because a menu row reads as a sentence (the chips that draw
+ * this upper-case it themselves - see [MobileDownloadControl]).
+ */
+internal const val DownloadLabel = "Download"
+
+/** Which press a [DownloadPlanRow] stands for. */
+internal enum class DownloadActionKind { DOWNLOAD, PLAY, RESUME, DELETE, STATE }
 
 /**
- * The Download control itself, in every state it has.
+ * One row of the download state machine: what it says, whether it can be
+ * pressed, and which action a press means.
  *
- * One composable for all four surfaces that offer it, because the states are a
- * policy and not a layout: a row that is downloading offers Pause and Cancel, a
- * finished one offers Play downloaded and Delete, and the DRM gate is the only
- * case that shows a disabled control with a reason. Two copies of that (the
- * Streams row's and the Detail button's) would be two chances to offer the
- * wrong press on a file that is not here.
+ * [reason] is only ever set on a disabled row, and is the words the viewer
+ * needs to read (the DRM gate's, spec §5).
+ */
+internal data class DownloadPlanRow(
+    val kind: DownloadActionKind,
+    val label: String,
+    val enabled: Boolean = true,
+    val reason: String? = null
+)
+
+/**
+ * The download state machine for one identity, as rows.
+ *
+ * Expressed as data rather than as a layout, because the phone now offers a
+ * download from one surface and draws it two ways: the streams picker's
+ * long-press menu reads these rows ([StreamsScreenMobile]), and
+ * [MobileDownloadControl] keeps the chip rendering for a card that wants the
+ * actions inline. Two copies of this `when` would be two chances to offer the
+ * wrong press on a file that is not here, which is the failure this feature can
+ * least afford.
+ *
+ * The states are closed, and mean exactly what [DownloadState] says:
+ *
+ *  - no record (or a DELETED one): **Download**;
+ *  - QUEUED / DOWNLOADING: the state word (with its percentage when known)
+ *    plus **Cancel download** - or the word alone on an [inert] surface
+ *    (offline), where a cancel would offer to stop something that is waiting
+ *    on the network the viewer does not have;
+ *  - PAUSED: **Resume** plus **Cancel download**;
+ *  - FAILED: **Retry** plus **Delete** (a retry, never a play: there are no
+ *    bytes to play, and the retry re-resolves, spec §7);
+ *  - DOWNLOADED: **Play downloaded** plus **Delete**.
  *
  * @param record this title's download, when there is one - and it is the whole
  *   state machine: null means nothing has been downloaded here yet.
- * @param idleLabel what to say when there is no record yet. "DOWNLOAD" on a
- *   source row, and "Connect to download" where the device is offline.
- * @param disabledReason non-null for the one gate that shows a disabled
- *   control with its reason (DRM).
- * @param inert true when the press must do nothing at all rather than start
- *   anything - the offline case, where the label has already said why.
+ * @param idleLabel what to say when there is no record yet. [DownloadLabel] on
+ *   a source row, and "Connect to download" where the device is offline.
+ * @param disabledReason non-null for the one gate that shows a disabled row
+ *   with its reason (DRM), so the gate stays learnable rather than hidden.
+ * @param inert true on an offline surface, where a queued transfer is shown but
+ *   its cancel is not offered.
+ */
+internal fun downloadPlan(
+    record: DownloadRecord?,
+    idleLabel: String,
+    disabledReason: String?,
+    inert: Boolean
+): List<DownloadPlanRow> {
+    if (disabledReason != null) {
+        return listOf(
+            DownloadPlanRow(
+                kind = DownloadActionKind.DOWNLOAD,
+                label = idleLabel,
+                enabled = false,
+                reason = disabledReason
+            )
+        )
+    }
+    if (record == null) {
+        return listOf(DownloadPlanRow(DownloadActionKind.DOWNLOAD, idleLabel))
+    }
+    return when (record.state) {
+        DownloadState.DOWNLOADED -> listOf(
+            // The bytes are here: the primary press plays them, and the second
+            // row is the way out of the download.
+            DownloadPlanRow(DownloadActionKind.PLAY, "Play downloaded"),
+            DownloadPlanRow(DownloadActionKind.DELETE, "Delete")
+        )
+
+        DownloadState.PAUSED -> listOf(
+            DownloadPlanRow(DownloadActionKind.RESUME, "Resume"),
+            DownloadPlanRow(DownloadActionKind.DELETE, "Cancel download")
+        )
+
+        DownloadState.FAILED -> listOf(
+            DownloadPlanRow(DownloadActionKind.DOWNLOAD, "Retry"),
+            DownloadPlanRow(DownloadActionKind.DELETE, "Delete")
+        )
+
+        DownloadState.QUEUED, DownloadState.DOWNLOADING -> buildList<DownloadPlanRow> {
+            add(
+                DownloadPlanRow(
+                    kind = DownloadActionKind.STATE,
+                    label = downloadStatusLine(record),
+                    enabled = false
+                )
+            )
+            if (!inert) {
+                add(DownloadPlanRow(DownloadActionKind.DELETE, "Cancel download"))
+            }
+        }
+
+        DownloadState.DELETED -> listOf(DownloadPlanRow(DownloadActionKind.DOWNLOAD, idleLabel))
+    }
+}
+
+/**
+ * [downloadPlan] drawn as chips.
+ *
+ * Kept because the states are a policy and not a layout: a surface that draws
+ * them beside a card (the streams row of an earlier build) gets the same rows
+ * the long-press menu shows, in the chip shape the rest of the app uses. The
+ * plan's labels arrive in sentence case and are upper-cased here, because that
+ * is how a chip reads.
  */
 @Composable
 internal fun MobileDownloadControl(
@@ -359,63 +473,33 @@ internal fun MobileDownloadControl(
     onResume: () -> Unit,
     onDelete: () -> Unit
 ) {
-    if (disabledReason != null) {
-        MobileDownloadAction(
-            label = idleLabel,
-            disabledReason = disabledReason,
-            onClick = {}
-        )
-        return
-    }
-    if (record == null) {
-        MobileDownloadAction(label = idleLabel, disabledReason = null, onClick = onDownload)
-        return
-    }
-    when (record.state) {
-        DownloadState.DOWNLOADED -> {
-            // The bytes are here: the primary press plays them, and the second
-            // chip is the way out of the download.
-            MobileFilterChip(label = "PLAY DOWNLOADED", selected = false, onClick = onPlay)
-            MobileFilterChip(label = "DELETE", selected = false, onClick = onDelete)
-        }
+    downloadPlan(record, idleLabel, disabledReason, inert).forEach { row ->
+        when {
+            row.kind == DownloadActionKind.STATE -> Text(
+                text = row.label,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
 
-        DownloadState.PAUSED -> {
-            MobileFilterChip(label = "RESUME", selected = false, onClick = onResume)
-            MobileFilterChip(label = "CANCEL", selected = false, onClick = onDelete)
-        }
-
-        DownloadState.FAILED -> {
-            // Retry, never a Play - a failed download has no bytes to play. The
-            // press re-resolves through the caller (spec §7).
-            MobileFilterChip(label = "RETRY", selected = false, onClick = onDownload)
-            MobileFilterChip(label = "DELETE", selected = false, onClick = onDelete)
-        }
-
-        DownloadState.QUEUED, DownloadState.DOWNLOADING -> {
-            if (inert) {
-                // Offline: said, not offered. The state words still show, so a
-                // queued download is visible from the picker.
-                Text(
-                    text = downloadActionLabel(record),
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                return
-            }
-            MobileFilterChip(
-                label = downloadActionLabel(record),
-                selected = false,
+            row.reason != null -> MobileDownloadAction(
+                label = row.label,
+                disabledReason = row.reason,
                 onClick = {}
             )
-            MobileFilterChip(label = "CANCEL", selected = false, onClick = onDelete)
-        }
 
-        DownloadState.DELETED -> MobileDownloadAction(
-            label = idleLabel,
-            disabledReason = null,
-            onClick = onDownload
-        )
+            else -> MobileFilterChip(
+                label = row.label.uppercase(),
+                selected = false,
+                onClick = when (row.kind) {
+                    DownloadActionKind.DOWNLOAD -> onDownload
+                    DownloadActionKind.PLAY -> onPlay
+                    DownloadActionKind.RESUME -> onResume
+                    DownloadActionKind.DELETE -> onDelete
+                    DownloadActionKind.STATE -> ({})
+                }
+            )
+        }
     }
 }

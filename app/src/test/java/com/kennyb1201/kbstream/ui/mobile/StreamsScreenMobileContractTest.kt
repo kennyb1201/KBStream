@@ -124,9 +124,10 @@ class StreamsScreenMobileContractTest {
     @Test
     fun `auto-play keeps the tv decision chain and its suppressions`() {
         val mobile = mobileStreams()
-        // The picker and the Detail page's Download button share ONE capped
-        // pick (autoplayPickFor), so the chain is asserted where it is written
-        // now, and separately that this screen reaches it through that call.
+        // The picker uses ONE capped pick (autoplayPickFor) - the Detail page
+        // no longer downloads, so this is the phone's only caller - so the chain
+        // is asserted where it is written now, and separately that this screen
+        // reaches it through that call.
         val sharedPick = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
         assertTrue(
             "auto-play must use the shared episode pick and quality ceiling",
@@ -211,6 +212,44 @@ class StreamsScreenMobileContractTest {
         assertNull(
             "another episode's marker is not this episode's name",
             episodeTitleFrom("Show S4 E5 • Karambits", 4, 4)
+        )
+    }
+
+    @Test
+    fun `downloads are a long-press menu on a row and nothing on Detail`() {
+        val mobile = mobileStreams()
+        assertTrue(
+            "a row must raise the shared touch poster menu on a hold - one sheet, " +
+                "not a bespoke menu per row",
+            mobile.contains("ui.components.touch.PosterContextMenu") &&
+                mobile.contains("onLongClick = if (gate == DownloadGate.Hidden)")
+        )
+        assertFalse(
+            "the inline Download chip is gone: the hold is the only download action",
+            mobile.contains("downloadSlot")
+        )
+        assertTrue(
+            "the menu's record comes from the row's own lookup - the media key " +
+                "enqueue writes - never a second key",
+            mobile.contains("mediaKey = DownloadIdentity.mediaKey( parentId, parentId )") &&
+                mobile.contains("downloadFor(downloads, row.mediaKey, season, episode)")
+        )
+        assertTrue(
+            "the menu's rows are the shared state machine, not a second state list",
+            mobile.contains("downloadPlan(")
+        )
+
+        val detail = source("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt")
+        assertFalse(
+            "Detail must have no download action, no press handler and no " +
+                "download re-resolve",
+            detail.contains("MobileDownloadControl(") ||
+                detail.contains("downloadPress(") ||
+                detail.contains("downloadAutoplayPick")
+        )
+        assertTrue(
+            "the DOWNLOADED badge stays as display only",
+            detail.contains("DownloadedBadge()")
         )
     }
 }

@@ -45,6 +45,7 @@ import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.download.DownloadGate
 import com.kennyb1201.kbstream.data.download.DownloadGates
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.download.DownloadTarget
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
@@ -55,12 +56,14 @@ import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
+import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.streams.StreamItemKeys
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
@@ -140,6 +143,10 @@ fun StreamsScreenMobile(
         // percentage, paused, here - so the picker says what is true about each
         // source rather than offering the same button for all of them (§4.1).
         val downloads = rememberDownloadRecords()
+        // The row whose download menu is open, if any. Held by the screen rather
+        // than by the card: a [PosterContextMenu] is its own window layer, and
+        // one sheet for the list is what every other phone row menu does.
+        var menuRow by remember(loadedKey) { mutableStateOf<MobileStreamMenuRow?>(null) }
         val routeKey = remember(contentType, streamId) {
             streamNavigationKey(contentType, streamId)
         }
@@ -195,9 +202,10 @@ fun StreamsScreenMobile(
          * episode rules, the season-pack test and the ceiling are re-applied to
          * the remainder (see AutoplayWalk).
          */
-        // The same call the Detail page's Download button makes, so "the row
-        // auto-play would play" is one function rather than two opinions
-        // (see autoplayPickFor).
+        // One capped pick for the whole phone (see autoplayPickFor), so "the row
+        // auto-play would play" is one function rather than several opinions.
+        // The Detail page no longer downloads, so this picker is its only
+        // caller.
         fun autoplayPickFrom(remaining: List<Stream>): Stream? =
             autoplayPickFor(context, remaining, season, episode, runtimeMinutes)
 
@@ -427,8 +435,6 @@ fun StreamsScreenMobile(
                         val parentId = route?.parentId?.takeIf { it.isNotBlank() } ?: streamId
                         val parentType = route?.parentType?.takeIf { it.isNotBlank() } ?: contentType
                         val gate = downloadGate(context, stream, isLiveChannel = false)
-                        val mediaKey = DownloadIdentity.mediaKey(parentId, parentId)
-                        val record = downloadFor(downloads, mediaKey, season, episode)
                         val target = downloadTargetFor(
                             parentId = parentId,
                             parentType = parentType,
@@ -444,55 +450,26 @@ fun StreamsScreenMobile(
                             stream = stream,
                             badgesAbove = AppPreferences.getBadgesAboveFile(context),
                             declaredLabel = declaredLabelFor(stream, season, episode),
-                            downloadSlot = {
-                                when (gate) {
-                                    // A live row has no Download action anywhere
-                                    // (spec §5) - not on a card, not on Detail.
-                                    DownloadGate.Hidden -> Unit
-
-                                    is DownloadGate.Disabled -> MobileDownloadControl(
-                                        record = record,
-                                        idleLabel = DownloadLabel,
-                                        disabledReason = gate.reason,
-                                        inert = false,
-                                        onDownload = {},
-                                        onPlay = {},
-                                        onResume = {},
-                                        onDelete = {}
-                                    )
-
-                                    DownloadGate.Offline -> MobileDownloadControl(
-                                        record = record,
-                                        idleLabel = DownloadGates.CONNECT_TO_DOWNLOAD,
-                                        disabledReason = null,
-                                        inert = true,
-                                        onDownload = {},
-                                        onPlay = {},
-                                        onResume = {},
-                                        onDelete = {}
-                                    )
-
-                                    is DownloadGate.Allowed -> MobileDownloadControl(
-                                        record = record,
-                                        idleLabel = DownloadLabel,
-                                        disabledReason = null,
-                                        inert = false,
-                                        onDownload = {
-                                            downloadPress(
-                                                context,
-                                                resolveScope,
-                                                stream,
-                                                record,
-                                                target
-                                            )
-                                        },
-                                        onPlay = { record?.let { playDownloaded(context, it) } },
-                                        onResume = {
-                                            record?.let { DownloadsManager.resume(context, it.id) }
-                                        },
-                                        onDelete = {
-                                            record?.let { DownloadsManager.delete(context, it.id) }
-                                        }
+                            // A tap still plays the row. The hold is the phone's
+                            // download menu (spec §2), and a row that has no
+                            // download at all (a live channel) has no hold
+                            // either: there is nothing it could open.
+                            onLongClick = if (gate == DownloadGate.Hidden) {
+                                null
+                            } else {
+                                {
+                                    menuRow = MobileStreamMenuRow(
+                                        stream = stream,
+                                        gate = gate,
+                                        target = target,
+                                        // The row's existing media key - the
+                                        // same one DownloadsManager.enqueue
+                                        // writes - so the menu reads the same
+                                        // record the row always has (spec §2).
+                                        mediaKey = DownloadIdentity.mediaKey(
+                                            parentId,
+                                            parentId
+                                        )
                                     )
                                 }
                             },
@@ -528,6 +505,92 @@ fun StreamsScreenMobile(
                     }
                 }
             }
+        }
+
+        // The row's download menu.
+        //
+        // It is the same touch [PosterContextMenu] every other phone row menu
+        // uses, so a hold looks and dismisses the same here as on a poster -
+        // and its rows are [downloadPlan]'s, the state machine the chip used to
+        // draw, so a state cannot mean one thing here and another in the
+        // Downloads screen.
+        menuRow?.let { row ->
+            // Read live, not at press time: the menu is open while the
+            // download it started changes state, and it must say what is true
+            // now rather than what was true when the finger went down.
+            val record = downloadFor(downloads, row.mediaKey, season, episode)
+            val plan = when (val gate = row.gate) {
+                // Unreachable from this screen (it passes isLiveChannel = false),
+                // and handled anyway so a live row can never grow a download.
+                DownloadGate.Hidden -> emptyList()
+
+                is DownloadGate.Disabled -> downloadPlan(
+                    record = record,
+                    idleLabel = DownloadLabel,
+                    disabledReason = gate.reason,
+                    inert = false
+                )
+
+                DownloadGate.Offline -> downloadPlan(
+                    record = record,
+                    idleLabel = DownloadGates.CONNECT_TO_DOWNLOAD,
+                    disabledReason = null,
+                    inert = true
+                )
+
+                is DownloadGate.Allowed -> downloadPlan(
+                    record = record,
+                    idleLabel = DownloadLabel,
+                    disabledReason = null,
+                    inert = false
+                )
+            }
+            val label = StreamRanker.labelOf(row.stream)
+            val heading = row.stream.name?.takeIf { it.isNotBlank() } ?: label
+            PosterContextMenu(
+                title = heading,
+                // The release name only when it is not already the heading: a
+                // sheet that prints one line twice says nothing.
+                subtitle = label.takeIf { it != heading },
+                actions = plan.map { item ->
+                    PosterContextAction(
+                        // The reason is only drawn on a disabled row, where it
+                        // is the whole point of showing the row at all (DRM).
+                        description = item.reason,
+                        label = item.label,
+                        isDestructive = item.kind == DownloadActionKind.DELETE,
+                        isEnabled = item.enabled,
+                        onClick = {
+                            // The menu closes on press; the row's own state (and
+                            // the manager's Toast) is what says it landed.
+                            menuRow = null
+                            when (item.kind) {
+                                DownloadActionKind.DOWNLOAD -> downloadPress(
+                                    context = context,
+                                    scope = resolveScope,
+                                    stream = row.stream,
+                                    record = record,
+                                    target = row.target
+                                )
+
+                                DownloadActionKind.PLAY ->
+                                    record?.let { playDownloaded(context, it) }
+
+                                DownloadActionKind.RESUME ->
+                                    record?.let { DownloadsManager.resume(context, it.id) }
+
+                                DownloadActionKind.DELETE ->
+                                    record?.let { DownloadsManager.delete(context, it.id) }
+
+                                // A state word is not an action: the row is
+                                // drawn disabled and pressing it does nothing.
+                                DownloadActionKind.STATE -> Unit
+                            }
+                        }
+                    )
+                },
+                onDismiss = { menuRow = null }
+            )
         }
     }
 }
@@ -708,23 +771,23 @@ private fun MobileAddonChip(label: String, selected: Boolean, onClick: () -> Uni
  * One source. The same content as the TV card - badges above or below the file
  * name per preference, the release name, the declared-episode warning, and the
  * title/description block - on a touch plate instead of a focus surface.
+ *
+ * The card carries no download control of its own any more: [onLongClick] is the
+ * hold that opens the row's download menu, and the row's text is left to say
+ * what the source is. The card is the touch [KBCard], which already accepts the
+ * hold, so a second card type was not needed.
  */
 @Composable
 private fun MobileStreamCard(
     stream: Stream,
     badgesAbove: Boolean,
     declaredLabel: String?,
-    /**
-     * The row's Download control, or nothing at all when this row has no
-     * Download action (a live row, a protected one that must be learnable, an
-     * offline picker). Handed in as a slot rather than derived here: the gate
-     * needs the route's title identity, which the card does not have.
-     */
-    downloadSlot: @Composable () -> Unit,
+    onLongClick: (() -> Unit)?,
     onClick: () -> Unit
 ) {
     KBCard(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 5.dp)
@@ -788,20 +851,21 @@ private fun MobileStreamCard(
                     )
                 )
             }
-
-            // The download control, under the row's own text: the picker's
-            // primary Download action (spec §4.1). Its own press is separate
-            // from the card's, so tapping the chip never starts playback.
-            Row(
-                modifier = Modifier.padding(top = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                downloadSlot()
-            }
         }
     }
 }
+
+/**
+ * The row a download menu was opened on, and everything its menu needs that the
+ * card does not know: the gate it was drawn under, the target enqueue takes, and
+ * the media key its record is filed under.
+ */
+private data class MobileStreamMenuRow(
+    val stream: Stream,
+    val gate: DownloadGate,
+    val target: DownloadTarget,
+    val mediaKey: String
+)
 
 private fun Stream.displayText(): String =
     listOfNotNull(
