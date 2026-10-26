@@ -105,6 +105,10 @@ fun SearchScreen(
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // A search that did not run is not an empty result set (see C4 in the
+    // search deep dive): the phone has read this since the error state was
+    // added; the TV page never did, so offline read as "No matches found."
+    val searchError by viewModel.searchError.collectAsStateWithLifecycle()
     val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     // Hidden titles are dropped as Search reads its own results, so a
@@ -408,7 +412,12 @@ fun SearchScreen(
                         ) {
                             items(
                                 items = recentSearches,
-                                key = { recent: String -> recent }
+                                // Prefixed like the phone's keys (and like the
+                                // fixed CLEAR RECENT item below): a search for
+                                // the literal "clear_recent" used to mint a
+                                // second item with that exact key, and LazyRow
+                                // throws on duplicate keys.
+                                key = { recent: String -> "recent:$recent" }
                             ) { recent: String ->
                                 SearchChip(
                                     label = recent,
@@ -436,7 +445,10 @@ fun SearchScreen(
             // state, and the no-results whitespace on failed searches.
             // Every entry opens its dedicated discover screen (the genre,
             // service, and decade screens own rails/pagination now).
-            if (query.isBlank() || (!isLoading && totalCount == 0)) {
+            // A FAILED query is not an invitation to browse: the browser is
+            // gated on there being no error, exactly as the phone's condition
+            // is (see SearchScreenMobile).
+            if (query.isBlank() || (!isLoading && totalCount == 0 && searchError == null)) {
                 item(key = "browse_browser") {
                     SearchBrowseBrowser(
                         viewModel = viewModel,
@@ -494,7 +506,22 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && query.isNotBlank() && totalCount == 0) {
+            val error = searchError
+            if (!isLoading && error != null) {
+                item(key = "search_error") {
+                    KBStatusMessage(
+                        message = error,
+                        onRetry = { viewModel.search(query) },
+                        actionLabel = "TRY AGAIN",
+                        modifier = Modifier
+                            .animateItem()
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    )
+                }
+            }
+
+            if (!isLoading && searchError == null && query.isNotBlank() && totalCount == 0) {
                 item(key = "no_results") {
                     KBStatusMessage(
                         icon = KB_STATUS_ICON_EMPTY,
@@ -562,7 +589,10 @@ fun SearchScreen(
                                 // searchTileFocusKey), so the same title on two
                                 // rails cannot share one node and an add-on
                                 // rail's tile is reachable from the menu's Hide.
-                                val tileKey = searchTileFocusKey(TITLES_RAIL_FOCUS_KEY, result)
+                                val tileKey = searchTileFocusKey(
+                                    TITLES_RAIL_FOCUS_KEY,
+                                    "${result.type}:${result.id}"
+                                )
                                 // Remembered, for the same reason the browse
                                 // grid's registry lookup is: a FocusRequester
                                 // built during composition outside a remember
@@ -686,7 +716,10 @@ fun SearchScreen(
                                 // place (see searchTileFocusKey). The old local
                                 // `remember(result.id)` was invisible outside
                                 // this lazy row.
-                                val tileKey = searchTileFocusKey(railKey, result)
+                                val tileKey = searchTileFocusKey(
+                                    railKey,
+                                    "${result.type}:${result.id}"
+                                )
                                 val requester = remember(tileKey) {
                                     titleTileFocusRequesters.getOrPut(tileKey) {
                                         FocusRequester()
@@ -736,17 +769,47 @@ fun SearchScreen(
 
             if (!isLoading && actorResults.isNotEmpty()) {
                 item(key = "actors_rail") {
-                    SearchRail(title = "Actors") {
-                        items(
+                    // Back from the person page puts this rail back on the
+                    // card that was opened, exactly as the titles/add-on rails
+                    // do (see SearchReturnFocus). This rail used to record
+                    // nothing, so Back landed the D-pad on the search field.
+                    val railReturn = SearchReturnFocus.peek()
+                    val actorsRailState = rememberLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == ACTORS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "Actors", state = actorsRailState) {
+                        itemsIndexed(
                             items = actorResults,
-                            key = { person: TmdbSearchPersonResult -> "actor:${person.id}" }
-                        ) { person: TmdbSearchPersonResult ->
+                            key = { _, person: TmdbSearchPersonResult -> "actor:${person.id}" }
+                        ) { index, person ->
+                            val tileKey = searchTileFocusKey(
+                                ACTORS_RAIL_FOCUS_KEY,
+                                "actor:${person.id}"
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
                             PersonResultCard(
                                 person = person,
                                 onClick = {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = ACTORS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
                                     viewModel.onActorOpened(person)
                                     onPersonClick?.invoke(person)
-                                }
+                                },
+                                modifier = Modifier.focusRequester(requester)
                             )
                         }
                     }
@@ -755,17 +818,44 @@ fun SearchScreen(
 
             if (!isLoading && studioResults.isNotEmpty()) {
                 item(key = "studios_rail") {
-                    SearchRail(title = "Studios") {
-                        items(
+                    // Same return target as the Actors rail above.
+                    val railReturn = SearchReturnFocus.peek()
+                    val studiosRailState = rememberLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == STUDIOS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "Studios", state = studiosRailState) {
+                        itemsIndexed(
                             items = studioResults,
-                            key = { studio: TmdbSearchStudioResult -> "studio:${studio.id}" }
-                        ) { studio: TmdbSearchStudioResult ->
+                            key = { _, studio: TmdbSearchStudioResult -> "studio:${studio.id}" }
+                        ) { index, studio ->
+                            val tileKey = searchTileFocusKey(
+                                STUDIOS_RAIL_FOCUS_KEY,
+                                "studio:${studio.id}"
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
                             StudioResultCard(
                                 studio = studio,
                                 onClick = {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = STUDIOS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
                                     viewModel.onStudioOpened(studio)
                                     onStudioClick?.invoke(studio)
-                                }
+                                },
+                                modifier = Modifier.focusRequester(requester)
                             )
                         }
                     }
@@ -774,17 +864,46 @@ fun SearchScreen(
 
             if (!isLoading && collectionResults.isNotEmpty()) {
                 item(key = "collections_rail") {
-                    SearchRail(title = "Collections") {
-                        items(
+                    // And again for the collection page.
+                    val railReturn = SearchReturnFocus.peek()
+                    val collectionsRailState = rememberLazyListState(
+                        initialFirstVisibleItemIndex =
+                            if (railReturn?.railKey == COLLECTIONS_RAIL_FOCUS_KEY) {
+                                railReturn.position
+                            } else {
+                                0
+                            }
+                    )
+                    SearchRail(title = "Collections", state = collectionsRailState) {
+                        itemsIndexed(
                             items = collectionResults,
-                            key = { collection: TmdbSearchCollectionResult -> "collection:${collection.id}" }
-                        ) { collection: TmdbSearchCollectionResult ->
+                            key = { _, collection: TmdbSearchCollectionResult ->
+                                "collection:${collection.id}"
+                            }
+                        ) { index, collection ->
+                            val tileKey = searchTileFocusKey(
+                                COLLECTIONS_RAIL_FOCUS_KEY,
+                                "collection:${collection.id}"
+                            )
+                            val requester = remember(tileKey) {
+                                titleTileFocusRequesters.getOrPut(tileKey) {
+                                    FocusRequester()
+                                }
+                            }
                             CollectionPosterTile(
                                 collection = collection,
                                 onClick = {
+                                    SearchReturnFocus.record(
+                                        SearchReturnTarget(
+                                            tileKey = tileKey,
+                                            railKey = COLLECTIONS_RAIL_FOCUS_KEY,
+                                            position = index
+                                        )
+                                    )
                                     viewModel.onCollectionOpened(collection)
                                     onCollectionClick?.invoke(collection)
-                                }
+                                },
+                                modifier = Modifier.focusRequester(requester)
                             )
                         }
                     }
@@ -855,7 +974,7 @@ fun SearchScreen(
                     successorIndexAfter(railResults.size, index)?.let { successor ->
                         val next = railResults[successor]
                         titleTileFocusRequesters[
-                            searchTileFocusKey(railKey, next)
+                            searchTileFocusKey(railKey, "${next.type}:${next.id}")
                         ]?.requestFocus()
                     }
                     // And the tile being hidden must not take the focus BACK:
@@ -1042,8 +1161,13 @@ fun SearchScreen(
 /** The TMDB "Titles" rail's key in the tile-focus registry (see searchTileFocusKey). */
 private const val TITLES_RAIL_FOCUS_KEY = "tmdb\u0001titles"
 
+/** The non-title rails' keys in the same registry, so they can return focus too. */
+private const val ACTORS_RAIL_FOCUS_KEY = "tmdb\u0001actors"
+private const val STUDIOS_RAIL_FOCUS_KEY = "tmdb\u0001studios"
+private const val COLLECTIONS_RAIL_FOCUS_KEY = "tmdb\u0001collections"
+
 /**
- * One search tile's key in [titleTileFocusRequesters].
+ * One search card's key in [titleTileFocusRequesters].
  *
  * The RAIL is part of the key, not just the tile: search mixes the TMDB
  * "Titles" rail with one rail per installed add-on, and the same title can
@@ -1051,6 +1175,10 @@ private const val TITLES_RAIL_FOCUS_KEY = "tmdb\u0001titles"
  * rails share one FocusRequester (so a Hidden one took the other's focus with
  * it), and made an add-on tile unreachable from the menu's Hide - which runs in
  * this screen's scope and has no local `remember` to name.
+ *
+ * [itemKey] is the card's identity WITHIN its rail: `type:id` for a title, and
+ * a prefixed id (`actor:` / `studio:` / `collection:`) for the non-title rails,
+ * which record return targets too now (see C1 in the search deep dive).
  */
-private fun searchTileFocusKey(railKey: String, result: SearchTitleResult): String =
-    "$railKey\u0001${result.type}:${result.id}"
+private fun searchTileFocusKey(railKey: String, itemKey: String): String =
+    "$railKey\u0001$itemKey"

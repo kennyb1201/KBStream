@@ -96,7 +96,7 @@ class AddonSearchStalePublishContractTest {
         )
         assertTrue(
             "the token is threaded into the collector that publishes snapshots",
-            source.contains("searchAddonCatalogs(query, tmdbKeysDeferred, generation)") &&
+            source.contains("searchAddonCatalogs(query, tmdbDedupDeferred, generation)") &&
                 source.contains("private suspend fun searchAddonCatalogs(")
         )
     }

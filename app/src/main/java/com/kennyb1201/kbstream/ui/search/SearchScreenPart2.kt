@@ -533,7 +533,10 @@ internal fun TitlePosterTile(
 @Composable
 internal fun PersonResultCard(
     person: TmdbSearchPersonResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // The screen's focus requester for this card, so Back from the person page
+    // can land on it (see SearchReturnFocus).
+    modifier: Modifier = Modifier
 ) {
     Card(
         onClick = onClick,
@@ -562,7 +565,7 @@ internal fun PersonResultCard(
                 elevation = KBFocusGlow
             )
         ),
-        modifier = Modifier.width(260.dp)
+        modifier = Modifier.width(260.dp).then(modifier)
     ) {
         Column(
             modifier = Modifier
@@ -604,7 +607,9 @@ internal fun PersonResultCard(
 @Composable
 internal fun StudioResultCard(
     studio: TmdbSearchStudioResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Same return-focus hook as PersonResultCard.
+    modifier: Modifier = Modifier
 ) {
     Card(
         onClick = onClick,
@@ -633,7 +638,7 @@ internal fun StudioResultCard(
                 elevation = KBFocusGlow
             )
         ),
-        modifier = Modifier.width(240.dp)
+        modifier = Modifier.width(240.dp).then(modifier)
     ) {
         Column(
             modifier = Modifier
@@ -677,7 +682,9 @@ internal fun StudioResultCard(
 @Composable
 internal fun CollectionPosterTile(
     collection: TmdbSearchCollectionResult,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Same return-focus hook as PersonResultCard.
+    modifier: Modifier = Modifier
 ) {
     val posterSize = rememberPosterSize()
     GlobalPosterCard(
@@ -689,6 +696,7 @@ internal fun CollectionPosterTile(
         posterWidth = posterSize.width,
         posterHeight = posterSize.height,
         artId = collection.id.toString(),
-        artType = ART_TYPE_COLLECTION
+        artType = ART_TYPE_COLLECTION,
+        modifier = modifier
     )
 }

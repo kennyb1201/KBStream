@@ -11,8 +11,11 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
@@ -39,6 +42,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -106,6 +110,58 @@ internal fun vetAddonGroup(
 ): AddonResultGroup? {
     val allowedResults = group.results.filter { it.meta in allowedMetas }
     return if (allowedResults.isEmpty()) null else group.copy(results = allowedResults)
+}
+
+/**
+ * What one add-on row has to match to be a duplicate of a TMDB hit.
+ *
+ * The old cross-wave dedup compared NAMES only (`"type:name"`), so a remake
+ * that shares a name with a TMDB hit - "Crash" (1996) against "Crash" (2004),
+ * "Total Recall" (1990) against the 2012 one - was dropped from the add-on rail
+ * even though it is a different title. The TMDB rail itself keeps both, so the
+ * two halves of one search disagreed about what exists.
+ *
+ * Two pieces of positive evidence can make a row a duplicate:
+ *  - the same identity (`type:id`, when the add-on carries a TMDB-flavoured id
+ *    the TMDB wave also returned), or
+ *  - the same name AND the same year.
+ * A row whose year differs, or whose year the add-on omitted, is NOT dropped:
+ * identity that cannot be proven is not identity. That is the conservative
+ * direction the badge/ownership rules use too - drop only on positive evidence.
+ */
+internal data class TmdbDedupIndex(
+    val ids: Set<String> = emptySet(),
+    val nameYears: Set<String> = emptySet()
+) {
+    fun matches(
+        type: String,
+        id: String,
+        name: String,
+        year: Int?
+    ): Boolean {
+        val normalizedType = type.trim().lowercase()
+        if ("$normalizedType:${id.trim()}" in ids) return true
+        val knownYear = year ?: return false
+        return "$normalizedType:${name.trim().lowercase()}:$knownYear" in nameYears
+    }
+
+    companion object {
+        /** The key a TMDB hit contributes to [nameYears]; null when its year is unknown. */
+        fun nameYearKey(
+            type: String,
+            name: String,
+            year: Int?
+        ): String? {
+            val knownYear = year ?: return null
+            return "${type.trim().lowercase()}:${name.trim().lowercase()}:$knownYear"
+        }
+
+        /** The key a TMDB hit contributes to [ids]. */
+        fun idKey(
+            type: String,
+            id: String
+        ): String = "${type.trim().lowercase()}:${id.trim()}"
+    }
 }
 
 class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
@@ -210,6 +266,80 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     val resolvedIds: StateFlow<Map<String, String>> =
         _resolvedIds.asStateFlow()
 
+    /**
+     * Ids (IMDb or `tmdb:<n>`) of the results currently on screen that ANOTHER
+     * profile positively owns, so neither badge is painted for them here.
+     *
+     * The watched cache key is `"type::id"` with no profile component (see
+     * WatchedStatusRepository.cacheKey), and the tracker feeds behind it are
+     * per ACCOUNT - so a kids-profile completion can badge a search tile on
+     * Profile 1, the same leak shape Home's C2 and the Actor page's C6 closed.
+     * Home filters both of its sets at publication; this screen filtered
+     * neither. Rebuilt whenever the published results change, and cleared with
+     * the sets themselves on a profile switch (see [resetSearchState]).
+     */
+    @Volatile
+    private var siblingOwnedMarkerIds: Set<String> = emptySet()
+
+    /** True when [key] (`type::id`) is a title another profile owns. */
+    private fun keyOwnedByAnotherProfile(key: String): Boolean =
+        siblingOwnedMarkerIds.any { id -> key.endsWith("::$id") }
+
+    /**
+     * Rebuilds [siblingOwnedMarkerIds] from EVERY result currently published:
+     * the TMDB titles rails and the add-on rails share one badge cache, so a
+     * wave that recomputed from its own half alone would drop the other
+     * half's ownership answers.
+     */
+    private fun refreshSiblingOwnedMarkers() {
+        siblingOwnedMarkerIds = siblingOwnedMarkerIdsFor(
+            _results.value + _addonResultGroups.value.flatMap { it.results }
+        )
+    }
+
+    /**
+     * The marker ids (both id flavors where known) of [results] whose title is
+     * positively owned by another profile. The name is the only key ownership
+     * has (see [titleOwnedByAnotherProfile]); the ids are what the badge sets
+     * are keyed by, so both flavors are collected - the raw `tmdb:<n>` a
+     * result always carries, and the IMDb id it resolved to when that
+     * resolution has landed.
+     */
+    private fun siblingOwnedMarkerIdsFor(results: List<SearchTitleResult>): Set<String> {
+        if (results.isEmpty()) return emptySet()
+
+        val activeProfileId = ProfileManager.activeProfile.value?.id
+            ?.takeIf { it.isNotBlank() }
+            ?: return emptySet()
+
+        val owners = TitleProfileOwnership.snapshot(getApplication())
+        if (owners.isEmpty()) return emptySet()
+
+        return results
+            .filter { result ->
+                titleOwnedByAnotherProfile(
+                    ownerByTitleKey = owners,
+                    type = result.type,
+                    title = result.name,
+                    activeProfileId = activeProfileId
+                )
+            }
+            .flatMap { result ->
+                val mediaType = normalizedType(result.type) ?: return@flatMap emptyList()
+                buildList {
+                    add(result.id)
+                    result.meta.id.takeIf { it.isNotBlank() }?.let { id -> add(id) }
+                    result.id.removePrefix("tmdb:").toIntOrNull()?.let { tmdbId ->
+                        _resolvedIds.value[lookupKey(tmdbId, mediaType)]
+                            ?.let { imdbId -> add(imdbId) }
+                    }
+                }
+            }
+            .map { id -> id.trim() }
+            .filter { id -> id.isNotEmpty() }
+            .toSet()
+    }
+
 
     private val _isLoading =
         MutableStateFlow(false)
@@ -232,6 +362,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     val searchError: StateFlow<String?> =
         _searchError.asStateFlow()
+
+    /**
+     * The (trimmed, lowercased) query whose results are currently in
+     * [_results], or null when there are none to attribute.
+     *
+     * [updateSuggestions] reads result names SYNCHRONOUSLY on every keystroke,
+     * while [search] debounces 300ms and cancels the previous wave - so a new
+     * prefix used to quote the PREVIOUS query's results until the new wave
+     * landed, then swap them. A transient, but a visible flicker of wrong
+     * suggestions on every query change. Names are only quoted for the query
+     * that produced them.
+     */
+    private var resultsQuery: String? = null
 
     private val _addonResultGroups =
         MutableStateFlow<List<AddonResultGroup>>(
@@ -358,6 +501,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 imdbId?.let { lookupKey(tmdbId, mediaType) to it }
             }.toMap()
 
+            // The resolved IMDb ids are badge keys too, so a title another
+            // profile owns has to name both flavors before the preload below
+            // merges its keys in.
+            refreshSiblingOwnedMarkers()
+
             // Fill the IMDB flavor too, for the freshly resolved tiles, from
             // the same cached state every other screen preloads.
             preloadWatchedKeysFor(
@@ -389,9 +537,18 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         .preloadAndGetPartiallyWatchedKeys(items) -
                         watched
 
-                _watchedKeys.value = _watchedKeys.value + watched
+                // BOTH sets obey the ownership rule, not just the eye: the
+                // completed set reads the same account-scoped cache the eye
+                // does, so a title finished on the kids profile could wear
+                // Profile 1's checkmark. Dropping only on POSITIVE ownership
+                // is the shared rule (see [keyOwnedByAnotherProfile]).
+                _watchedKeys.value = (_watchedKeys.value + watched)
+                    .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                    .toSet()
                 _partialWatchedKeys.value =
-                    (_partialWatchedKeys.value + partial) - watched
+                    ((_partialWatchedKeys.value + partial) - watched)
+                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .toSet()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -421,7 +578,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (resolved != null && _resolvedIds.value[lookup] == null) {
                     _resolvedIds.value = _resolvedIds.value + (lookup to resolved)
                 }
-                resolved
+                // No IMDb id (TMDB has none for some titles, and resolution
+                // fails offline): fall back to the result's own `tmdb:<n>`
+                // flavor, the key the tile's badge already reads. Bailing here
+                // was a dead menu action - the menu had already closed - on
+                // exactly the titles whose badges work through that fallback.
+                resolved ?: WatchedStatusKeys.tmdbKeyId(tmdbId)
             } else {
                 result.id.trim().takeIf { it.isNotBlank() }
             } ?: return@launch
@@ -456,7 +618,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (resolved != null && _resolvedIds.value[lookup] == null) {
                     _resolvedIds.value = _resolvedIds.value + (lookup to resolved)
                 }
-                resolved
+                // No IMDb id (TMDB has none for some titles, and resolution
+                // fails offline): fall back to the result's own `tmdb:<n>`
+                // flavor, the key the tile's badge already reads. Bailing here
+                // was a dead menu action - the menu had already closed - on
+                // exactly the titles whose badges work through that fallback.
+                resolved ?: WatchedStatusKeys.tmdbKeyId(tmdbId)
             } else {
                 result.id.trim().takeIf { it.isNotBlank() }
             } ?: return@launch
@@ -512,6 +679,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             _collectionResults.value = emptyList()
             _suggestions.value = emptyList()
             _isLoading.value = false
+            resultsQuery = null
             return
         }
 
@@ -522,34 +690,39 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
             _isLoading.value = true
             try {
-                val tmdbMoviesDeferred = async {
-                    runCatchingCancellable { tmdbRepository.searchMovies(normalized) }
+                // One endpoint failing is not a failed search - the other four
+                // can still answer - but EVERY one failing is, and per-call
+                // swallowing used to turn that into five empty lists: the
+                // screen then said "No matches found." for a search that never
+                // reached the service. The count is what tells the two apart
+                // once the awaits return (see the check below).
+                val failedTmdbWaves = AtomicInteger(0)
+
+                suspend fun <T> tmdbWave(
+                    what: String,
+                    call: suspend () -> List<T>
+                ): List<T> =
+                    runCatchingCancellable { call() }
                         .onFailure { e ->
-                            Log.e("KBStream", "Movie search failed", e)
+                            failedTmdbWaves.incrementAndGet()
+                            Log.e("KBStream", "$what failed", e)
                         }
                         .getOrDefault(emptyList())
+
+                val tmdbMoviesDeferred = async {
+                    tmdbWave("Movie search") { tmdbRepository.searchMovies(normalized) }
                 }
                 val tmdbTvDeferred = async {
-                    runCatchingCancellable { tmdbRepository.searchTv(normalized) }
-                        .onFailure { e ->
-                            Log.e("KBStream", "TV search failed", e)
-                        }
-                        .getOrDefault(emptyList())
+                    tmdbWave("TV search") { tmdbRepository.searchTv(normalized) }
                 }
                 val personDeferred = async {
-                    runCatchingCancellable { tmdbRepository.searchPerson(normalized) }
-                        .onFailure { e -> Log.e("KBStream", "Person search failed", e) }
-                        .getOrDefault(emptyList())
+                    tmdbWave("Person search") { tmdbRepository.searchPerson(normalized) }
                 }
                 val studioDeferred = async {
-                    runCatchingCancellable { tmdbRepository.searchCompany(normalized) }
-                        .onFailure { e -> Log.e("KBStream", "Studio search failed", e) }
-                        .getOrDefault(emptyList())
+                    tmdbWave("Studio search") { tmdbRepository.searchCompany(normalized) }
                 }
                 val collectionDeferred = async {
-                    runCatchingCancellable { tmdbRepository.searchCollection(normalized) }
-                        .onFailure { e -> Log.e("KBStream", "Collection search failed", e) }
-                        .getOrDefault(emptyList())
+                    tmdbWave("Collection search") { tmdbRepository.searchCollection(normalized) }
                 }
 
                 // Add-on / AI search (AIOMetadata, BingeCat, ...) fires in
@@ -567,6 +740,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 val personResults = personDeferred.await()
                 val studioResults = studioDeferred.await()
                 val collectionResults = collectionDeferred.await()
+
+                if (failedTmdbWaves.get() == TMDB_WAVE_COUNT) {
+                    // The search did not run: say so instead of rendering an
+                    // empty result set. The add-on wave is independent and
+                    // keeps whatever it found; a viewer with no connection
+                    // gets the error card, not "No matches found."
+                    _results.value = emptyList()
+                    _actorResults.value = emptyList()
+                    _studioResults.value = emptyList()
+                    _collectionResults.value = emptyList()
+                    _searchError.value = SEARCH_UNAVAILABLE
+                    resultsQuery = null
+                    return@launch
+                }
 
                 // Cap result counts so the list stays instantly scrollable
                 // even for very broad queries (e.g. one-letter searches).
@@ -620,6 +807,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                             .take(MAX_COLLECTION_RESULTS)
                     }
 
+                // The suggestions row may only quote THIS query's results
+                // from here (see [updateSuggestions]).
+                resultsQuery = normalized.lowercase()
+                // Ownership is computed from what is actually published, and
+                // before the badge preload, so a sibling-owned title is
+                // filtered on its FIRST merge rather than after a repaint.
+                refreshSiblingOwnedMarkers()
+
                 // Resolve the visible TMDB ids -> IMDB in the background so
                 // badges/marks can key off the IMDB id.
                 resolveTmdbTitles(_results.value)
@@ -665,25 +860,45 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         addonSearchJob = viewModelScope.launch {
             // The add-on probes start immediately now — they used to wait
             // for BOTH TMDB searches to finish before firing a single
-            // request, adding ~0.5-1s to every addon rail. The de-dupe keys
-            // are instead resolved lazily: each addon consults them only
-            // after its own network response is back, by which time TMDB
-            // has almost always finished anyway (and if not, that addon
-            // was the slow one regardless).
-            val tmdbKeysDeferred = async {
-                buildSet {
-                    tmdbMoviesDeferred.await().forEach {
-                        add(tmdbNameKey("movie", it))
+            // request, adding ~0.5-1s to every addon rail. The de-dupe index
+            // is instead resolved lazily: each addon consults it only after
+            // its own network response is back, by which time TMDB has almost
+            // always finished anyway (and if not, that addon was the slow one
+            // regardless).
+            val tmdbDedupDeferred = async {
+                val movies = tmdbMoviesDeferred.await()
+                val tv = tmdbTvDeferred.await()
+                TmdbDedupIndex(
+                    ids = buildSet {
+                        movies.forEach { result ->
+                            add(TmdbDedupIndex.idKey("movie", "tmdb:${result.id}"))
+                        }
+                        tv.forEach { result ->
+                            add(TmdbDedupIndex.idKey("series", "tmdb:${result.id}"))
+                        }
+                    },
+                    nameYears = buildSet {
+                        movies.forEach { result ->
+                            TmdbDedupIndex.nameYearKey(
+                                type = "movie",
+                                name = tmdbResultName("movie", result),
+                                year = tmdbResultYear(result)
+                            )?.let { key -> add(key) }
+                        }
+                        tv.forEach { result ->
+                            TmdbDedupIndex.nameYearKey(
+                                type = "series",
+                                name = tmdbResultName("series", result),
+                                year = tmdbResultYear(result)
+                            )?.let { key -> add(key) }
+                        }
                     }
-                    tmdbTvDeferred.await().forEach {
-                        add(tmdbNameKey("series", it))
-                    }
-                }
+                )
             }
 
             val groups =
                 try {
-                    searchAddonCatalogs(query, tmdbKeysDeferred, generation)
+                    searchAddonCatalogs(query, tmdbDedupDeferred, generation)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -727,6 +942,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // profile this is the same list it always was.
             val publishedGroups = withKidsCeiling(visibleGroups)
             _addonResultGroups.value = publishedGroups
+            // These rails are part of the badge picture now: recompute the
+            // ownership answers over the TMDB titles AND these add-on hits
+            // before the preload below merges their keys.
+            refreshSiblingOwnedMarkers()
 
             // Add-on results already carry IMDB ids: preload their watched /
             // eye-badge state so those rails read like every other screen.
@@ -838,7 +1057,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private suspend fun searchAddonCatalogs(
         query: String,
-        tmdbKeysDeferred: Deferred<Set<String>>,
+        tmdbDedupDeferred: Deferred<TmdbDedupIndex>,
         generation: Int
     ): List<AddonResultGroup> = coroutineScope {
         val addons = addonManager.getEnabledAddons()
@@ -855,7 +1074,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         addons.mapIndexed { index, addon ->
             launch {
                 val groups = try {
-                    collectAddonSearchGroup(addon, query, tmdbKeysDeferred)
+                    collectAddonSearchGroup(addon, query, tmdbDedupDeferred)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -874,6 +1093,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     // an unvetted intermediate snapshot would show adult hits
                     // until the consolidated wave replaced them.
                     _addonResultGroups.value = withKidsCeiling(snapshot)
+                    refreshSiblingOwnedMarkers()
                 }
             }
         }.joinAll()
@@ -938,7 +1158,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun collectAddonSearchGroup(
         addon: InstalledAddon,
         query: String,
-        tmdbKeysDeferred: Deferred<Set<String>>
+        tmdbDedupDeferred: Deferred<TmdbDedupIndex>
     ): List<AddonResultGroup> = coroutineScope {
         val groups = mutableListOf<AddonResultGroup>()
         val baseUrl =
@@ -1003,7 +1223,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // already present in the TMDB rails) is not repeated in the
                 // same addon's later regular rails.
                 val seen = mutableSetOf<String>()
-                val tmdbKeys = tmdbKeysDeferred.await()
+                val tmdbDedup = tmdbDedupDeferred.await()
                 for ((catalog, hits) in perCatalog) {
                     val searchStyle = catalog.isSearchStyleCatalog()
                     // A search that returns the SAME list as the catalog's
@@ -1018,7 +1238,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         .distinctBy { "${it.type}:${it.id}" }
                         .filter { meta ->
                             searchStyle ||
-                                "${meta.type}:${meta.name.lowercase()}" !in tmdbKeys
+                                !tmdbDedup.matches(
+                                    type = meta.type,
+                                    id = meta.id,
+                                    name = meta.name,
+                                    year = meta.yearOrNull
+                                )
                         }
                         .filter { meta ->
                             // Search-style rails never enter or consult the
@@ -1052,14 +1277,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             return@coroutineScope groups
         }
 
-        // Await the de-dupe keys once, before filtering.
-        val tmdbKeys = tmdbKeysDeferred.await()
+        // Await the de-dupe index once, before filtering.
+        val tmdbDedup = tmdbDedupDeferred.await()
 
         val addonItems =
             collected
                 .distinctBy { "${it.type}:${it.id}" }
-                .filter {
-                    "${it.type}:${it.name.lowercase()}" !in tmdbKeys
+                .filter { meta ->
+                    !tmdbDedup.matches(
+                        type = meta.type,
+                        id = meta.id,
+                        name = meta.name,
+                        year = meta.yearOrNull
+                    )
                 }
                 .map { meta ->
                     SearchTitleResult(
@@ -1126,22 +1356,26 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         return ignored
     }
 
-    private fun tmdbNameKey(
+    /** The display name of a TMDB hit, in the same precedence mergeTitles uses. */
+    private fun tmdbResultName(
         type: String,
         result: TmdbSearchTitleResult
-    ): String {
-        val name =
-            if (type == "movie") {
-                result.title?.takeIf { it.isNotBlank() }
-                    ?: result.name?.takeIf { it.isNotBlank() }
-                    ?: "Untitled"
-            } else {
-                result.name?.takeIf { it.isNotBlank() }
-                    ?: result.title?.takeIf { it.isNotBlank() }
-                    ?: "Untitled"
-            }
-        return "$type:${name.lowercase()}"
-    }
+    ): String =
+        if (type == "movie") {
+            result.title?.takeIf { it.isNotBlank() }
+                ?: result.name?.takeIf { it.isNotBlank() }
+                ?: "Untitled"
+        } else {
+            result.name?.takeIf { it.isNotBlank() }
+                ?: result.title?.takeIf { it.isNotBlank() }
+                ?: "Untitled"
+        }
+
+    /** The year a TMDB hit is displayed with, or null when TMDB has no date. */
+    private fun tmdbResultYear(result: TmdbSearchTitleResult): Int? =
+        (result.releaseDate ?: result.firstAirDate)
+            ?.take(4)
+            ?.toIntOrNull()
 
     /*
      * Merge TMDB movie + series results into one ranked title list, sorted
@@ -1250,14 +1484,22 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         val recents = _recentSearches.value.filter {
             it.lowercase().startsWith(lower) && !it.equals(q, ignoreCase = true)
         }
-        val titles = _results.value
-            .map { it.name }
-            .filter {
-                it.isNotBlank() &&
-                    it.lowercase().startsWith(lower) &&
-                    !it.equals(q, ignoreCase = true)
-            }
-            .distinctBy { it.lowercase() }
+        // Only the query that produced the current results may quote them:
+        // during the debounce, `_results` still holds the PREVIOUS query's
+        // names, and suggesting them for the new prefix is the flicker this
+        // guard removes. Recents and keywords are independent and stay instant.
+        val titles = if (resultsQuery == lower) {
+            _results.value
+                .map { it.name }
+                .filter {
+                    it.isNotBlank() &&
+                        it.lowercase().startsWith(lower) &&
+                        !it.equals(q, ignoreCase = true)
+                }
+                .distinctBy { it.lowercase() }
+        } else {
+            emptyList()
+        }
         val keywords = activeKeywordNames()
             .filter { it.startsWith(lower) && !it.equals(q, ignoreCase = true) }
             .map { it.replaceFirstChar { c -> c.uppercase() } }
@@ -1648,7 +1890,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             .onEach { update ->
                 val current = _watchedKeys.value.toMutableSet()
                 if (update.isWatched) {
-                    current.add(update.key)
+                    // A live write from a sibling's session must not put a
+                    // badge back on a title this profile does not own (see
+                    // siblingOwnedMarkerIds).
+                    if (keyOwnedByAnotherProfile(update.key)) {
+                        current.remove(update.key)
+                    } else {
+                        current.add(update.key)
+                    }
                 } else {
                     current.remove(update.key)
                 }
@@ -1661,7 +1910,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // marker preload.
                 val partial = _partialWatchedKeys.value.toMutableSet()
                 if (update.isPartiallyWatched) {
-                    partial.add(update.key)
+                    if (keyOwnedByAnotherProfile(update.key)) {
+                        partial.remove(update.key)
+                    } else {
+                        partial.add(update.key)
+                    }
                 } else {
                     partial.remove(update.key)
                 }
@@ -2117,6 +2370,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _collectionResults.value = emptyList()
         _suggestions.value = emptyList()
         _isLoading.value = false
+        _searchError.value = null
+        resultsQuery = null
+        // The badge sets are keyed by title id, not by profile, and this
+        // ViewModel deliberately survives a profile switch. Left in place,
+        // the outgoing profile's badges lingered over the incoming one's
+        // searches until an unrelated watch update happened to remove them -
+        // and nothing on a switch triggers one. Cleared here, so every
+        // switch starts badge-clean and the next preload rebuilds from the
+        // new profile's data through the ownership filter.
+        _watchedKeys.value = emptySet()
+        _partialWatchedKeys.value = emptySet()
+        _resolvedIds.value = emptyMap()
+        siblingOwnedMarkerIds = emptySet()
     }
 
     /**
@@ -2266,5 +2532,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         const val MAX_ADDON_CATALOG_RESULTS = 20
         const val MAX_SUGGESTIONS = 6
         const val SEARCH_DEBOUNCE_MS = 300L
+
+        /** The TMDB endpoints one search probes (movies, TV, people, studios, collections). */
+        const val TMDB_WAVE_COUNT = 5
     }
 }
