@@ -203,17 +203,42 @@ class StreamsRankWiringContractTest {
 
     @Test
     fun `every auto-play path applies the viewer's quality ceiling`() {
+        val tv = source("com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt")
+        assertTrue(
+            "StreamsScreen.kt must cap the automatic pick: without it a 1080p " +
+                "ceiling still starts a 4K head",
+            tv.contains("AutoPlayQuality.cappedPick(") &&
+                tv.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+        )
+
+        // The phone has one capped pick for both of its auto-play paths - the
+        // picker's own start, and the Detail page's Download-and-play - so the
+        // ceiling is asserted where it is applied, and each caller separately.
+        // Asserting the capped call in a screen file would pin a second copy of
+        // the decision, which is exactly the drift this test exists to prevent.
+        val shared = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
+        assertTrue(
+            "autoplayPickFor must cap the automatic pick: without it a 1080p " +
+                "ceiling still starts a 4K head",
+            shared.contains("AutoPlayQuality.cappedPick(") &&
+                shared.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+        )
+        listOf(
+            "com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt",
+            "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
+        ).forEach { path ->
+            assertTrue(
+                "$path must reach the capped pick through autoplayPickFor, not " +
+                    "through a copy of the chain",
+                source(path).contains("autoplayPickFor(")
+            )
+        }
+
         listOf(
             "com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt",
             "com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt"
         ).forEach { path ->
             val screen = source(path)
-            assertTrue(
-                "$path must cap the automatic pick: without it a 1080p ceiling " +
-                    "still starts a 4K head",
-                screen.contains("AutoPlayQuality.cappedPick(") &&
-                    screen.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
-            )
             assertTrue(
                 "and it must say so when the ceiling is why nothing started, or " +
                     "the picker opening instead of the player reads as a bug: $path",

@@ -130,8 +130,11 @@ class SettingsScreenMobileContractTest {
                 mobile.contains("SettingsPane.SYNC -> SyncPaneMobile()")
         )
         assertTrue(
-            "BACK returns to the pane list before leaving Settings",
-            mobile.contains("if (pane != null) pane = null else onBack()")
+            "BACK closes the pushed Downloads page, then returns to the pane " +
+                "list, and only then leaves Settings",
+            mobile.contains("downloadsOpen -> downloadsOpen = false") &&
+                mobile.contains("pane != null -> pane = null") &&
+                mobile.contains("else -> onBack()")
         )
     }
 

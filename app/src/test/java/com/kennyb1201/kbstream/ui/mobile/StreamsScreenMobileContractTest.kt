@@ -124,10 +124,15 @@ class StreamsScreenMobileContractTest {
     @Test
     fun `auto-play keeps the tv decision chain and its suppressions`() {
         val mobile = mobileStreams()
+        // The picker and the Detail page's Download button share ONE capped
+        // pick (autoplayPickFor), so the chain is asserted where it is written
+        // now, and separately that this screen reaches it through that call.
+        val sharedPick = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
         assertTrue(
             "auto-play must use the shared episode pick and quality ceiling",
-            mobile.contains("EpisodeMatch.autoplayPick(") &&
-                mobile.contains("AutoPlayQuality.cappedPick(")
+            mobile.contains("autoplayPickFor(") &&
+                sharedPick.contains("EpisodeMatch.autoplayPick(") &&
+                sharedPick.contains("AutoPlayQuality.cappedPick(")
         )
         assertTrue(
             "what auto-play did must still be reported",
