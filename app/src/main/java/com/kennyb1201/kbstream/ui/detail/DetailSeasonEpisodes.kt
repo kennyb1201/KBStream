@@ -54,9 +54,9 @@ internal object DetailSeasonEpisodes {
         val count = episodeCount?.takeIf { it > 0 } ?: return null
 
         // A season that has not premiered yet has no episodes to mark, however
-        // many it is scheduled to have.
-        val premiere = seasonAirDate?.let { episodeAirDate(it) }
-        if (premiere != null && premiere.isAfter(today)) return emptyList()
+        // many it is scheduled to have. Same date rule as an unaired episode
+        // (a missing date proves nothing, so it is not treated as future).
+        if (isEpisodeUnavailable(seasonAirDate, today)) return emptyList()
 
         val pointer = nextEpisodeToAir
         val pointerSeason = pointer?.seasonNumber?.takeIf { it > 0 }
