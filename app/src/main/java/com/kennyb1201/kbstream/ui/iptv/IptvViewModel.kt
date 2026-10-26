@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
 import com.kennyb1201.kbstream.data.iptv.EpgStalledException
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
 import com.kennyb1201.kbstream.data.iptv.FreeLineup
+import com.kennyb1201.kbstream.data.iptv.XumoGuide
 import com.kennyb1201.kbstream.data.iptv.GuideImportOutcome
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
@@ -86,7 +87,30 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Primary + extras, in order, trimmed, no blanks. */
     private fun allEpgUrls(): List<String> =
         (_epgUrl.value.trim().takeIf(String::isNotEmpty)?.let(::listOf).orEmpty() +
-            extraEpgUrlList()).distinct()
+            extraEpgUrlList() +
+            adapterGuideUrls()).distinct()
+
+    /**
+     * The installed guide ADAPTERS, always LAST in source order.
+     *
+     * Order is load-bearing and unchanged by this: guide sources are read in
+     * order and each channel keeps the FIRST source that resolves it, so Xumo
+     * after kanya/locals/Pluto/Samsung/Plex/Roku can only ADD channels none of
+     * them answer. Xumo's channels are platform-distinct, so going last leaves
+     * every existing source's precedence exactly as it was.
+     *
+     * These are not lines in [extraEpgUrls]: the adapter is a managed installed
+     * source, so it appears here by flag rather than by text. That is also why
+     * this list - not the field - is what Playlist Setup, the freshness stamps
+     * and the diagnostics all read: a key present here is reported per source
+     * everywhere those already work.
+     */
+    private fun adapterGuideUrls(): List<String> =
+        if (prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)) {
+            listOf(XumoGuide.SOURCE_KEY)
+        } else {
+            emptyList()
+        }
 
     private val _playlistName = MutableStateFlow(prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty())
     val playlistName: StateFlow<String> = _playlistName.asStateFlow()
@@ -236,7 +260,26 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         writeSources(playlists, guides)
         _freeLineupFailed.value = false
         forgetPlaylistRows(FreeLineup.PLAYLIST_URL)
+        forgetXumoGuideAdapter()
         afterSourceRemoval()
+    }
+
+    /**
+     * Takes the Xumo adapter out with the lineup it exists for.
+     *
+     * [FreeLineup.remove] cannot do this by deleting text, because there is no
+     * line to delete - so removal is the flag plus the rows. Clearing the flag
+     * is what makes a later re-install re-apply the adapter: nothing about the
+     * removal is remembered beyond the fact that it happened.
+     */
+    private fun forgetXumoGuideAdapter() {
+        if (!prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)) return
+        prefs.edit().putBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false).apply()
+        viewModelScope.launch {
+            runCatchingCancellable { repository.forgetGuideSource(XumoGuide.SOURCE_KEY) }
+            _guideRefreshTick.value += 1
+        }
+        Log.i(TAG, "FREE LINEUP XUMO EPG adapter removed with the lineup")
     }
 
     /**
@@ -417,6 +460,65 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Records that this profile has been offered the FAST platform guides. */
     private fun markFreeLineupFastEpgApplied() {
         prefs.edit().putBoolean(KEY_FREE_TV_FAST_EPG_APPLIED, true).apply()
+    }
+
+    /**
+     * The one-time Xumo guide-adapter migration, on the FAST migration's trigger.
+     *
+     * Same entry point and same guard as its neighbours: a guide import owns the
+     * fetch/write window, so the flag stays UNSET and the next entry retries.
+     * Nothing is written into the Extra EPG field - the adapter has no line -
+     * so "applying" is only the per-profile flag plus the single-source import
+     * the caller starts.
+     *
+     * @return true when the adapter was registered by THIS call.
+     */
+    private fun migrateFreeLineupXumoEpg(): Boolean {
+        val applied = prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)
+        if (_isImportingGuide.value) return false
+        if (!FreeLineup.shouldInstallXumoGuide(
+                extraPlaylistUrls = _extraPlaylistUrls.value,
+                alreadyApplied = applied
+            )
+        ) {
+            return false
+        }
+        prefs.edit().putBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, true).apply()
+        Log.i(TAG, "FREE LINEUP XUMO EPG migration: guide adapter registered")
+        return true
+    }
+
+    /**
+     * Imports the Xumo adapter ALONE, and nothing else.
+     *
+     * Registering the adapter must not re-download the other six sources: their
+     * guides are already stored, and a full pass would re-fetch ~100k programs
+     * to add one platform. [IptvRepository.importGuide] is already a
+     * single-source entry point (it is what the worker loop calls per URL), so
+     * the spec's preferred outcome is the one implemented here - no fallback.
+     *
+     * The stamp is recorded exactly as the loop records it, so Playlist Setup
+     * says when this source last succeeded, and a failure lands as that source's
+     * own failure: a non-fatal log plus no stamp, leaving its rows as they were.
+     */
+    private fun importXumoAdapterOnly() {
+        viewModelScope.launch {
+            runCatchingCancellable {
+                repository.importGuide(XumoGuide.SOURCE_KEY)
+                GuideSourceStamps.recordSuccess(prefs, XumoGuide.SOURCE_KEY)
+                _guideRefreshTick.value += 1
+            }.onFailure { error ->
+                // Cancellation is already rethrown by runCatchingCancellable;
+                // what lands here is a real source failure, and it stays one:
+                // no stamp is recorded, its rows are left as they were, and the
+                // other sources are untouched.
+                Log.e(
+                    TAG,
+                    "XUMO GUIDE IMPORT FAILED source=${Redaction.url(XumoGuide.SOURCE_KEY)}",
+                    Redaction.throwable(error)
+                )
+            }
+        }
     }
 
     /**
@@ -1333,9 +1435,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 // kanya (+ locals): add the missing platform feeds too, before
                 // the cache read, for the same reason.
                 val fastLinesAdded = migrateFreeLineupFastEpg()
+                // The Xumo adapter has no line to write, so it is registered by
+                // flag and imported on its OWN - deliberately not folded into
+                // guideSourceAdded, which forces a full pass over every source.
+                val xumoAdapterAdded = migrateFreeLineupXumoEpg()
                 // A line that was just written is not in any guide yet: the
                 // import below (or after the load) reads the list (§3.4).
                 val guideSourceAdded = localsLineAdded || fastLinesAdded
+                if (xumoAdapterAdded) importXumoAdapterOnly()
                 // An install from before the US filter still holds its old,
                 // unfiltered rows: rewrite the cache before this restore reads
                 // it (see [migrateFreeLineupUsFilter], spec §3).
@@ -2378,6 +2485,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
          * never re-adds a FAST line the viewer deleted.
          */
         const val KEY_FREE_TV_FAST_EPG_APPLIED = "free_tv_fast_epg_applied"
+
+        /**
+         * The Xumo guide ADAPTER's per-profile one-time flag.
+         *
+         * A sibling of the two migration flags above, but with a difference
+         * that matters: those record "the lines are in the field now", and this
+         * one records "this profile owns the adapter at all" - because there is
+         * no line whose presence could serve as the record.
+         */
+        const val KEY_FREE_TV_XUMO_EPG_APPLIED = FreeLineup.XUMO_EPG_APPLIED_KEY
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
 
         /**

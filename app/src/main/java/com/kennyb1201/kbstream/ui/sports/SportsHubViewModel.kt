@@ -7,7 +7,9 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.XumoGuide
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
@@ -1666,6 +1668,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     .split('\n', ';')
                     .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
                     .forEach(::add)
+            }
+            // The Xumo guide adapter is an installed source, not a field line:
+            // it joins the set by flag, LAST, exactly as it does in the guide
+            // screen's list - this surface reads the same stored rows, so it has
+            // to see the same sources or its lookups would disagree with the
+            // guide about which channels are covered.
+            if (prefs.getBoolean(FreeLineup.XUMO_EPG_APPLIED_KEY, false)) {
+                add(XumoGuide.SOURCE_KEY)
             }
         }.distinct()
 

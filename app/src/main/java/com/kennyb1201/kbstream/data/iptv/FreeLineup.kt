@@ -137,6 +137,16 @@ object FreeLineup {
     /** The display name the lineup's channels are grouped under. */
     const val NAME = "Free TV"
 
+    /**
+     * The Xumo adapter's per-profile install flag.
+     *
+     * Lives here, beside the URLs, because BOTH surfaces need it: the guide
+     * screen's source list and the Sports hub's own EPG lookup each build the
+     * source set from prefs, and a second copy of this literal would let one of
+     * them silently stop seeing the adapter.
+     */
+    const val XUMO_EPG_APPLIED_KEY = "free_tv_xumo_epg_applied"
+
     /** The extras entry as stored: `<url>|<display name>`. */
     val ENTRY: String = "$PLAYLIST_URL|$NAME"
 
@@ -360,6 +370,26 @@ object FreeLineup {
         hasGuide(extraEpgUrls, LOCALS_EPG_URL) -> LocalsGuideDecision.RecordOnly
         else -> LocalsGuideDecision.Append(append(extraEpgUrls, LOCALS_EPG_URL))
     }
+
+    /**
+     * Whether this profile should register the Xumo guide adapter.
+     *
+     * The adapter is the one installed guide that is NOT a line in the Extra
+     * EPG field: there is nothing to paste, rename or delete, so there is no
+     * text to reconcile and no [Append]/[RecordOnly] distinction to draw. The
+     * decision is therefore just the two facts the other migrations share -
+     * Free TV is installed, and this profile has not been offered it yet - and
+     * applying it twice writes one source, because the second application sees
+     * `alreadyApplied` and stops.
+     *
+     * "No line" is also why removal needs no special case: [remove] cannot take
+     * the adapter out by deleting text, so the caller clears the flag and the
+     * adapter's rows instead (see `IptvRepository.forgetGuideSource`).
+     */
+    internal fun shouldInstallXumoGuide(
+        extraPlaylistUrls: String,
+        alreadyApplied: Boolean
+    ): Boolean = !alreadyApplied && isInstalled(extraPlaylistUrls)
 
     /**
      * The extra-EPG blob with the legacy guide line swapped for [EPG_URL], or

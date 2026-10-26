@@ -435,6 +435,40 @@ class IptvRepository(
             // nobody completes. The cancellation still propagates:
             // result.getOrThrow() rethrows it just below.
             val result: Result<GuideImportOutcome> = runCatching {
+                // ── the Xumo adapter ─────────────────────────────────────
+                // A JSON source is not a file to download: it is fetched page
+                // by page and translated in memory, and the XMLTV that comes
+                // out goes to the SAME importer as every other source - so the
+                // staged swap, the empty-feed guard, prune and the profile pin
+                // are this call's, not a parallel implementation's.
+                //
+                // Routed BEFORE the validators block because there is nothing
+                // to make conditional: no server holds this document, so a
+                // validator would be inventing an ETag for bytes we generated.
+                // Kept inside this runCatching so it completes `waiter` and
+                // joins the same failure shape as every other source.
+                if (normalizedUrl == XumoGuide.SOURCE_KEY) {
+                    val translator = XumoEpgTranslator { url ->
+                        // Reuses the playlist/guide fetcher's retry and backoff,
+                        // so a stalled Xumo page is retried like a stalled
+                        // download. A page that still fails throws, which is a
+                        // per-source failure (see the caller's error handling).
+                        IptvHttpClient.fetchTextWithRetry(client, url)
+                    }
+                    // The window the importer stores is the window the adapter
+                    // must cover: passing the same pair to both is what makes
+                    // §7's day-coverage rule and the importer's row filter
+                    // agree instead of guessing at each other.
+                    val nowMs = System.currentTimeMillis()
+                    val windowStartMs = nowMs - EpgWindow.PAST_MS
+                    val windowEndMs = nowMs + EpgWindow.FUTURE_MS
+                    val stats = translator.fetch(windowStartMs, windowEndMs).use { stream ->
+                        importer.import(normalizedUrl, stream, windowStartMs, windowEndMs)
+                    }
+                    importedFresh = !stats.emptyFeedKeptLive
+                    return@runCatching streamedOutcome(stats)
+                }
+
                 // The validators stored by the last successful import of this
                 // URL, if any. They make the fetch conditional, which is the
                 // whole point: a 10-100 MB guide that has not changed must not
@@ -558,6 +592,25 @@ class IptvRepository(
 
             Log.d(TAG, "GUIDE IMPORT END source=${Redaction.url(normalizedUrl)}")
         }
+    }
+
+    /**
+     * Deletes every stored row belonging to one guide source.
+     *
+     * Written for the Xumo adapter, whose source key is not a line the viewer
+     * could delete: removing Free TV has to take its programs out explicitly,
+     * because there is no text removal that does it implicitly. It is
+     * deliberately source-agnostic - the staging key is swept as well, so an
+     * import that died mid-swap cannot leave rows behind that the next import
+     * of that source would resurrect.
+     */
+    suspend fun forgetGuideSource(sourceKey: String) = withContext(Dispatchers.IO) {
+        val key = sourceKey.trim()
+        if (key.isEmpty()) return@withContext
+        dao.clearGuideBySource(key)
+        dao.clearGuideBySource("$key@importing")
+        GuideCacheHeaders.clear(appContext, key)
+        Log.i(TAG, "GUIDE SOURCE FORGOTTEN source=${Redaction.url(key)}")
     }
 
     /**
