@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -136,6 +137,7 @@ import com.kennyb1201.kbstream.ui.components.KBImdbTint
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
@@ -228,6 +230,33 @@ private sealed interface PeopleRowItem {
  */
 private fun personRowKey(member: TmdbCastMember): String =
     "person${member.id}${member.character.orEmpty()}"
+
+/**
+ * Files a rail card's [requester] under [key] for the life of the card.
+ *
+ * The map used to be written directly during composition, so an entry outlived
+ * the card that registered it - and a drill-down reuses this composition for a
+ * different title while the rail keys (`genre:`, `rec:`, `network:` ...) are
+ * not namespaced by title. Hand-back and return-focus reads in that window
+ * found an unattached requester, spent their retry budgets and abandoned.
+ * Disposing the registration removes it, which is what Home's card rail has
+ * always done. The removal is conditional on the value still being THIS
+ * requester: a replacement registration under the same key must survive the
+ * old card's disposal.
+ */
+@Composable
+private fun RegisterRailRequester(
+    requesters: MutableMap<String, FocusRequester>,
+    key: String,
+    requester: FocusRequester
+) {
+    DisposableEffect(key, requester) {
+        requesters[key] = requester
+        onDispose {
+            if (requesters[key] === requester) requesters.remove(key)
+        }
+    }
+}
 
 /**
  * The key the episodes rail gives one episode of a season.
@@ -1093,6 +1122,10 @@ fun DetailScreen(
     val awards by viewModel.awards.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
+    // The app's transient message channel, used where a press has nowhere to
+    // go (a poster TMDB cannot resolve to an IMDb id): silence there reads as a
+    // broken remote, not as a title with no destination.
+    val feedback = rememberKBFeedback()
     // The trailer the button offers IS the trailer the button plays: one pick,
     // one rule. Movies almost always carry a video typed exactly "Trailer", so
     // this matters for series, which TMDB frequently files as a "Teaser".
@@ -1290,7 +1323,16 @@ fun DetailScreen(
                 }
             }
 
-            val castItems = tmdbCast.distinctBy { it.id }.take(25).map { PeopleRowItem.Person(it) }
+            // Deduped by the CREDIT, not the person: a performer playing two
+            // roles in one title (routine for animation voice casts) is two
+            // rows on this rail, and the rail's own key is the composite
+            // person+character. Deduping by the bare id dropped the second
+            // character and left the character half of that key unable to ever
+            // distinguish anything.
+            val castItems = tmdbCast
+                .distinctBy { it.id to it.character.orEmpty() }
+                .take(25)
+                .map { PeopleRowItem.Person(it) }
             if (castItems.isNotEmpty() && isNotEmpty()) {
                 add(PeopleRowItem.Separator)
             }
@@ -1400,12 +1442,18 @@ fun DetailScreen(
             mediaPosters.size
         )
     }
-    // Remembered for the LIFE of the page, not keyed on the tab list: the list
+    // Remembered for the LIFE of the title, not keyed on the tab list: the list
     // instance is rebuilt whenever the detail payload re-emits (a rating or
     // runtime landing, a TMDB cache refresh), and keying the state on it snapped
     // the viewer back to the first tab mid-browse. The `getOrNull` clamp below
     // already handles a list that shrank.
-    var mediaTabIndex by remember { mutableIntStateOf(0) }
+    //
+    // Keyed on (type, id) because this composable is one unkeyed slot that a
+    // drill-down (More Like This, a collection part) reuses for a different
+    // title: unkeyed, title A's tab carried onto title B's page and B opened on
+    // Posters when the viewer had left A on Posters. The phone fixed this exact
+    // leak by keying its tab on the title; this is the same rule.
+    var mediaTabIndex by remember(type, id) { mutableIntStateOf(0) }
     val mediaTab = mediaTabs.getOrNull(mediaTabIndex) ?: mediaTabs.firstOrNull()
 
     // The active page's cards, projected once per payload rather than per
@@ -1751,35 +1799,24 @@ fun DetailScreen(
         seasonsWithStaleDates
     ) {
         fun numbersFor(seasonNum: Int): List<Int>? {
-            if (
-                seasonNum == effectiveSeason &&
-                episodes.isNotEmpty()
-            ) {
-                return episodes
-                    // A season mark/unmark must not sweep up UNAIRED episodes:
-                    // the loaded season lists them (and greys the cards), but a
-                    // whole-season push would tell the tracker the whole season
-                    // is watched. Air dates that are not trusted for this
-                    // season are left alone rather than guessed at.
-                    .filter { ep ->
-                        effectiveSeason in seasonsWithStaleDates ||
-                            !isEpisodeUnavailable(ep.airDate)
-                    }
-                    .map {
-                        it.episodeNumber
-                    }
-                    .distinct()
-                    .sorted()
-            }
-            val count = tmdbDetail?.seasons
+            val summary = tmdbDetail?.seasons
                 ?.firstOrNull {
                     it.seasonNumber == seasonNum
                 }
-                ?.episodeCount
-            if (count != null && count > 0) {
-                return (1..count).toList()
-            }
-            return null
+            // One rule for both screens and the ViewModel (see
+            // [DetailSeasonEpisodes]): a season mark/unmark must not sweep up
+            // UNAIRED episodes - not on the loaded season (whose listing
+            // includes next week's card), and not on an unloaded one (whose
+            // only number used to be the scheduled episode count).
+            return DetailSeasonEpisodes.numbers(
+                season = seasonNum,
+                loadedSeason = effectiveSeason,
+                episodes = episodes,
+                episodeCount = summary?.episodeCount,
+                seasonAirDate = summary?.airDate,
+                nextEpisodeToAir = tmdbDetail?.nextEpisodeToAir,
+                airDatesTrusted = seasonNum !in seasonsWithStaleDates
+            )
         }
 
         ::numbersFor
@@ -3742,8 +3779,11 @@ fun DetailScreen(
                                         remember(genre.id) {
                                             FocusRequester()
                                         }
-                                    railFocusRequesters[chipKey] =
+                                    RegisterRailRequester(
+                                        railFocusRequesters,
+                                        chipKey,
                                         chipFocusRequester
+                                    )
                                     // Filed by column like every rail inside the
                                     // list, so a press INTO this header rail from
                                     // the tag rail below is aimed at the chip in
@@ -4089,8 +4129,11 @@ fun DetailScreen(
                                             remember(kw.id) {
                                                 FocusRequester()
                                             }
-                                        railFocusRequesters[chipKey] =
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            chipKey,
                                             chipFocusRequester
+                                        )
                                         // Filed by column like the chip rails
                                         // below, so the chain can move INTO this
                                         // rail from the episode row as well as
@@ -4576,13 +4619,23 @@ fun DetailScreen(
                                                                         episodeTitle =
                                                                             ep.name,
 
+                                                                        // The same number list the
+                                                                        // season-chip menu marks,
+                                                                        // filtered for unaired
+                                                                        // episodes. This used to
+                                                                        // pass the raw loaded
+                                                                        // listing, so the
+                                                                        // episode-card menu marked
+                                                                        // next week's episode (and
+                                                                        // pushed it to the
+                                                                        // trackers) while the chip
+                                                                        // menu two rows above did
+                                                                        // not.
                                                                         seasonEpisodeNumbers =
-                                                                            episodes
-                                                                                .map {
-                                                                                    it.episodeNumber
-                                                                                }
-                                                                                .distinct()
-                                                                                .sorted(),
+                                                                            seasonEpisodeNumbersFor(
+                                                                                seasonForMenu
+                                                                            )
+                                                                                .orEmpty(),
                                                                         streamId =
                                                                             ep.streamId,
                                                                         overview =
@@ -4810,8 +4863,11 @@ fun DetailScreen(
                                                     ) {
                                                         FocusRequester()
                                                     }
-                                                railFocusRequesters[cardKey] =
+                                                RegisterRailRequester(
+                                                    railFocusRequesters,
+                                                    cardKey,
                                                     cardFocusRequester
+                                                )
                                                 // The card's COLUMN in the rail
                                                 // (a separator has none), which
                                                 // is what the chips below step
@@ -4943,8 +4999,11 @@ fun DetailScreen(
                                         val chipKey = "network:${n.id}"
                                         val chipFocusRequester =
                                             remember(n.id) { FocusRequester() }
-                                        railFocusRequesters[chipKey] =
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            chipKey,
                                             chipFocusRequester
+                                        )
                                         registerChipColumn(
                                             NETWORK_ROW_KEY,
                                             networkIndex,
@@ -5048,8 +5107,11 @@ fun DetailScreen(
                                         val chipKey = "company:${c.id}"
                                         val chipFocusRequester =
                                             remember(c.id) { FocusRequester() }
-                                        railFocusRequesters[chipKey] =
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            chipKey,
                                             chipFocusRequester
+                                        )
                                         registerChipColumn(
                                             PRODUCTION_ROW_KEY,
                                             companyIndex,
@@ -5157,7 +5219,11 @@ fun DetailScreen(
                                             FocusRequester()
                                         }
                                         val partKey = "collection:${part.id}"
-                                        railFocusRequesters[partKey] = requester
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            partKey,
+                                            requester
+                                        )
                                         // Filed by index like the chip rails, so
                                         // a vertical press INTO this rail can be
                                         // aimed at the column it came from (see
@@ -5243,6 +5309,15 @@ fun DetailScreen(
                                                             "movie",
                                                             imdbId
                                                         )
+                                                    } else {
+                                                        // No IMDb id means no
+                                                        // detail route. Say so
+                                                        // instead of eating the
+                                                        // press.
+                                                        feedback.show(
+                                                            "Couldn't open this title",
+                                                            isError = true
+                                                        )
                                                     }
                                                 }
                                             },
@@ -5327,7 +5402,11 @@ fun DetailScreen(
                                             FocusRequester()
                                         }
                                         val recKey = "rec:${rec.id}"
-                                        railFocusRequesters[recKey] = requester
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            recKey,
+                                            requester
+                                        )
                                         // Same as the collection rail: the
                                         // poster's index is the column a
                                         // vertical press keeps.
@@ -5411,6 +5490,11 @@ fun DetailScreen(
                                                         onNavigateDetail(
                                                             type,
                                                             imdbId
+                                                        )
+                                                    } else {
+                                                        feedback.show(
+                                                            "Couldn't open this title",
+                                                            isError = true
                                                         )
                                                     }
                                                 }
@@ -5505,8 +5589,11 @@ fun DetailScreen(
                                         // its requester instance was rebuilt while
                                         // the overlay was up (see the page's
                                         // hand-back driver).
-                                        railFocusRequesters["review:${review.id}"] =
+                                        RegisterRailRequester(
+                                            railFocusRequesters,
+                                            "review:${review.id}",
                                             reviewFocusRequester
+                                        )
                                         // Filed by column like every rail in the
                                         // list, so a press into the review rail
                                         // from the More Like This rail above (or
@@ -6113,6 +6200,19 @@ fun DetailScreen(
                     PosterContextMenu(
                         title = displayName.ifBlank { "Play" },
                         subtitle = playLabel,
+                        // The title's own page is the most natural place to
+                        // add it to My List; before this the only Library rows
+                        // were on OTHER titles' poster menus (a More Like This
+                        // or collection card), so a viewer had to leave the
+                        // page they were on to save it. The shared menu adds
+                        // the Add to Library / Add to list rows itself.
+                        libraryTarget = LibraryAddTarget(
+                            mediaType = normalizedType,
+                            imdbId = id.takeIf { it.startsWith("tt") },
+                            tmdbId = tmdbDetail?.id,
+                            title = displayName.ifBlank { "Untitled" },
+                            posterUrl = viewModel.currentPosterUrl()
+                        ),
                         actions = listOf(
                             PosterContextAction(
                                 label = "Play from Beginning",
@@ -6655,23 +6755,25 @@ private fun SeasonRow(
                 onFocus = {
                     onSeasonFocused(season)
                 },
-                onLongClick = if (seasonUnavailable) {
+                onLongClick = if (seasonUnavailable || episodeNumbers.isNullOrEmpty()) {
                     // No episodes to mark yet - hide the watch-menu gesture
                     // on not-yet-released seasons.
+                    //
+                    // ...and on a season no source can enumerate. The old
+                    // fallback was `1..highest already watched`, so the menu
+                    // offered "Mark as Watched" for a list that stopped at the
+                    // last tick and marked nothing new - and because
+                    // isSeasonWatched is false whenever the numbers are null,
+                    // it offered that row even for a season the viewer had
+                    // finished. With no episode set there is nothing honest to
+                    // offer, so the gesture is withheld rather than guessing.
                     null
                 } else {
                     {
-                        val numbers =
-                            episodeNumbers
-                                ?: (1..(watchedSet
-                                    .maxOrNull()
-                                    ?: 0)
-                                    .coerceAtLeast(1))
-                                    .toList()
                         onSeasonLongPress(
                             season,
                             seasonName,
-                            numbers,
+                            episodeNumbers,
                             chipFocusRequester
                         )
                     }

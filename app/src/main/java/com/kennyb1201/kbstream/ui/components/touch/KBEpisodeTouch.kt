@@ -148,7 +148,17 @@ fun KBEpisodeRailCardTouch(
             // still does not get squared off or pill-softened by a preference
             // about posters.
             .then(posterBorderModifier(KBShapeCard))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            // An unaired episode is still drawn (dimmed, with the UNAVAILABLE
+            // badge) but it is not a press target: tapping it used to launch
+            // source resolution for an episode that has not aired, which then
+            // failed with a source error, and long-pressing it opened the menu
+            // whose "Mark as Watched" wrote next week's episode into the
+            // trackers. The television card has gated both gestures since that
+            // source-error report; the touch twin had neither gate.
+            .combinedClickable(
+                onClick = { if (!unavailable) onClick() },
+                onLongClick = if (unavailable) null else onLongClick
+            )
     ) {
         AsyncImage(
             model = episode.thumbnail,

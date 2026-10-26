@@ -2,8 +2,9 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
-import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
+import com.kennyb1201.kbstream.ui.detail.DetailSeasonEpisodes
 import java.time.LocalDate
 
 /**
@@ -32,6 +33,12 @@ internal object MobileDetailRules {
      * the show-level pointer (see [staleSeasonDates]): a future date there
      * says the ROW is stale, not that the episode has not aired, so the list
      * is left intact rather than guessed at.
+     *
+     * Seasons that are not on screen are NOT simply `1..episode_count` any
+     * more: an unloaded season that is still airing is capped at the episode
+     * before TMDB's next one, so a whole-series mark cannot sweep next week's
+     * episode into the trackers. [nextEpisodeToAir] and [seasonAirDate] are
+     * the two facts that make that decision; see [DetailSeasonEpisodes].
      */
     fun seasonEpisodeNumbers(
         season: Int,
@@ -39,21 +46,20 @@ internal object MobileDetailRules {
         episodes: List<ResolvedEpisode>,
         episodeCount: Int?,
         airDatesTrusted: Boolean,
-        today: LocalDate
-    ): List<Int>? {
-        if (season == loadedSeason && episodes.isNotEmpty()) {
-            return episodes
-                .filter { episode ->
-                    !airDatesTrusted || !isEpisodeUnavailable(episode.airDate, today)
-                }
-                .map { it.episodeNumber }
-                .filter { it > 0 }
-                .distinct()
-                .sorted()
-        }
-        val count = episodeCount?.takeIf { it > 0 } ?: return null
-        return (1..count).toList()
-    }
+        today: LocalDate,
+        nextEpisodeToAir: TmdbEpisodeAirInfo? = null,
+        seasonAirDate: String? = null
+    ): List<Int>? =
+        DetailSeasonEpisodes.numbers(
+            season = season,
+            loadedSeason = loadedSeason,
+            episodes = episodes,
+            episodeCount = episodeCount,
+            seasonAirDate = seasonAirDate,
+            nextEpisodeToAir = nextEpisodeToAir,
+            airDatesTrusted = airDatesTrusted,
+            today = today
+        )
 
     /**
      * Every season's episode numbers, in season order, skipping the seasons
@@ -112,14 +118,6 @@ internal object MobileDetailRules {
      * season mark/unmark covers the whole listing. Exactly the set the TV page
      * derives, from the same two TMDB fields.
      */
-    fun staleSeasonDates(detail: TmdbDetail?): Set<Int> {
-        val pointer = detail?.nextEpisodeToAir
-        val seasonNumber = pointer?.seasonNumber ?: return emptySet()
-        if (pointer.airDate.isNullOrBlank()) return emptySet()
-        val rowDate = detail.seasons
-            .firstOrNull { it.seasonNumber == seasonNumber }
-            ?.airDate
-            ?: return emptySet()
-        return if (rowDate != pointer.airDate) setOf(seasonNumber) else emptySet()
-    }
+    fun staleSeasonDates(detail: TmdbDetail?): Set<Int> =
+        DetailSeasonEpisodes.staleSeasons(detail)
 }

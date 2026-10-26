@@ -68,6 +68,24 @@ class StreamsRankWiringContractTest {
         return rest.substring(0, end)
     }
 
+    /**
+     * A member from its signature through the end of its body.
+     *
+     * [functionBody] starts at the opening brace, so a parameter and its
+     * default - the report's `reordered: String? = null` - are not in what it
+     * returns. Assertions about a member's DECLARATION need the header too;
+     * reading them off the body made this contract test fail on itself (the
+     * test asserted a parameter it could never see, no matter what the source
+     * said).
+     */
+    private fun memberWithSignature(src: String, signature: String): String {
+        val start = src.indexOf(signature)
+        assertTrue("source missing member: $signature", start >= 0)
+        val body = functionBody(src, signature)
+        val bodyStart = src.indexOf(body, start)
+        return src.substring(start, bodyStart + body.length)
+    }
+
     @Test
     fun `the collapse runs on the reordered list, and before the badges`() {
         val fetch = functionBody(viewModel, "private suspend fun fetch(")
@@ -190,7 +208,7 @@ class StreamsRankWiringContractTest {
                 fetch.contains("reordered = memoryReorder")
         )
 
-        val report = functionBody(viewModel, "private fun rankReportLines(")
+        val report = memberWithSignature(viewModel, "private fun rankReportLines(")
         assertTrue(
             "and the block has to carry the line itself: $report",
             report.contains("reordered: String?") && report.contains("\"  reorder: \$it\"")

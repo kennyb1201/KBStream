@@ -92,6 +92,7 @@ import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.components.LibraryAdds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.RatingChipSource
@@ -132,6 +133,7 @@ import com.kennyb1201.kbstream.ui.detail.MediaCardItem
 import com.kennyb1201.kbstream.ui.detail.MediaTab
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
 import com.kennyb1201.kbstream.ui.detail.formatEpisodeAirDate
+import com.kennyb1201.kbstream.ui.detail.episodeRowKey
 import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -335,6 +337,24 @@ fun DetailScreenMobile(
         val posterUrl = meta?.poster
             ?: tmdbDetail?.posterPath?.let { TmdbRepository.POSTER_BASE + it }
             ?: initialPoster
+        // The title's own Library row. Before this the page had no way to save
+        // the title it is about - the Add to Library rows lived only on OTHER
+        // titles' poster menus - so saving the thing being read meant going
+        // back to a poster that offered it. Same target shape those menus
+        // build, so it reaches the trackers with the id pair they key on.
+        val libraryTarget = remember(normalizedType, id, tmdbDetail?.id, displayName, posterUrl) {
+            LibraryAddTarget(
+                mediaType = normalizedType,
+                imdbId = id.takeIf { it.startsWith("tt") },
+                tmdbId = tmdbDetail?.id,
+                title = displayName.ifBlank { "Untitled" },
+                posterUrl = posterUrl
+            )
+        }
+        var inLibrary by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(libraryTarget) {
+            inLibrary = LibraryAdds.inMyList(context, libraryTarget)
+        }
         // The TV's ladder, not "the add-on's logo, else the title": TMDB's
         // English clearlogo or nothing (the add-on `logo` is a bare URL with no
         // language, so a localized catalog's wordmark could reach this header
@@ -414,15 +434,20 @@ fun DetailScreenMobile(
             today
         ) {
             { seasonNumber: Int ->
+                val summary = tmdbDetail?.seasons
+                    ?.firstOrNull { it.seasonNumber == seasonNumber }
                 MobileDetailRules.seasonEpisodeNumbers(
                     season = seasonNumber,
                     loadedSeason = loadedSeason,
                     episodes = episodes,
-                    episodeCount = tmdbDetail?.seasons
-                        ?.firstOrNull { it.seasonNumber == seasonNumber }
-                        ?.episodeCount,
+                    episodeCount = summary?.episodeCount,
                     airDatesTrusted = seasonNumber !in staleSeasons,
-                    today = today
+                    today = today,
+                    // The next unaired episode and the season's own premiere:
+                    // the two facts that keep an unloaded, still-airing season
+                    // from being marked watched to its scheduled end.
+                    nextEpisodeToAir = tmdbDetail?.nextEpisodeToAir,
+                    seasonAirDate = summary?.airDate
                 )
             }
         }
@@ -514,6 +539,17 @@ fun DetailScreenMobile(
             fromStart: Boolean = false,
             manual: Boolean = false
         ) {
+            // The card gestures are gated, but the episode menu's "Play from
+            // Beginning" / "Play Manually" rows reach this function directly.
+            // An episode that has not aired has no sources to resolve, so no
+            // caller gets to start one (the TV's click gate states the same
+            // rule).
+            if (
+                episodeSeason !in staleSeasons &&
+                isEpisodeUnavailable(episode.airDate, today)
+            ) {
+                return
+            }
             val progress = inProgressByStreamId[episode.streamId]
             val resumeRow = resumeInfo?.takeIf {
                 it.episodeStreamId == episode.streamId
@@ -917,14 +953,33 @@ fun DetailScreenMobile(
         fun openCollectionPart(part: TmdbCollectionPart) {
             scope.launch {
                 val imdbId = viewModel.resolveImdbId(part.id, "movie")
-                if (imdbId != null) onNavigateDetail("movie", imdbId)
+                if (imdbId != null) {
+                    onNavigateDetail("movie", imdbId)
+                } else {
+                    // A press that resolves no IMDb id used to do nothing at
+                    // all, which reads as a broken screen rather than a title
+                    // TMDB cannot map. Same message as the TV rails.
+                    Toast.makeText(
+                        context,
+                        "Couldn't open this title",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
 
         fun openRecommendation(item: TmdbRecommendationItem) {
             scope.launch {
                 val imdbId = viewModel.resolveImdbId(item.id, type)
-                if (imdbId != null) onNavigateDetail(type, imdbId)
+                if (imdbId != null) {
+                    onNavigateDetail(type, imdbId)
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Couldn't open this title",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
 
@@ -1181,6 +1236,29 @@ fun DetailScreenMobile(
                             }
                         }
 
+                        // Save the title being read. Hidden once it is on My
+                        // List (this page offers no remove, matching the
+                        // poster menus, which only add).
+                        if (!inLibrary) {
+                            KBButton(
+                                label = "ADD TO LIBRARY",
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                LibraryAdds.add(context, libraryTarget) { added ->
+                                    inLibrary = added
+                                    Toast.makeText(
+                                        context,
+                                        if (added) {
+                                            "Added to Library"
+                                        } else {
+                                            "Couldn't add to Library"
+                                        },
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        }
+
                         // ---- offline download (spec §4.2, §4.4) ----
                         //
                         // The badge first, when the title this page is showing
@@ -1346,7 +1424,18 @@ fun DetailScreenMobile(
                         // the touch twin of it, filled from the same
                         // `episodeVisual` the list row below reads.
                         item(key = "episodeRail") {
-                            KBEpisodeRailTouch(episodes = episodes) { episode ->
+                            KBEpisodeRailTouch(
+                                episodes = episodes,
+                                // Keyed by the episode, not the file that holds
+                                // it: streamId is file numbering, so a show
+                                // whose files carry two segments gives two rows
+                                // one key and Compose throws on the duplicate.
+                                // Same identity as the TV rail (episodeRowKey)
+                                // and the list branch below.
+                                key = { episode ->
+                                    episodeRowKey(id, currentSeason, episode.episodeNumber)
+                                }
+                            ) { episode ->
                                 val visual = episodeVisual(episode)
                                 KBEpisodeRailCardTouch(
                                     episode = episode,
@@ -1369,7 +1458,15 @@ fun DetailScreenMobile(
                     } else {
                         items(
                             episodes,
-                            key = { "ep:" + it.streamId },
+                            // NOT the stream id: it is the FILE that holds the
+                            // episode and is shared by every episode of a
+                            // segmented show, so two rows carried one key and
+                            // LazyColumn threw "Key ... was already used" -
+                            // the crash the TV rail already fixed with
+                            // episodeRowKey.
+                            key = { episode ->
+                                episodeRowKey(id, currentSeason, episode.episodeNumber)
+                            },
                             contentType = { "episode" }
                         ) { episode ->
                             val visual = episodeVisual(episode)
@@ -1407,7 +1504,13 @@ fun DetailScreenMobile(
                                 // unopenable for those titles. Same composite
                                 // key as the TV cast rail.
                                 items(
-                                    cast.take(20),
+                                    // The key's own identity, deduped: two
+                                    // identical credit rows (TMDB does repeat
+                                    // one (id, character) pair) still shared a
+                                    // key and threw from LazyRow even though
+                                    // two ROLES no longer did.
+                                    cast.distinctBy { it.id to it.character.orEmpty() }
+                                        .take(20),
                                     key = { member ->
                                         "person${member.id}${member.character.orEmpty()}"
                                     },
@@ -2236,7 +2339,14 @@ private fun EpisodeRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .clip(KBShapeCard)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            // Same gate as the rail card and the TV episode card: an unaired
+            // episode draws an UNAVAILABLE mark, and pressing it must not open
+            // source resolution (which fails with a source error) nor the
+            // episode menu (whose mark would reach the trackers).
+            .combinedClickable(
+                onClick = { if (!unavailable) onClick() },
+                onLongClick = if (unavailable) null else onLongClick
+            )
             .padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically

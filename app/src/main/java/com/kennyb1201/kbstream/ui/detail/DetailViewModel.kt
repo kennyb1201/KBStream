@@ -12,12 +12,15 @@ import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
+import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
+import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -541,19 +544,58 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshPosterWatchedStatus(type)
     }
 
+    /**
+     * True when this page's title is positively owned by ANOTHER profile.
+     *
+     * Detail's badge sets are fed by the same non-per-profile sources the
+     * Home rails are (tracker episode libraries, the pre-profile history
+     * store), so the same rule applies here: no owner means no badge is
+     * withheld - only positive ownership by someone else hides this
+     * profile's ticks. See [titleOwnedByAnotherProfile].
+     */
+    private fun detailOwnedByAnotherProfile(): Boolean {
+        val title = _meta.value?.name
+            ?: _tmdbDetail.value?.name
+            ?: _tmdbDetail.value?.title
+        return titleOwnedByAnotherProfile(
+            ownerByTitleKey = TitleProfileOwnership.snapshot(app),
+            type = mediaType.ifBlank { _meta.value?.type.orEmpty() },
+            title = title,
+            activeProfileId = ProfileManager.activeProfile.value?.id
+        )
+    }
+
     private fun refreshPosterWatchedStatus(type: String) {
         viewModelScope.launch {
             try {
                 val normalizedType = type.lowercase()
 
+                // The title travels with each poster because the ownership
+                // filter below is keyed by title: a poster's watched badge
+                // must obey the same sibling-profile rule the Home rails now
+                // do (see [titleOwnedByAnotherProfile]).
                 val rawItems = buildList {
                     _collection.value?.parts.orEmpty().forEach { part ->
-                        add(part.id to "movie")
+                        add(PosterWatchItem(part.id, "movie", part.title))
                     }
                     _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
-                        add(rec.id to normalizedType)
+                        add(PosterWatchItem(rec.id, normalizedType, rec.title ?: rec.name))
                     }
                 }.distinct()
+
+                val owners = TitleProfileOwnership.snapshot(app)
+                val activeProfileId = ProfileManager.activeProfile.value?.id
+                val ownedElsewhere = rawItems
+                    .filter { item ->
+                        titleOwnedByAnotherProfile(
+                            ownerByTitleKey = owners,
+                            type = item.mediaType,
+                            title = item.title,
+                            activeProfileId = activeProfileId
+                        )
+                    }
+                    .map { item -> item.tmdbId }
+                    .toSet()
 
                 if (rawItems.isEmpty()) {
                     _watchedKeys.value = emptySet()
@@ -562,15 +604,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
-                val resolvedItems = rawItems.mapNotNull { (tmdbId, mediaType) ->
+                val resolvedItems = rawItems.mapNotNull { item ->
                     val imdb = runCatchingCancellable {
-                        resolveImdbId(tmdbId, mediaType)
+                        resolveImdbId(item.tmdbId, item.mediaType)
                     }.getOrNull()
 
                     if (imdb.isNullOrBlank()) {
                         null
                     } else {
-                        Triple(tmdbId, mediaType, imdb)
+                        Triple(item.tmdbId, item.mediaType, imdb)
                     }
                 }.distinct()
 
@@ -592,8 +634,8 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // already-cached Simkl snapshot, not a request.
                 val preloadItems = buildList {
                     addAll(
-                        rawItems.map { (tmdbId, mediaType) ->
-                            WatchedStatusKeys.tmdbKeyId(tmdbId) to mediaType
+                        rawItems.map { item ->
+                            WatchedStatusKeys.tmdbKeyId(item.tmdbId) to item.mediaType
                         }
                     )
                     addAll(
@@ -606,11 +648,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 watchedStatusRepository.preload(preloadItems)
 
                 val watchedKeys = rawItems
-                    .flatMap { (tmdbId, mediaType) ->
+                    .filterNot { item -> item.tmdbId in ownedElsewhere }
+                    .flatMap { item ->
                         WatchedStatusKeys.watchedKeysOf(
-                            tmdbId = tmdbId,
-                            mediaType = mediaType,
-                            resolvedImdbId = resolvedMap[posterLookupKey(tmdbId, mediaType)],
+                            tmdbId = item.tmdbId,
+                            mediaType = item.mediaType,
+                            resolvedImdbId =
+                            resolvedMap[posterLookupKey(item.tmdbId, item.mediaType)],
                             matches = watchedStatusRepository::isWatchedCached
                         )
                     }
@@ -619,11 +663,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 _watchedKeys.value = watchedKeys
 
                 _partialWatchedKeys.value = rawItems
-                    .flatMap { (tmdbId, mediaType) ->
+                    .filterNot { item -> item.tmdbId in ownedElsewhere }
+                    .flatMap { item ->
                         WatchedStatusKeys.watchedKeysOf(
-                            tmdbId = tmdbId,
-                            mediaType = mediaType,
-                            resolvedImdbId = resolvedMap[posterLookupKey(tmdbId, mediaType)],
+                            tmdbId = item.tmdbId,
+                            mediaType = item.mediaType,
+                            resolvedImdbId =
+                            resolvedMap[posterLookupKey(item.tmdbId, item.mediaType)],
                             matches = watchedStatusRepository::isPartiallyWatchedCached
                         )
                     }
@@ -765,6 +811,59 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         startWatchProgressObserver(parentId, historyParentIds)
 
         return localCompletedEntries
+    }
+
+    /**
+     * Re-reads the tracker episode sets for this show and keeps whichever
+     * reads succeeded.
+     *
+     * The 60-second freshness gate used to re-read ONLY local history, on the
+     * reasoning that playback is what changed while the page was away. A mark
+     * made on the web, or on another device, changes tracker state too, so a
+     * revisit could show stale ticks for up to a minute. This is the bounded
+     * fix: three cached/guarded reads, each of them the same call the full
+     * load makes, and a failure leaves the previous set alone rather than
+     * clearing ticks that were already right.
+     */
+    private suspend fun refreshTrackerEpisodeSets(
+        parentId: String,
+        normalizedType: String,
+        tmdbId: Int?
+    ) {
+        if (normalizedType != "series") return
+
+        if (simklRepository.isConfigured() && simklRepository.hasToken()) {
+            runCatchingCancellable {
+                simklRepository.getWatchedEpisodesForShowByImdb(
+                    imdbId = parentId,
+                    tmdbId = tmdbId
+                )
+            }.onSuccess { episodes ->
+                _simklWatchedEpisodes.value = episodes
+                _simklSeriesWatched.value = episodes.isNotEmpty()
+            }
+        }
+
+        if (MdbListClient.isConfigured(getApplication())) {
+            runCatchingCancellable {
+                MdbListClient.watchedEpisodesForShow(
+                    context = getApplication(),
+                    showKeys = localHistoryParentIds(parentId)
+                )
+            }.onSuccess { episodes ->
+                mdbListWatchedEpisodes = episodes
+            }
+        }
+
+        if (traktRepository.isConfigured() && traktRepository.hasToken()) {
+            runCatchingCancellable {
+                traktRepository.watchedEpisodesForShow(
+                    showKeys = localHistoryParentIds(parentId)
+                )
+            }.onSuccess { episodes ->
+                traktWatchedEpisodes = episodes
+            }
+        }
     }
 
     /**
@@ -936,7 +1035,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         completedEntries: List<WatchHistoryEntity>
     ) {
         _completedEpisodeIds.value =
-            completedEntries.map { it.id }.toSet()
+            if (detailOwnedByAnotherProfile()) {
+                emptySet()
+            } else {
+                completedEntries.map { it.id }.toSet()
+            }
 
         publishWatchedEpisodeKeys(parentId, completedEntries)
     }
@@ -950,6 +1053,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         parentId: String,
         localCompletedEntries: List<WatchHistoryEntity>
     ) {
+        if (detailOwnedByAnotherProfile()) {
+            // The merged set has non-per-profile members (Simkl, MDBList,
+            // Trakt), so a title finished on the kids profile was ticking its
+            // episodes on profile 1's Detail page. Positive ownership by
+            // another profile withholds the whole set; a title with no owner
+            // keeps it.
+            _watchedEpisodeKeys.value = emptySet()
+            return
+        }
         _watchedEpisodeKeys.value =
             WatchedEpisodeState.buildMergedWatchedKeys(
                 parentId = parentId,
@@ -1008,6 +1120,16 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
                 publishWatchedEpisodeKeys(id, localCompletedEntries)
                 refreshPosterWatchedStatus(normalizedType)
+                // Bounded tracker refresh: the reason the fast path existed
+                // was to avoid the full network load, not to lie about
+                // tracker state. Three guarded reads, then the merged keys
+                // are rebuilt from whatever landed.
+                refreshTrackerEpisodeSets(
+                    parentId = id,
+                    normalizedType = normalizedType,
+                    tmdbId = _tmdbDetail.value?.id
+                )
+                publishWatchedEpisodeKeys(id, localCompletedEntries)
             }
             return
         }
@@ -2169,7 +2291,9 @@ for ((metaAddon, response, error) in probeResults) {
         if (parentId.isBlank() || season < 0) return
 
         val validEpisodes =
-            episodeNumbers.filter { it > 0 }.distinct()
+            airedEpisodeNumbers(season, episodeNumbers)
+                .filter { it > 0 }
+                .distinct()
         if (validEpisodes.isEmpty()) return
 
         viewModelScope.launch {
@@ -2831,16 +2955,52 @@ for ((metaAddon, response, error) in probeResults) {
     }
 
     /**
+     * The subset of [numbers] that has actually aired in [season].
+     *
+     * The menu builders are supposed to hand in aired-only numbers already,
+     * but they are three separate readers of the same rule (TV chip, TV
+     * episode card, phone menus) and this is the one place every mark passes
+     * through. Nothing is removed when the air dates cannot be re-derived
+     * (no detail payload, or no episode count for a season that was never
+     * loaded): "cannot prove it is unaired" keeps the caller's list, while a
+     * proven-unaired episode is dropped before it can reach a tracker.
+     */
+    private fun airedEpisodeNumbers(
+        season: Int,
+        numbers: List<Int>
+    ): List<Int> {
+        val detail = _tmdbDetail.value ?: return numbers
+        val summary = detail.seasons
+            .firstOrNull { it.seasonNumber == season }
+        val aired = DetailSeasonEpisodes.numbers(
+            season = season,
+            loadedSeason = _loadedSeason.value,
+            episodes = _episodes.value,
+            episodeCount = summary?.episodeCount,
+            seasonAirDate = summary?.airDate,
+            nextEpisodeToAir = detail.nextEpisodeToAir,
+            airDatesTrusted = season !in DetailSeasonEpisodes.staleSeasons(detail)
+        ) ?: return numbers
+        val airedSet = aired.toSet()
+        return numbers.filter { it in airedSet }
+    }
+
+    /**
      * Cleans the (season -> episode numbers) map the episode/season chip
      * menus hand in: drops invalid entries and sorts/dedupes the numbers so
      * a whole-series mark cannot write the same row twice.
+     *
+     * It also drops episodes that have not aired, season by season, for the
+     * same reason the per-season action does: a whole-series mark is the
+     * widest sweep this screen offers, and a currently-airing (or unloaded,
+     * still-airing) season must not be pushed to the trackers as finished.
      */
     private fun normalizeSeasonEpisodes(
         seasonEpisodes: List<Pair<Int, List<Int>>>
     ): List<Pair<Int, List<Int>>> =
         seasonEpisodes
             .map { (season, episodes) ->
-                season to episodes
+                season to airedEpisodeNumbers(season, episodes)
                     .filter { it > 0 }
                     .distinct()
                     .sorted()
@@ -2870,6 +3030,15 @@ for ((metaAddon, response, error) in probeResults) {
 
         val seasonsToMark =
             normalizeSeasonEpisodes(seasonEpisodes)
+
+        // Did the aired filter actually take episodes out? If it did, this is
+        // a show with episodes still to come, and the tracker half below must
+        // not use the whole-show endpoint - it expands server-side across the
+        // show's whole run, including next week's episode. The per-season
+        // pushes cover exactly what was marked locally instead.
+        val sweptUnaired =
+            seasonEpisodes.sumOf { (_, episodes) -> episodes.count { it > 0 } } >
+                seasonsToMark.sumOf { (_, episodes) -> episodes.size }
 
         viewModelScope.launch {
             val showName =
@@ -3071,11 +3240,23 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.hasToken()
             ) {
                 runCatchingCancellable {
-                    simklRepository.pushWatchedShow(
-                        showImdbId = parentId,
-                        title = showName.takeIf { it.isNotBlank() },
-                        tmdbId = showTmdbId
-                    )
+                    if (sweptUnaired) {
+                        seasonsToMark.forEach { (season, episodes) ->
+                            simklRepository.pushWatchedSeason(
+                                showImdbId = parentId,
+                                season = season,
+                                episodes = episodes,
+                                title = showName.takeIf { it.isNotBlank() },
+                                tmdbId = showTmdbId
+                            )
+                        }
+                    } else {
+                        simklRepository.pushWatchedShow(
+                            showImdbId = parentId,
+                            title = showName.takeIf { it.isNotBlank() },
+                            tmdbId = showTmdbId
+                        )
+                    }
                 }.onFailure { e ->
                     Log.e(
                         "KBStream",
@@ -3087,11 +3268,23 @@ for ((metaAddon, response, error) in probeResults) {
 
             if (MdbListClient.isConfigured(getApplication())) {
                 runCatchingCancellable {
-                    MdbListClient.pushWatchedShow(
-                        getApplication(),
-                        imdbId = parentId.takeIf { it.startsWith("tt") },
-                        tmdbId = showTmdbId
-                    )
+                    if (sweptUnaired) {
+                        seasonsToMark.forEach { (season, episodes) ->
+                            MdbListClient.pushWatchedEpisodes(
+                                context = getApplication(),
+                                imdbId = parentId.takeIf { it.startsWith("tt") },
+                                tmdbId = showTmdbId,
+                                season = season,
+                                episodes = episodes
+                            )
+                        }
+                    } else {
+                        MdbListClient.pushWatchedShow(
+                            getApplication(),
+                            imdbId = parentId.takeIf { it.startsWith("tt") },
+                            tmdbId = showTmdbId
+                        )
+                    }
                 }.onFailure { e ->
                     Log.e(
                         "KBStream",
@@ -3461,3 +3654,13 @@ for ((metaAddon, response, error) in probeResults) {
             ?.let { TmdbRepository.POSTER_BASE + it }
 
 }
+
+/**
+ * One poster row this page resolves watched state for, with the title its
+ * sibling-profile ownership is keyed by (see [titleOwnedByAnotherProfile]).
+ */
+private data class PosterWatchItem(
+    val tmdbId: Int,
+    val mediaType: String,
+    val title: String?
+)

@@ -363,12 +363,17 @@ class DetailMediaRowWiringContractTest {
             "the tab index must not be keyed on the mediaTabs instance: the " +
                 "detail payload re-emits (a rating or runtime landing, a cache " +
                 "refresh) and a rebuilt list snapped the viewer back to the " +
-                "first page mid-browse",
-            screen.contains("var mediaTabIndex by remember { mutableIntStateOf(0) }")
+                "first page mid-browse - but it IS keyed on the TITLE, because " +
+                "a drill-down reuses this composition for another title",
+            screen.contains("var mediaTabIndex by remember(type, id)")
         )
         assertFalse(
             "the keyed spelling is the bug",
             screen.contains("var mediaTabIndex by remember(mediaTabs)")
+        )
+        assertFalse(
+            "an unkeyed remember carried title A's tab onto title B",
+            screen.contains("var mediaTabIndex by remember { mutableIntStateOf(0) }")
         )
         assertTrue(
             "list shrinkage is still handled: the active page is read with a " +

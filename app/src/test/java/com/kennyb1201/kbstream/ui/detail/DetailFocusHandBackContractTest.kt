@@ -121,7 +121,8 @@ class DetailFocusHandBackContractTest {
         assertTrue(
             "the review tile is filed by id as its rail composes, so its overlay " +
                 "finds the tile again even if the requester was rebuilt",
-            detail.contains("railFocusRequesters[\"review:\${review.id}\"] =") &&
+            detail.contains("RegisterRailRequester(") &&
+                detail.contains("\"review:\${review.id}\",") &&
                 detail.contains("reviewId?.let { railFocusRequesters[\"review:\$it\"] }")
         )
         assertTrue(
