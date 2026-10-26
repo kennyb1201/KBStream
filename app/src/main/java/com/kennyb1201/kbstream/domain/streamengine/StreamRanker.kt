@@ -124,26 +124,64 @@ object StreamRanker {
      * film titles ("The Italian Job"), and demoting those would sink the real
      * release. The Indic dub tags and the explicit "dubbed"/"dublado" tags have
      * no such collision.
+     *
+     * Scene TAG forms are where the coverage comes from, because a release names
+     * its audio with a short tag far more often than with a full language name:
+     * `PAW.Patrol.S03E15.1080p.WEB-DL.RUS` is the usual shape of such a row, and
+     * no marker above matched it - so it scored like an honest release and
+     * headed the picker and auto-play. The tags below are 2-3 letters that do
+     * not stand alone as words in plausible titles or descriptions (unlike
+     * `nor`, `dan`, `may`, `per`, `rum`, `chi`, `fin`, which stay out), so they
+     * are safe bare. Full names stay out for the same reason as before
+     * ("Russian Doll", "The Danish Girl"), and `ru` stays out until a real row
+     * proves it safe - `rus` is the tag releases actually print.
+     *
+     * Only markers that mean the AUDIO was replaced may be listed. A subtitled
+     * copy keeps its original audio and a dual/multi-audio copy includes
+     * English, so `sub`, `dual` and `multi` must never appear here. (`rus` does
+     * sink a row reading `RUS SUB` as well, because no row set available to this
+     * landing distinguishes subtitle-only rows from dubs; that is the
+     * conservative direction for an English-first viewer, and it is recorded as
+     * a field-verification item rather than hidden.)
      */
     private val FOREIGN_OR_HARDSUBBED_RELEASE =
         Regex(
-            """\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi|urdu|dubbed|dublado|latino|castellano|vostfr|truefrench|hc|hardsub|hardcoded|esub|esubs|korsub)\b"""
+            """\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi|urdu""" +
+                // Russian is the reported one (RuDub lowercases to `rudub`; `rus`
+                // is the standard scene tag), then the rest of the tag set.
+                """|rus|rudub|ukr|pol|cze|slo|svk|ger|deu|fre|fra|ita|spa|esp|dut|nld""" +
+                """|tur|jpn|kor|bul|srp|hrv|heb|fas|farsi""" +
+                """|dubbed|dublado|latino|castellano|vostfr|truefrench|hc|hardsub|hardcoded|esub|esubs|korsub)\b"""
         )
 
     /**
      * A 3D encode (side-by-side or over-under, including the half variants):
      * without a 3D mode this is a doubled, squashed picture - the other way a
      * well-labeled stream turns out to be unwatchable.
+     *
+     * The bare two-letter forms are NOT here. `sbs` is also SBS, the Australian
+     * and Korean broadcaster, whose releases carry the tag exactly this way
+     * (`Show.S01E01.720p.SBS`), and `ou` is the French word "or", which appears
+     * as a standalone word in French titles and descriptions. Unlike the
+     * PROPER rule there is no release-name gate to disambiguate either: a
+     * broadcaster tag arrives next to release signals like any other. The
+     * unambiguous spellings (`3d`, `hsbs`, `hou`, `half-sbs`, `half-ou`) still
+     * sink, and they are how a 3D pair is actually named.
      */
     private val THREE_D_RELEASE =
-        Regex("""\b(3d|sbs|hsbs|half-sbs|ou|hou|half-ou)\b""")
+        Regex("""\b(3d|hsbs|hou)\b|\bhalf[.\s_-]?(?:sbs|ou)\b""")
 
     /**
      * HDR / Dolby Vision markers. Word-bounded on purpose: `"dv" in text` also
      * matches "DVDRip", which handed a plain DVD rip the Dolby Vision bonus.
+     *
+     * `Dolby Vision` takes every separator a release name uses between its
+     * words (`Dolby.Vision`, `Dolby-Vision`, `Dolby_Vision`) - see
+     * [RELEASE_TIERS] for why this is a separator class rather than
+     * normalization of the whole text.
      */
     private val HDR_RELEASE =
-        Regex("""\b(hdr10\+?|hdr|dolby\s?vision|dv)\b""")
+        Regex("""\b(hdr10\+?|hdr|dolby[.\s_-]?vision|dv)\b""")
 
     /**
      * The Dolby Vision half of [HDR_RELEASE], and only that half.
@@ -158,13 +196,26 @@ object StreamRanker {
      * `\bdv\b` still cannot match "dvdrip" (no word boundary between the `v`
      * and the `d`), for the same reason [HDR_RELEASE] is word-bounded.
      */
-    private val DV_RELEASE = Regex("""\b(dolby\s?vision|dolbyvision|dv)\b""")
+    private val DV_RELEASE = Regex("""\b(dolby[.\s_-]?vision|dv)\b""")
 
-    /** Release types worth a nudge, best tier first. */
+    /**
+     * Release types worth a nudge, best tier first.
+     *
+     * Multi-word tags take whatever separator the naming style uses, because
+     * `WEB-DL`, `WEB.DL` and `WEBDL` are one release type: a dot-separated
+     * `WEB.DL` used to match nothing here and lose its +15 against an otherwise
+     * equal copy. The separator class is written into these patterns rather
+     * than normalized out of the whole text, because [SIZE_IN_TEXT] reads
+     * decimals - collapsing dots would turn `24.5 GB` into `24 5 GB`.
+     *
+     * DVDrip is deliberately not a tier: it is an ordinary, lower-quality
+     * release type rather than one of the types this ladder is about, so it
+     * ties an unlabeled copy instead of being promoted or sunk.
+     */
     private val RELEASE_TIERS = listOf(
         Regex("""\bremux\b""") to 30,
-        Regex("""\b(blu-?ray|bdrip|brrip)\b""") to 20,
-        Regex("""\bweb-?dl\b""") to 15,
+        Regex("""\b(blu[.\s_-]?ray|bdrip|brrip)\b""") to 20,
+        Regex("""\bweb[.\s_-]?dl\b""") to 15,
         Regex("""\b(webrip|hdtv)\b""") to 5
     )
 
@@ -299,14 +350,34 @@ object StreamRanker {
     private val SIZE_IN_TEXT = Regex("""(\d+(?:\.\d+)?)\s?(mb|gb|tb)\b""")
 
     /**
-     * Smallest plausible file size, in GB, for the resolution a release claims.
-     * A "2160p"/"4K" tag on a file below [MIN_PLAUSIBLE_4K_GB] — or a "1080p"
-     * tag below [MIN_PLAUSIBLE_1080P_GB] — is an upscale or a mislabel: the file
-     * is not the resolution it advertises, the other way a garbage entry carries
-     * a good-looking label to the top.
+     * Smallest plausible AVERAGE bitrate, in Mbps, for a real encode at each
+     * resolution tier: a "2160p" tag on a file that cannot carry 2160p is an
+     * upscale or a mislabel, the other way a garbage entry carries a
+     * good-looking label to the top.
+     *
+     * Read against the runtime when the request carries one. Read as fixed
+     * sizes before that, a 5-minute 4K short at 1 GB - a healthy 27 Mbps - ate
+     * the whole penalty, while the 1440p, 720p and 480p tiers were not checked
+     * at all. The numbers are ordinary-encode floors (1.6 Mbps over a two-hour
+     * film is the old 1.5 GB; 0.7 Mbps over a 45-minute episode is the old
+     * 0.25 GB), so nothing an honest release carries reaches them.
+     */
+    private const val MIN_PLAUSIBLE_4K_MBPS = 1.6
+    private const val MIN_PLAUSIBLE_1440P_MBPS = 1.0
+    private const val MIN_PLAUSIBLE_1080P_MBPS = 0.7
+    private const val MIN_PLAUSIBLE_720P_MBPS = 0.35
+    private const val MIN_PLAUSIBLE_480P_MBPS = 0.2
+
+    /**
+     * The same floors as absolute sizes, for a title whose length is unknown:
+     * the old [MIN_PLAUSIBLE_4K_GB] and [MIN_PLAUSIBLE_1080P_GB] (1.5 GB and
+     * 0.25 GB, the two tiers checked before this) plus the tiers below them.
      */
     private const val MIN_PLAUSIBLE_4K_GB = 1.5
+    private const val MIN_PLAUSIBLE_1440P_GB = 0.75
     private const val MIN_PLAUSIBLE_1080P_GB = 0.25
+    private const val MIN_PLAUSIBLE_720P_GB = 0.12
+    private const val MIN_PLAUSIBLE_480P_GB = 0.07
 
     /**
      * The corrected copy of an encode the scene had nuked: enough to separate it
@@ -650,6 +721,16 @@ object StreamRanker {
             (NUKED_RELEASE.containsMatchIn(text) &&
                 !PROPER_RELEASE.containsMatchIn(text))
 
+    /**
+     * [isKnownBad] for a whole stream, read from the same text [rank] sorted on.
+     *
+     * Exposed for [BingeGroupResolver]: promotion outranks the order built
+     * here, so it has to know which rows this tier already sank - otherwise a
+     * binge group / addon match lifts a foreign-dubbed copy straight back over
+     * the honest head for the next episode.
+     */
+    internal fun isKnownBadStream(stream: Stream): Boolean = isKnownBad(searchableText(stream))
+
     private fun score(
         stream: Stream,
         text: String,
@@ -660,11 +741,15 @@ object StreamRanker {
 
         // --- Signals from the stream's own fields ---
 
-        // Widevine: the main player negotiates the license, so DRM stays a
-        // (small) quality signal - deliberately nowhere near big enough to lift
-        // a DRM entry over a better-labeled open one, since it also cannot be
-        // handed to the MPV engine at all.
-        if (stream.drm != null) score += 60
+        // Widevine: the main player negotiates the license, so DRM is a small
+        // quality signal and nothing more. It used to be +60, which is larger
+        // than every step between two resolution tiers (25 between 2160p and
+        // 1440p, 50 between 1080p and 720p), so a DRM 1080p
+        // scored 210 against an open 4K's 200 - the exact promotion this
+        // comment used to promise could not happen. 10 is a tiebreak below the
+        // smallest resolution step, level with the English-audio nudge, and a
+        // DRM copy still cannot be handed to the MPV engine at all.
+        if (stream.drm != null) score += 10
 
         // Separate audio track = often higher quality or proper muxing
         if (!stream.audioUrl.isNullOrBlank()) score += 40
@@ -785,7 +870,7 @@ object StreamRanker {
         // A contradicted resolution label is different in kind. The file still
         // plays; it simply is not the resolution it advertises, so it stays a
         // score term sitting next to the resolution it claims.
-        score -= fakeQualityPenalty(stream, text)
+        score -= fakeQualityPenalty(stream, text, runtimeMinutes)
 
         // Prefer streams that have a name (more metadata = more reliable source)
         if (!stream.name.isNullOrBlank()) score += 10
@@ -797,15 +882,30 @@ object StreamRanker {
     /**
      * Everything the rules may read, as one lowercase string.
      *
-     * The link contributes its *filename*: the query string is dropped because
-     * it carries tokens and signatures rather than release names, and the path
-     * is percent-decoded so an encoded release name ("Some%20Film%201080p.mkv")
-     * reads like the plain one the same addon sends elsewhere. [Stream.badges]
-     * are not consulted - they are a user-imported pack, matched after ranking.
+     * The link contributes its *filename* and nothing else. The query string is
+     * dropped because it carries tokens and signatures rather than release
+     * names, the path is percent-decoded so an encoded release name
+     * ("Some%20Film%201080p.mkv") reads like the plain one the same addon sends
+     * elsewhere, and the trailing media extension is dropped because a
+     * container name is not a release tag.
+     *
+     * The host and the directories used to be read too, and every one of them
+     * was a sink: an `en.` subdomain paid the English-audio bonus, a `cached` or
+     * `instant` directory paid the availability tier, an `sbs` directory
+     * tripped the 3D rule, and a link ending `.ts` - an MPEG-TS container, not
+     * a telesync - carried a standalone `ts` token that sank an honest copy as
+     * known-bad. An addon names its release in the filename, which is also the
+     * part [EpisodeMatch] reads, so that is the part this reads. A direct-link
+     * addon that puts the release name in a *directory* still scores on its
+     * title, which is where the addon puts the same text on every other row.
+     *
+     * [Stream.badges] are not consulted - they are a user-imported pack,
+     * matched after ranking.
      */
     private fun searchableText(stream: Stream): String {
         val fromLink = stream.url
             ?.substringBefore('?')
+            ?.substringAfterLast('/')
             ?.let { path ->
                 runCatching { java.net.URLDecoder.decode(path, "UTF-8") }.getOrDefault(path)
             }
@@ -818,33 +918,91 @@ object StreamRanker {
             fromLink
         )
             .filter { it.isNotBlank() }
-            .joinToString(" ")
+            // A container extension is not a release tag: `.ts` (MPEG-TS) read
+            // as a telesync marker, and `.mkv`/`.mp4` are noise either way.
+            .joinToString(" ") { it.replace(MEDIA_EXTENSION, "") }
             .lowercase()
     }
 
     /**
-     * Peers the stream reports, or null when it reports none — an unknown swarm
-     * is not an empty one, and guessing would demote honest sources.
+     * A container extension at the end of a filename, which names no release.
+     *
+     * Stripped before the rules run for one concrete reason: `Some.Show.S01E01
+     * .1080p.ts` is an MPEG-TS copy, and [UNWATCHABLE_RELEASE]'s `\bts\b` read
+     * the extension as a telesync tag and sank it under every honest row.
      */
-    private fun seeders(text: String): Int? =
-        SEEDERS.find(text)
-            ?.groupValues
-            ?.drop(1)
-            ?.firstOrNull { it.isNotEmpty() }
-            ?.toIntOrNull()
+    private val MEDIA_EXTENSION =
+        Regex(
+            """\.(mkv|mp4|m4v|avi|mov|webm|ts|m2ts|mpg|mpeg|wmv|flv|ogv|vob|divx|m3u8|nzb)$"""
+        )
 
     /**
-     * Penalty for a resolution label the file's own size does not support:
-     * "2160p" on a sub-[MIN_PLAUSIBLE_4K_GB] file, or "1080p" under
-     * [MIN_PLAUSIBLE_1080P_GB]. Zero when the size is unknown — an unlabeled
-     * size is not evidence of a fake, and guessing would demote honest sources.
+     * Peers the stream reports, or null when it reports none — an unknown swarm
+     * is not an empty one, and guessing would demote honest sources.
+     *
+     * Every count in the text, then the LARGEST, which is the same rule
+     * [sizeInGb] reads a size with. First-match was order-sensitive: a title
+     * saying "100 seeders" over a description saying 500 scored 100, and the
+     * seeder tiers are coarse enough (100/30/10/3) that this flipped tiers
+     * rather than points.
      */
-    private fun fakeQualityPenalty(stream: Stream, text: String): Int {
+    private fun seeders(text: String): Int? =
+        SEEDERS.findAll(text)
+            .mapNotNull { match ->
+                match.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.toIntOrNull()
+            }
+            .maxOrNull()
+
+    /**
+     * Penalty for a resolution label the file's own size does not support: the
+     * tier's own floor, read as a bitrate when the request carries the title's
+     * runtime and as an absolute size when it does not. Zero when the size is
+     * unknown — an unlabeled size is not evidence of a fake, and guessing would
+     * demote honest sources.
+     *
+     * Two defects are closed here. The check covered only 4K (-300) and 1080p
+     * (-200), so a "1440p" tag on a 100 MB file kept its full +175. And the
+     * floors were absolute, so a five-minute 4K short - a dense, healthy encode
+     * by the density rule right above it - was measured against a feature's
+     * minimum and lost 300 points.
+     */
+    private fun fakeQualityPenalty(
+        stream: Stream,
+        text: String,
+        runtimeMinutes: Int?
+    ): Int {
         val sizeGb = sizeInGb(stream, text) ?: return 0
-        return when (resolutionRankOf(text)) {
-            5 -> if (sizeGb < MIN_PLAUSIBLE_4K_GB) 300 else 0
-            3 -> if (sizeGb < MIN_PLAUSIBLE_1080P_GB) 200 else 0
-            else -> 0
+        val rank = resolutionRankOf(text)
+        val floorMbps = when (rank) {
+            5 -> MIN_PLAUSIBLE_4K_MBPS
+            4 -> MIN_PLAUSIBLE_1440P_MBPS
+            3 -> MIN_PLAUSIBLE_1080P_MBPS
+            2 -> MIN_PLAUSIBLE_720P_MBPS
+            1 -> MIN_PLAUSIBLE_480P_MBPS
+            else -> return 0
+        }
+        val floorGb = when (rank) {
+            5 -> MIN_PLAUSIBLE_4K_GB
+            4 -> MIN_PLAUSIBLE_1440P_GB
+            3 -> MIN_PLAUSIBLE_1080P_GB
+            2 -> MIN_PLAUSIBLE_720P_GB
+            else -> MIN_PLAUSIBLE_480P_GB
+        }
+        val runtime = runtimeMinutes?.takeIf { it > 0 }
+        val plausible = if (runtime != null) {
+            // GB to Mbit, over the title's own seconds, in Mbps - the same
+            // reading [EpisodeMatch.isSeasonPack] makes of a size.
+            sizeGb * 8_000.0 / (runtime * 60.0) >= floorMbps
+        } else {
+            sizeGb >= floorGb
+        }
+        if (plausible) return 0
+        return when (rank) {
+            5 -> 300
+            4 -> 250
+            3 -> 200
+            2 -> 150
+            else -> 100
         }
     }
 

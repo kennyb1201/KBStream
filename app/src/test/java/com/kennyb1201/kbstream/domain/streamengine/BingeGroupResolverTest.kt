@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -105,5 +106,109 @@ class BingeGroupResolverTest {
         )
 
         assertEquals(streams, ordered)
+    }
+
+    // ── Promotion never re-lifts a sunk copy ──
+    //
+    // Reported: Russian-dubbed PAW Patrol copies kept starting. Promotion
+    // wholesale outranks rank order (`groupMatch + rest`), so once the ranker
+    // sank a row, a matching binge group or addon lifted it straight back over
+    // the honest head for the next episode. Both tiers now only promote honest
+    // matches; the sunk ones keep their ranked position in the remainder.
+
+    private fun showRow(
+        addon: String,
+        url: String,
+        title: String,
+        group: String? = null
+    ) = stream(addon, url, group).copy(title = title)
+
+    @Test
+    fun `a sunk group match does not ride the binge group to the head`() {
+        val honestGroup = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.en.mkv",
+            "Show S2E6 1080p WEB-DL 4 GB",
+            group = "prov|1080p"
+        )
+        val otherAddon = showRow(
+            "FlixStreams",
+            "https://flix.example/e6.mkv",
+            "Show S2E6 1080p WEB-DL 4 GB"
+        )
+        val russian = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.ru.mkv",
+            "Show S2E6 1080p WEB-DL RUS 4 GB",
+            group = "prov|1080p"
+        )
+        // Already ranked, as the caller hands it over: the sunk row last.
+        val ranked = listOf(honestGroup, otherAddon, russian)
+
+        val ordered = BingeGroupResolver.orderedForNextEpisode(
+            context = context,
+            streams = ranked,
+            previousBingeGroup = "prov|1080p",
+            previousAddonName = "FlixStreams"
+        )
+
+        assertEquals(honestGroup, ordered.first())
+        assertTrue(ordered.indexOf(russian) > ordered.indexOf(honestGroup))
+        assertTrue(ordered.indexOf(russian) > ordered.indexOf(otherAddon))
+    }
+
+    @Test
+    fun `a sunk same-addon match does not head the next episode`() {
+        val honest = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.en.mkv",
+            "Show S2E6 1080p WEB-DL 4 GB"
+        )
+        val other = showRow("FlixStreams", "https://flix.example/e6.mkv", "Show S2E6 1080p WEB-DL 4 GB")
+        val russian = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.ru.mkv",
+            "Show S2E6 1080p WEB-DL RUS 4 GB"
+        )
+        val ranked = listOf(honest, other, russian)
+
+        val ordered = BingeGroupResolver.orderedForNextEpisode(
+            context = context,
+            streams = ranked,
+            previousBingeGroup = null,
+            previousAddonName = "AIOStreams"
+        )
+
+        assertEquals(honest, ordered.first())
+        assertEquals(russian, ordered.last())
+    }
+
+    @Test
+    fun `when every group match is sunk the reuse tier still heads an honest row`() {
+        val sunkGroup = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.ru.mkv",
+            "Show S2E6 1080p WEB-DL RUS 4 GB",
+            group = "prov|1080p"
+        )
+        val honest = showRow(
+            "AIOStreams",
+            "https://aio.example/e6.en.mkv",
+            "Show S2E6 1080p WEB-DL 4 GB"
+        )
+        val other = showRow("FlixStreams", "https://flix.example/e6.mkv", "Show S2E6 1080p WEB-DL 4 GB")
+        val ranked = listOf(honest, other, sunkGroup)
+
+        val ordered = BingeGroupResolver.orderedForNextEpisode(
+            context = context,
+            streams = ranked,
+            previousBingeGroup = "prov|1080p",
+            previousAddonName = "AIOStreams"
+        )
+
+        // The group has nothing honest to promote, so the addon tier answers -
+        // and it must not re-lift the sunk copy either.
+        assertEquals(honest, ordered.first())
+        assertEquals(sunkGroup, ordered.last())
     }
 }

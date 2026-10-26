@@ -180,12 +180,30 @@ internal fun addonsFor(
     parsed: List<Stream>,
     addons: List<String?>
 ): List<String?> {
-    if (addons.isEmpty()) return List(streams.size) { null }
+    val lookup = addonLookup(parsed, addons)
+    return streams.map(lookup)
+}
+
+/**
+ * [addonsFor]'s lookup as a function, for a caller that needs the add-on
+ * *while* ordering the list rather than beside it.
+ *
+ * The player re-ranks the payload it was handed, and the ranker reads the
+ * add-on behind each row for its debrid-backed tier (see
+ * [com.kennyb1201.kbstream.domain.streamengine.StreamRanker.rank]). Reading it
+ * from the same map the parallel array is resolved with is what keeps "whose
+ * row is this" one answer.
+ */
+internal fun addonLookup(
+    parsed: List<Stream>,
+    addons: List<String?>
+): (Stream) -> String? {
+    if (addons.isEmpty()) return { null }
     val byStream = HashMap<Stream, String?>()
     parsed.forEachIndexed { index, stream ->
         if (!byStream.containsKey(stream)) byStream[stream] = addons.getOrNull(index)
     }
-    return streams.map { byStream[it] }
+    return { stream -> byStream[stream] }
 }
 
 /**

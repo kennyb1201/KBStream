@@ -29,6 +29,13 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * the normal ranker order applies. A blank group on its own is still enough
  * to run the reuse tier: the providers that tier covers are the ones that
  * stopped tagging consecutive files.
+ *
+ * Promotion never re-lifts a copy the ranker sank (see
+ * [StreamRanker.isKnownBadStream]). Both tiers only promote honest matches; a
+ * sunk match keeps its ranked position in the remainder, under the honest
+ * rows. Without that, the foreign-dubbed copy auto-play landed on kept
+ * heading the next episode, because promotion wholesale outranks rank order -
+ * the ranker fix alone could not reach this path.
  */
 object BingeGroupResolver {
 
@@ -68,7 +75,9 @@ object BingeGroupResolver {
         if (group.isEmpty() && addon.isEmpty()) return streams
 
         val groupMatch = streams.filter {
-            !it.bingeGroup.isNullOrBlank() && it.bingeGroup.equals(group, ignoreCase = true)
+            !it.bingeGroup.isNullOrBlank() &&
+                it.bingeGroup.equals(group, ignoreCase = true) &&
+                !StreamRanker.isKnownBadStream(it)
         }
 
         // Tier 1 — same binge group.
@@ -79,7 +88,10 @@ object BingeGroupResolver {
         // Tier 2 — same addon (parsed from the stream title), when reuse is on.
         if (reuse) {
             if (addon.isNotEmpty()) {
-                val addonMatch = streams.filter { normalizeAddon(titleAddonName(it)) == addon }
+                val addonMatch = streams.filter {
+                    normalizeAddon(titleAddonName(it)) == addon &&
+                        !StreamRanker.isKnownBadStream(it)
+                }
                 if (addonMatch.isNotEmpty()) {
                     return addonMatch + streams.filterNot { it in addonMatch }
                 }

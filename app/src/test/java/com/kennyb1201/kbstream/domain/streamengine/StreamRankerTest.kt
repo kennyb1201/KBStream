@@ -2,7 +2,9 @@ package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
+import com.kennyb1201.kbstream.data.addon.StreamDrm
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1073,6 +1075,134 @@ class StreamRankerTest {
         assertEquals(scoreOf(plain), scoreOf(extended))
     }
 
+    // ── Foreign dubs across languages, not just the Indic set ──
+    //
+    // Reported: PAW Patrol autoplay kept starting Russian-dubbed copies. The
+    // player's track menu showed Russian labels and Russian was the only audio
+    // in the file, so no in-player fix exists - the bug was which row
+    // auto-play took. The ranker knew no Russian marker at all, so the dub
+    // scored like an honest release (1080p WEB-DL, big size, debrid-cached).
+    // The whole tag set is audited here so the next language does not arrive
+    // the same way.
+
+    /** Every audited AUDIO tag, in the spelling real releases use. */
+    private val foreignDubTags = listOf(
+        "RUS", "RuDub", "UKR", "POL", "CZE", "SLO", "SVK", "GER", "DEU",
+        "FRE", "FRA", "ITA", "SPA", "ESP", "DUT", "NLD", "TUR", "JPN",
+        "KOR", "BUL", "SRP", "HRV", "HEB", "FAS", "Farsi"
+    )
+
+    @Test
+    fun `every audited foreign-dub tag sinks an otherwise identical copy`() {
+        // Same title, resolution and size, no debrid state on either row: the
+        // only difference is the tag, so the tag is what moves the row - the
+        // tier's promise, not a score comparison.
+        for (tag in foreignDubTags) {
+            val dubbed = stream(
+                "Paw Patrol S03E15 1080p WEB-DL $tag 3 GB",
+                url = "https://host/dub.mkv"
+            )
+            val honest = stream("Paw Patrol S03E15 1080p WEB-DL 3 GB", url = "https://host/en.mkv")
+
+            assertEquals("expected $tag to sink its copy", listOf(honest, dubbed), order(dubbed, honest))
+            assertTrue(
+                "expected $tag to read as known-bad",
+                StreamRanker.explain(dubbed).contains("known-bad")
+            )
+        }
+    }
+
+    @Test
+    fun `a russian dub with better labels still sits under an honest 480p`() {
+        // The reported row shape: a debrid-served 4K remux of the right episode
+        // with a Russian dub, which is exactly what every label-based rule
+        // preferred before there was a marker for it.
+        val dub = stream(
+            "Paw Patrol S03E15 2160p REMUX RUS 18 GB",
+            url = "https://store-9.torbox.app/download/a.mkv"
+        )
+        val honest = stream("Paw Patrol S03E15 480p WEB-DL", url = "https://host/b.mkv")
+
+        assertEquals(listOf(honest, dub), order(dub, honest))
+    }
+
+    @Test
+    fun `a russian dub does not head the list even when it says english too`() {
+        // The English nudge cannot rescue a copy whose audio was replaced; the
+        // tier outranks the score, and "english" in the subtitle line is what a
+        // dubbed row often prints.
+        val dub = stream(
+            "Paw Patrol S03E15 1080p WEB-DL RUS english subtitles 4 GB",
+            url = "https://host/a.mkv"
+        )
+        val honest = stream("Paw Patrol S03E15 480p WEB-DL", url = "https://host/b.mkv")
+
+        assertTrue(StreamRanker.explain(dub).contains("known-bad"))
+        assertEquals(listOf(honest, dub), order(dub, honest))
+    }
+
+    @Test
+    fun `titles that merely name a language still order by quality`() {
+        // The other half of the admission rule: a marker may only sink when it
+        // is a tag, never when it is the title. Each of these titles' own rows
+        // carry the same words, so they must stay honest and separate on
+        // quality alone.
+        val titles = listOf(
+            "The Italian Job 2003",
+            "Russian Doll S01E01",
+            "My Big Fat Greek Wedding 2002",
+            "The Danish Girl 2015",
+            "Norwegian Wood 2010",
+            "Chinese Zodiac 2012",
+            "The Rum Diary 2011",
+            "Tai Chi Zero 2012",
+            "Dan in Real Life 2007"
+        )
+
+        for (title in titles) {
+            val hd = stream("$title 1080p WEB-DL 4 GB", url = "https://host/hd.mkv")
+            val sd = stream("$title 720p WEB-DL 4 GB", url = "https://host/sd.mkv")
+
+            assertFalse(
+                "$title: a release of the title must not sink for its own name",
+                StreamRanker.explain(hd).contains("known-bad")
+            )
+            assertEquals(
+                "$title must order by quality among its own releases",
+                listOf(hd, sd),
+                order(sd, hd)
+            )
+        }
+    }
+
+    @Test
+    fun `dual and multi audio copies are honest, not foreign dubs`() {
+        // Dual/multi audio includes the English track, so it is not a copy whose
+        // audio was replaced. Only "dub" markers may sink.
+        val plain = stream("Some Film 2024 1080p WEB-DL 4 GB", url = "https://host/a.mkv")
+
+        for (marker in listOf("Dual Audio", "Dual-Audio", "Multi Audio", "MULTi")) {
+            val multi = stream("Some Film 2024 1080p WEB-DL $marker 4 GB", url = "https://host/b.mkv")
+
+            assertFalse(
+                "$marker must not sink - it includes the English track",
+                StreamRanker.explain(multi).contains("known-bad")
+            )
+            // No score difference either: they are ordinary copies.
+            assertEquals(scoreOf(plain), scoreOf(multi))
+        }
+    }
+
+    @Test
+    fun `an english-tagged copy still heads an untagged one`() {
+        // The other half of the foreign-dub rule is untouched by this audit.
+        val tagged = stream("Some Film 2024 1080p WEB-DL ENG 4 GB", url = "https://host/a.mkv")
+        val untagged = stream("Some Film 2024 1080p WEB-DL 4 GB", url = "https://host/b.mkv")
+
+        assertEquals(10, scoreOf(tagged) - scoreOf(untagged))
+        assertEquals(listOf(tagged, untagged), order(untagged, tagged))
+    }
+
     @Test
     fun `a foreign dub stays sunk even when its text also says english`() {
         val dubbed = stream(
@@ -1085,5 +1215,220 @@ class StreamRankerTest {
         // demonstrably wrong over an honest one.
         assertTrue(StreamRanker.explain(dubbed).contains("known-bad"))
         assertEquals(listOf(honest, dubbed), order(dubbed, honest))
+    }
+
+    // ── A DRM label is a tiebreak, not a tier ──
+    //
+    // Reported: the DRM bonus was 60, larger than the 25 points between 2160p
+    // and 1440p, so a DRM 1080p (150 + 60 = 210) outranked an open 4K (200) and
+    // could head the list - the exact promotion its own comment promised could
+    // not happen.
+
+    private fun drmStream(title: String, url: String) = Stream(
+        name = "Some Service",
+        title = title,
+        url = url,
+        drm = StreamDrm(type = "widevine", licenseUrl = "https://cdn.example/license")
+    )
+
+    @Test
+    fun `a DRM copy does not outrank a better-labeled open one`() {
+        val drm1080 = drmStream("Some Film 2024 1080p WEB-DL", "https://cdn.example/drm.mkv")
+        val open4k = Stream(
+            name = "Some Service",
+            title = "Some Film 2024 2160p WEB-DL",
+            url = "https://host/4k.mkv"
+        )
+
+        assertEquals(listOf(open4k, drm1080), order(drm1080, open4k))
+    }
+
+    @Test
+    fun `a DRM copy still separates two otherwise identical rows`() {
+        val drm = drmStream("Some Film 2024 1080p WEB-DL", "https://cdn.example/drm.mkv")
+        val open = Stream(
+            name = "Some Service",
+            title = "Some Film 2024 1080p WEB-DL",
+            url = "https://host/open.mkv"
+        )
+
+        assertEquals(10, scoreOf(drm) - scoreOf(open))
+        assertEquals(listOf(drm, open), order(open, drm))
+    }
+
+    // ── The link contributes its filename, and nothing else ──
+    //
+    // Reported: searchableText fed the whole URL path into every rule, so a
+    // host or a directory could score or sink a row, and a `.ts` container read
+    // as a telesync tag.
+
+    @Test
+    fun `an mpeg-ts link is not a telesync`() {
+        val ts = stream(
+            "Some Film 2024 1080p WEB-DL 5 GB",
+            url = "https://host/Some.Film.2024.1080p.WEB-DL.ts"
+        )
+        val mkv = stream(
+            "Some Film 2024 1080p WEB-DL 5 GB",
+            url = "https://host/Some.Film.2024.1080p.WEB-DL.mkv"
+        )
+
+        assertFalse(
+            "a container extension is not a release tag: ${StreamRanker.explain(ts)}",
+            StreamRanker.explain(ts).contains("known-bad")
+        )
+        assertEquals(listOf(ts, mkv), order(ts, mkv))
+
+        // The tag itself still sinks: an HDTS capture names it before its
+        // extension ever enters the text.
+        val hdts = stream("Some Film 2024 1080p HDTS", url = "https://host/cam.mkv")
+        assertTrue(StreamRanker.explain(hdts).contains("known-bad"))
+    }
+
+    @Test
+    fun `a host or a directory token does not score the row`() {
+        // "en." at the front of a host used to pay the English-audio bonus.
+        val englishHost = stream(
+            "Some Film 2024 1080p WEB-DL 4 GB",
+            url = "https://en.example/f.mkv"
+        )
+        val plainHost = stream(
+            "Some Film 2024 1080p WEB-DL 4 GB",
+            url = "https://example/f.mkv"
+        )
+        assertEquals(scoreOf(plainHost), scoreOf(englishHost))
+
+        // A cached/instant directory used to pay the availability tier ...
+        val cachedPath = stream(
+            "Some Film 2024 1080p WEB-DL 4 GB",
+            url = "https://host/cached/instant/f.mkv"
+        )
+        assertFalse(
+            "the path is not the addon's availability claim: ${StreamRanker.explain(cachedPath)}",
+            StreamRanker.explain(cachedPath).contains("instant")
+        )
+
+        // ... and an sbs directory used to sink the row as a 3D pair.
+        val sbsPath = stream("Some Film 2024 1080p WEB-DL 4 GB", url = "https://host/sbs/f.mkv")
+        assertFalse(
+            "a directory is not a release tag: ${StreamRanker.explain(sbsPath)}",
+            StreamRanker.explain(sbsPath).contains("known-bad")
+        )
+    }
+
+    // ── Multi-word tags take any separator ──
+    //
+    // Reported: scene names are dot-separated, and `web-?dl` / `blu-?ray` /
+    // `dolby\s?vision` only accepted a hyphen, a space or nothing, so WEB.DL,
+    // Blu.Ray and Dolby.Vision scored as unlabeled releases.
+
+    @Test
+    fun `dot-separated release tags still collect their tier`() {
+        val plain = stream("Some Film 2024 1080p 4 GB", url = "https://host/a.mkv")
+        val webDl = stream("Some Film 2024 1080p WEB.DL 4 GB", url = "https://host/b.mkv")
+        val bluRay = stream("Some Film 2024 1080p Blu.Ray 4 GB", url = "https://host/c.mkv")
+
+        assertEquals(15, scoreOf(webDl) - scoreOf(plain))
+        assertEquals(20, scoreOf(bluRay) - scoreOf(plain))
+    }
+
+    @Test
+    fun `a dot-separated Dolby Vision label is still an HDR label`() {
+        val dv = stream("Some Film 2024 1080p WEB-DL Dolby.Vision 4 GB", url = "https://host/dv.mkv")
+        val hdr10 = stream("Some Film 2024 1080p WEB-DL HDR10 4 GB", url = "https://host/hdr.mkv")
+
+        assertEquals(scoreOf(hdr10), scoreOf(dv))
+        // ... and it is the DV half, so a box that cannot show DV drops it too.
+        assertEquals(scoreOf(dv) - 30, scoreOf(dv, dolbyVisionUseful = false))
+    }
+
+    // ── An SBS broadcaster is not a 3D pair ──
+    //
+    // Reported: the 3D rule read a bare `sbs`, which is also the Australian and
+    // Korean broadcaster's tag on a normal 720p/1080p release. `ou` is the
+    // French word for "or". Neither is a 3D signal on its own.
+
+    @Test
+    fun `an SBS broadcaster tag is not a 3D pair`() {
+        val broadcaster = stream(
+            "Some Show S01E01 1080p WEB-DL SBS 4 GB",
+            url = "https://host/a.mkv"
+        )
+        val plain = stream("Some Show S01E01 720p", url = "https://host/b.mkv")
+
+        assertFalse(
+            "a broadcaster tag must not sink the row: ${StreamRanker.explain(broadcaster)}",
+            StreamRanker.explain(broadcaster).contains("known-bad")
+        )
+        assertEquals(listOf(broadcaster, plain), order(plain, broadcaster))
+
+        // A genuine 3D pair still sinks, spelled the way releases spell it.
+        for (tag in listOf("HSBS", "3D", "Half-SBS", "HOU")) {
+            val threeD = stream("Some Film 2024 1080p $tag", url = "https://host/3d.mkv")
+            assertTrue(
+                "expected $tag to read as a 3D pair",
+                StreamRanker.explain(threeD).contains("known-bad")
+            )
+        }
+    }
+
+    // ── A contradicted resolution label, measured against the runtime ──
+    //
+    // Reported: the fake-resolution penalty only knew 4K and 1080p, so a 1440p
+    // tag on a 100 MB file kept its full +175; and its floors were absolute, so
+    // a five-minute 4K short at 1 GB - a dense, healthy encode - lost 300.
+
+    @Test
+    fun `a 1440p tag on a tiny file is penalized like the other tiers`() {
+        val fake1440 = stream("Some Film 2024 1440p WEB-DL 100 MB", url = "https://host/fake.mkv")
+        val real1080 = stream("Some Film 2024 1080p WEB-DL 8 GB", url = "https://host/real.mkv")
+
+        assertEquals(listOf(real1080, fake1440), order(fake1440, real1080))
+        assertTrue(
+            "the 1440p label must not keep its +175 on a 100 MB file",
+            scoreOf(fake1440) < scoreOf(real1080)
+        )
+    }
+
+    @Test
+    fun `a short 4K film is measured against its own runtime`() {
+        val short4k = stream("Some Short 2024 2160p WEB-DL 1 GB", url = "https://host/short.mkv")
+        val short1080 = stream("Some Short 2024 1080p WEB-DL 1 GB", url = "https://host/hd.mkv")
+
+        // 1 GB over five minutes is ~27 Mbps - a healthy 4K encode, not a fake.
+        assertTrue(
+            "a five-minute 4K short keeps its resolution bonus",
+            scoreOf(short4k, runtimeMinutes = 5) > scoreOf(short1080, runtimeMinutes = 5)
+        )
+
+        // The same file against a feature's length IS a fake, so the floor has
+        // not been disarmed - only measured against the title it belongs to.
+        val film4k = stream("Some Film 2024 2160p WEB-DL 1 GB", url = "https://host/film4k.mkv")
+        val film1080 = stream("Some Film 2024 1080p WEB-DL 1 GB", url = "https://host/film1080.mkv")
+        assertTrue(
+            "1 GB over two hours is not a 4K release",
+            scoreOf(film4k, runtimeMinutes = 120) < scoreOf(film1080, runtimeMinutes = 120)
+        )
+    }
+
+    // ── Peers: the largest count in the row ──
+    //
+    // Reported: seeders used first-match while sizes used max, so a title
+    // saying 100 over a description saying 500 scored 100 - enough to flip a
+    // seeder TIER, not just a point or two.
+
+    @Test
+    fun `the largest seeder count in the row is the one that counts`() {
+        val conflicting = Stream(
+            title = "Some Film 2024 1080p WEB-DL 100 seeders",
+            description = "500 seeders",
+            url = "https://host/a.mkv"
+        )
+        val busy = Stream(
+            title = "Some Film 2024 1080p WEB-DL 240 seeders",
+            url = "https://host/b.mkv"
+        )
+
+        assertEquals(scoreOf(busy), scoreOf(conflicting))
     }
 }

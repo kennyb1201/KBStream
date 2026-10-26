@@ -252,6 +252,23 @@ object EpisodeMatch {
      * answer is null and the picker is shown, labeled, with the filenames in
      * front of the viewer.
      *
+     * Two refinements sit on top of that order, both read from facts this
+     * object already computes:
+     *
+     *  - A copy the ranker sank ([StreamRanker.isKnownBadStream]: a CAM, a 3D
+     *    pair, a foreign dub, a nuked release) is only ever autoplay's last
+     *    resort — the same place the ranker's own tiers put it. Without this,
+     *    "first MATCHES row" handed the head to a sunk copy whenever it was the
+     *    only one that named the episode, and three separate paths (the ranker's
+     *    sort, the addon-memory reorder, this pick) could each put a known-bad
+     *    row at the head.
+     *  - A source that declares *nothing* outranks one whose declaration cannot
+     *    be compared with the request (another season's numbering). The two used
+     *    to share one bucket, so a file the app knows is another season's
+     *    same-numbered episode could start ahead of a file that says nothing at
+     *    all. Absolute-numbering tolerance is unchanged: the wrong-season row is
+     *    still playable by fallback, only after the truly silent one.
+     *
      * [runtimeMinutes] is the requested episode's own length, used only to read
      * a size: without one, a pack is recognized by the way it names itself
      * instead (see [isSeasonPack]).
@@ -265,23 +282,47 @@ object EpisodeMatch {
         episode: Int?,
         runtimeMinutes: Int? = null
     ): Stream? {
-        val playable = streams.filter { isAutoplayCandidate(it) }
-        if (season == null || episode == null) return playable.firstOrNull()
+        val candidates = streams.filter { isAutoplayCandidate(it) }
+        if (season == null || episode == null) return candidates.firstOrNull()
 
+        val (honest, sunk) = candidates.partition { !StreamRanker.isKnownBadStream(it) }
+        return pickAmong(honest, season, episode, runtimeMinutes)
+            ?: pickAmong(sunk, season, episode, runtimeMinutes)
+    }
+
+    /**
+     * The best of [candidates] for this episode, or null when every one of them
+     * declares another episode of this season.
+     *
+     * In order: the episode itself, a source that declares nothing, then a
+     * source whose declaration cannot be compared with the request (a different
+     * season — see [verdict]). A whole season is skipped at every step: a pack
+     * declares no episode and would otherwise read as "says nothing".
+     */
+    private fun pickAmong(
+        candidates: List<Stream>,
+        season: Int,
+        episode: Int,
+        runtimeMinutes: Int?
+    ): Stream? {
         var undeclared: Stream? = null
-        for (stream in playable) {
+        var otherSeason: Stream? = null
+        for (stream in candidates) {
             when (verdict(stream, season, episode)) {
                 Verdict.MATCHES -> return stream
                 Verdict.UNKNOWN -> {
-                    if (undeclared == null && !isSeasonPack(stream, runtimeMinutes)) {
-                        undeclared = stream
+                    if (isSeasonPack(stream, runtimeMinutes)) continue
+                    if (declared(stream) == null) {
+                        if (undeclared == null) undeclared = stream
+                    } else if (otherSeason == null) {
+                        otherSeason = stream
                     }
                 }
 
                 Verdict.DIFFERENT -> Unit
             }
         }
-        return undeclared
+        return undeclared ?: otherSeason
     }
 
     /**
@@ -330,15 +371,20 @@ object EpisodeMatch {
     }
 
     /**
-     * True when the list holds playable sources and every one of them declares
+     * True when the list holds candidates and every one of them declares
      * another episode — the case the picker explains in words instead of
      * leaving the viewer to wonder why auto-play stopped.
+     *
+     * The candidate set is [autoplayPick]'s own, hash rows included: a list
+     * whose URL rows are all another episode but whose hash rows include this
+     * one is not "only other episodes", and saying so would contradict what
+     * autoplay does with the same list.
      */
     fun onlyOtherEpisodes(streams: List<Stream>, season: Int?, episode: Int?): Boolean {
         if (season == null || episode == null) return false
-        val playable = streams.filter { !it.url.isNullOrBlank() }
-        return playable.isNotEmpty() &&
-            playable.all { verdict(it, season, episode) == Verdict.DIFFERENT }
+        val candidates = streams.filter { isAutoplayCandidate(it) }
+        return candidates.isNotEmpty() &&
+            candidates.all { verdict(it, season, episode) == Verdict.DIFFERENT }
     }
 
     /**

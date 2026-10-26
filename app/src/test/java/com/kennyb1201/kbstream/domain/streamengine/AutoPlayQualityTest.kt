@@ -235,4 +235,55 @@ class AutoPlayQualityTest {
             AutoPlayQuality.cappedPick(ranked[0], ranked, null, null, null, AutoPlayQuality.CAP_1080)
         )
     }
+
+    // ── Hash rows are candidates, exactly as they are for auto-play ──────────
+    //
+    // Reported: cappedPick's eligible set was URL-only while autoplay considered
+    // hash rows (see EpisodeMatch.isAutoplayCandidate), so in a debrid-first
+    // list - where every under-cap copy is a hash TorBox can resolve - a capped
+    // autoplay found nothing and stopped dead with the picker open, instead of
+    // starting the under-cap row it was allowed to start.
+
+    @Test
+    fun `a hash row under the ceiling is the fallback when no link fits`() {
+        val hash4k = Stream(title = "Movie 2160p REMUX", infoHash = "aaa111")
+        val hash1080 = Stream(title = "Movie 1080p WEB-DL", infoHash = "bbb222")
+        val candidates = listOf(hash4k, hash1080)
+
+        assertEquals(
+            hash1080,
+            AutoPlayQuality.cappedPick(hash4k, candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `a list of over-cap hash rows still starts nothing`() {
+        // The other half: the ceiling is not weakened by admitting hashes. An
+        // over-cap hash still owns no under-cap candidate, so nothing starts.
+        val hash4k = Stream(title = "Movie 2160p REMUX", infoHash = "aaa111")
+        val hashUhd = Stream(title = "Movie 4K HDR", infoHash = "ccc333")
+        val candidates = listOf(hash4k, hashUhd)
+
+        assertNull(
+            AutoPlayQuality.cappedPick(hash4k, candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `a ceiling notice is not shown while an under-cap hash row is in the list`() {
+        // The notice read the same URL-only set, so it could claim "every source
+        // is above your ceiling" while an under-cap hash row sat uncounted.
+        val url4k = s("Show S01E05 2160p")
+        val hash1080 = Stream(title = "Show S01E05 1080p", infoHash = "bbb222")
+
+        assertNull(
+            AutoPlayQuality.ceilingNotice(
+                listOf(url4k, hash1080),
+                1,
+                5,
+                null,
+                AutoPlayQuality.CAP_1080
+            )
+        )
+    }
 }

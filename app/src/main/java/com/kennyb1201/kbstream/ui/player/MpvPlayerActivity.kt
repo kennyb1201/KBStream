@@ -57,6 +57,8 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
+import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
@@ -1512,11 +1514,39 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val dolbyVisionUseful =
             com.kennyb1201.kbstream.data.player.DolbyVisionCapability.supportsNativeDolbyVision &&
                 AppPreferences.getDvCompatMode(this) != AppPreferences.DV_COMPAT_ALL
+        // Which add-on each parsed row came from, by the same identity the
+        // parallel array is resolved with below (addonsFor). The ranker's
+        // debrid-backed tier and the add-on memory reorder both read it.
+        val parsedAddonOf = addonLookup(parsedSources, parsedAddons)
         val orderedSources = if (AppPreferences.getUseStreamRanker(this)) {
-            StreamRanker.rank(
+            val ranked = StreamRanker.rank(
                 parsedSources,
                 requestedEpisode,
-                dolbyVisionUseful = dolbyVisionUseful
+                dolbyVisionUseful = dolbyVisionUseful,
+                // The same facts the resolver ranked with (see
+                // StreamsViewModel.fetch): the title's runtime, the add-on
+                // behind each row, and whether this install holds the debrid
+                // account those add-ons resolve through. Without them this
+                // re-rank built a second, different order - no debrid tier,
+                // size scored as raw bulk instead of density, and no memory
+                // reorder at all.
+                runtimeMinutes = launchRuntimeMinutes,
+                addonOf = parsedAddonOf,
+                debridAddons = DebridAddons.servedIds(
+                    AppPreferences.getTorboxApiKey(this).isNotBlank()
+                )
+            )
+            // What this title's add-ons last did, in the tier order the picker
+            // applied (see SourceAddonPreference): an add-on that opened a file
+            // here leads, a stalling or dead one is demoted, and a copy the
+            // ranker sank is never promoted by the memory. Recorded under
+            // parentId here and under the stream id by the resolver; both
+            // resolve to one show key.
+            SourceAddonPreference.ordered(
+                streams = ranked,
+                addonOf = parsedAddonOf,
+                outcomes = com.kennyb1201.kbstream.data.player.SourceAddonMemory
+                    .outcomes(this, parentId)
             )
         } else {
             parsedSources

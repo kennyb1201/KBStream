@@ -35,6 +35,15 @@ import com.kennyb1201.kbstream.data.addon.Stream
  * The tiers are stable, so within one the ranker's own order survives: this
  * rule moves whole addons, it does not second-guess the ranking.
  *
+ * The one thing the worked tier may not do is re-lift a copy the ranker sank
+ * ([StreamRanker.isKnownBadStream]): a dub, a CAM, a nuked release from an
+ * addon that opened a file here keeps the ranker's position instead of riding
+ * its addon to the head. Promotion wholesale outranks rank order - that is what
+ * the tier is for - so without this a "worked" addon's known-bad MATCHES row
+ * was handed to auto-play over another addon's honest one, and the ranker's
+ * promise ("a known-bad copy sits under every honest source") held only until
+ * this reorder ran.
+ *
  * Deliberately NOT a filter. A demoted addon stays in the list and stays
  * selectable: its links may work again tomorrow (a debrid cache refills, a
  * hoster recovers), the record expires on its own, and the viewer can always
@@ -59,6 +68,19 @@ internal object SourceAddonPreference {
     ) {
         val isEmpty: Boolean
             get() = worked.isEmpty() && failed.isEmpty() && slow.isEmpty()
+
+        /**
+         * The record in the diagnostics report's words, one tier per clause.
+         *
+         * Keys are the normalized add-on names this rule sorts on - the same
+         * spelling the stream's add-on normalizes to, so a row in the report
+         * can be lined up with the clause that moved it. Read-only.
+         */
+        fun describe(): String = buildList {
+            if (worked.isNotEmpty()) add("worked: ${worked.sorted().joinToString(", ")}")
+            if (slow.isNotEmpty()) add("slow: ${slow.sorted().joinToString(", ")}")
+            if (failed.isNotEmpty()) add("failed: ${failed.sorted().joinToString(", ")}")
+        }.joinToString("; ")
     }
 
     /**
@@ -129,11 +151,24 @@ internal object SourceAddonPreference {
         val worked = outcomes.worked
         val slow = outcomes.slow
         val failed = outcomes.failed
+        // Read once per row rather than inside the selector: the comparator runs
+        // O(n log n) times and each read builds and matches the row's whole
+        // searchable text (the same reason StreamRanker caches it per stream).
+        val knownBad = java.util.IdentityHashMap<Stream, Boolean>()
+        streams.forEach { stream -> knownBad[stream] = StreamRanker.isKnownBadStream(stream) }
         return streams
             .withIndex()
             .sortedWith(
                 compareBy(
-                    { (_, stream) -> tierOf(addonOf(stream), worked, slow, failed) },
+                    { (_, stream) ->
+                        tierOf(
+                            addon = addonOf(stream),
+                            worked = worked,
+                            slow = slow,
+                            failed = failed,
+                            knownBad = knownBad[stream] == true
+                        )
+                    },
                     // The ranker's own order inside a tier: `sortedWith` is
                     // stable, but being explicit about the tie-break keeps the
                     // rule honest if that ever changes.
@@ -147,7 +182,8 @@ internal object SourceAddonPreference {
         addon: String?,
         worked: Set<String>,
         slow: Set<String>,
-        failed: Set<String>
+        failed: Set<String>,
+        knownBad: Boolean
     ): Int {
         val key = normalize(addon)
         if (key.isEmpty()) return TIER_UNKNOWN
@@ -166,7 +202,10 @@ internal object SourceAddonPreference {
         // keep up twice, which is the worse fact for choosing what to start
         // from.
         if (key in slow) return TIER_SLOW
-        if (key in worked) return TIER_WORKED
+        // A sunk copy keeps the ranker's position, which is where the ranker's
+        // known-bad tier put it: below every honest row. The unknown tier's
+        // stable index order preserves exactly that.
+        if (key in worked) return if (knownBad) TIER_UNKNOWN else TIER_WORKED
         return TIER_UNKNOWN
     }
 }

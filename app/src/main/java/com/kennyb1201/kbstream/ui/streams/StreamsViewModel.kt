@@ -109,10 +109,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * configured resolves no infoHash at all), and the account alone says
      * nothing about which add-on's links reach it.
      */
-    private fun debridBackedAddons(): Set<String> {
-        if (!hasDebridServiceConfigured()) return emptySet()
-        return DebridAddons.normalizedIds()
-    }
+    private fun debridBackedAddons(): Set<String> =
+        DebridAddons.servedIds(hasDebridServiceConfigured())
 
     private companion object {
         const val TAG = "KBStream"
@@ -589,12 +587,27 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // itself, so the picker, the tabs' parent list and auto-play all see
         // the same order. It only reorders - nothing is hidden, and a failure
         // expires on its own ([SourceAddonMemory.TTL_MS]).
+        val addonOutcomes = SourceAddonMemory.outcomes(getApplication(), streamId)
         val preferredStreams =
             SourceAddonPreference.ordered(
                 streams = preppedStreams,
                 addonOf = addonOf,
-                outcomes = SourceAddonMemory.outcomes(getApplication(), streamId)
+                outcomes = addonOutcomes
             )
+        // Whether that reorder actually moved a row, and by which tier. The
+        // diagnostics block explains the ranker, and the reorder runs after it:
+        // without this line a capture showing a surprising head cannot say
+        // whether the ranker put it there or the add-on memory lifted it there,
+        // which is the question the report exists to answer.
+        val memoryReorder =
+            if (
+                preferredStreams.size == preppedStreams.size &&
+                preferredStreams.indices.any { preferredStreams[it] !== preppedStreams[it] }
+            ) {
+                "add-on memory · ${addonOutcomes.describe()}"
+            } else {
+                null
+            }
 
         // The same torrent served by several addons is ONE choice: collapse the
         // repeats into the best-placed row (see StreamDedup). Deliberately after
@@ -669,7 +682,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 ranked = useRanker,
                 requestedEpisode = requestedEpisode,
                 runtimeMinutes = runtimeMinutes,
-                debridAddons = debridAddons
+                debridAddons = debridAddons,
+                reordered = memoryReorder
             )
         )
 
@@ -791,7 +805,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         ranked: Boolean,
         requestedEpisode: Pair<Int, Int>?,
         runtimeMinutes: Int?,
-        debridAddons: Set<String>
+        debridAddons: Set<String>,
+        // The reorder that ran after the ranker, when it moved a row (see
+        // [SourceAddonPreference]). Null = nothing moved, so the ranker's own
+        // lines are the whole explanation.
+        reordered: String? = null
     ): List<String> {
         if (streams.isEmpty()) return listOf("streams: none returned")
 
@@ -807,6 +825,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     (requestedEpisode?.let { " for S%02dE%02d".format(it.first, it.second) } ?: "") +
                     ", top $RANK_REPORT_TOP:"
             )
+            reordered?.let { add("  reorder: $it") }
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
                     "  ${addonOf(stream) ?: "?"} · " +

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -30,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
@@ -451,6 +451,41 @@ internal fun Modifier.homeTopRailUpHook(
 }
 
 /**
+ * The D-pad Left edge-stop for the FIRST card of a Home rail.
+ *
+ * Reported problem (TV, Onn): pressing Left from the Continue Watching head
+ * card moved focus DOWN to the Upcoming rail's header button. Nothing on Home
+ * consumes Left, so that was pure default focus search - and the search had a
+ * target to find because the rail column pads [TvSafeAreaHorizontal] while the
+ * card row adds [RailHorizontalStartPadding] on top, which puts the Upcoming
+ * header's left edge 12dp left of the first card's. There is nothing inside the
+ * row to the left of its first card, so the search fell through to the nearest
+ * focusable that was even partly left of it, one rail below.
+ *
+ * Cancelling the LEFT search is the fix. A rail's left edge is a boundary, not
+ * a doorway: the top bar is reached by Up, never by Left, so there is no
+ * legitimate Left target from a head card, and cancelling the search leaves
+ * focus exactly where it is without touching Up, Down, Right or Select.
+ *
+ * [FocusRequester.Cancel] rather than intercepting the key, so no press is
+ * consumed here: a cancelled search is the framework's own "this direction has
+ * nowhere to go", which is also why it cannot interfere with an explicit
+ * `requestFocus()` - an edge-stop cancels a SEARCH, never a request, so the
+ * fresh-entry landing on the head card and the return-from-Detail restore are
+ * unaffected.
+ *
+ * Applied only to position 0, so Left/Right inside a rail keep working as they
+ * did. Must sit BEFORE the card's `focusRequester` in the chain, as
+ * `focusProperties` only configures the focus target that follows it.
+ */
+internal fun Modifier.homeRailHeadLeftEdgeStop(isHeadCard: Boolean): Modifier =
+    if (!isHeadCard) {
+        this
+    } else {
+        this.focusProperties { left = FocusRequester.Cancel }
+    }
+
+/**
  * How long D-pad Up has to be HELD, on any rail, before Home reveals its top
  * bar.
  *
@@ -683,7 +718,7 @@ fun KBHomeCollectionRail(
                 itemsIndexed(
                     items = tiles,
                     key = { index, tile -> collectionRailKey(index, tile) }
-                ) { _, (folderId, folder) ->
+                ) { index, (folderId, folder) ->
                     // Every item emits a tile - the null guard and its empty
                     // branch are gone, so no position can be a focusable no-op.
                     val requester = remember { FocusRequester() }
@@ -708,6 +743,9 @@ fun KBHomeCollectionRail(
                             }
                         },
                         modifier = Modifier
+                            // The head tile's left edge is the rail's edge (see
+                            // [homeRailHeadLeftEdgeStop]).
+                            .homeRailHeadLeftEdgeStop(index == 0)
                             .focusRequester(requester)
                             .homeTopRailUpHook(requester, onUpPressed)
                     )
@@ -1003,10 +1041,10 @@ fun KBHomeBrowseRail(
             ),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(
+            itemsIndexed(
                 items = shortcuts,
-                key = { it.chipKey() }
-            ) { shortcut ->
+                key = { _, shortcut -> shortcut.chipKey() }
+            ) { index, shortcut ->
                 // From the caller's registry when one was handed in, so Home
                 // can hand focus to the chip that takes a removed one's place
                 // before that chip leaves; a local one otherwise. The lookup
@@ -1044,6 +1082,9 @@ fun KBHomeBrowseRail(
                         }
                     },
                     modifier = Modifier
+                        // The head chip's left edge is the rail's edge (see
+                        // [homeRailHeadLeftEdgeStop]).
+                        .homeRailHeadLeftEdgeStop(index == 0)
                         .focusRequester(requester)
                         .homeTopRailUpHook(requester, onUpPressed)
                 )

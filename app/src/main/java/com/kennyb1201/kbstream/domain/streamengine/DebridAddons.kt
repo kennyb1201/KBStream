@@ -64,4 +64,20 @@ internal object DebridAddons {
      */
     fun normalizedIds(): Set<String> =
         KNOWN_DEBRID_ADDON_IDS.mapTo(mutableSetOf()) { SourceAddonPreference.normalize(it) }
+
+    /**
+     * The set an install may hand the ranker, given whether it holds a debrid
+     * account at all.
+     *
+     * Both halves are required. The add-on list alone would promote an add-on
+     * that cannot serve anything (a debrid-first add-on with no account
+     * configured resolves no infoHash at all), and the account alone says
+     * nothing about which add-on's links reach it. Written once because two
+     * readers ask the question: the source resolver that builds the picker's
+     * order, and the player that re-ranks the list it was handed (see
+     * MpvPlayerActivity) - a second spelling would let the two disagree about
+     * what "debrid-served" means.
+     */
+    fun servedIds(hasAccount: Boolean): Set<String> =
+        if (hasAccount) normalizedIds() else emptySet()
 }

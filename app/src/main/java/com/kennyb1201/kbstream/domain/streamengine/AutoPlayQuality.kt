@@ -62,6 +62,16 @@ internal object AutoPlayQuality {
      * *this* episode — never one that declares another episode of the season,
      * and never a whole-season pack.
      *
+     * "Candidate" is [EpisodeMatch.isAutoplayCandidate], the same test
+     * auto-play itself uses, and it includes hash-only rows: TorBox can hand
+     * back a CDN link for a torrent the account holds, which is what
+     * [AutoplayWalk] exists for. A URL-only set here could therefore find
+     * nothing under the ceiling while every under-cap row was a hash — the
+     * pick would be an over-cap hash, the walk would ask again, and autoplay
+     * would stop dead with the picker open in the debrid-first setup this app
+     * is built around. The ceiling still holds: the fallback resolves that hash
+     * row only because its own text declares a resolution at or under the cap.
+     *
      * An unlabeled copy is only the fallback behind those declared ones. Both
      * are allowed — an unlabeled file is not evidence of a big one — but only
      * the declared copy is *evidence of a small one*, and the unlabeled head is
@@ -93,7 +103,7 @@ internal object AutoPlayQuality {
         val pickRank = StreamRanker.resolutionRank(pick)
         if (pickRank in 1..limit) return pick
         val eligible = candidates.filter { stream ->
-            !stream.url.isNullOrBlank() &&
+            EpisodeMatch.isAutoplayCandidate(stream) &&
                 qualifiesForEpisode(stream, season, episode, runtimeMinutes)
         }
         // 1. a copy that SAYS it fits ...
@@ -135,7 +145,9 @@ internal object AutoPlayQuality {
      * Only when EVERY candidate for this episode plainly declares more than the
      * ceiling: an unlabeled source would have been taken by [cappedPick], and a
      * list with no candidates at all is the wrong-episode case's business, not
-     * this one's.
+     * this one's. The candidate set is [cappedPick]'s own — hash rows included —
+     * or the notice could claim "every source is above your ceiling" while an
+     * under-cap hash row sat in the same list uncounted.
      */
     fun ceilingNotice(
         streams: List<Stream>,
@@ -147,7 +159,7 @@ internal object AutoPlayQuality {
         if (cap == CAP_AUTO || streams.isEmpty()) return null
         val limit = capRank(cap)
         val candidates = streams.filter { stream ->
-            !stream.url.isNullOrBlank() &&
+            EpisodeMatch.isAutoplayCandidate(stream) &&
                 qualifiesForEpisode(stream, season, episode, runtimeMinutes)
         }
         if (candidates.isEmpty()) return null

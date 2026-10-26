@@ -165,8 +165,60 @@ class StreamsRankWiringContractTest {
         assertTrue(
             "a debrid-first addon with no account configured must not be lifted: " +
                 "it can serve nothing, so it is not debrid-served: $helper",
-            helper.contains("hasDebridServiceConfigured()") &&
-                helper.contains("DebridAddons.normalizedIds()")
+            helper.contains("DebridAddons.servedIds(hasDebridServiceConfigured())")
+        )
+
+        // Both halves now live in one place, because the player's re-rank reads
+        // the same set (see MpvPlayerActivity): a second spelling would let the
+        // picker and the in-player SOURCES list disagree about what
+        // "debrid-served" means.
+        val addons = source("com/kennyb1201/kbstream/domain/streamengine/DebridAddons.kt")
+        val served = addons.substringAfter("fun servedIds(")
+        assertTrue(
+            "the set is empty without an account and the known ids with one: $served",
+            served.contains("normalizedIds()") && served.contains("emptySet()")
+        )
+    }
+
+    @Test
+    fun `the report names the reorder that ran after the ranker`() {
+        val fetch = functionBody(viewModel, "private suspend fun fetch(")
+        assertTrue(
+            "a head lifted by the add-on memory must be readable as such: the " +
+                "outcomes and the movement both have to reach the block",
+            fetch.contains("val addonOutcomes = SourceAddonMemory.outcomes(") &&
+                fetch.contains("reordered = memoryReorder")
+        )
+
+        val report = functionBody(viewModel, "private fun rankReportLines(")
+        assertTrue(
+            "and the block has to carry the line itself: $report",
+            report.contains("reordered: String?") && report.contains("\"  reorder: \$it\"")
+        )
+    }
+
+    @Test
+    fun `the player's re-rank reads the same facts as the resolver's`() {
+        // The in-player SOURCES list is a re-rank of the payload, not a copy of
+        // the resolver's order, so it has to be given the same three facts: a
+        // rank call that keeps the defaults orders a debrid-backed addon's
+        // entries differently, scores size as bulk instead of density, and
+        // never applies the add-on memory - three ways one title's list differ
+        // between the picker and the player.
+        val mpv = source("com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt")
+        val start = mpv.indexOf("val ranked = StreamRanker.rank(")
+        assertTrue("the player must still re-rank the payload it was handed", start >= 0)
+        val call = mpv.substring(start, minOf(mpv.length, start + 1_600))
+        assertTrue(
+            "the runtime, the add-on behind each row and the debrid set: $call",
+            call.contains("runtimeMinutes = launchRuntimeMinutes") &&
+                call.contains("addonOf = parsedAddonOf") &&
+                call.contains("debridAddons = DebridAddons.servedIds(")
+        )
+        assertTrue(
+            "and the memory reorder the picker applied: $call",
+            call.contains("SourceAddonPreference.ordered(") &&
+                call.contains(".outcomes(this, parentId)")
         )
     }
 

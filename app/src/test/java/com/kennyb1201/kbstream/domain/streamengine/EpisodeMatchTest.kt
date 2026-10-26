@@ -330,4 +330,68 @@ class EpisodeMatchTest {
         assertNull(EpisodeMatch.seriesRootFrom("tt3121722:special:3"))
         assertNull(EpisodeMatch.seriesRootFrom(null))
     }
+
+    // ── the ranker's known-bad tier still comes first ──
+    //
+    // Reported: "first MATCHES row" ignored the tier the ranker had already
+    // applied, so a CAM - or a foreign-dubbed copy, the PAW Patrol report - of
+    // the right episode started by itself whenever it was the only row naming
+    // the episode. The ranker's promise is that a known-bad copy sits under
+    // every honest source; the automatic pick has to keep that promise too.
+
+    @Test
+    fun `an honest copy of the episode is played over a sunk one`() {
+        val cam = stream(title = "Paw Patrol S03E30 1080p CAM", url = "https://host/cam.mkv")
+        val honest = stream(title = "Paw Patrol S03E30 480p WEB-DL", url = "https://host/a.mkv")
+
+        assertEquals(honest, EpisodeMatch.autoplayPick(listOf(cam, honest), 3, 30))
+    }
+
+    @Test
+    fun `a foreign-dubbed copy does not start over an honest one`() {
+        val dubbed = stream(title = "Paw Patrol S03E30 1080p WEB-DL RUS", url = "https://host/ru.mkv")
+        val honest = stream(title = "Paw Patrol S03E30 480p WEB-DL", url = "https://host/a.mkv")
+
+        assertEquals(honest, EpisodeMatch.autoplayPick(listOf(dubbed, honest), 3, 30))
+    }
+
+    @Test
+    fun `a sunk copy is still played when nothing honest is left`() {
+        // The tier is a preference, not a filter: a title whose only row is a
+        // CAM still has one playable row, exactly as the ranker's list does.
+        val cam = stream(title = "Paw Patrol S03E30 1080p CAM", url = "https://host/cam.mkv")
+
+        assertEquals(cam, EpisodeMatch.autoplayPick(listOf(cam), 3, 30))
+    }
+
+    // ── a file that says nothing outranks one from another season ──
+    //
+    // Another season's declaration is UNKNOWN rather than a contradiction, so
+    // absolute numbering keeps working - but it is still a declaration, and a
+    // file that says nothing at all is the better guess. The two used to share
+    // one fallback bucket, so a known other-season row could start ahead of a
+    // silent one.
+
+    @Test
+    fun `a source that names nothing beats one that names another season`() {
+        val otherSeason = stream(title = "Paw Patrol S01E30 1080p", url = "https://host/s1.mkv")
+        val quiet = stream(title = "Paw Patrol 1080p WEB-DL", url = "https://host/quiet.mkv")
+
+        assertEquals(quiet, EpisodeMatch.autoplayPick(listOf(otherSeason, quiet), 3, 30))
+        // ... and the wrong-season row is still played when it is all there is,
+        // which is the absolute-numbering tolerance this must not break.
+        assertEquals(otherSeason, EpisodeMatch.autoplayPick(listOf(otherSeason), 3, 30))
+    }
+
+    @Test
+    fun `a hash row of this episode counts when the picker asks about other episodes`() {
+        // The notice and the pick have to read one candidate set: a list whose
+        // URL rows are all another episode but whose hash rows include this one
+        // is not "only other episodes".
+        val urlOther = stream(title = "Paw Patrol S03E31 1080p", url = "https://host/a.mkv")
+        val hashAsked = Stream(title = "Paw Patrol S03E30 1080p", infoHash = "abc123")
+
+        assertFalse(EpisodeMatch.onlyOtherEpisodes(listOf(urlOther, hashAsked), 3, 30))
+        assertEquals(hashAsked, EpisodeMatch.autoplayPick(listOf(urlOther, hashAsked), 3, 30))
+    }
 }

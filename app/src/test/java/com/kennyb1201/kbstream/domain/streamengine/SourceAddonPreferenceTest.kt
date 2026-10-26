@@ -109,6 +109,52 @@ class SourceAddonPreferenceTest {
         assertEquals(listOf("FlixStreams", "AIOStreams"), result.map { it.name })
     }
 
+    // ── the worked tier does not re-lift a copy the ranker sank ──
+    //
+    // Reported: promotion wholesale outranks rank order, so a "worked" addon's
+    // known-bad row - a dub, a CAM, a nuked release - was handed to auto-play
+    // ahead of another addon's honest copy. The ranker's promise ("a known-bad
+    // copy sits under every honest source") held only until this reorder ran.
+
+    @Test
+    fun `a sunk copy is not promoted by the addon that worked`() {
+        val honest = Stream(
+            name = "AIOStreams",
+            title = "Show S2E5 1080p WEB-DL",
+            url = "https://aio.example/e5.mp4"
+        )
+        val dubbed = Stream(
+            name = "FlixStreams",
+            title = "Show S2E5 1080p WEB-DL RUS",
+            url = "https://flix.example/e5.ru.mp4"
+        )
+        // Already ranked, as the caller hands it over: honest first, sunk last.
+        val ranked = listOf(honest, dubbed)
+
+        val result = ordered(streams = ranked, worked = setOf("FlixStreams"))
+
+        assertEquals(listOf("AIOStreams", "FlixStreams"), result.map { it.name })
+    }
+
+    @Test
+    fun `a worked addon's honest copies still lead`() {
+        // The tier itself is untouched: only rows the ranker sank are exempt.
+        val worked = Stream(
+            name = "FlixStreams",
+            title = "Show S2E5 720p WEB-DL",
+            url = "https://flix.example/e5.mp4"
+        )
+        val other = Stream(
+            name = "AIOStreams",
+            title = "Show S2E5 1080p WEB-DL",
+            url = "https://aio.example/e5.mp4"
+        )
+
+        val result = ordered(streams = listOf(other, worked), worked = setOf("FlixStreams"))
+
+        assertEquals(listOf("FlixStreams", "AIOStreams"), result.map { it.name })
+    }
+
     @Test
     fun `nothing known means the list is untouched`() {
         val streams = listOf(aio, flix, other)

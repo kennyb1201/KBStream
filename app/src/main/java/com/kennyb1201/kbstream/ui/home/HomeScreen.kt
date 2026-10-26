@@ -157,6 +157,7 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
+import com.kennyb1201.kbstream.ui.kb.homeRailHeadLeftEdgeStop
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
 import com.kennyb1201.kbstream.ui.kb.rememberHomeTopBarHoldUpHook
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -2358,6 +2359,10 @@ private fun UpcomingEpisodeCard(
     onLongClick: (() -> Unit)? = null,
     onFocus: () -> Unit = {},
     focusRequester: FocusRequester? = null,
+    // True only for the card at position 0 of its rail: Left from there has no
+    // target and must not fall through to another rail (see
+    // [homeRailHeadLeftEdgeStop]).
+    isHeadCard: Boolean = false,
     // Non-null only when this card's rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2376,6 +2381,7 @@ private fun UpcomingEpisodeCard(
             .width(224.dp)
             .height(146.dp)
             .padding(end = HomeRailGap)
+            .homeRailHeadLeftEdgeStop(isHeadCard)
             .then(
                 if (focusRequester == null) {
                     Modifier
@@ -3134,6 +3140,12 @@ private fun BuiltinContinueWatchingRail(
                         // gap instead of the rail teleporting under the D-pad.
                         modifier = Modifier
                             .animateItem()
+                            // Left from the rail's first card is nowhere, not a
+                            // step down to the Upcoming header below it (see
+                            // [homeRailHeadLeftEdgeStop]).
+                            .homeRailHeadLeftEdgeStop(
+                                index == CONTINUE_WATCHING_HEAD_INDEX
+                            )
                             .then(
                                 if (index == CONTINUE_WATCHING_HEAD_INDEX) {
                                     // Only the head is measured: it is the one the
@@ -3352,6 +3364,12 @@ private fun BuiltinUpcomingRail(
                             onClick = { onOpenDetails(heroItem) },
                             onLongClick = { onLongPress(upcoming, requester) },
                             focusRequester = requester,
+                            // The head card's left edge is the rail's edge (see
+                            // [homeRailHeadLeftEdgeStop]). It is also the rail
+                            // whose focusable header sits directly below the
+                            // Continue Watching rail's first card, which is the
+                            // reported Left->Down jump this closes.
+                            isHeadCard = index == CONTINUE_WATCHING_HEAD_INDEX,
                             onUpPressed = onUpPressed,
                             onFocus = {
                                 // Where the viewer actually is (see
@@ -5367,6 +5385,12 @@ fun HomeScreen(
                                                         meta.id
                                                     )
                                                     .offset(y = (-3).dp)
+                                                    // Left from the rail's first
+                                                    // card is nowhere (see
+                                                    // [homeRailHeadLeftEdgeStop]).
+                                                    .homeRailHeadLeftEdgeStop(
+                                                        index == 0
+                                                    )
                                                     .focusRequester(requester)
                                                     .width(cardWidth)
                                                     .height(cardHeight)
