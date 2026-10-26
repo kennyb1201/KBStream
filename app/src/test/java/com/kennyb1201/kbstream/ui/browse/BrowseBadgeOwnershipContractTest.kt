@@ -80,7 +80,7 @@ class BrowseBadgeOwnershipContractTest {
             )
             assertTrue(
                 "$path: and the key test is the shared shape - the key the badge sets " +
-                    "carry ENDS WITH `::$id`, it is not the id itself",
+                    "carry ENDS WITH `::\$id`, it is not the id itself",
                 vm.contains("private fun keyOwnedByAnotherProfile(") &&
                     vm.contains("siblingOwned.any { id -> key.endsWith(\"::\$id\") }")
             )
