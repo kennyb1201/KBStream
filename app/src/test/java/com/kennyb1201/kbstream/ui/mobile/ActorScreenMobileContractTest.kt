@@ -168,8 +168,9 @@ class ActorScreenMobileContractTest {
             mobile.contains("ACTOR_MOVIES_RAIL") && mobile.contains("ACTOR_TV_RAIL")
         )
         assertTrue(
-            "the credit's id is the recorded item, as on TV",
-            mobile.contains("itemId = credit.id.toString()")
+            "the recorded item is the credit's id PLUS its role, as on TV, so a " +
+                "dual-role credit's two cards are distinguishable",
+            mobile.contains("itemId = viewModel.creditItemId(credit)")
         )
         assertTrue(
             "the record is consumed on entry and honoured by scrolling",

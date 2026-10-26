@@ -43,6 +43,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
+import com.kennyb1201.kbstream.ui.actor.ACTOR_CREW_RAIL
 import com.kennyb1201.kbstream.ui.actor.ACTOR_MOVIES_RAIL
 import com.kennyb1201.kbstream.ui.actor.ACTOR_TV_RAIL
 import com.kennyb1201.kbstream.ui.actor.ActorViewModel
@@ -85,14 +86,14 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  * filter is the TV's too, with the resolved IMDb id in the tuple so a title
  * hidden from Home or the Library leaves the filmography as well.
  *
- * The TV page is a full-bleed still behind two horizontal rails of credits.
- * The phone keeps the still as a header panel and lays each rail out as a
- * titled band in one vertical grid, which is the same adaptation the genre /
- * studio / decade pages use. A tap records the same [BrowseReturnTarget] the TV
- * rail records (rail key `moviesrow` / `tvrow`, the credit's id as the item),
- * so backing out of a title's Detail page reopens the filmography scrolled to
- * that card. The record is honoured by scrolling: there is no focus ring on a
- * phone to put back.
+ * The TV page is a full-bleed still behind horizontal rails of credits. The
+ * phone keeps the still as a header panel and lays each rail out as a titled
+ * band in one vertical grid, which is the same adaptation the genre / studio /
+ * decade pages use. A tap records the same [BrowseReturnTarget] the TV rail
+ * records (rail key `moviesrow` / `tvrow` / `crewrow`, the credit's id plus its
+ * role as the item), so backing out of a title's Detail page reopens the
+ * filmography scrolled to that card. The record is honoured by scrolling: there
+ * is no focus ring on a phone to put back.
  *
  * The long-press sheet is the shared one and offers what the TV menu offers:
  * Go to Details (recording the same place first), the watched toggle resolved
@@ -147,6 +148,16 @@ fun ActorScreenMobile(
         val sorted = viewModel.sortedCredits(person)
         sorted.filter { it.mediaType == "tv" && !creditHidden(it, "series") }
     }
+    // The directing/writing work, hidden-filtered like the cast rails. A
+    // director or writer tapped from Detail's people rail used to land on a
+    // cast-only page; this is the section that shows the work they were
+    // tapped for.
+    val crewCredits = remember(person, resolvedCreditIds, hiddenTitleKeys) {
+        viewModel.sortedCrewCredits(person).filter { credit ->
+            val normalizedType = if (credit.mediaType == "tv") "series" else "movie"
+            !creditHidden(credit, normalizedType)
+        }
+    }
 
     LaunchedEffect(actorId) {
         viewModel.load(actorId)
@@ -157,33 +168,41 @@ fun ActorScreenMobile(
     // credits can land after this grid composes, so the record is held until
     // the card is actually in the list; a record for a rail this page does not
     // paint falls through to the first credit.
-    LaunchedEffect(returnTarget, movies, tvShows) {
+    LaunchedEffect(returnTarget, movies, tvShows, crewCredits) {
         val target = returnTarget ?: return@LaunchedEffect
         // Grid positions, laid out exactly as the items below are added: the
         // header, the optional biography, a label for each non-empty rail, and
         // the cards. The first card is the fallthrough for a record this page
         // cannot name (the credit is gone), which is where an ordinary open
         // starts anyway.
-        val positions = LinkedHashMap<Pair<String, Int>, Int>()
+        //
+        // Keyed by the same composite item id the record carries (id + role),
+        // so a dual-role credit's two cards do not overwrite each other and the
+        // return lands on the role that was tapped.
+        val positions = LinkedHashMap<Pair<String, String>, Int>()
         var next = 1 + (if (person?.biography.orEmpty().isNotBlank()) 1 else 0)
         if (movies.isNotEmpty()) {
             next += 1
             movies.forEachIndexed { index, credit ->
-                positions[ACTOR_MOVIES_RAIL to credit.id] = next + index
+                positions[ACTOR_MOVIES_RAIL to viewModel.creditItemId(credit)] = next + index
             }
             next += movies.size
         }
         if (tvShows.isNotEmpty()) {
             next += 1
             tvShows.forEachIndexed { index, credit ->
-                positions[ACTOR_TV_RAIL to credit.id] = next + index
+                positions[ACTOR_TV_RAIL to viewModel.creditItemId(credit)] = next + index
+            }
+            next += tvShows.size
+        }
+        if (crewCredits.isNotEmpty()) {
+            next += 1
+            crewCredits.forEachIndexed { index, credit ->
+                positions[ACTOR_CREW_RAIL to viewModel.creditItemId(credit)] = next + index
             }
         }
-        val targetId = target.itemId.toIntOrNull()
-        val recordedIndex = if (target.railKey != null && targetId != null) {
-            positions[target.railKey to targetId]
-        } else {
-            null
+        val recordedIndex = target.railKey?.let { railKey ->
+            positions[railKey to target.itemId]
         }
         val index = recordedIndex
             ?: positions.values.firstOrNull()
@@ -328,7 +347,7 @@ fun ActorScreenMobile(
                                             credit,
                                             BrowseReturnTarget(
                                                 screenKey = screenKey,
-                                                itemId = credit.id.toString(),
+                                                itemId = viewModel.creditItemId(credit),
                                                 position = index,
                                                 railKey = ACTOR_MOVIES_RAIL
                                             )
@@ -337,7 +356,7 @@ fun ActorScreenMobile(
                                     onLongClick = {
                                         menu = credit to BrowseReturnTarget(
                                             screenKey = screenKey,
-                                            itemId = credit.id.toString(),
+                                            itemId = viewModel.creditItemId(credit),
                                             position = index,
                                             railKey = ACTOR_MOVIES_RAIL
                                         )
@@ -368,7 +387,7 @@ fun ActorScreenMobile(
                                             credit,
                                             BrowseReturnTarget(
                                                 screenKey = screenKey,
-                                                itemId = credit.id.toString(),
+                                                itemId = viewModel.creditItemId(credit),
                                                 position = index,
                                                 railKey = ACTOR_TV_RAIL
                                             )
@@ -377,7 +396,7 @@ fun ActorScreenMobile(
                                     onLongClick = {
                                         menu = credit to BrowseReturnTarget(
                                             screenKey = screenKey,
-                                            itemId = credit.id.toString(),
+                                            itemId = viewModel.creditItemId(credit),
                                             position = index,
                                             railKey = ACTOR_TV_RAIL
                                         )
@@ -386,11 +405,71 @@ fun ActorScreenMobile(
                             }
                         }
 
-                        if (movies.isEmpty() && tvShows.isEmpty()) {
+                        if (crewCredits.isNotEmpty()) {
+                            item(key = "crewheader", span = { GridItemSpan(maxLineSpan) }) {
+                                SectionLabel("DIRECTING & WRITING")
+                            }
+                            itemsIndexed(
+                                items = crewCredits,
+                                // The role (job) half of the key, so a title the
+                                // person both acted in and wrote/directed is not
+                                // a duplicate key against a cast row.
+                                key = { _, credit -> "crew:${credit.id}:${credit.job.orEmpty()}" },
+                                contentType = { _, _ -> "actor-crew" }
+                            ) { index, credit ->
+                                // The crew rail mixes films and series, so the
+                                // badge type comes off the credit itself.
+                                val creditType =
+                                    if (credit.mediaType == "tv") "series" else "movie"
+                                CreditTile(
+                                    modifier = Modifier.animateItem(),
+                                    credit = credit,
+                                    isWatched = creditWatched(credit, creditType),
+                                    isPartiallyWatched =
+                                        creditPartiallyWatched(credit, creditType),
+                                    onClick = {
+                                        openCredit(
+                                            credit,
+                                            BrowseReturnTarget(
+                                                screenKey = screenKey,
+                                                itemId = viewModel.creditItemId(credit),
+                                                position = index,
+                                                railKey = ACTOR_CREW_RAIL
+                                            )
+                                        )
+                                    },
+                                    onLongClick = {
+                                        menu = credit to BrowseReturnTarget(
+                                            screenKey = screenKey,
+                                            itemId = viewModel.creditItemId(credit),
+                                            position = index,
+                                            railKey = ACTOR_CREW_RAIL
+                                        )
+                                    }
+                                )
+                            }
+                        }
+
+                        if (movies.isEmpty() && tvShows.isEmpty() && crewCredits.isEmpty()) {
                             item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                                 MobileStatus("No credits to show for this person.")
                             }
                         }
+                    }
+
+                    // No person and no error: the load answered nothing (a
+                    // blank API key, or a person TMDB returned null for). The
+                    // header above drew a name-less stub; this names the state
+                    // instead of leaving the grid empty.
+                    else -> item(
+                        key = "no-person",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        MobileStatus(
+                            message = "Couldn't load this person.",
+                            actionLabel = "TRY AGAIN",
+                            onAction = { viewModel.load(actorId) }
+                        )
                     }
                 }
             }

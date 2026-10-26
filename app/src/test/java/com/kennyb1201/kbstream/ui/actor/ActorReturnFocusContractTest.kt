@@ -120,7 +120,7 @@ class ActorReturnFocusContractTest {
                 "resolved index",
             source.contains(
                 "val returnIndex = returnTarget?.let { target -> " +
-                    "credits.indexOfFirst { it.id.toString() == target.itemId } " +
+                    "credits.indexOfFirst { viewModel.creditItemId(it) == target.itemId } " +
                     ".takeIf { it >= 0 } " +
                     "?: target.position.takeIf { it in credits.indices } }"
             ) &&
@@ -171,7 +171,8 @@ class ActorReturnFocusContractTest {
             source.contains(
                 "val arrivedRailKeys = buildList { " +
                     "if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL) " +
-                    "if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL) }.toSet()"
+                    "if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL) " +
+                    "if (crewCredits.isNotEmpty()) add(ACTOR_CREW_RAIL) }.toSet()"
             ) && source.contains("if (railKey !in arrivedRailKeys) return false")
         )
         assertTrue(
@@ -218,7 +219,7 @@ class ActorReturnFocusContractTest {
     fun `a fresh open lands focus on the first card, not nothing`() {
         assertTrue(
             "the page waits for the credits to land, then places focus",
-            source.contains("LaunchedEffect(movies, tvShows, isLoading)") &&
+            source.contains("LaunchedEffect(movies, tvShows, crewCredits, isLoading)") &&
                 source.contains("focusFirstCard()")
         )
         assertTrue(
@@ -242,7 +243,10 @@ class ActorReturnFocusContractTest {
             "an entry focus that could not land is retried when the next rail " +
                 "arrives, while a placed one is left alone",
             source.contains("var focusPlaced by remember(actorId) { mutableStateOf(false) }") &&
-                source.contains("if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty()))")
+                source.contains(
+                    "!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty() || " +
+                        "crewCredits.isNotEmpty())"
+                )
         )
     }
 

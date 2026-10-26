@@ -114,13 +114,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The rail keys of the two filmography rails, and of the outer items that hold
- * them: [revealBrowseReturnRail] looks for a rail by the key its OUTER item
- * carries, and the per-rail filter matches the same value (see
+ * The rail keys of the three filmography rails, and of the outer items that
+ * hold them: [revealBrowseReturnRail] looks for a rail by the key its OUTER
+ * item carries, and the per-rail filter matches the same value (see
  * [BrowseReturnFocus]).
  */
 internal const val ACTOR_MOVIES_RAIL = "moviesrow"
 internal const val ACTOR_TV_RAIL = "tvrow"
+internal const val ACTOR_CREW_RAIL = "crewrow"
 
 /**
  * How many credits a rail warms before it is ever scrolled.
@@ -365,7 +366,12 @@ fun ActorScreen(
             railCount = 3,
             shape = posterEdgeShape()
         )
-        error != null ->
+        // The error is gated on there being NO person, exactly as the phone
+        // page gates it (see ActorScreenMobile): a person that loaded has a
+        // name, portrait and bio worth drawing, and the ViewModel's zero-credits
+        // message must not replace a header that is sitting right there. A
+        // failed load leaves person null, so this branch still catches it.
+        error != null && loadedPerson == null ->
             KBStatusMessage(
                 message = "Error: $error",
                 // A failed actor load left nothing to look at, and the
@@ -415,12 +421,26 @@ fun ActorScreen(
                         )
                 }
             }
+            // The directing/writing work, hidden-filtered exactly like the cast
+            // rails (so Hide takes the card it was pressed on off this rail
+            // too). This is the section a director or writer tapped from
+            // Detail's people rail was missing entirely.
+            val crewCredits = remember(p, hiddenTitleKeys, resolvedCreditIds) {
+                viewModel.sortedCrewCredits(p).filter { credit ->
+                    val normalizedType =
+                        if (credit.mediaType == "tv") "series" else "movie"
+                    !creditHidden(
+                        credit, normalizedType, hiddenTitleKeys, resolvedCreditIds, viewModel
+                    )
+                }
+            }
 
-            // The outer item indices of the two rail rows, which is what
+            // The outer item indices of the three rail rows, which is what
             // [revealBrowseReturnRail] scrolls to: the biography, when the
             // person has one, is the item before the first header.
             val moviesRowIndex = if (p.biography.orEmpty().isNotBlank()) 2 else 1
             val tvRowIndex = moviesRowIndex + 2
+            val crewRowIndex = tvRowIndex + 2
 
             // The rails this page paints, in the key space its return records
             // use. A record naming a rail that is not in here yet is WAITED for
@@ -430,6 +450,7 @@ fun ActorScreen(
             val arrivedRailKeys = buildList {
                 if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL)
                 if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL)
+                if (crewCredits.isNotEmpty()) add(ACTOR_CREW_RAIL)
             }.toSet()
 
             /**
@@ -490,7 +511,7 @@ fun ActorScreen(
             // twelve-attempt budget. Charging a try for an arrival is what ran
             // this page's budget out on its OTHER rail and reopened it at the
             // top (see [browseReturnDecision]).
-            LaunchedEffect(movies, tvShows, isLoading) {
+            LaunchedEffect(movies, tvShows, crewCredits, isLoading) {
                 if (isLoading) {
                     focusPlaced = false
                     // HOLD the record across the reload. These ViewModels are
@@ -507,7 +528,10 @@ fun ActorScreen(
                     // record was read. Zeroing it without a re-consume would
                     // leave the timeout unable to fire.
                     returnAttempts = 0
-                } else if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty())) {
+                } else if (
+                    !focusPlaced &&
+                    (movies.isNotEmpty() || tvShows.isNotEmpty() || crewCredits.isNotEmpty())
+                ) {
                     // The wait starts when the record is read, not when a rail
                     // arrives: it is what bounds holding the record at all.
                     val recorded = returnTarget
@@ -929,6 +953,68 @@ fun ActorScreen(
                                     )
                                 }
                             }
+
+                            if (crewCredits.isNotEmpty()) {
+                                item(key = "crewheader") {
+                                    Text(
+                                        "DIRECTING & WRITING",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = KBTextLo,
+                                        modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
+                                    )
+                                }
+                                item(key = ACTOR_CREW_RAIL) {
+                                    ActorCreditRail(
+                                        credits = crewCredits,
+                                        railKey = ACTOR_CREW_RAIL,
+                                        railIndex = crewRowIndex,
+                                        // The crew rail mixes films and series,
+                                        // so the badge type is derived per credit
+                                        // inside the rail; this is only the
+                                        // fallback for a credit with no type.
+                                        normalizedMediaType = "movie",
+                                        // The first rail the page draws takes the
+                                        // entry focus when both cast rails are
+                                        // absent.
+                                        isFirstRail = movies.isEmpty() && tvShows.isEmpty(),
+                                        bottomPadding = 32.dp,
+                                        pageListState = browseListState,
+                                        browseReturnKey = browseReturnKey,
+                                        returnTarget = returnTarget?.takeIf { it.railKey == ACTOR_CREW_RAIL },
+                                        returnFocusRequester = returnFocusRequester,
+                                        firstCreditFocusRequester = firstCreditFocusRequester,
+                                        resolvedCreditIds = resolvedCreditIds,
+                                        watchedKeys = watchedKeys,
+                                        partialWatchedKeys = partialWatchedKeys,
+                                        viewModel = viewModel,
+                                        onNavigateDetail = onNavigateDetail,
+                                        onOpenPosterMenu = { credit, requester, target ->
+                                            lastCreditFocusRequester = requester
+                                            menuCredit = credit
+                                            menuReturnTarget = target
+                                        }
+                                    )
+                                }
+                            }
+
+                            // Nothing to draw: a loaded person whose every credit
+                            // is hidden (or who has none at all) used to render
+                            // the bio and then nothing. The phone page names this
+                            // state; now so does this one.
+                            if (movies.isEmpty() && tvShows.isEmpty() && crewCredits.isEmpty()) {
+                                item(key = "emptycredits") {
+                                    Text(
+                                        "No credits to show for this person.",
+                                        color = KBTextLo,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        modifier = Modifier.padding(
+                                            start = 24.dp,
+                                            end = 24.dp,
+                                            top = 8.dp
+                                        )
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -1074,6 +1160,15 @@ fun ActorScreen(
                 }
             }
         }
+        else ->
+            // No person and no error: the load answered nothing (a blank API
+            // key, or a person TMDB returned null for). The `when` used to fall
+            // off the end here and draw NOTHING at all - a blank screen with no
+            // message and no way back.
+            KBStatusMessage(
+                message = "Couldn't load this person.",
+                onRetry = { viewModel.load(actorId) }
+            )
     }
 }
 
@@ -1140,7 +1235,7 @@ private fun ActorCreditRail(
     // the page fell through to its first-card path. The recorded position is
     // only the fallback, for a card the record cannot name.
     val returnIndex = returnTarget?.let { target ->
-        credits.indexOfFirst { it.id.toString() == target.itemId }
+        credits.indexOfFirst { viewModel.creditItemId(it) == target.itemId }
             .takeIf { it >= 0 }
             ?: target.position.takeIf { it in credits.indices }
     }
@@ -1215,7 +1310,10 @@ private fun ActorCreditRail(
             key = { _, credit -> "credit:${credit.id}:${credit.character.orEmpty()}" }
         ) { index, credit ->
             val requester = remember(credit.id) { FocusRequester() }
-            val cardKey = credit.id.toString()
+            // The item id carries the ROLE as well as the id, so a dual-role
+            // credit's two cards are distinguishable and a return lands on the
+            // role that was pressed (see [ActorViewModel.creditItemId]).
+            val cardKey = viewModel.creditItemId(credit)
             val target = BrowseReturnTarget(
                 screenKey = browseReturnKey,
                 itemId = cardKey,
@@ -1235,13 +1333,22 @@ private fun ActorCreditRail(
             // IMDB one, then its own raw `tmdb:<n>` id, which is the one a
             // credit past the `.take(60)` resolution cap still has (see
             // [WatchedStatusKeys]). The checkmark wins over the eye.
+            //
+            // The type is derived per credit rather than taken from the rail:
+            // the crew rail mixes films and series, and keying a series credit
+            // as a movie would miss its badge.
+            val creditType = when (credit.mediaType?.lowercase()) {
+                "movie" -> "movie"
+                "tv", "series" -> "series"
+                else -> normalizedMediaType
+            }
             val creditImdbId =
-                resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
+                resolvedCreditIds[viewModel.creditLookupKey(credit.id, creditType)]
             val creditTmdbWatchedKey =
-                viewModel.watchedKey(WatchedStatusKeys.tmdbKeyId(credit.id), normalizedMediaType)
+                viewModel.watchedKey(WatchedStatusKeys.tmdbKeyId(credit.id), creditType)
             val creditWatched =
                 creditImdbId?.let {
-                    viewModel.watchedKey(it, normalizedMediaType) in watchedKeys
+                    viewModel.watchedKey(it, creditType) in watchedKeys
                 } == true || creditTmdbWatchedKey in watchedKeys
 
             ActorCreditCard(
@@ -1249,7 +1356,7 @@ private fun ActorCreditRail(
                 isWatched = creditWatched,
                 isPartiallyWatched = !creditWatched && (
                     creditImdbId?.let {
-                        viewModel.watchedKey(it, normalizedMediaType) in partialWatchedKeys
+                        viewModel.watchedKey(it, creditType) in partialWatchedKeys
                     } == true || creditTmdbWatchedKey in partialWatchedKeys
                     ),
                 onClick = {
