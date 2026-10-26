@@ -115,6 +115,14 @@ media3-exoplayer-smoothstreaming = { module = "androidx.media3:media3-exoplayer-
 media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
 media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 media3-datasource-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "media3" }
+# Declared explicitly rather than relied on transitively: offline downloads are
+# the one feature that names classes out of both of these modules directly
+# (StandaloneDatabaseProvider for the download index, SimpleCache /
+# CacheDataSource for the bytes), so the modules the code depends on are the
+# modules the build asks for. Both are already on the classpath through
+# media3-exoplayer's own api dependencies at the same version.ref.
+media3-database = { module = "androidx.media3:media3-database", version.ref = "media3" }
+media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "media3" }
 
 # --- Playback engines / stream extraction ---
 # The MPV engine's native library is no longer a Maven coordinate: it is the

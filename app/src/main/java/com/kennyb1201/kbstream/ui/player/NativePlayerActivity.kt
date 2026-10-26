@@ -65,6 +65,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.iptv.ChannelRecall
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.iptv.GuideRevision
@@ -1524,6 +1525,30 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     // History
     private var isLiveChannel = false
+
+    /**
+     * Non-null when this session is playing a DOWNLOAD rather than a stream.
+     *
+     * Set from [DownloadsManager.EXTRA_DOWNLOAD_ID]. It is the whole of this
+     * session's difference from a streamed one: the url is the same kind of url
+     * (the one the download was taken from), and the bytes come out of the
+     * download cache instead of the network - see [createPlayer]'s data source
+     * and [newMediaItemBuilder]'s cache key. Everything else - title metadata,
+     * resume, history, scrobbling, the end-of-episode panels - is exactly the
+     * path a streamed play takes (spec §6).
+     */
+    private var downloadId: String? = null
+
+    /**
+     * The cache key this download's bytes were written under, for the MediaItem.
+     *
+     * A progressive download is cached under a key of ours (the download id) so
+     * two rows for one title cannot share an entry; an adaptive one is cached by
+     * url and must carry no key at all. Null therefore means "address the cache
+     * by url", which is right for both a segmented stream and every streamed
+     * play.
+     */
+    private var downloadCacheKey: String? = null
 
     /**
      * The YouTube video id this session is playing as a TRAILER, or null for
@@ -3519,6 +3544,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
         drmHeaders = parseHeaders(intent.getStringExtra(EXTRA_DRM_HEADERS).orEmpty())
+        // A downloaded session (spec §6). The check is HERE, before anything
+        // else is set up, because the failure it guards is the feature's whole
+        // point: bytes the app no longer has must never be replaced by a
+        // streamed fetch of the source url. A session that cannot find them says
+        // so and leaves; the record is marked so the list offers a Retry instead
+        // of offering Play again.
+        downloadId = intent.getStringExtra(DownloadsManager.EXTRA_DOWNLOAD_ID)
+            ?.takeIf { it.isNotBlank() }
+        if (downloadId != null) {
+            val record = DownloadsManager.playbackRecord(this, downloadId)
+            if (record == null || !DownloadsManager.isPlayable(this, downloadId)) {
+                downloadId?.let { DownloadsManager.markMissing(this, it) }
+                Toast.makeText(
+                    this,
+                    "This download is no longer on this phone",
+                    Toast.LENGTH_LONG
+                ).show()
+                finish()
+                return
+            }
+            downloadCacheKey = DownloadsManager.playbackCacheKey(record)
+        }
         titleKey = if (isLiveChannel) {
             null
         } else {
@@ -5372,6 +5419,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun newMediaItemBuilder(mimeType: String?): MediaItem.Builder {
         val builder = MediaItem.Builder().setUri(currentUrl)
         if (mimeType != null) builder.setMimeType(mimeType)
+        // A downloaded progressive row must be addressed by the key its bytes
+        // were written under, or the cache would be looked up by url and miss
+        // (see DownloadsManager.playbackCacheKey). Null for everything else,
+        // including an adaptive download, whose segments are keyed by their own
+        // urls and must NOT be given a key.
+        downloadCacheKey?.let { builder.setCustomCacheKey(it) }
 
         // Surface now-playing info to system/external media controllers
         // (Android TV launcher, phone remote apps, BT headset displays).
@@ -5537,8 +5590,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // already-fetched bytes come back from disk instead. Skipped for live
         // channels (every byte is once-only) and googlevideo clips (bounded,
         // signed ranges that must not be re-served from a stale cache).
+        // A downloaded session reads the DOWNLOAD cache, and its upstream is a
+        // client that refuses every request: a cache miss fails the playback
+        // with the same words the launch-time check uses, instead of quietly
+        // fetching the source url over the network - which is exactly what would
+        // make this feature work on the sofa and fail on the plane (spec §6).
+        val downloadRecordForPlayback = downloadId?.let {
+            DownloadsManager.playbackRecord(this, it)
+        }
+        val downloadSourceFactory = downloadRecordForPlayback?.let { record ->
+            DownloadsManager.playbackDataSourceFactory(this, record)
+        }
         val cachedFactory: androidx.media3.datasource.DataSource.Factory =
-            if (isLiveChannel || isGooglevideoStream) {
+            if (downloadSourceFactory != null) {
+                downloadSourceFactory
+            } else if (isLiveChannel || isGooglevideoStream) {
                 httpOrYoutubeFactory
             } else {
                 androidx.media3.datasource.cache.CacheDataSource.Factory()
@@ -12685,6 +12751,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 entry
             )
             if (isCompleted) syncCompletedToSimkl()
+            // "Delete after finishing" (spec §4.5): the completion has been
+            // FILED, so a finished download may go. Gated on the file having
+            // actually ENDED, or on this session closing while it is already
+            // complete - never on the completion alone, because the completion
+            // rule fires at 90% and deleting the bytes there would strand the
+            // rest of the playback reading from a cache that no longer has them.
+            if (isCompleted && downloadId != null) {
+                val sessionOver = playbackEndReached || isFinishing
+                if (sessionOver) {
+                    downloadId?.let { id ->
+                        DownloadsManager.playbackRecord(this@NativePlayerActivity, id)
+                            ?.let { record ->
+                                DownloadsManager.onTitleCompleted(
+                                    this@NativePlayerActivity,
+                                    listOf(record.mediaKey)
+                                )
+                            }
+                    }
+                }
+            }
             onWritten?.invoke(result.ok, result.profileId)
         }
     }

@@ -79,6 +79,9 @@ import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.data.download.DownloadsManager
+import com.kennyb1201.kbstream.data.download.DownloadsStore
+import com.kennyb1201.kbstream.data.download.formatDownloadBytes
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
@@ -171,9 +174,19 @@ fun SettingsScreenMobile(
     onOpenStats: () -> Unit = {}
 ) {
     var pane by remember { mutableStateOf<SettingsPane?>(null) }
+    // The Downloads page. A screen pushed over the panes the way a pane is
+    // pushed over the list - and deliberately NOT a SettingsPane member: that
+    // enum is the television's own pane inventory (the rail draws every entry),
+    // so adding one would put a Downloads row on a TV's settings page, which
+    // this feature must never do (spec §8).
+    var downloadsOpen by remember { mutableStateOf(false) }
 
     BackHandler {
-        if (pane != null) pane = null else onBack()
+        when {
+            downloadsOpen -> downloadsOpen = false
+            pane != null -> pane = null
+            else -> onBack()
+        }
     }
 
     MobileTheme {
@@ -183,7 +196,12 @@ fun SettingsScreenMobile(
                 .background(KBVoid)
         ) {
             val open = pane
-            if (open == null) {
+            if (downloadsOpen) {
+                // Its own screen, with its own head and its own Back: one page
+                // pushed at a time, which is this screen's whole navigation
+                // model on a phone.
+                DownloadsScreenMobile(onBack = { downloadsOpen = false })
+            } else if (open == null) {
                 SettingsHomeMobile(onOpen = { pane = it })
             } else {
                 PaneHeaderMobile(pane = open, onBack = { pane = null })
@@ -208,7 +226,9 @@ fun SettingsScreenMobile(
 
                         SettingsPane.HIDDEN -> HiddenTitlesPaneMobile()
 
-                        SettingsPane.PLAYBACK -> PlaybackPaneMobile()
+                        SettingsPane.PLAYBACK -> PlaybackPaneMobile(
+                            onOpenDownloads = { downloadsOpen = true }
+                        )
 
                         SettingsPane.VIDEO -> VideoPaneMobile()
 
@@ -1072,7 +1092,7 @@ private fun HiddenTitlesPaneMobile() {
 }
 
 @Composable
-private fun PlaybackPaneMobile() {
+private fun PlaybackPaneMobile(onOpenDownloads: () -> Unit) {
     val context = LocalContext.current
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
 
@@ -1162,6 +1182,16 @@ private fun PlaybackPaneMobile() {
     var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
     var externalTrustReturn by remember {
         mutableStateOf(AppPreferences.getExternalTrustReturn(context))
+    }
+    // The two download switches (spec §4.5), read straight from the downloads'
+    // own store and NOT keyed on the sync revision: they are device-local, so a
+    // pull from another device must not re-read them here (see DownloadsStore
+    // for why they are not AppPreferences keys at all).
+    var downloadOverCellular by remember {
+        mutableStateOf(DownloadsStore.getDownloadOverCellular(context))
+    }
+    var deleteAfterFinish by remember {
+        mutableStateOf(DownloadsStore.getDeleteAfterFinish(context))
     }
     var showCustomPlayerPicker by remember { mutableStateOf(false) }
     // Set when the engine pill is picked and there is more than one installed
@@ -1704,7 +1734,55 @@ private fun PlaybackPaneMobile() {
                 onDismiss = { showCustomPlayerPicker = false }
             )
         }
+
+        // ---- Downloads (spec §4.3, §4.5) ----
+        //
+        // The screen itself, the storage figure, and the two switches that
+        // govern it. Both default OFF: cellular data is not spent on a download
+        // unless the viewer says so, and a finished title is not deleted unless
+        // they ask for it.
+        SettingsSectionMobile("Downloads")
+        SettingsNavRowMobile(
+            label = "Downloads",
+            description = downloadsSummary(context),
+            onClick = onOpenDownloads
+        )
+        SettingsToggleMobile(
+            label = "Download over cellular",
+            description = "Let downloads run on mobile data. Off, a download waits for Wi-Fi.",
+            checked = downloadOverCellular,
+            onChange = { enabled ->
+                downloadOverCellular = enabled
+                DownloadsStore.setDownloadOverCellular(context, enabled)
+                // Applied to the downloader immediately, so a download already
+                // queued starts the moment the switch is flipped rather than at
+                // the next one.
+                DownloadsManager.onTogglesChanged(context)
+            }
+        )
+        SettingsToggleMobile(
+            label = "Delete after finishing",
+            description = "Remove a download once you have watched what it holds.",
+            checked = deleteAfterFinish,
+            onChange = { enabled ->
+                deleteAfterFinish = enabled
+                DownloadsStore.setDeleteAfterFinish(context, enabled)
+            }
+        )
     }
+}
+
+/**
+ * The Downloads row's blurb: what is on this phone and how much room it takes.
+ *
+ * Completed downloads only, from the manager's own total, so this line and the
+ * Downloads screen's header cannot disagree about the same number.
+ */
+private fun downloadsSummary(context: android.content.Context): String {
+    val complete = DownloadsStore.records(context).count { it.state.isComplete }
+    if (complete == 0) return "Nothing downloaded yet."
+    val size = formatDownloadBytes(DownloadsManager.totalBytes(context))
+    return "$complete on this phone · $size"
 }
 
 @Composable

@@ -43,8 +43,12 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.download.DownloadGates
+import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.streamNavigationKey
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
@@ -130,6 +134,14 @@ fun StreamsScreenMobile(
         val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+        // This phone's downloads for the profile on screen. The rows read their
+        // own download state from here - queued, transferring with its own
+        // percentage, paused, here - so the picker says what is true about each
+        // source rather than offering the same button for all of them (§4.1).
+        val downloads = rememberDownloadRecords()
+        val routeKey = remember(contentType, streamId) {
+            streamNavigationKey(contentType, streamId)
+        }
 
         // A DRM stream cannot play on the MPV engine, so picking one drops the
         // anime verdict published for this request (see the TV picker).
@@ -182,15 +194,11 @@ fun StreamsScreenMobile(
          * episode rules, the season-pack test and the ceiling are re-applied to
          * the remainder (see AutoplayWalk).
          */
+        // The same call the Detail page's Download button makes, so "the row
+        // auto-play would play" is one function rather than two opinions
+        // (see autoplayPickFor).
         fun autoplayPickFrom(remaining: List<Stream>): Stream? =
-            AutoPlayQuality.cappedPick(
-                pick = EpisodeMatch.autoplayPick(remaining, season, episode, runtimeMinutes),
-                candidates = remaining,
-                season = season,
-                episode = episode,
-                runtimeMinutes = runtimeMinutes,
-                cap = AppPreferences.getMaxAutoPlayQuality(context)
-            )
+            autoplayPickFor(context, remaining, season, episode, runtimeMinutes)
 
         /*
          * Auto-play's start, the TV picker's exact route: a url-bearing pick
@@ -397,10 +405,85 @@ fun StreamsScreenMobile(
                     items = visibleStreams,
                     key = { index, _ -> streamKeys[index] }
                 ) { _, stream ->
+                    // The id the player will carry as `parent_id` for this title,
+                    // so a download made here lands on the same watch-history row
+                    // a streamed play does. Published by the route on a phone
+                    // only; a picker with no route memory (a direct call in a
+                    // test, say) falls back to the target's own id rather than
+                    // refusing to offer a download.
+                    val route = CurrentStreamsRoute.current(routeKey)
+                    val parentId = route?.parentId?.takeIf { it.isNotBlank() } ?: streamId
+                    val parentType = route?.parentType?.takeIf { it.isNotBlank() } ?: contentType
+                    val gate = downloadGate(context, stream, isLiveChannel = false)
+                    val mediaKey = DownloadIdentity.mediaKey(parentId, parentId)
+                    val record = downloadFor(downloads, mediaKey, season, episode)
+                    val target = downloadTargetFor(
+                        parentId = parentId,
+                        parentType = parentType,
+                        title = displayName,
+                        qualityLabel = StreamRanker.labelOf(stream),
+                        episodeLabel = episodeLabel,
+                        season = season,
+                        episode = episode,
+                        posterUrl = route?.posterUrl,
+                        episodeStreamId = streamId
+                    )
                     MobileStreamCard(
                         stream = stream,
                         badgesAbove = AppPreferences.getBadgesAboveFile(context),
                         declaredLabel = declaredLabelFor(stream, season, episode),
+                        downloadSlot = {
+                            when (gate) {
+                                // A live row has no Download action anywhere
+                                // (spec §5) - not on a card, not on Detail.
+                                DownloadGate.Hidden -> Unit
+
+                                is DownloadGate.Disabled -> MobileDownloadControl(
+                                    record = record,
+                                    idleLabel = DownloadLabel,
+                                    disabledReason = gate.reason,
+                                    inert = false,
+                                    onDownload = {},
+                                    onPlay = {},
+                                    onResume = {},
+                                    onDelete = {}
+                                )
+
+                                DownloadGate.Offline -> MobileDownloadControl(
+                                    record = record,
+                                    idleLabel = DownloadGates.CONNECT_TO_DOWNLOAD,
+                                    disabledReason = null,
+                                    inert = true,
+                                    onDownload = {},
+                                    onPlay = {},
+                                    onResume = {},
+                                    onDelete = {}
+                                )
+
+                                is DownloadGate.Allowed -> MobileDownloadControl(
+                                    record = record,
+                                    idleLabel = DownloadLabel,
+                                    disabledReason = null,
+                                    inert = false,
+                                    onDownload = {
+                                        downloadPress(
+                                            context,
+                                            resolveScope,
+                                            stream,
+                                            record,
+                                            target
+                                        )
+                                    },
+                                    onPlay = { record?.let { playDownloaded(context, it) } },
+                                    onResume = {
+                                        record?.let { DownloadsManager.resume(context, it.id) }
+                                    },
+                                    onDelete = {
+                                        record?.let { DownloadsManager.delete(context, it.id) }
+                                    }
+                                )
+                            }
+                        },
                         onClick = { selectSource(stream, streams, sourceAddons) }
                     )
                 }
@@ -590,6 +673,13 @@ private fun MobileStreamCard(
     stream: Stream,
     badgesAbove: Boolean,
     declaredLabel: String?,
+    /**
+     * The row's Download control, or nothing at all when this row has no
+     * Download action (a live row, a protected one that must be learnable, an
+     * offline picker). Handed in as a slot rather than derived here: the gate
+     * needs the route's title identity, which the card does not have.
+     */
+    downloadSlot: @Composable () -> Unit,
     onClick: () -> Unit
 ) {
     KBCard(
@@ -656,6 +746,17 @@ private fun MobileStreamCard(
                         top = if (stream.badges.isEmpty()) 0.dp else 6.dp
                     )
                 )
+            }
+
+            // The download control, under the row's own text: the picker's
+            // primary Download action (spec §4.1). Its own press is separate
+            // from the card's, so tapping the chip never starts playback.
+            Row(
+                modifier = Modifier.padding(top = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                downloadSlot()
             }
         }
     }

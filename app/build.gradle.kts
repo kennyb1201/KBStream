@@ -646,6 +646,14 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
+    // Offline downloads (data/download). The download index needs media3's
+    // StandaloneDatabaseProvider and the bytes live in a SimpleCache, so both
+    // modules are named here even though media3-exoplayer already pulls them in:
+    // a direct import should not depend on somebody else's transitive graph
+    // staying the shape it is today. Same version.ref as every other media3
+    // line, so they can never drift apart.
+    implementation(libs.media3.database)
+    implementation(libs.media3.datasource)
     // FFmpeg decoder extension.
     //
     // There is no published build of media3's decoder_ffmpeg we can use: the

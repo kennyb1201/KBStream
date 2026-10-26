@@ -122,6 +122,12 @@ fun LibraryScreenMobile(
 ) {
     MobileTheme {
         val context = LocalContext.current
+        // This phone's downloads, so a tile can say the title is here offline
+        // (spec §4.4: the badge appears where the surface renders badges, and a
+        // library tile already renders the watched marker, so it is one of
+        // them). Held as state rather than read per tile from the store, so a
+        // download that finishes while the grid is up redraws it.
+        val downloads = rememberDownloadRecords()
 
         val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()
         // A hidden title leaves My List, the merged All list and every personal
@@ -497,6 +503,14 @@ fun LibraryScreenMobile(
                     ) { index, item ->
                         LibraryTile(
                             item = item,
+                            // The show's whole title, not one episode: a library
+                            // row is the title, so any downloaded episode of it
+                            // marks the row.
+                            isDownloaded = downloadsHaveAny(
+                                downloads,
+                                item.watchedKeyCandidates() +
+                                    listOfNotNull(item.navigationId)
+                            ),
                             // Removals and filter/sort changes stop teleporting
                             // the grid: a tile fading out and its neighbours
                             // closing the gap is the phone's whole point here.
@@ -732,6 +746,8 @@ private fun LibraryTile(
     rating: Double?,
     isWatched: Boolean,
     isPartiallyWatched: Boolean,
+    /** True when a completed download of this title is on this phone (spec §4.4). */
+    isDownloaded: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -761,6 +777,12 @@ private fun LibraryTile(
             year = item.year?.toString(),
             rating = rating
         )
+        // The badge sits with the captions rather than over the artwork: the
+        // shared poster tile has no slot for it, and a download is a fact about
+        // the title, not a mark on its poster.
+        if (isDownloaded) {
+            DownloadedBadge()
+        }
         Text(
             text = item.source.label,
             color = KBTextLo,

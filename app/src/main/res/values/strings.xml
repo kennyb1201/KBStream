@@ -12,6 +12,13 @@
   visible strings move here and the screens switch to `stringResource()`.
   Until then, keep new copy consistent with the existing voice rather than
   inventing a parallel convention.
+
+  The two entries below are the exception the rule allows: media3's
+  DownloadService takes its notification channel's name and description as
+  @StringRes ids, so these two strings cannot be inline Kotlin. They are the
+  only resources here, and they are here because the API demands resources.
 -->
 <resources>
+    <string name="downloads_channel_name">Downloads</string>
+    <string name="downloads_channel_description">Keeps a download going and shows its progress.</string>
 </resources>

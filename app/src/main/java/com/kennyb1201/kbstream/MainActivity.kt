@@ -2987,6 +2987,28 @@ fun AppRoot(
                 current.target.streamId
             )
 
+            // The phone picker's Download action needs this route's title
+            // identity - the id the player below carries as `parent_id` - and
+            // the picker composable cannot be handed it as a parameter (its call
+            // site is the shared TV/phone dispatch file this feature leaves
+            // byte-identical, spec §8). So the route publishes it here, on a
+            // PHONE ONLY: on a television this line never runs, which is what
+            // keeps the TV path historically identical rather than merely
+            // unread. See CurrentStreamsRoute.
+            if (!FormFactor.isTv) {
+                com.kennyb1201.kbstream.ui.mobile.CurrentStreamsRoute.remember(
+                    com.kennyb1201.kbstream.ui.mobile.CurrentStreamsRoute.Route(
+                        key = streamKey,
+                        parentId = current.parentId,
+                        parentType = current.parentType,
+                        posterUrl = current.itemPoster,
+                        backdropUrl = current.backdropUrl,
+                        clearLogoUrl = current.clearLogoUrl,
+                        overview = current.overview
+                    )
+                )
+            }
+
             StreamsScreen(
                 title = current.target.title,
                 displayName = current.target.displayName,

@@ -582,6 +582,16 @@ object ProfileManager {
         recordDeletion(context, profileId)
         pushProfilesBlob(context, updated)
 
+        // Offline downloads: the records live in a preference namespace the wipe
+        // below clears, so the removal that has to READ them runs first. It is a
+        // no-op on a device with no downloads (and on a television, where none
+        // can exist), and it does its work on its own IO scope - deleting a
+        // profile must not wait on a download cache.
+        runCatching {
+            com.kennyb1201.kbstream.data.download.DownloadsManager
+                .deleteAllForProfile(context, profileId)
+        }
+
         // Wipe the profile's local namespace.
         wipeLocalProfileData(context, profileId)
 

@@ -64,7 +64,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import android.widget.Toast
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.download.DownloadGates
+import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -80,6 +84,10 @@ import com.kennyb1201.kbstream.data.tmdb.TrailerPick
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
+import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
@@ -267,6 +275,22 @@ fun DetailScreenMobile(
             viewModel.simklWatchedEpisodes.collectAsStateWithLifecycle()
         val simklPageUrl by viewModel.simklPageUrl.collectAsStateWithLifecycle()
         val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+
+        // This title's download on this phone, for the profile on screen
+        // (spec §4.2 and §4.4). Declared HERE, at the top, because it is read
+        // by the calls-to-action block far below a couple of early returns -
+        // and a state subscription after a conditional return is a call that
+        // exists on some frames and not others.
+        val downloads = rememberDownloadRecords()
+        // The picker's own view model, keyed per title, so the Download button
+        // can ask the add-ons what auto-play would have picked. A second,
+        // separate instance rather than the picker's: this one belongs to the
+        // Detail page's own visit, and sharing the live picker's would let a
+        // REFRESH there change what this button downloads.
+        val downloadStreams: StreamsViewModel =
+            androidx.lifecycle.viewmodel.compose.viewModel(
+                key = "detail_download_${type}_$id"
+            )
         val partialWatchedKeys by
             viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
         val resolvedPosterIds by
@@ -969,6 +993,99 @@ fun DetailScreenMobile(
                 return@Box
             }
 
+            // ---- the Download button's title identity (spec §4.2) ----
+            //
+            // The episode the Play button would start, resolved by the SAME rule
+            // playCurrent uses, so the button downloads that episode rather than
+            // whichever one happens to be first in the season.
+            val downloadResumeHere = targetEpisode != null && resumeInfo?.season == currentSeason
+            val downloadEpisode = when {
+                normalizedType == "movie" -> null
+                downloadResumeHere -> targetEpisode
+                else -> episodes.firstOrNull()
+            }
+            val downloadSeason = if (downloadEpisode != null) currentSeason else null
+            val downloadEpisodeNumber = downloadEpisode?.episodeNumber
+            // The route's own id is what the player carries as `parent_id` for
+            // this title (openStreams hands it over unchanged), which is what
+            // makes a downloaded play file the same history row a streamed one
+            // does.
+            val downloadMediaKey = DownloadIdentity.mediaKey(id, id)
+            val downloadRecord = downloadFor(
+                records = downloads,
+                mediaKey = downloadMediaKey,
+                season = downloadSeason,
+                episode = downloadEpisodeNumber
+            )
+            val downloadOnline = DownloadsManager.isOnline(context)
+
+            /**
+             * The Download button's press: resolve what auto-play would play,
+             * then download THAT row.
+             *
+             * It re-resolves here rather than opening the picker (spec §4.2 is
+             * explicit that this button must not open the Streams screen as a
+             * side effect), and it uses the picker's own pick function so the
+             * row it takes is the row a Play press would have taken.
+             */
+            fun downloadAutoplayPick() {
+                scope.launch {
+                    val parentId = if (normalizedType == "movie") {
+                        runCatching { viewModel.awaitStreamRootId(id) }.getOrDefault(id)
+                    } else {
+                        id
+                    }
+                    val streamId = downloadEpisode?.streamId?.takeIf { it.isNotBlank() }
+                        ?: parentId
+                    val runtime = downloadEpisode?.runtimeMinutes
+                        ?: tmdbDetail?.runtime?.takeIf { it > 0 }
+                    downloadStreams.load(normalizedType, streamId, runtime)
+                    val sources = withTimeoutOrNull(30_000L) {
+                        downloadStreams.streams.first { !downloadStreams.isLoading.value }
+                    }.orEmpty()
+                    val pick = autoplayPickFor(
+                        context = context,
+                        sources = sources,
+                        season = downloadSeason,
+                        episode = downloadEpisodeNumber,
+                        runtimeMinutes = runtime
+                    )
+                    if (pick == null) {
+                        Toast.makeText(
+                            context,
+                            "No sources found to download",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return@launch
+                    }
+                    val current = downloadFor(
+                        records = DownloadsManager.currentRecords(),
+                        mediaKey = downloadMediaKey,
+                        season = downloadSeason,
+                        episode = downloadEpisodeNumber
+                    )
+                    downloadPress(
+                        context = context,
+                        scope = scope,
+                        stream = pick,
+                        record = current,
+                        target = downloadTargetFor(
+                            parentId = parentId,
+                            parentType = normalizedType,
+                            title = displayName,
+                            qualityLabel = StreamRanker.labelOf(pick),
+                            episodeLabel = downloadEpisode?.let { episode ->
+                                "S%02d · E%02d".format(currentSeason, episode.episodeNumber)
+                            },
+                            season = downloadSeason,
+                            episode = downloadEpisodeNumber,
+                            posterUrl = posterUrl,
+                            episodeStreamId = downloadEpisode?.streamId
+                        )
+                    )
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 28.dp),
@@ -1063,6 +1180,41 @@ fun DetailScreenMobile(
                                 openMovie(fromStart = true)
                             }
                         }
+
+                        // ---- offline download (spec §4.2, §4.4) ----
+                        //
+                        // The badge first, when the title this page is showing
+                        // is on the phone, then the control itself. The control
+                        // is the SAME one the picker's rows use, so a state
+                        // means what it means in both places.
+                        if (downloadRecord?.state?.isComplete == true) {
+                            DownloadedBadge()
+                        }
+                        MobileDownloadControl(
+                            record = downloadRecord,
+                            // Offline, the button says what the picker's rows say
+                            // rather than pretending a press would start
+                            // something (spec §5).
+                            idleLabel = if (downloadOnline) {
+                                DownloadLabel
+                            } else {
+                                DownloadGates.CONNECT_TO_DOWNLOAD
+                            },
+                            disabledReason = null,
+                            inert = false,
+                            // Never a Play here: the control routes a completed
+                            // download to onPlay, and a FAILED one to this same
+                            // press, which downloadPress turns into a RETRY
+                            // (a re-resolve, spec §7).
+                            onDownload = { downloadAutoplayPick() },
+                            onPlay = { downloadRecord?.let { playDownloaded(context, it) } },
+                            onResume = {
+                                downloadRecord?.let { DownloadsManager.resume(context, it.id) }
+                            },
+                            onDelete = {
+                                downloadRecord?.let { DownloadsManager.delete(context, it.id) }
+                            }
+                        )
                     }
                 }
 

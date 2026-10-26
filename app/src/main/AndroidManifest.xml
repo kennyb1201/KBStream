@@ -15,6 +15,14 @@
     <!-- New-episode alerts. Runtime-requested on Android 13+ (requested when
          the toggle is switched on); a no-op grant on older releases. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Offline downloads. The download runs in a foreground service (a
+         4 GB transfer is not something the platform will let a background
+         process finish), so the service permission is required, and API 34+
+         requires the DATA_SYNC type-specific one beside it because that is the
+         type videos download under. Additive only: on a television nothing ever
+         starts the service, so neither permission is ever exercised there. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Android TV launcher "Watch Next" rows: the launcher's Continue
          watching rail, published by TvLauncherPublisher.
 
@@ -305,6 +313,28 @@
             android:supportsPictureInPicture="true"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
             android:screenOrientation="landscape" />
+
+        <!-- Offline downloads (mobile only). The service media3's DownloadManager
+             runs its transfers in. Declared here and nowhere else: no TV screen
+             starts it, so a television build gains a declaration it never
+             exercises rather than a new entry point (spec §8).
+
+             exported=false because only this app's own `DownloadService.send*`
+             calls start it - a download started by another app would be a
+             download this app has no record of.
+
+             foregroundServiceType=dataSync is the type a transfer belongs to
+             (API 34+ requires it, and requires the matching permission above).
+
+             Deliberately NO media3 scheduler intent-filter: the filter exists so
+             a JobScheduler-driven restart can re-arm the service after a reboot,
+             and this app resumes what is unfinished from
+             DownloadsManager.start() on every launch instead of adding a second
+             scheduling mechanism (see DownloadsService). -->
+        <service
+            android:name=".data.download.DownloadsService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Third engine (External player). Hands the stream to an installed
              video app (VLC, MX Player, Kodi) and keeps the SESSION here: the

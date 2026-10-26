@@ -119,6 +119,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             startupStep("startup.outboxFlush", "app_create_outbox_flush_worker") {
                 OutboxFlushWorker.enqueue(applicationContext)
             }
+            // Offline downloads (mobile only). Builds the download manager and
+            // resumes whatever a previous process left in flight, and does
+            // nothing at all on a television: nothing there can enqueue a
+            // download, so there is nothing to resume and no reason to start the
+            // service (spec §8). Runs before the periodic workers because a
+            // download's own service is what keeps the transfer moving.
+            startupStep("startup.downloads", "app_create_downloads") {
+                com.kennyb1201.kbstream.data.download.DownloadsManager
+                    .start(this@MainApplication)
+            }
             startupStep("startup.newEpisodeWorker", "app_create_new_episode_worker") {
                 scheduleNewEpisodeChecks()
             }
