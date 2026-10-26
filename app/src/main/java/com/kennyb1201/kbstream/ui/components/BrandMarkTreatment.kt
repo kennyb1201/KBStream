@@ -205,3 +205,160 @@ internal fun hasKnockoutDetail(pixels: IntArray, width: Int, height: Int): Boole
     }
     return enclosed.toFloat() / pixels.size >= BRAND_MARK_KNOCKOUT_MIN_SHARE
 }
+
+// ── trimming the transparent borders ─────────────────────────────────────
+
+/**
+ * Alpha above which a decoded pixel counts as the mark's INK, for trimming the
+ * transparent border off the artwork before it is fitted into its slot.
+ *
+ * Deliberately much lower than [BRAND_MARK_OPAQUE_ALPHA], which decides which
+ * pixels the mark's COLOUR is averaged over: a soft drop shadow at alpha 40 is
+ * still artwork as far as cropping goes, while a few pixels of JPEG ringing are
+ * not. Both error directions are visible on a card - too low and a padded
+ * wordmark keeps its halo (and so goes on rendering small), too high and the
+ * shadow is sheared off as if the mark ended at its hard core.
+ *
+ * Pinned by test (see `BrandMarkInkTest`), not tuned by eye.
+ */
+internal const val BRAND_MARK_INK_ALPHA = 10
+
+/**
+ * The visible ink's bounds inside a brand mark's FILE, as fractions of it
+ * (`left`/`top` where the ink starts, `right`/`bottom` where it ends).
+ *
+ * This exists because a clearlogo's file box is not its drawn box. TMDB's logo
+ * files carry wildly different amounts of transparent padding, and a card fits
+ * the WHOLE file into its slot, so a padded wordmark's ink lands far smaller
+ * than the slot while a tight one fills it - in the same rail, from the same
+ * card size (field report, 2026-10-25). The fractions let the card fit the ink
+ * instead, without touching the slot the tight logos already fill correctly.
+ */
+internal data class BrandMarkInk(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+) {
+    /** Share of the file's width the ink spans. */
+    val widthFraction: Float get() = right - left
+
+    /** Share of the file's height the ink spans. */
+    val heightFraction: Float get() = bottom - top
+}
+
+/**
+ * Measures the bounding box of the mark's visible ink: the smallest box that
+ * still contains every pixel above [BRAND_MARK_INK_ALPHA].
+ *
+ * Runs over the SAME pixels [brandMarkTreatment] is handed - one pass over an
+ * already-allocated array, so trimming adds no decode, no retained bitmap and
+ * no allocation of its own. Nothing here is per frame or per card: the caller
+ * measures once per logo URL and keeps four floats.
+ *
+ * Returns null when there is no box to draw into: no ink at all (a blank
+ * plate, artwork that never arrived), or a degenerate sample. Callers then draw
+ * the mark UNTRIMMED, exactly as they did before trimming existed - a failure
+ * here must never hide a logo, stand in for it with title text, or push it down
+ * the unusable path.
+ *
+ * The box is measured on the coarse tile the sampler already builds (48x48, see
+ * `sampleBrandMark`), so each edge is accurate to about 1/48 of that axis - a
+ * few tenths of a dp at the sizes a clearlogo is drawn, and always generous
+ * rather than tight where the resample blurs an edge, so ink is never clipped
+ * away.
+ */
+internal fun brandMarkInk(pixels: IntArray, width: Int, height: Int): BrandMarkInk? {
+    if (width <= 0 || height <= 0 || pixels.size < width * height) return null
+
+    var minX = width
+    var minY = height
+    var maxX = -1
+    var maxY = -1
+    for (y in 0 until height) {
+        val row = y * width
+        for (x in 0 until width) {
+            val alpha = (pixels[row + x] ushr 24) and 0xFF
+            if (alpha <= BRAND_MARK_INK_ALPHA) continue
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+    }
+    if (maxX < minX || maxY < minY) return null
+
+    return BrandMarkInk(
+        left = minX.toFloat() / width,
+        top = minY.toFloat() / height,
+        right = (maxX + 1).toFloat() / width,
+        bottom = (maxY + 1).toFloat() / height,
+    )
+}
+
+/**
+ * Where the ink box of [ink] has to be drawn so that it - and not the padded
+ * file around it - is what is fitted into the slot.
+ *
+ * [scale] and ([x], [y]) are the affine transform to apply to content that is
+ * ALREADY laid out with `ContentScale.Fit` for the WHOLE file: `c * scale + (x,
+ * y)`, measured in slot pixels from the slot's top-left corner. [width] and
+ * [height] are the size the ink finally draws at, which is what the tests pin
+ * (a padded wordmark draws as large as the same wordmark drawn tight, a mark
+ * whose ink is wider than the slot still shrinks by the slot's width cap).
+ *
+ * The slot is the whole budget, so the width cap applies to the INK: a
+ * 68%-of-the-card box constrains 68% of ink, where before it constrained 68%
+ * of a file that might have been half padding. Padding never spends it.
+ *
+ * Returns null for a slot or image that cannot be laid out; the caller then
+ * draws the mark untrimmed.
+ */
+internal fun layoutBrandMarkInk(
+    slotWidth: Float,
+    slotHeight: Float,
+    imageWidth: Int,
+    imageHeight: Int,
+    ink: BrandMarkInk,
+): BrandMarkInkPlacement? {
+    if (slotWidth <= 0f || slotHeight <= 0f) return null
+    if (imageWidth <= 0 || imageHeight <= 0) return null
+
+    val fileWidth = imageWidth.toFloat()
+    val fileHeight = imageHeight.toFloat()
+    val inkWidth = fileWidth * ink.widthFraction
+    val inkHeight = fileHeight * ink.heightFraction
+    if (inkWidth <= 0f || inkHeight <= 0f) return null
+
+    // What the slot draws today: the whole file, fitted into it.
+    val fileFit = minOf(slotWidth / fileWidth, slotHeight / fileHeight)
+    // What it should draw instead: the ink box, fitted into the same slot.
+    val inkFit = minOf(slotWidth / inkWidth, slotHeight / inkHeight)
+    if (fileFit <= 0f || inkFit <= 0f) return null
+
+    val drawnWidth = inkWidth * inkFit
+    val drawnHeight = inkHeight * inkFit
+    // Both boxes are centred in the slot, which is what ContentScale.Fit does
+    // with a single image.
+    val fileX = (slotWidth - fileWidth * fileFit) / 2f
+    val fileY = (slotHeight - fileHeight * fileFit) / 2f
+    val scale = inkFit / fileFit
+    return BrandMarkInkPlacement(
+        scale = scale,
+        x = (slotWidth - drawnWidth) / 2f - ink.left * fileWidth * inkFit - fileX * scale,
+        y = (slotHeight - drawnHeight) / 2f - ink.top * fileHeight * inkFit - fileY * scale,
+        width = drawnWidth,
+        height = drawnHeight,
+    )
+}
+
+/**
+ * The transform [layoutBrandMarkInk] computes, plus the size the ink draws at.
+ */
+internal data class BrandMarkInkPlacement(
+    val scale: Float,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+)
