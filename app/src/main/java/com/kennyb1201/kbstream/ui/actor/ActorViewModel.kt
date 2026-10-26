@@ -102,8 +102,11 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 .toSet()
                 // A title another profile positively owns draws no checkmark
                 // here, however the marker resolved (see
-                // [siblingOwnedMarkerIdsFor]).
+                // [siblingOwnedMarkerIdsFor]). Back to a SET after the filter:
+                // filterNot on a Set answers a List, and this flow is typed
+                // StateFlow<Set<String>> (the v0.9.74 build failure).
                 .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .toSet()
         }
     }.stateIn(
         scope = viewModelScope,
@@ -136,8 +139,10 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 .toSet()
-                // Same sibling-ownership filter as the checkmark set above.
-                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) } - watchedKeys.value
+                // Same sibling-ownership filter as the checkmark set above,
+                // and the same return to a Set before the subtraction.
+                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .toSet() - watchedKeys.value
         }
     }.stateIn(
         scope = viewModelScope,
