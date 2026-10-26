@@ -54,8 +54,16 @@ class BadgeProfileOwnershipContractTest {
             collector.contains(".filterNot { key -> keyOwnedByAnotherProfile(key) }")
         )
         assertTrue(
-            "a finished title is not this bug: the checkmark set is untouched",
-            body.contains("_watchedKeys.value =\n                    resolvedWatchedKeys")
+            "and the checkmark set gets the same rule: the completed twin of the " +
+                "PAW Patrol eye resolves out of the same non-per-profile cache, " +
+                "so a title finished on the kids profile must not wear this " +
+                "profile's checkmark either",
+            body.contains(
+                "_watchedKeys.value =\n" +
+                    "                    resolvedWatchedKeys\n" +
+                    "                        .filterNot { key -> keyOwnedByAnotherProfile(key) }\n" +
+                    "                        .toSet()"
+            )
         )
 
         val helper = functionBody(HOME_VM, "private fun siblingOwnedRailItemIds(")

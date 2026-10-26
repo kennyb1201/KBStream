@@ -2151,9 +2151,13 @@ private fun InterfacePaneMobile() {
                 AppPreferences.setSearchRailShowAddonName(context, it)
             }
         )
+        // The same pref the television's row sets, and now the same promise:
+        // the Upcoming rail is a SCHEDULE and is deliberately exempt from this
+        // filter, so the old phone-only label ("Take the Upcoming row off
+        // Home") described something this switch no longer does.
         SettingsToggleMobile(
-            label = "Hide the Upcoming rail",
-            description = "Take the Upcoming row off Home.",
+            label = "Hide Unreleased Titles",
+            description = "Hides movies that are still in theaters or not yet digitally released, across all screens.",
             checked = hideUpcoming,
             onChange = {
                 hideUpcoming = it

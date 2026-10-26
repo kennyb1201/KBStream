@@ -113,16 +113,18 @@ class HomeRailUpHookContractTest {
             home.contains("builtinRailItems()")
         )
         assertEquals(
-            "declared once and called from both no-catalog branches",
-            3,
+            "declared once and called from the one branch that has no rail column",
+            2,
             home.split("builtinRailItems()").size - 1
         )
         assertTrue(
             "the empty-state branch draws them",
             home.contains("rails.isEmpty() && !isLoading -> {")
         )
-        assertTrue(
-            "and the failed-build branch, which is status about the catalog list too",
+        assertFalse(
+            "and a failed build no longer gets a branch that withholds the rails: " +
+                "its status line is drawn inside the rail column, where the " +
+                "built-ins arrive through the merged order with everything else",
             home.contains("error != null && rails.isNotEmpty() -> {")
         )
         assertTrue(

@@ -8205,6 +8205,12 @@ private suspend fun calculateEpisodesRemaining(
                 tmdbRepository.kidsFilterMetas(metas)
             }
 
+        // One card per title, as the paging append and the pinned-rail path
+        // already guarantee. The LazyRow keys its cards by `type:id`, so a
+        // first page that repeats one throws on the duplicate key and takes
+        // Home down with it - a crash, not a duplicated poster.
+        val distinct = filtered.distinctBy { it.id }
+
         if (
             filtered.isEmpty()
         ) {
@@ -8219,7 +8225,7 @@ private suspend fun calculateEpisodesRemaining(
                     pending.catalogUserNamed
                 ),
                 type = pending.catalogType,
-                items = filtered,
+                items = distinct,
                 catalogId = pending.catalogId,
                 baseUrl = pending.baseUrl,
                 // Inherited from the rail this replaces, and filled in behind
@@ -9159,10 +9165,6 @@ private suspend fun calculateEpisodesRemaining(
                     return@launch
                 }
 
-                _watchedKeys.value =
-                    resolvedWatchedKeys
-
-
                 // The completed checkmark wins over the eye badge when a
                 // show resolves to both - and neither badge is drawn for a
                 // title another profile positively owns. The sources behind
@@ -9179,6 +9181,18 @@ private suspend fun calculateEpisodesRemaining(
                     siblingOwnedRailItemIds(rails)
 
                 siblingOwnedMarkerIds = siblingOwnedIds
+
+                // BOTH sets obey the rule above, not just the eye. The
+                // completed set used to be published straight from the
+                // preload cache - the same cache, fed by the same
+                // non-per-profile sources the eye leak came from - so a title
+                // finished on the kids profile could wear profile 1's
+                // checkmark. The ownership ids are already resolved here; the
+                // filter is the one the eye has used all along.
+                _watchedKeys.value =
+                    resolvedWatchedKeys
+                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .toSet()
 
                 _partialWatchedKeys.value =
                     (resolvedPartialWatchedKeys - resolvedWatchedKeys)
@@ -9356,8 +9370,14 @@ private suspend fun calculateEpisodesRemaining(
                     current.remove(update.key)
                 }
 
+                // The same ownership rule the refresh's publish applies: a
+                // live write must not put a sibling-owned checkmark back
+                // between refreshes (the eye right below has done this since
+                // the leak was fixed).
                 _watchedKeys.value =
                     current
+                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .toSet()
 
                 // The badge state as the write resolved it - not "anything
                 // that is not watched is bare". A manual whole-title mark

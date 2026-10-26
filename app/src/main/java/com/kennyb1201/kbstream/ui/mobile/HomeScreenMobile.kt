@@ -234,11 +234,6 @@ fun HomeScreenMobile(
         val railPosterSize = rememberTouchPosterSize()
         val railLandscapeWidth = landscapeTileWidth(railPosterSize.width)
         val railLandscapeHeight = landscapeTileHeight(railPosterSize.width)
-        // Settings' "Hide the Upcoming rail": the Upcoming schedule row is off
-        // Home. The same synced pref filters unreleased titles out of the
-        // catalog rails inside HomeViewModel; this is the row itself, which is
-        // what the phone's own label promises.
-
         val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
         val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
         val hiddenTitleKeys = rememberHiddenTitleKeys()
@@ -270,8 +265,8 @@ fun HomeScreenMobile(
         val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
         val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
-        // Continue Watching and Upcoming come from history and Simkl rather than
-        // from the rails, so they are filtered here as well (see HomeScreen).
+        // Continue Watching comes from history and Simkl rather than from the
+        // rails, so it is filtered here as well (see HomeScreen).
         val upNext = remember(upNextRaw, hiddenTitleKeys) {
             upNextRaw.filterNot { item ->
                 HiddenTitles.hides(
@@ -284,7 +279,23 @@ fun HomeScreenMobile(
                 )
             }
         }
-        val upcoming by viewModel.upcomingSchedule.collectAsStateWithLifecycle()
+        val upcomingRaw by viewModel.upcomingSchedule.collectAsStateWithLifecycle()
+        // The Upcoming rail's schedule is its own flow - the filter on upNext
+        // does not reach it - so a hidden show's next episode used to surface
+        // here while the same show was gone from every other row. Same ids as
+        // the TV screen's filter: the show's and the episode's.
+        val upcoming = remember(upcomingRaw, hiddenTitleKeys) {
+            upcomingRaw.filterNot { episode ->
+                HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    episode.parentType,
+                    episode.title,
+                    null,
+                    episode.parentId,
+                    episode.id
+                )
+            }
+        }
 
         // KB collections (imported profiles), the Browse chips mirrored to
         // Home, and the rail arrangement that interleaves them with the
@@ -292,13 +303,13 @@ fun HomeScreenMobile(
         // where the home manager says on both screens.
         val kbViewModel: KBHomeViewModel = viewModel()
         val kbState by kbViewModel.state.collectAsStateWithLifecycle()
-        val hideUpcomingRail = remember(activeProfileId?.id, syncRevision) {
-            AppPreferences.getHomeRailHideUpcoming(context)
-        }
         // The row the screen actually draws - everything below asks this, not
-        // the raw schedule, or "All rails are hidden" would claim the viewer
-        // hid rails when the only thing they hid was Upcoming.
-        val upcomingVisible = upcoming.isNotEmpty() && !hideUpcomingRail
+        // the raw schedule. Upcoming is a SCHEDULE, not a discovery rail, so it
+        // is deliberately exempt from "Hide Unreleased Titles": the same
+        // toggle used to remove the row on the phone while the television kept
+        // it, so one setting produced two different Homes (the TV behaviour is
+        // the intended one).
+        val upcomingVisible = upcoming.isNotEmpty()
         val builtinWithContent = remember(upNext.isNotEmpty(), upcomingVisible) {
             buildSet {
                 if (upNext.isNotEmpty()) add(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING)

@@ -176,19 +176,29 @@ class HomeScreenMobileContractTest {
     }
 
     @Test
-    fun `the Upcoming rail obeys the hide-upcoming pref`() {
+    fun `the Upcoming rail is a schedule on both screens`() {
         val mobile = mobileHome()
+        val home = homeScreen()
         assertTrue(
-            "the phone's own toggle label is 'Hide the Upcoming rail'",
-            mobile.contains("AppPreferences.getHomeRailHideUpcoming(")
+            "the row's visibility must be the schedule alone: Upcoming is a " +
+                "schedule, not a discovery rail",
+            mobile.contains("val upcomingVisible = upcoming.isNotEmpty()")
+        )
+        assertFalse(
+            "and the hide-unreleased pref must not gate it - the television " +
+                "never gated this row, so one setting produced two different " +
+                "Homes (decided 2026-10-26: Upcoming is exempt)",
+            mobile.contains("hideUpcomingRail") ||
+                mobile.contains("getHomeRailHideUpcoming(")
         )
         assertTrue(
-            "the row's visibility must be the pref AND the schedule",
-            mobile.contains("val upcomingVisible = upcoming.isNotEmpty() && !hideUpcomingRail")
-        )
-        assertTrue(
-            "the row must disappear from the built-ins the order builder sees",
+            "the row must disappear from the built-ins the order builder sees " +
+                "only when the schedule is empty",
             mobile.contains("if (upcomingVisible) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)")
+        )
+        assertTrue(
+            "the TV's built-in gate must stay the schedule alone, so the two agree",
+            home.contains("if (upcomingSchedule.isNotEmpty()) {")
         )
         assertTrue(
             "and the screen must not draw the item it just dropped",

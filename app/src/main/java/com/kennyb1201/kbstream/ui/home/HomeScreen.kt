@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -3895,21 +3894,21 @@ fun HomeScreen(
     // paint for a frame before the empty list landed.
     val railsBuiltForProfile by viewModel.railsProfileId.collectAsStateWithLifecycle()
     val railsRaw by viewModel.rails.collectAsStateWithLifecycle()
+    // The rails the loader actually produced for THIS profile, before any
+    // viewer filtering. Kept apart from [rails] because "no catalogs" and
+    // "every title on the catalogs is hidden" are different states with
+    // different recoveries (see the empty branch of the rail column).
+    val railsRawForProfile = remember(railsRaw, railsBuiltForProfile, activeProfileId) {
+        if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
+    }
     // Hidden titles are dropped as Home reads its own data, so a long-press
     // Hide on a rail takes the title off the whole screen at once - the
     // rails, Continue Watching, Up Next and the hero - and a rail the user
     // emptied out is dropped with it instead of leaving a gap. The key set
     // re-reads whenever the store changes (see rememberHiddenTitleKeys).
     val hiddenTitleKeys = rememberHiddenTitleKeys()
-    val rails = remember(
-        railsRaw,
-        railsBuiltForProfile,
-        activeProfileId,
-        hiddenTitleKeys
-    ) {
-        val built =
-            if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
-        built.mapNotNull { rail ->
+    val rails = remember(railsRawForProfile, hiddenTitleKeys) {
+        railsRawForProfile.mapNotNull { rail ->
             val visible = rail.items.filterNot { meta ->
                 HiddenTitles.hides(
                     hiddenTitleKeys,
@@ -3927,7 +3926,8 @@ fun HomeScreen(
     val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
     // A hidden show's Continue Watching / Up Next cards come from history and
     // from Simkl rather than from the rails above, so they are filtered here
-    // too - including the Upcoming rail's announced episodes.
+    // too. (The Upcoming rail's schedule is a separate flow and is filtered at
+    // its own read below.)
     val upNext = remember(upNextRaw, hiddenTitleKeys) {
         upNextRaw.filterNot { item ->
             HiddenTitles.hides(
@@ -3941,8 +3941,26 @@ fun HomeScreen(
             )
         }
     }
-    val upcomingSchedule by
+    val upcomingScheduleRaw by
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
+    // ...and the Upcoming rail's own schedule is filtered here too. It is a
+    // separate flow from [upNext], so the filter on that list does not reach
+    // it: Hide removed a show from the catalog rails and Continue Watching
+    // while its next episode still surfaced here, and focusing that card put
+    // the hidden show in the hero. The id spellings it carries are the show's
+    // and the episode's, the same pair the upNext filter passes.
+    val upcomingSchedule = remember(upcomingScheduleRaw, hiddenTitleKeys) {
+        upcomingScheduleRaw.filterNot { episode ->
+            HiddenTitles.hides(
+                hiddenTitleKeys,
+                episode.parentType,
+                episode.title,
+                null,
+                episode.parentId,
+                episode.id
+            )
+        }
+    }
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     // Held as State objects rather than values: HomeHeroHost below performs the
@@ -5044,32 +5062,6 @@ fun HomeScreen(
                             }
                         }
 
-                        // Only when there are rails for it to sit above. With
-                        // the rail list empty this branch won over the retry
-                        // card below, so a failed cold start showed a dead gray
-                        // line instead of the card whose entire point is that
-                        // pressing OK retries -- see the empty branch.
-                        error != null && rails.isNotEmpty() -> {
-                            // The built-in rows still draw: this line is status
-                            // about the CATALOG list, and they are not catalog
-                            // rows (see builtinRailItems). Base drew them here
-                            // too, above this line.
-                            builtinRailItems()
-                            item(key = "error", contentType = "status") {
-                                // The shared status pill rather than a bare
-                                // Text line: this is the same "something went
-                                // wrong" state every browse screen shows, and
-                                // it was the last one still hand-rolled. No
-                                // onRetry here - the rails below are what the
-                                // viewer is here for, and the pill's retry
-                                // card would take focus off them.
-                                KBStatusMessage(
-                                    message = "Error: $error",
-                                    modifier = Modifier.padding(24.dp)
-                                )
-                            }
-                        }
-
                         // No catalog rails, and no load in flight: the retry
                         // card, with the rows that do not come from a catalog
                         // drawn first (see drawBuiltinRail) - which is where they
@@ -5094,22 +5086,42 @@ fun HomeScreen(
                                 // "Couldn't reach your add-ons…" for exactly this
                                 // branch and the message was dropped on the
                                 // floor, so a TV that lost the network on cold
-                                // start told the viewer they had no add-ons. Its
-                                // text is preferred whenever there IS an error;
-                                // "add an addon" is for the case with nothing to
-                                // report.
-                                val emptyMessage = error?.takeIf { it.isNotBlank() }
-                                    ?.let {
-                                        "Couldn't reach your add-ons. Check the " +
-                                            "network connection, then press OK to retry."
-                                    }
-                                    ?: "No catalogs available. Add an addon to get started."
-                                KBStatusMessage(
-                                    message = emptyMessage,
-                                    icon = KB_STATUS_ICON_EMPTY,
-                                    onRetry = { viewModel.refreshRailsOnly() },
-                                    modifier = Modifier.fillParentMaxSize()
-                                )
+                                // start told the viewer they had no add-ons.
+                                //
+                                // Three states used to share one card: a
+                                // failed build (the retry works), no catalogs
+                                // at all (the retry is the only lead), and
+                                // every title on working rails hidden by the
+                                // viewer. The last was told it had no add-ons
+                                // and given a retry that re-applies the same
+                                // hidden filter, so it could never clear - and
+                                // the real recovery, Unhide all, was never
+                                // mentioned on this screen. It is the one of
+                                // the three a press can undo here.
+                                when {
+                                    !error.isNullOrBlank() -> KBStatusMessage(
+                                        message = "Couldn't reach your add-ons. Check the " +
+                                            "network connection, then press OK to retry.",
+                                        icon = KB_STATUS_ICON_EMPTY,
+                                        onRetry = { viewModel.refreshRailsOnly() },
+                                        modifier = Modifier.fillParentMaxSize()
+                                    )
+
+                                    railsRawForProfile.isNotEmpty() -> KBStatusMessage(
+                                        message = "All titles on your rails are hidden.",
+                                        icon = KB_STATUS_ICON_EMPTY,
+                                        onRetry = { HiddenTitles.unhideAll(context) },
+                                        actionLabel = "UNHIDE ALL",
+                                        modifier = Modifier.fillParentMaxSize()
+                                    )
+
+                                    else -> KBStatusMessage(
+                                        message = "No catalogs available. Add an addon to get started.",
+                                        icon = KB_STATUS_ICON_EMPTY,
+                                        onRetry = { viewModel.refreshRailsOnly() },
+                                        modifier = Modifier.fillParentMaxSize()
+                                    )
+                                }
                             }
                         }
 
@@ -5134,6 +5146,22 @@ fun HomeScreen(
                         }
 
                         else -> {
+                            // A status line can sit above working rails, and it
+                            // is a LINE, not a card: the rails below are what
+                            // the viewer came for, so the pill carries no retry
+                            // button to take focus off them. The previous
+                            // error-with-rails branch drew this status INSTEAD
+                            // of the rails, which withheld the very thing its
+                            // own no-retry comment assumed was on screen.
+                            if (error != null) {
+                                item(key = "error", contentType = "status") {
+                                    KBStatusMessage(
+                                        message = "Error: $error",
+                                        modifier = Modifier.padding(24.dp)
+                                    )
+                                }
+                            }
+
                             // KB collections interleave with addon rails:
                             // the merged order was computed above in composable
                             // context (pin / reorder / hide from the manager;
@@ -5250,6 +5278,25 @@ fun HomeScreen(
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail -> {
                                         val rail = e.rail
 
+                                        // This rail's prefix in the shared
+                                        // card-requester map. The same title can
+                                        // sit in two catalog rails (routine), and
+                                        // the map is one map for the whole
+                                        // screen: keyed on `type:id` alone, the
+                                        // second rail's copy overwrote the first
+                                        // rail's requester - and a copy that
+                                        // scrolled out removed the survivor's
+                                        // entry - so a return from Detail could
+                                        // land on the wrong rail's copy, or find
+                                        // nothing at all. The rail is part of
+                                        // the key; the card's focus callback and
+                                        // its registration both use it, so the
+                                        // remembered key and the restore lookup
+                                        // move together.
+                                        val catalogCardKeyPrefix =
+                                            "catalog|" + rail.addonName + "::" +
+                                                rail.catalogId + "::" + rail.type + "|"
+
                                         Column(
                                             modifier = Modifier.padding(
                                                 start = TvSafeAreaHorizontal,
@@ -5361,7 +5408,8 @@ fun HomeScreen(
                                                 // still remembered on focus, below.)
                                                 DisposableEffect(requester) {
                                                     val cardKey =
-                                                        "${meta.type}:${meta.id}"
+                                                        catalogCardKeyPrefix +
+                                                            "${meta.type}:${meta.id}"
                                                     railFocusRequesters[cardKey] = requester
                                                     onDispose {
                                                         railFocusRequesters.remove(cardKey)
@@ -5396,7 +5444,9 @@ fun HomeScreen(
                                                     .height(cardHeight)
                                                     .onFocusChanged { focusState ->
                                                         if (focusState.isFocused) {
-                                                            val cardKey = "${meta.type}:${meta.id}"
+                                                            val cardKey =
+                                                                catalogCardKeyPrefix +
+                                                                    "${meta.type}:${meta.id}"
                                                             // Remembered past this composable's
                                                             // life too: the card the viewer left
                                                             // Home on is what focus has to land on
@@ -5558,13 +5608,6 @@ fun HomeScreen(
                         }
                     }
 
-                    item(key = "bottom_spacer") {
-                        Spacer(
-                            modifier = Modifier.height(
-                                0.dp
-                            )
-                        )
-                    }
                 }
             }
         }
