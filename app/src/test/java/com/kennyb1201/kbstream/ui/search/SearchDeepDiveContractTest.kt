@@ -297,7 +297,7 @@ class SearchDeepDiveContractTest {
         assertTrue(
             "a recent search literally called \"clear_recent\" minted a duplicate " +
                 "LazyRow key and crashed the screen",
-            screen.contains("key = { recent: String -> \"recent:$recent\" }")
+            screen.contains("key = { recent: String -> \"recent:\$recent\" }")
         )
         assertFalse(
             "the bare text is the collision",
