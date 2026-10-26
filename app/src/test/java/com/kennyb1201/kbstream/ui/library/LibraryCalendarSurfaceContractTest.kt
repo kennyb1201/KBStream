@@ -64,8 +64,16 @@ class LibraryCalendarSurfaceContractTest {
     fun `a day's episodes are all drawn, and the list can be entered and left`() {
         assertTrue(
             "every episode of the selected day is an item - not one row, not a take(1)",
-            pane.contains("itemsIndexed( items = episodes, key = { _, episode ->") &&
+            pane.contains("itemsIndexed( items = episodes,") &&
                 !pane.contains(".take(1)")
+        )
+        assertTrue(
+            // ANDROID-11: the watched key is NOT a row identity - a day can hold
+            // the same show/season/episode twice, and Compose crashed the list on
+            // the duplicate key. The rows come from one precomputed, unique list.
+            "row keys are unique per row, not per watched key",
+            pane.contains("val rowKeys = remember(episodes) { calendarRowKeys(episodes) }") &&
+                pane.contains("key = { index, _ -> rowKeys[index] }")
         )
         assertTrue(
             "the FIRST row is the list's entry point, because a Column is not a " +

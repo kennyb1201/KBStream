@@ -1,0 +1,1485 @@
+From 3864f5033b37f4701618808f5ed6ba5061f8365b Mon Sep 17 00:00:00 2001
+From: Codebuff <noreply@codebuff.com>
+Date: Mon, 26 Oct 2026 00:01:22 +0000
+Subject: [PATCH 1/2] Free TV's Xumo streams get a guide from Xumo's own JSON
+ schedule
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Xumo publishes no XMLTV file, so its ~29 streams stayed blank while every
+other installed source had a feed. The platform does expose a JSON schedule,
+and this translates it to XMLTV in memory for the existing importer - no
+second importer, no second swap, no new matcher pass, so prune, the staged
+swap, the empty-feed guard and the profile pin are all the ones already
+tested.
+
+Live verification corrected three things the community generator implies:
+the channel list is a separate endpoint (the schedule response carries ids
+with no titles), the URL's trailing number is a six-hour block rather than a
+day page, and the API's `+0000` offset is not a spelling the guide parser
+accepts - the first run emitted 455 channels and zero programmes because of
+it, which is why the adapter has its own timestamp parser.
+
+The adapter is an installed source, not a line in the Extra EPG field: it
+registers by per-profile flag, reads LAST so no existing source's precedence
+moves, and is imported alone rather than re-downloading the other six.
+
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>
+---
+ .../kbstream/data/iptv/FreeLineup.kt          |  30 ++
+ .../kbstream/data/iptv/IptvRepository.kt      |  53 ++
+ .../kbstream/data/iptv/XumoEpgTranslator.kt   | 498 ++++++++++++++++++
+ .../kbstream/ui/iptv/IptvViewModel.kt         | 119 ++++-
+ .../kbstream/ui/sports/SportsHubViewModel.kt  |  10 +
+ .../data/iptv/XumoEpgTranslatorTest.kt        | 394 ++++++++++++++
+ 6 files changed, 1103 insertions(+), 1 deletion(-)
+ create mode 100644 app/src/main/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslator.kt
+ create mode 100644 app/src/test/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslatorTest.kt
+
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/data/iptv/FreeLineup.kt b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/FreeLineup.kt
+index 316fc5a..37e8394 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/data/iptv/FreeLineup.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/FreeLineup.kt
+@@ -137,6 +137,16 @@ object FreeLineup {
+     /** The display name the lineup's channels are grouped under. */
+     const val NAME = "Free TV"
+ 
++    /**
++     * The Xumo adapter's per-profile install flag.
++     *
++     * Lives here, beside the URLs, because BOTH surfaces need it: the guide
++     * screen's source list and the Sports hub's own EPG lookup each build the
++     * source set from prefs, and a second copy of this literal would let one of
++     * them silently stop seeing the adapter.
++     */
++    const val XUMO_EPG_APPLIED_KEY = "free_tv_xumo_epg_applied"
++
+     /** The extras entry as stored: `<url>|<display name>`. */
+     val ENTRY: String = "$PLAYLIST_URL|$NAME"
+ 
+@@ -361,6 +371,26 @@ object FreeLineup {
+         else -> LocalsGuideDecision.Append(append(extraEpgUrls, LOCALS_EPG_URL))
+     }
+ 
++    /**
++     * Whether this profile should register the Xumo guide adapter.
++     *
++     * The adapter is the one installed guide that is NOT a line in the Extra
++     * EPG field: there is nothing to paste, rename or delete, so there is no
++     * text to reconcile and no [Append]/[RecordOnly] distinction to draw. The
++     * decision is therefore just the two facts the other migrations share -
++     * Free TV is installed, and this profile has not been offered it yet - and
++     * applying it twice writes one source, because the second application sees
++     * `alreadyApplied` and stops.
++     *
++     * "No line" is also why removal needs no special case: [remove] cannot take
++     * the adapter out by deleting text, so the caller clears the flag and the
++     * adapter's rows instead (see `IptvRepository.forgetGuideSource`).
++     */
++    internal fun shouldInstallXumoGuide(
++        extraPlaylistUrls: String,
++        alreadyApplied: Boolean
++    ): Boolean = !alreadyApplied && isInstalled(extraPlaylistUrls)
++
+     /**
+      * The extra-EPG blob with the legacy guide line swapped for [EPG_URL], or
+      * null when there is nothing to swap.
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/data/iptv/IptvRepository.kt b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/IptvRepository.kt
+index 57a2857..6b79150 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/data/iptv/IptvRepository.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/IptvRepository.kt
+@@ -435,6 +435,40 @@ class IptvRepository(
+             // nobody completes. The cancellation still propagates:
+             // result.getOrThrow() rethrows it just below.
+             val result: Result<GuideImportOutcome> = runCatching {
++                // ── the Xumo adapter ─────────────────────────────────────
++                // A JSON source is not a file to download: it is fetched page
++                // by page and translated in memory, and the XMLTV that comes
++                // out goes to the SAME importer as every other source - so the
++                // staged swap, the empty-feed guard, prune and the profile pin
++                // are this call's, not a parallel implementation's.
++                //
++                // Routed BEFORE the validators block because there is nothing
++                // to make conditional: no server holds this document, so a
++                // validator would be inventing an ETag for bytes we generated.
++                // Kept inside this runCatching so it completes `waiter` and
++                // joins the same failure shape as every other source.
++                if (normalizedUrl == XumoGuide.SOURCE_KEY) {
++                    val translator = XumoEpgTranslator { url ->
++                        // Reuses the playlist/guide fetcher's retry and backoff,
++                        // so a stalled Xumo page is retried like a stalled
++                        // download. A page that still fails throws, which is a
++                        // per-source failure (see the caller's error handling).
++                        IptvHttpClient.fetchTextWithRetry(client, url)
++                    }
++                    // The window the importer stores is the window the adapter
++                    // must cover: passing the same pair to both is what makes
++                    // §7's day-coverage rule and the importer's row filter
++                    // agree instead of guessing at each other.
++                    val nowMs = System.currentTimeMillis()
++                    val windowStartMs = nowMs - EpgWindow.PAST_MS
++                    val windowEndMs = nowMs + EpgWindow.FUTURE_MS
++                    val stats = translator.fetch(windowStartMs, windowEndMs).use { stream ->
++                        importer.import(normalizedUrl, stream, windowStartMs, windowEndMs)
++                    }
++                    importedFresh = !stats.emptyFeedKeptLive
++                    return@runCatching streamedOutcome(stats)
++                }
++
+                 // The validators stored by the last successful import of this
+                 // URL, if any. They make the fetch conditional, which is the
+                 // whole point: a 10-100 MB guide that has not changed must not
+@@ -560,6 +594,25 @@ class IptvRepository(
+         }
+     }
+ 
++    /**
++     * Deletes every stored row belonging to one guide source.
++     *
++     * Written for the Xumo adapter, whose source key is not a line the viewer
++     * could delete: removing Free TV has to take its programs out explicitly,
++     * because there is no text removal that does it implicitly. It is
++     * deliberately source-agnostic - the staging key is swept as well, so an
++     * import that died mid-swap cannot leave rows behind that the next import
++     * of that source would resurrect.
++     */
++    suspend fun forgetGuideSource(sourceKey: String) = withContext(Dispatchers.IO) {
++        val key = sourceKey.trim()
++        if (key.isEmpty()) return@withContext
++        dao.clearGuideBySource(key)
++        dao.clearGuideBySource("$key@importing")
++        GuideCacheHeaders.clear(appContext, key)
++        Log.i(TAG, "GUIDE SOURCE FORGOTTEN source=${Redaction.url(key)}")
++    }
++
+     /**
+      * What a STREAMED fetch means for the viewer, and for every live instance.
+      *
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslator.kt b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslator.kt
+new file mode 100644
+index 0000000..50bb9ba
+--- /dev/null
++++ b/app/src/main/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslator.kt
+@@ -0,0 +1,498 @@
++package com.kennyb1201.kbstream.data.iptv
++
++import java.io.ByteArrayInputStream
++import java.io.InputStream
++import java.time.Instant
++import java.time.LocalDate
++import java.time.ZoneOffset
++import java.time.format.DateTimeFormatter
++import org.json.JSONArray
++import org.json.JSONObject
++
++/**
++ * The Xumo FAST guide, translated to XMLTV in memory.
++ *
++ * Xumo publishes no XMLTV file: its schedule is a JSON API. This adapter
++ * fetches that JSON and returns an XMLTV document as a STREAM, which the
++ * existing [XmltvImporter] then parses exactly as it parses a downloaded guide.
++ * That is the whole design: no second importer, no second staged swap, no second
++ * empty-feed guard, no second matcher pass. Prune, profile pinning, the watchdog
++ * and the per-source stats all come from the importer that already has them.
++ *
++ * Everything below was verified against the live API on 2026-10-25; where the
++ * shipped community generator and the live response disagree, the live response
++ * is what this file implements, and the divergence is called out at each site.
++ */
++internal object XumoGuide {
++
++    /**
++     * The adapter's source key.
++     *
++     * URL-shaped on purpose. The adapter is NOT a line in the Extra EPG field
++     * (there is nothing to paste or edit), but the key still travels through
++     * every place that assumes a guide source is a URL: [Redaction.url] strips
++     * userinfo from anything with a `scheme://`, `GuideSourceStamps` stores
++     * `<epochMs>|<key>` lines, and the diagnostics and Playlist Setup rows print
++     * it. A bare `"xumo"` would survive all of those too, but `xumo://guide`
++     * additionally makes a log line unambiguous about which source it came from,
++     * and cannot collide with a real provider URL. Behaviour is identical either
++     * way; see the landing report for the audit.
++     */
++    const val SOURCE_KEY = "xumo://guide"
++
++    /**
++     * The lineup the Android TV app reads. Live-verified: HTTP 200,
++     * `totalChannels: 455`, 453 of which carry programs.
++     *
++     * This is the id the Channels-community `xumo.py` generator uses. Its newer
++     * sibling (`generate_xumo.py`) reads lineup `10006` off the `valencia-app-mds`
++     * host instead; both were verified to answer, and both list the same 455
++     * channels including American Ninja Warrior, so the choice is not
++     * load-bearing - but only ONE lineup may be fetched, or every channel would
++     * be emitted twice.
++     */
++    const val LINEUP_ID = "10032"
++
++    private const val MDS_HOST = "https://android-tv-mds.xumo.com"
++
++    /** Channel display names. The EPG response carries no titles at all. */
++    const val CHANNEL_LIST_URL =
++        "$MDS_HOST/v2/channels/list/$LINEUP_ID.json?f=genreId&sort=hybrid&geoId=unknown"
++
++    /**
++     * The path's trailing number is NOT a day page - it is a SIX-HOUR BLOCK.
++     *
++     * The community generator's URL shape is identical but its meaning was
++     * misread: block `0` returns 00:00-06:00, `1` 06:00-12:00, `2` 12:00-18:00,
++     * `3` 18:00-24:00, and `4` and above answer HTTP 400. A full day is
++     * therefore four block requests per offset page (~44 calls), not one.
++     */
++    const val BLOCKS_PER_DAY = 4
++
++    fun epgUrl(day: String, block: Int, offset: Int): String =
++        "$MDS_HOST/v2/epg/$LINEUP_ID/$day/$block.json" +
++            "?limit=$PAGE_SIZE&offset=$offset&f=asset.title&f=asset.descriptions"
++
++    /** Page size the API documents, and the step used to walk it. */
++    const val PAGE_SIZE = 50
++
++    /**
++     * A hard stop on pagination.
++     *
++     * The walk ends when a page comes back empty, which is the API's own
++     * contract; this ceiling only exists so a server that answers every offset
++     * with the same page cannot spin an import forever. 455 channels is ten
++     * pages, so this is roughly four times the largest real walk seen.
++     */
++    const val MAX_PAGES_PER_BLOCK = 40
++
++    /**
++     * How many extra days the coverage loop may fetch.
++     *
++     * §7's rule is coverage, not a day count: the loop below re-checks whether
++     * the fetched program ends past the window and extends by one day when they
++     * do not. Two days is what the current 20 h window needs in practice; the
++     * cap stops a provider whose schedule simply ends early from turning that
++     * into an unbounded download.
++     */
++    const val MAX_EXTRA_DAYS = 2
++
++    /** Channel-tile art, the same URL shape the community generator emits. */
++    fun iconUrl(channelId: Long): String =
++        "https://image.xumo.com/v1/channels/channel/xumo-$channelId/600x337.png?type=channelTile"
++
++    /** The XMLTV channel id for one Xumo channel id. */
++    fun xmltvChannelId(channelId: Long): String = "xumo-$channelId"
++}
++
++/**
++ * Fetches and translates the Xumo guide.
++ *
++ * [fetchText] is injected rather than taking an `OkHttpClient` so the whole
++ * translation is unit-testable against fixtures with no network and no HTTP
++ * stack - the same reason [XmltvDates] was lifted out of the importer.
++ */
++internal class XumoEpgTranslator(
++    private val fetchText: suspend (url: String) -> String
++) {
++
++    /**
++     * The guide for [windowStartMs]..[windowEndMs], as an XMLTV stream.
++     *
++     * Throws on anything that would make this a partial guide: a failed channel
++     * list, a failed page, a failed block. §6 is explicit that a partial walk is
++     * a FAILED SOURCE, not a partial import, so nothing here degrades quietly.
++     * The caller ([IptvRepository]) turns the throw into the ordinary per-source
++     * failure: staging discarded, live rows kept, freshness stamp not advanced.
++     */
++    suspend fun fetch(windowStartMs: Long, windowEndMs: Long): InputStream =
++        ByteArrayInputStream(translate(windowStartMs, windowEndMs).toByteArray(Charsets.UTF_8))
++
++    internal suspend fun translate(windowStartMs: Long, windowEndMs: Long): String {
++        // Names first: without them the schedule below is unmatchable (the EPG
++        // response has ids and no titles), so a channel-list failure must fail
++        // the source rather than produce a nameless feed.
++        val titles = parseChannelList(fetchText(XumoGuide.CHANNEL_LIST_URL))
++
++        val days = daysFor(windowStartMs, windowEndMs).toMutableList()
++        val schedule = LinkedHashMap<Long, MutableList<XumoScheduleEntry>>()
++        val assets = HashMap<String, XumoAssetEntry>()
++
++        var index = 0
++        var extensions = 0
++        while (index < days.size) {
++            mergeDay(days[index], schedule, assets)
++            index++
++            // §7: coverage, not a count. If what was fetched ends before the
++            // window does, one more day is fetched and re-checked. A clock skew
++            // or a date bucket that disagrees with the generator's UTC
++            // assumption shows up here as a window the fetched days do not
++            // reach, and it is extended rather than silently dropped.
++            if (index == days.size &&
++                extendsWindow(schedule, windowEndMs) &&
++                extensions < XumoGuide.MAX_EXTRA_DAYS
++            ) {
++                val next = shiftDay(days.last(), +1) ?: break
++                days.add(next)
++                extensions++
++            }
++        }
++
++        return translateToXmltv(titles, schedule, assets)
++    }
++
++    /** Walks every block and every offset page of one day and merges it. */
++    private suspend fun mergeDay(
++        day: String,
++        schedule: MutableMap<Long, MutableList<XumoScheduleEntry>>,
++        assets: MutableMap<String, XumoAssetEntry>
++    ) {
++        for (block in 0 until XumoGuide.BLOCKS_PER_DAY) {
++            var offset = 0
++            var pages = 0
++            while (true) {
++                val chunk = parseEpgChunk(fetchText(XumoGuide.epgUrl(day, block, offset)))
++                if (chunk.channels.isEmpty()) break
++                chunk.channels.forEach { (channelId, entries) ->
++                    schedule.getOrPut(channelId) { ArrayList() }.addAll(entries)
++                }
++                assets.putAll(chunk.assets)
++                pages++
++                offset += XumoGuide.PAGE_SIZE
++                // A page shorter than the limit is the last page; the empty-page
++                // check above still runs first, because the API answers a past
++                // the end offset with an empty array rather than a 404.
++                if (chunk.channels.size < XumoGuide.PAGE_SIZE) break
++                if (pages >= XumoGuide.MAX_PAGES_PER_BLOCK) break
++            }
++        }
++    }
++
++    /**
++     * Whether the fetched programs already reach [windowEndMs].
++     *
++     * Deliberately lenient: the check is "does ANY program end at or after the
++     * window", because a schedule's last hours are routinely sparse on some
++     * channels - a strict per-channel rule would extend the fetch forever.
++     */
++    private fun extendsWindow(
++        schedule: Map<Long, List<XumoScheduleEntry>>,
++        windowEndMs: Long
++    ): Boolean {
++        var latest = Long.MIN_VALUE
++        for (entries in schedule.values) {
++            for (entry in entries) {
++                val end = parseXumoInstant(entry.end) ?: continue
++                if (end > latest) latest = end
++            }
++        }
++        return latest == Long.MIN_VALUE || latest < windowEndMs
++    }
++
++    /** The next calendar day, or null when [day] is not a `yyyyMMdd` value. */
++    private fun shiftDay(day: String, delta: Long): String? = runCatching {
++        DAY_FORMAT.format(LocalDate.parse(day, DAY_FORMAT).plusDays(delta))
++    }.getOrNull()
++
++    private companion object {
++        val DAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
++    }
++}
++
++/**
++ * UTC day buckets a window spans, inclusive.
++ *
++ * UTC on purpose: the platform's own date buckets are UTC (the community
++ * generator uses `datetime.now(timezone.utc)`), and every program carries its
++ * own offset, so the bucket only decides WHICH days are fetched. §7's rule is
++ * coverage, and the caller extends this list when the fetched programs do not
++ * reach the window.
++ */
++internal fun daysFor(windowStartMs: Long, windowEndMs: Long): List<String> {
++    val format = DateTimeFormatter.ofPattern("yyyyMMdd")
++    var date = Instant.ofEpochMilli(windowStartMs).atZone(ZoneOffset.UTC).toLocalDate()
++    val last = Instant.ofEpochMilli(maxOf(windowStartMs, windowEndMs))
++        .atZone(ZoneOffset.UTC)
++        .toLocalDate()
++    val days = ArrayList<String>(2)
++    while (!date.isAfter(last)) {
++        days.add(format.format(date))
++        date = date.plusDays(1)
++        // Twelve days is far past any window this app imports; the guard is
++        // against a caller passing an inverted or absurd range, not a policy.
++        if (days.size > 12) break
++    }
++    return days
++}
++
++/** One channel's schedule inside an EPG page. */
++internal data class XumoScheduleEntry(
++    val assetId: String,
++    val start: String,
++    val end: String
++)
++
++/** The asset table an EPG page carries, keyed by asset id. */
++internal data class XumoAssetEntry(
++    val title: String?,
++    val episodeTitle: String?,
++    val descriptions: Map<String, String>
++)
++
++/** One EPG page, already separated into its two halves. */
++internal data class XumoEpgChunk(
++    val channels: Map<Long, List<XumoScheduleEntry>>,
++    val assets: Map<String, XumoAssetEntry>
++)
++
++/**
++ * `channel.item[].title` by `guid.value`.
++ *
++ * This endpoint - not the schedule response - is the only title source. It is
++ * also where the DRM placeholder pages are dropped: `Series Page - DRM` and
++ * `Movies Page - DRM` are not channels and have no schedule, so emitting them
++ * would only add two dead guide channels to prune.
++ */
++internal fun parseChannelList(json: String): Map<Long, String> {
++    val root = JSONObject(json)
++    val items = root.optJSONObject("channel")?.optJSONArray("item") ?: JSONArray()
++    val titles = LinkedHashMap<Long, String>(items.length())
++    for (index in 0 until items.length()) {
++        val item = items.optJSONObject(index) ?: continue
++        val title = item.optString("title").trim()
++        if (title.isEmpty()) continue
++        val id = item.optJSONObject("guid")?.optString("value")?.toLongOrNull() ?: continue
++        titles[id] = title
++    }
++    return titles
++}
++
++/** Splits one EPG page into its schedule and its asset table. */
++internal fun parseEpgChunk(json: String): XumoEpgChunk {
++    val root = JSONObject(json)
++    val channelsJson = root.optJSONArray("channels") ?: JSONArray()
++    val channels = LinkedHashMap<Long, List<XumoScheduleEntry>>(channelsJson.length())
++    for (index in 0 until channelsJson.length()) {
++        val channel = channelsJson.optJSONObject(index) ?: continue
++        val channelId = channel.optLong("channelId")
++        if (channelId <= 0L) continue
++        val scheduleJson = channel.optJSONArray("schedule") ?: JSONArray()
++        val entries = ArrayList<XumoScheduleEntry>(scheduleJson.length())
++        for (entryIndex in 0 until scheduleJson.length()) {
++            val entry = scheduleJson.optJSONObject(entryIndex) ?: continue
++            val assetId = entry.optString("assetId").trim()
++            val start = entry.optString("start").trim()
++            val end = entry.optString("end").trim()
++            if (assetId.isEmpty() || start.isEmpty() || end.isEmpty()) continue
++            entries.add(XumoScheduleEntry(assetId = assetId, start = start, end = end))
++        }
++        channels[channelId] = entries
++    }
++
++    val assetsJson = root.optJSONObject("assets") ?: JSONObject()
++    val assets = HashMap<String, XumoAssetEntry>(assetsJson.length())
++    assetsJson.keys().forEach { key ->
++        val asset = assetsJson.optJSONObject(key) ?: return@forEach
++        val descriptions = HashMap<String, String>(4)
++        asset.optJSONObject("descriptions")?.let { descriptionsJson ->
++            descriptionsJson.keys().forEach { name ->
++                val value = descriptionsJson.optString(name).trim()
++                if (value.isNotEmpty()) descriptions[name] = value
++            }
++        }
++        assets[key] = XumoAssetEntry(
++            title = asset.optString("title").trim().ifEmpty { null },
++            // Live responses omit this far more often than they carry it, so
++            // its absence is the normal case, not an error.
++            episodeTitle = asset.optString("episodeTitle").trim().ifEmpty { null },
++            descriptions = descriptions
++        )
++    }
++    return XumoEpgChunk(channels = channels, assets = assets)
++}
++
++/**
++ * The XMLTV document for one translated day-set.
++ *
++ * Ordering is by channel id so the same input always produces the same bytes -
++ * which is what lets a fixture test assert on the output without sorting it
++ * first.
++ */
++internal fun translateToXmltv(
++    titles: Map<Long, String>,
++    schedule: Map<Long, List<XumoScheduleEntry>>,
++    assets: Map<String, XumoAssetEntry>
++): String {
++    val out = StringBuilder(1 shl 20)
++    out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
++    out.append("<tv generator-info-name=\"KBStream Xumo adapter\">\n")
++
++    val channels = schedule.keys.filter { titles.containsKey(it) }.sorted()
++    channels.forEach { channelId ->
++        out.append("<channel id=\"").append(xmlEscape(XumoGuide.xmltvChannelId(channelId))).append("\">")
++        out.append("<display-name>").append(xmlEscape(titles.getValue(channelId))).append("</display-name>")
++        // Kept because XmltvImporter DOES preserve channel icons (readChannel
++        // stores <icon src>), so this is a supported field rather than an
++        // invented one. Programme icons are not emitted: readProgram ignores
++        // them, and an element the importer drops is pure bytes.
++        out.append("<icon src=\"").append(xmlEscape(XumoGuide.iconUrl(channelId))).append("\"/>")
++        out.append("</channel>\n")
++    }
++
++    channels.forEach { channelId ->
++        val channelKey = XumoGuide.xmltvChannelId(channelId)
++        schedule.getValue(channelId).forEach { entry ->
++            val start = parseXumoInstant(entry.start) ?: return@forEach
++            val end = parseXumoInstant(entry.end) ?: return@forEach
++            if (end <= start) return@forEach
++            val asset = assets[entry.assetId]
++
++            out.append("<programme start=\"").append(xmltvTimestamp(start))
++                .append("\" stop=\"").append(xmltvTimestamp(end))
++                .append("\" channel=\"").append(xmlEscape(channelKey)).append("\">")
++
++            val title = asset?.title.orEmpty()
++            out.append("<title>").append(xmlEscape(title)).append("</title>")
++
++            // Sub-title only when it says something the title does not: the
++            // generator emits it whenever present, but a show whose episode
++            // title repeats its title would render as the same line twice.
++            val episodeTitle = asset?.episodeTitle
++            if (!episodeTitle.isNullOrBlank() && !episodeTitle.equals(title, ignoreCase = true)) {
++                out.append("<sub-title>").append(xmlEscape(episodeTitle)).append("</sub-title>")
++            }
++
++            xumoDescription(asset?.descriptions)?.let { description ->
++                out.append("<desc>").append(xmlEscape(description)).append("</desc>")
++            }
++
++            // The generator's own rule: an `EP…` asset is a program id, anything
++            // else is a series id. NOTE the current importer does not read
++            // <episode-num> at all, so this is forward-looking metadata rather
++            // than something the guide displays today; it is emitted because the
++            // spec pins the mapping, and dropping it would make the XML not
++            // match the platform's own identity rules.
++            val (system, value) = episodeNum(entry.assetId)
++            out.append("<episode-num system=\"").append(system).append("\">")
++                .append(xmlEscape(value)).append("</episode-num>")
++
++            out.append("</programme>\n")
++        }
++    }
++
++    out.append("</tv>\n")
++    return out.toString()
++}
++
++/**
++ * The description fallback chain, largest first.
++ *
++ * `large` is nearly always absent in live responses - the sampled assets carry
++ * `medium` and nothing else - so the chain is what makes descriptions appear at
++ * all. Empty is a legitimate answer and must not become the string "null".
++ */
++internal fun xumoDescription(descriptions: Map<String, String>?): String? {
++    if (descriptions == null) return null
++    return XUMO_DESCRIPTION_KEYS
++        .firstNotNullOfOrNull { key -> descriptions[key]?.takeIf { it.isNotBlank() } }
++}
++
++private val XUMO_DESCRIPTION_KEYS = listOf("large", "medium", "small", "tiny")
++
++/** `EP…` → `dd_progid`, everything else → `dd_seriesid`. */
++internal fun episodeNum(assetId: String): Pair<String, String> =
++    if (assetId.startsWith("EP")) "dd_progid" to assetId else "dd_seriesid" to assetId
++
++/**
++ * Parses the API's own timestamp spelling.
++ *
++ * The live values look like `2026-10-25T00:00:00+0000` - an ISO date-time with a
++ * COMPACT numeric offset. That is deliberately not delegated to
++ * [parseXmltvDateMillis]: that parser is tuned for guide FILES (compact
++ * `yyyyMMddHHmmss`, and ISO with `Z` or a colon-bearing offset), and it returns
++ * null for this spelling. The first live run of this adapter proved it - 455
++ * channels and zero programmes, because every start parsed to null and every
++ * entry was skipped. A silent whole-feed drop is exactly the failure mode this
++ * function exists to make impossible, so the offset form is handled explicitly
++ * rather than assumed.
++ */
++internal fun parseXumoInstant(value: String?): Long? {
++    val raw = value?.trim().orEmpty()
++    if (raw.isEmpty()) return null
++    for (format in XUMO_TIMESTAMP_FORMATS) {
++        try {
++            return java.time.OffsetDateTime.parse(raw, format).toInstant().toEpochMilli()
++        } catch (_: Exception) {
++            // Try the next spelling; only exhaustion is an answer.
++        }
++    }
++    return null
++}
++
++/**
++ * Accepted spellings, most specific first: the live `+0000`, the RFC-style
++ * `Z`, and the colon form. [java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME]
++ * covers fractional seconds if the API ever adds them.
++ */
++private val XUMO_TIMESTAMP_FORMATS: List<DateTimeFormatter> = listOf(
++    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ"),
++    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"),
++    DateTimeFormatter.ISO_OFFSET_DATE_TIME
++)
++
++/**
++ * An epoch instant as XMLTV spells it: `yyyyMMddHHmmss +0000`.
++ *
++ * The API's own values end in a compact `+0000`, and the importer's parser
++ * accepts that spelling too - but this normalizes every value to UTC so a
++ * response that ever ships a real offset cannot land a program in the wrong
++ * hour by being passed through verbatim.
++ */
++internal fun xmltvTimestamp(epochMs: Long): String =
++    XMLTV_TIMESTAMP.format(Instant.ofEpochMilli(epochMs))
++
++private val XMLTV_TIMESTAMP: DateTimeFormatter =
++    DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").withZone(ZoneOffset.UTC)
++
++/**
++ * XML text escaping for the values Xumo supplies.
++ *
++ * The importer tolerates unescaped `&` through [XmltvEntitySanitizingReader],
++ * but tolerating it is not the same as emitting it: a title containing `<` would
++ * otherwise end the element early and truncate the programme.
++ */
++internal fun xmlEscape(value: String): String {
++    if (value.none { it == '&' || it == '<' || it == '>' || it == '"' || it == '\'' }) return value
++    val out = StringBuilder(value.length + 16)
++    value.forEach { character ->
++        when (character) {
++            '&' -> out.append("&amp;")
++            '<' -> out.append("&lt;")
++            '>' -> out.append("&gt;")
++            '"' -> out.append("&quot;")
++            '\'' -> out.append("&apos;")
++            else -> out.append(character)
++        }
++    }
++    return out.toString()
++}
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt b/app/src/main/java/com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt
+index f056e5b..25e5bd2 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt
+@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
+ import com.kennyb1201.kbstream.data.iptv.EpgStalledException
+ import com.kennyb1201.kbstream.data.iptv.EpgWindow
+ import com.kennyb1201.kbstream.data.iptv.FreeLineup
++import com.kennyb1201.kbstream.data.iptv.XumoGuide
+ import com.kennyb1201.kbstream.data.iptv.GuideImportOutcome
+ import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+ import com.kennyb1201.kbstream.data.iptv.GuideRefreshPolicy
+@@ -86,7 +87,30 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+     /** Primary + extras, in order, trimmed, no blanks. */
+     private fun allEpgUrls(): List<String> =
+         (_epgUrl.value.trim().takeIf(String::isNotEmpty)?.let(::listOf).orEmpty() +
+-            extraEpgUrlList()).distinct()
++            extraEpgUrlList() +
++            adapterGuideUrls()).distinct()
++
++    /**
++     * The installed guide ADAPTERS, always LAST in source order.
++     *
++     * Order is load-bearing and unchanged by this: guide sources are read in
++     * order and each channel keeps the FIRST source that resolves it, so Xumo
++     * after kanya/locals/Pluto/Samsung/Plex/Roku can only ADD channels none of
++     * them answer. Xumo's channels are platform-distinct, so going last leaves
++     * every existing source's precedence exactly as it was.
++     *
++     * These are not lines in [extraEpgUrls]: the adapter is a managed installed
++     * source, so it appears here by flag rather than by text. That is also why
++     * this list - not the field - is what Playlist Setup, the freshness stamps
++     * and the diagnostics all read: a key present here is reported per source
++     * everywhere those already work.
++     */
++    private fun adapterGuideUrls(): List<String> =
++        if (prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)) {
++            listOf(XumoGuide.SOURCE_KEY)
++        } else {
++            emptyList()
++        }
+ 
+     private val _playlistName = MutableStateFlow(prefs.getString(KEY_PLAYLIST_NAME, "").orEmpty())
+     val playlistName: StateFlow<String> = _playlistName.asStateFlow()
+@@ -236,9 +260,28 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+         writeSources(playlists, guides)
+         _freeLineupFailed.value = false
+         forgetPlaylistRows(FreeLineup.PLAYLIST_URL)
++        forgetXumoGuideAdapter()
+         afterSourceRemoval()
+     }
+ 
++    /**
++     * Takes the Xumo adapter out with the lineup it exists for.
++     *
++     * [FreeLineup.remove] cannot do this by deleting text, because there is no
++     * line to delete - so removal is the flag plus the rows. Clearing the flag
++     * is what makes a later re-install re-apply the adapter: nothing about the
++     * removal is remembered beyond the fact that it happened.
++     */
++    private fun forgetXumoGuideAdapter() {
++        if (!prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)) return
++        prefs.edit().putBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false).apply()
++        viewModelScope.launch {
++            runCatchingCancellable { repository.forgetGuideSource(XumoGuide.SOURCE_KEY) }
++            _guideRefreshTick.value += 1
++        }
++        Log.i(TAG, "FREE LINEUP XUMO EPG adapter removed with the lineup")
++    }
++
+     /**
+      * Swaps a free-lineup install's dead guide address for the living one.
+      *
+@@ -419,6 +462,65 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+         prefs.edit().putBoolean(KEY_FREE_TV_FAST_EPG_APPLIED, true).apply()
+     }
+ 
++    /**
++     * The one-time Xumo guide-adapter migration, on the FAST migration's trigger.
++     *
++     * Same entry point and same guard as its neighbours: a guide import owns the
++     * fetch/write window, so the flag stays UNSET and the next entry retries.
++     * Nothing is written into the Extra EPG field - the adapter has no line -
++     * so "applying" is only the per-profile flag plus the single-source import
++     * the caller starts.
++     *
++     * @return true when the adapter was registered by THIS call.
++     */
++    private fun migrateFreeLineupXumoEpg(): Boolean {
++        val applied = prefs.getBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, false)
++        if (_isImportingGuide.value) return false
++        if (!FreeLineup.shouldInstallXumoGuide(
++                extraPlaylistUrls = _extraPlaylistUrls.value,
++                alreadyApplied = applied
++            )
++        ) {
++            return false
++        }
++        prefs.edit().putBoolean(KEY_FREE_TV_XUMO_EPG_APPLIED, true).apply()
++        Log.i(TAG, "FREE LINEUP XUMO EPG migration: guide adapter registered")
++        return true
++    }
++
++    /**
++     * Imports the Xumo adapter ALONE, and nothing else.
++     *
++     * Registering the adapter must not re-download the other six sources: their
++     * guides are already stored, and a full pass would re-fetch ~100k programs
++     * to add one platform. [IptvRepository.importGuide] is already a
++     * single-source entry point (it is what the worker loop calls per URL), so
++     * the spec's preferred outcome is the one implemented here - no fallback.
++     *
++     * The stamp is recorded exactly as the loop records it, so Playlist Setup
++     * says when this source last succeeded, and a failure lands as that source's
++     * own failure: a non-fatal log plus no stamp, leaving its rows as they were.
++     */
++    private fun importXumoAdapterOnly() {
++        viewModelScope.launch {
++            runCatchingCancellable {
++                repository.importGuide(XumoGuide.SOURCE_KEY)
++                GuideSourceStamps.recordSuccess(prefs, XumoGuide.SOURCE_KEY)
++                _guideRefreshTick.value += 1
++            }.onFailure { error ->
++                // Cancellation is already rethrown by runCatchingCancellable;
++                // what lands here is a real source failure, and it stays one:
++                // no stamp is recorded, its rows are left as they were, and the
++                // other sources are untouched.
++                Log.e(
++                    TAG,
++                    "XUMO GUIDE IMPORT FAILED source=${Redaction.url(XumoGuide.SOURCE_KEY)}",
++                    Redaction.throwable(error)
++                )
++            }
++        }
++    }
++
+     /**
+      * Removes the PRIMARY playlist - the URL and the name, nothing else.
+      *
+@@ -1333,9 +1435,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+                 // kanya (+ locals): add the missing platform feeds too, before
+                 // the cache read, for the same reason.
+                 val fastLinesAdded = migrateFreeLineupFastEpg()
++                // The Xumo adapter has no line to write, so it is registered by
++                // flag and imported on its OWN - deliberately not folded into
++                // guideSourceAdded, which forces a full pass over every source.
++                val xumoAdapterAdded = migrateFreeLineupXumoEpg()
+                 // A line that was just written is not in any guide yet: the
+                 // import below (or after the load) reads the list (§3.4).
+                 val guideSourceAdded = localsLineAdded || fastLinesAdded
++                if (xumoAdapterAdded) importXumoAdapterOnly()
+                 // An install from before the US filter still holds its old,
+                 // unfiltered rows: rewrite the cache before this restore reads
+                 // it (see [migrateFreeLineupUsFilter], spec §3).
+@@ -2378,6 +2485,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
+          * never re-adds a FAST line the viewer deleted.
+          */
+         const val KEY_FREE_TV_FAST_EPG_APPLIED = "free_tv_fast_epg_applied"
++
++        /**
++         * The Xumo guide ADAPTER's per-profile one-time flag.
++         *
++         * A sibling of the two migration flags above, but with a difference
++         * that matters: those record "the lines are in the field now", and this
++         * one records "this profile owns the adapter at all" - because there is
++         * no line whose presence could serve as the record.
++         */
++        const val KEY_FREE_TV_XUMO_EPG_APPLIED = FreeLineup.XUMO_EPG_APPLIED_KEY
+         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
+ 
+         /**
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt b/app/src/main/java/com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt
+index 6aeda9a..7f79811 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt
+@@ -7,7 +7,9 @@ import android.os.SystemClock
+ import android.util.Log
+ import androidx.lifecycle.AndroidViewModel
+ import androidx.lifecycle.viewModelScope
++import com.kennyb1201.kbstream.data.iptv.FreeLineup
+ import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
++import com.kennyb1201.kbstream.data.iptv.XumoGuide
+ import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
+ import com.kennyb1201.kbstream.data.iptv.IptvChannel
+ import com.kennyb1201.kbstream.data.iptv.IptvRepository
+@@ -1667,6 +1669,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
+                     .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                     .forEach(::add)
+             }
++            // The Xumo guide adapter is an installed source, not a field line:
++            // it joins the set by flag, LAST, exactly as it does in the guide
++            // screen's list - this surface reads the same stored rows, so it has
++            // to see the same sources or its lookups would disagree with the
++            // guide about which channels are covered.
++            if (prefs.getBoolean(FreeLineup.XUMO_EPG_APPLIED_KEY, false)) {
++                add(XumoGuide.SOURCE_KEY)
++            }
+         }.distinct()
+ 
+     /**
+diff --git a/app/src/test/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslatorTest.kt b/app/src/test/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslatorTest.kt
+new file mode 100644
+index 0000000..b6093f4
+--- /dev/null
++++ b/app/src/test/java/com/kennyb1201/kbstream/data/iptv/XumoEpgTranslatorTest.kt
+@@ -0,0 +1,394 @@
++package com.kennyb1201.kbstream.data.iptv
++
++import com.kennyb1201.kbstream.data.reporting.Redaction
++import kotlinx.coroutines.runBlocking
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/**
++ * The Xumo translator, pinned against the shapes the LIVE API actually returns
++ * (verified 2026-10-25) rather than the shapes the community generator's code
++ * implies.
++ *
++ * The most consequential difference is the fetch shape: the URL's trailing
++ * number is a six-hour BLOCK, not a day page - block 0 is 00:00-06:00 and block
++ * 4 answers HTTP 400 - so a day is four block walks, and pagination happens
++ * inside each of them. A fixture that assumed one page per day would pass while
++ * the shipped adapter fetched six hours of schedule.
++ *
++ * These are pure and network-free: the fetch is a lambda, so no HTTP stack and
++ * no clock is involved in the translation itself.
++ */
++class XumoEpgTranslatorTest {
++
++    // ── Program metadata mapping ─────────────────────────────────────────
++
++    @Test
++    fun `episode title becomes the sub-title when it differs from the title`() {
++        val xml = translateOne(
++            assetJson = """
++                {"title":"American Ninja Warrior",
++                 "episodeTitle":"Qualifiers Night 2",
++                 "descriptions":{"medium":"Obstacles."}}
++            """.trimIndent()
++        )
++        assertContains(xml, "<sub-title>Qualifiers Night 2</sub-title>")
++    }
++
++    @Test
++    fun `an episode title that repeats the title is not emitted`() {
++        // The generator emits it unconditionally, which renders the same line
++        // twice in the guide; the importer would store a pointless sub-title.
++        val xml = translateOne(
++            assetJson = """{"title":"Ninja Kidz TV","episodeTitle":"Ninja Kidz TV"}"""
++        )
++        assertFalse(xml.contains("<sub-title>"))
++    }
++
++    @Test
++    fun `a missing episode title is the normal case and emits nothing`() {
++        // Sampled live assets carry `title` and `descriptions` only.
++        val xml = translateOne(assetJson = """{"title":"Power Players"}""")
++        assertFalse(xml.contains("<sub-title>"))
++    }
++
++    @Test
++    fun `description falls back large then medium then small then tiny`() {
++        assertEquals(
++            "L",
++            xumoDescription(mapOf("large" to "L", "medium" to "M", "small" to "S", "tiny" to "T"))
++        )
++        assertEquals(
++            "M",
++            xumoDescription(mapOf("medium" to "M", "small" to "S", "tiny" to "T"))
++        )
++        assertEquals("S", xumoDescription(mapOf("small" to "S", "tiny" to "T")))
++        assertEquals("T", xumoDescription(mapOf("tiny" to "T")))
++    }
++
++    @Test
++    fun `no description is empty, not the string null`() {
++        assertNull(xumoDescription(emptyMap()))
++        assertNull(xumoDescription(null))
++        // A present-but-blank value must not win the chain.
++        assertEquals("M", xumoDescription(mapOf("large" to "  ", "medium" to "M")))
++    }
++
++    @Test
++    fun `EP assets are program ids and everything else is a series id`() {
++        assertEquals("dd_progid" to "EP012100200456", episodeNum("EP012100200456"))
++        assertEquals("dd_seriesid" to "SH012100200456", episodeNum("SH012100200456"))
++    }
++
++    // ── Time conversion ──────────────────────────────────────────────────
++
++    @Test
++    fun `the API's compact offset spelling becomes an XMLTV timestamp`() {
++        // Live value: "2026-10-25T00:00:00+0000". Pinned against the guide
++        // parser on purpose: parseXmltvDateMillis deliberately does NOT accept
++        // this spelling, and the first live run of the adapter emitted 455
++        // channels with ZERO programmes because it was used here.
++        assertNull(
++            "the XMLTV parser must not be relied on for the API's spelling",
++            parseXmltvDateMillis("2026-10-25T00:00:00+0000")
++        )
++        val epoch = parseXumoInstant("2026-10-25T00:00:00+0000")
++        assertNotNull(epoch)
++        assertEquals("20261025000000 +0000", xmltvTimestamp(epoch!!))
++    }
++
++    @Test
++    fun `a program that starts the night before keeps its real hour`() {
++        // The first ANW program on 2026-10-25 starts 2026-10-24T22:24:00+0000 -
++        // programs cross the day boundary, which is why the fixtures pin the
++        // converted value rather than a date bucket.
++        val epoch = parseXumoInstant("2026-10-24T22:24:00+0000")!!
++        assertEquals("20261024222400 +0000", xmltvTimestamp(epoch))
++    }
++
++    @Test
++    fun `the other offset spellings parse too`() {
++        // Defensive: the endpoint is unofficial and its offset spelling could
++        // change without warning. All three reach the same instant.
++        val expected = parseXumoInstant("2026-10-25T00:00:00+0000")
++        assertEquals(expected, parseXumoInstant("2026-10-25T00:00:00Z"))
++        assertEquals(expected, parseXumoInstant("2026-10-25T02:00:00+02:00"))
++    }
++
++    @Test
++    fun `days span window start through window end inclusive`() {
++        val start = parseXmltvDateMillis("2026-10-25T02:00:00Z")!!
++        val end = parseXmltvDateMillis("2026-10-26T22:00:00Z")!!
++        assertEquals(listOf("20261025", "20261026"), daysFor(start, end))
++    }
++
++    @Test
++    fun `a window inside one day fetches one day`() {
++        val start = parseXmltvDateMillis("2026-10-25T02:00:00Z")!!
++        val end = parseXmltvDateMillis("2026-10-25T22:00:00Z")!!
++        assertEquals(listOf("20261025"), daysFor(start, end))
++    }
++
++    // ── The document ─────────────────────────────────────────────────────
++
++    @Test
++    fun `the American Ninja Warrior fixture translates with its real channel id`() {
++        // channel 99951318 is the id the playlist carries as
++        // `ads.xumo_channelId`, and the lineup's own title is what NAME matching
++        // needs to see.
++        val xml = translateOne(
++            channelId = 99951318L,
++            channelTitle = "American Ninja Warrior",
++            assetJson = """
++                {"title":"American Ninja Warrior",
++                 "descriptions":{"medium":"Athletes take on an obstacle course."}}
++            """.trimIndent()
++        )
++        assertContains(xml, "<channel id=\"xumo-99951318\">")
++        assertContains(xml, "<display-name>American Ninja Warrior</display-name>")
++        assertContains(xml, "channel=\"xumo-99951318\"")
++        assertContains(xml, "start=\"20261025000000 +0000\"")
++        assertContains(xml, "stop=\"20261025010000 +0000\"")
++    }
++
++    @Test
++    fun `the channel tile is emitted because the importer keeps channel icons`() {
++        val xml = translateOne(assetJson = """{"title":"Power Players"}""")
++        assertContains(
++            xml,
++            "<icon src=\"https://image.xumo.com/v1/channels/channel/xumo-99951318/600x337.png" +
++                "?type=channelTile\"/>"
++        )
++    }
++
++    @Test
++    fun `a channel the lineup does not name is not emitted`() {
++        // Titles exist ONLY in the channel list; an EPG id with no title could
++        // only be emitted under a numeric display-name, which matches nothing
++        // and would cost an import slot to prove it.
++        val fetcher = fetcher(
++            channelList = mapOf(99951318L to "American Ninja Warrior"),
++            days = mapOf("20261025" to dayOf(99951318L to oneProgram(), 12345L to oneProgram()))
++        )
++        val xml = runBlocking {
++            XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++        }
++        assertContains(xml, "xumo-99951318")
++        assertFalse(xml.contains("xumo-12345"))
++    }
++
++    @Test
++    fun `titles and descriptions are escaped so a stray ampersand cannot truncate`() {
++        assertContains(xmlEscape("Law & Order <SVU>"), "Law &amp; Order &lt;SVU&gt;")
++        val xml = translateOne(assetJson = """{"title":"Law & Order"}""")
++        assertContains(xml, "<title>Law &amp; Order</title>")
++    }
++
++    // ── The fetch shape ──────────────────────────────────────────────────
++
++    @Test
++    fun `one day is four block walks, not one day page`() {
++        val requested = mutableListOf<String>()
++        val fetcher = fetcher(
++            channelList = mapOf(99951318L to "American Ninja Warrior"),
++            days = mapOf("20261025" to dayOf(99951318L to oneProgram())),
++            record = requested
++        )
++        runBlocking {
++            XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++        }
++        // Block 3 is still walked even though block 0 already reached the window:
++        // the rule is a fixed block count per fetched day, which is what makes a
++        // 20 h window's two days a bounded 44-request walk.
++        (0 until XumoGuide.BLOCKS_PER_DAY).forEach { block ->
++            assertTrue(
++                "block $block was not fetched: $requested",
++                requested.any { it.contains("/20261025/$block.json") }
++            )
++        }
++        assertFalse(
++            "block 4 does not exist and must never be requested",
++            requested.any { it.contains("/20261025/4.json") }
++        )
++    }
++
++    @Test
++    fun `pagination walks offset pages until a short page ends the block`() {
++        val requested = mutableListOf<String>()
++        // A full page is exactly PAGE_SIZE channels; the walk may only stop on
++        // the short one that follows.
++        val fullPage = (0 until XumoGuide.PAGE_SIZE).associate { index ->
++            (1_000_000L + index) to oneProgram()
++        }
++        val fetcher: suspend (String) -> String = { url ->
++            requested += url
++            when {
++                url == XumoGuide.CHANNEL_LIST_URL -> channelListJson(
++                    fullPage.keys.associateWith { "Channel $it" }
++                )
++                url.contains("offset=0") -> epgJson(fullPage)
++                url.contains("offset=${XumoGuide.PAGE_SIZE}") -> epgJson(
++                    mapOf(2_000_000L to oneProgram())
++                )
++                else -> epgJson(emptyMap())
++            }
++        }
++        runBlocking {
++            XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++        }
++        val blockZero = requested.filter { it.contains("/20261025/0.json") }
++        assertEquals(
++            "expected offset 0 then offset 50 for block 0, got $blockZero",
++            listOf(0, XumoGuide.PAGE_SIZE),
++            blockZero.map { it.substringAfter("offset=").substringBefore('&').toInt() }
++        )
++    }
++
++    @Test
++    fun `a window the fetched days do not reach fetches one more day`() {
++        val requested = mutableListOf<String>()
++        val fetcher = fetcher(
++            channelList = mapOf(99951318L to "American Ninja Warrior"),
++            days = mapOf(
++                "20261025" to dayOf(99951318L to oneProgram()),
++                "20261026" to dayOf(99951318L to oneProgram())
++            ),
++            record = requested
++        )
++        // A two-day window whose programs exist only on day one: the coverage
++        // loop must extend rather than silently hand the importer a guide that
++        // stops halfway through the window.
++        runBlocking {
++            XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 30 * 3_600_000L)
++        }
++        assertTrue(
++            "day two was never fetched: $requested",
++            requested.any { it.contains("/20261026/") }
++        )
++    }
++
++    // ── Failure semantics ───────────────────────────────────────────────
++
++    @Test
++    fun `a failed page throws rather than importing a partial day`() {
++        // §6: a partial walk is a failed SOURCE. Swallowing it would promote a
++        // guide that is silently missing the rest of the day.
++        val fetcher: suspend (String) -> String = { url ->
++            when {
++                url == XumoGuide.CHANNEL_LIST_URL ->
++                    channelListJson(mapOf(99951318L to "American Ninja Warrior"))
++                url.contains("/0.json") -> epgJson(mapOf(99951318L to oneProgram()))
++                else -> error("HTTP 500 Internal Server Error")
++            }
++        }
++        var thrown: Throwable? = null
++        runBlocking {
++            runCatching {
++                XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++            }.onFailure { thrown = it }
++        }
++        assertNotNull("a failed block must fail the source", thrown)
++    }
++
++    @Test
++    fun `a failed channel list fails before any schedule is fetched`() {
++        // Without titles nothing could match, so fetching 44 pages first would
++        // be pure waste.
++        val requested = mutableListOf<String>()
++        val fetcher: suspend (String) -> String = { url ->
++            requested += url
++            error("HTTP 503 Service Unavailable")
++        }
++        var thrown: Throwable? = null
++        runBlocking {
++            runCatching {
++                XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++            }.onFailure { thrown = it }
++        }
++        assertNotNull(thrown)
++        assertEquals(1, requested.size)
++    }
++
++    @Test
++    fun `the source key is URL-shaped for every consumer that assumes a URL`() {
++        // The audit §5 demands: Redaction, the stamp lines and the diagnostics
++        // all treat a source key as a URL. A scheme is what keeps them honest.
++        assertTrue(XumoGuide.SOURCE_KEY.contains("://"))
++        assertEquals(XumoGuide.SOURCE_KEY, Redaction.url(XumoGuide.SOURCE_KEY))
++    }
++
++    // ── Fixtures ────────────────────────────────────────────────────────
++
++    private fun translateOne(
++        channelId: Long = 99951318L,
++        channelTitle: String = "American Ninja Warrior",
++        assetJson: String
++    ): String {
++        val fetcher = fetcher(
++            channelList = mapOf(channelId to channelTitle),
++            days = mapOf("20261025" to dayOf(channelId to oneProgram())),
++            assetJson = assetJson
++        )
++        return runBlocking {
++            XumoEpgTranslator(fetcher).translate(DAY_START, DAY_START + 6 * 3_600_000L)
++        }
++    }
++
++    private fun fetcher(
++        channelList: Map<Long, String>,
++        days: Map<String, Map<Long, List<Pair<String, String>>>>,
++        assetJson: String = """{"title":"American Ninja Warrior"}""",
++        record: MutableList<String>? = null
++    ): suspend (String) -> String = { url ->
++        record?.add(url)
++        when {
++            url == XumoGuide.CHANNEL_LIST_URL -> channelListJson(channelList)
++            else -> {
++                val day = DAY_IN_URL.find(url)?.groupValues?.get(1) ?: ""
++                val channels = days[day].orEmpty()
++                epgJson(channels, assetJson)
++            }
++        }
++    }
++
++    private fun channelListJson(titles: Map<Long, String>): String {
++        val items = titles.entries.joinToString(",") { (id, title) ->
++            """{"title":"$title","guid":{"value":"$id"},"number":1313}"""
++        }
++        return """{"channel":{"item":[$items]}}"""
++    }
++
++    private fun epgJson(
++        channels: Map<Long, List<Pair<String, String>>>,
++        assetJson: String = """{"title":"American Ninja Warrior"}"""
++    ): String {
++        val channelJson = channels.entries.joinToString(",") { (id, programs) ->
++            val schedule = programs.joinToString(",") { (start, end) ->
++                """{"assetId":"EP012100200456","start":"$start","end":"$end"}"""
++            }
++            """{"channelId":$id,"number":1,"schedule":[$schedule]}"""
++        }
++        return """{"totalChannels":1,"channels":[$channelJson],
++            "assets":{"EP012100200456":$assetJson}}""".trimIndent()
++    }
++
++    private fun dayOf(vararg channels: Pair<Long, List<Pair<String, String>>>) =
++        channels.toMap()
++
++    private fun oneProgram(): List<Pair<String, String>> =
++        listOf("2026-10-25T00:00:00+0000" to "2026-10-25T01:00:00+0000")
++
++    private fun assertContains(haystack: String, needle: String) {
++        assertTrue("expected to find <$needle> in:\n$haystack", haystack.contains(needle))
++    }
++
++    private companion object {
++        /** 2026-10-25T00:00:00Z, the day every fixture is built on. */
++        val DAY_START: Long = parseXmltvDateMillis("2026-10-25T00:00:00Z")!!
++        val DAY_IN_URL = Regex("""/epg/\d+/(\d{8})/""")
++    }
++}
+-- 
+2.43.0
+
+
+From 5c20f3d2d44afbdfb6b17e5cfe046550f4047e2b Mon Sep 17 00:00:00 2001
+From: Codebuff <noreply@codebuff.com>
+Date: Mon, 26 Oct 2026 00:11:43 +0000
+Subject: [PATCH 2/2] Two fatal crashes: a refused player launch and a
+ duplicated list key
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both were caught by Sentry on real devices and both are fatal, so neither can
+wait for a redesign.
+
+ANDROID-12 (0.9.67): the stream screen launches the player from a
+LaunchedEffect, and when ActivityTaskManager refuses that launch the
+platform throws a bare `RuntimeException: Failure from system` out of
+composition - the app died instead of telling the viewer the player would
+not open. The launch is now reported, not propagated.
+
+ANDROID-11: the calendar used the watched-state key as its LazyColumn key,
+but a day can legitimately hold the same show/season/episode twice, and
+Compose rejects the duplicate key with a fatal IllegalArgumentException.
+Row identity is now the watched key plus its occurrence, so the first row
+keeps the key watched state is stored under.
+
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>
+---
+ .../com/kennyb1201/kbstream/MainActivity.kt   | 22 ++++-
+ .../ui/library/LibraryCalendarPane.kt         |  9 ++-
+ .../ui/library/LibraryCalendarRules.kt        | 26 ++++++
+ .../ui/library/LibraryCalendarRowKeysTest.kt  | 81 +++++++++++++++++++
+ 4 files changed, 134 insertions(+), 4 deletions(-)
+ create mode 100644 app/src/test/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRowKeysTest.kt
+
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/MainActivity.kt b/app/src/main/java/com/kennyb1201/kbstream/MainActivity.kt
+index 2c2d580..b68c109 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/MainActivity.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/MainActivity.kt
+@@ -3581,7 +3581,27 @@ fun AppRoot(
+                     // Continue Watching. Ignored by the two in-app engines.
+                     current.runtimeMinutes?.let { putExtra("runtime_minutes", it) }
+                 }
+-                playerResultLauncher.launch(intent)
++                // A LaunchedEffect is not a place to assume the platform will
++                // start an activity. `ActivityResultLauncher.launch` ends in
++                // Instrumentation.execStartActivity, which throws a bare
++                // `RuntimeException: Failure from system` when the task manager
++                // REFUSES the launch - the app is already finishing, the target
++                // was disabled, or the system was unreachable during a restart.
++                // There is no stream to fall back from here, so the refusal used
++                // to propagate out of composition and take the whole app down
++                // (ANDROID-12, onn. 4K Plus): the worst possible answer to "the
++                // system would not open the player". Catch it, report it, and
++                // leave the viewer on the stream list to pick another source.
++                runCatching { playerResultLauncher.launch(intent) }
++                    .onFailure { launchError ->
++                        Log.e(
++                            TAG,
++                            "PLAYER LAUNCH FAILED engine=${playerActivity.simpleName}",
++                            launchError
++                        )
++                        com.kennyb1201.kbstream.data.reporting.CrashReporter
++                            .recordNonFatal(launchError, mapOf("source" to "player.launch"))
++                    }
+             }
+         }
+     }
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarPane.kt b/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarPane.kt
+index adf2302..501e06c 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarPane.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarPane.kt
+@@ -838,6 +838,8 @@ private fun CalendarDayList(
+             return@Column
+         }
+ 
++        val rowKeys = remember(episodes) { calendarRowKeys(episodes) }
++
+         LazyColumn(
+             verticalArrangement = Arrangement.spacedBy(6.dp),
+             // The vertical inset is the room a focused row needs INSIDE the
+@@ -853,9 +855,10 @@ private fun CalendarDayList(
+         ) {
+             itemsIndexed(
+                 items = episodes,
+-                key = { _, episode ->
+-                    "${episode.showId}|s${episode.season}|e${episode.episode}"
+-                }
++                // Unique per ROW, not per watched key: a day can hold two
++                // entries with the same show/season/episode, and reusing that
++                // key crashed the list (ANDROID-11, see [calendarRowKeys]).
++                key = { index, _ -> rowKeys[index] }
+             ) { index, episode ->
+                 CalendarEpisodeRow(
+                     episode = episode,
+diff --git a/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRules.kt b/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRules.kt
+index 1362faf..471c141 100644
+--- a/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRules.kt
++++ b/app/src/main/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRules.kt
+@@ -619,3 +619,29 @@ internal fun pageMonth(month: YearMonth, delta: Int): YearMonth =
+  */
+ internal fun calendarWatchedKey(showId: String, season: Int, episode: Int): String =
+     "$showId|s$season|e$episode"
++
++/**
++ * The LazyColumn key for each row of ONE day, unique by construction.
++ *
++ * [calendarWatchedKey] is a WATCHED-STATE key, and two entries legitimately can
++ * share one: the same show/season/episode can reach a day twice (an announced
++ * episode and a scheduled airing of it resolve to the same numbering), and a
++ * calendar day is not guaranteed to be de-duplicated upstream. Using it as a
++ * Compose key therefore crashed the library with
++ *
++ *   IllegalArgumentException: Key "tmdb:214162|s5|e4" was already used
++ *
++ * (ANDROID-11), which is a fatal crash in a list that only ever meant to scroll.
++ * Identity for a ROW is the watched key plus its occurrence, so the first
++ * duplicate keeps the plain key and later ones are suffixed - stable across
++ * recomposition of the same list, and never colliding.
++ */
++internal fun calendarRowKeys(episodes: List<CalendarEpisode>): List<String> {
++    val seen = HashMap<String, Int>(episodes.size)
++    return episodes.map { episode ->
++        val base = calendarWatchedKey(episode.showId, episode.season, episode.episode)
++        val occurrence = seen.getOrDefault(base, 0)
++        seen[base] = occurrence + 1
++        if (occurrence == 0) base else "$base#${occurrence + 1}"
++    }
++}
+diff --git a/app/src/test/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRowKeysTest.kt b/app/src/test/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRowKeysTest.kt
+new file mode 100644
+index 0000000..5e09e9f
+--- /dev/null
++++ b/app/src/test/java/com/kennyb1201/kbstream/ui/library/LibraryCalendarRowKeysTest.kt
+@@ -0,0 +1,81 @@
++package com.kennyb1201.kbstream.ui.library
++
++import java.time.LocalDate
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++/**
++ * The calendar's LazyColumn keys.
++ *
++ * The watched-state key is not a row identity: a day can hold the same
++ * show/season/episode twice, and using the watched key as the Compose key
++ * crashed the library with `Key "tmdb:214162|s5|e4" was already used`
++ * (ANDROID-11). These pin the uniqueness the list needs without changing the
++ * key watched state is stored under.
++ */
++class LibraryCalendarRowKeysTest {
++
++    @Test
++    fun `distinct episodes keep the plain watched key`() {
++        val keys = calendarRowKeys(
++            listOf(
++                episode(showId = "tmdb:214162", season = 5, episode = 4),
++                episode(showId = "tmdb:214162", season = 5, episode = 5)
++            )
++        )
++        assertEquals(
++            listOf("tmdb:214162|s5|e4", "tmdb:214162|s5|e5"),
++            keys
++        )
++    }
++
++    @Test
++    fun `a repeated show and episode yields no duplicate key`() {
++        // The exact shape of the crash report.
++        val keys = calendarRowKeys(
++            listOf(
++                episode(showId = "tmdb:214162", season = 5, episode = 4),
++                episode(showId = "tmdb:214162", season = 5, episode = 4)
++            )
++        )
++        assertEquals(keys.size, keys.toSet().size)
++        // The first keeps the watched key, so an existing highlight lookup still
++        // finds its row by the plain value.
++        assertEquals("tmdb:214162|s5|e4", keys[0])
++        assertEquals("tmdb:214162|s5|e4#2", keys[1])
++    }
++
++    @Test
++    fun `a third repeat is still unique`() {
++        val keys = calendarRowKeys(
++            List(3) { episode(showId = "tmdb:1", season = 1, episode = 1) }
++        )
++        assertEquals(3, keys.toSet().size)
++        assertEquals(listOf("tmdb:1|s1|e1", "tmdb:1|s1|e1#2", "tmdb:1|s1|e1#3"), keys)
++    }
++
++    @Test
++    fun `an empty day has no keys`() {
++        assertTrue(calendarRowKeys(emptyList()).isEmpty())
++    }
++
++    private fun episode(
++        showId: String,
++        season: Int,
++        episode: Int,
++        airDate: LocalDate = LocalDate.of(2026, 10, 25)
++    ) = CalendarEpisode(
++        showId = showId,
++        openId = showId,
++        showTitle = "Show",
++        poster = null,
++        backdrop = null,
++        season = season,
++        episode = episode,
++        episodeTitle = null,
++        airDate = airDate,
++        isPremiere = false,
++        isFinale = false
++    )
++}
+-- 
+2.43.0
+
