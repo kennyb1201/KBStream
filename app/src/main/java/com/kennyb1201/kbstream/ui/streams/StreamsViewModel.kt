@@ -126,15 +126,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         const val ADDON_TIMEOUT_MS = 15_000L
 
         /**
-         * How long AUTO-PLAY keeps collecting add-ons after the first one
-         * answers (audit P1).
+         * How long AUTO-PLAY keeps collecting add-ons once its hand holds a row
+         * it could start (audit P1).
          *
          * The picker wants every add-on: its tabs are per add-on, and a source
          * that arrives late still belongs in the list. Auto-play does not - it
          * plays the head of the ranked list, and waiting out a hanging add-on
          * costs the viewer the full 15 s before the first frame even though the
          * top add-on answered in under a second. This is the extra time the
-         * head of the list gets to be improved by a second answer.
+         * head of the list gets to be improved by a second answer - re-decided
+         * per wait, so a startable row that arrives after an unstartable first
+         * answer still gets it (see [fetch]).
          */
         const val AUTOPLAY_FIRST_RESULT_GRACE_MS = 2_500L
     }
@@ -466,40 +468,38 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             }
 
             val collected = mutableListOf<Pair<Int, AddonLoadResult>>()
-            // Set once the grace has closed and been kept open because nothing
-            // collected so far could actually be started (see below).
-            var graceHeldOpen = false
             while (collected.size < streamAddons.size) {
                 // The wait-all case (the picker) keeps waiting for every
                 // add-on, each of which is already bounded by its own 15 s
                 // timeout. The auto-play case stops [firstResultGraceMs] after
-                // the FIRST answer instead of paying the slowest add-on's
-                // timeout for a list whose head will not change.
-                val next =
-                    if (firstResultGraceMs == null || collected.isEmpty() || graceHeldOpen) {
-                        withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L) { outcomes.receive() }
+                // the collection holds something that can actually be started.
+                //
+                // The grace is decided per WAIT from the hand in front of it,
+                // not set once from the first answer: a hash-first answer used
+                // to hold the collection open to the full window, so a second
+                // add-on answering with a playable row at 9 s still paid the
+                // rest of a 17 s wait before auto-play could start. Startable =
+                // short grace; still unstartable = keep listening (each add-on
+                // still bounded by its own 15 s) until something can be started
+                // or everyone has answered - which is what the comment here
+                // always promised and the code did not do.
+                val graceMs =
+                    if (collected.isNotEmpty() && hasStartableRow(collected)) {
+                        firstResultGraceMs
                     } else {
-                        withTimeoutOrNull(firstResultGraceMs) { outcomes.receive() }
+                        null
+                    }
+                val next =
+                    if (graceMs != null) {
+                        withTimeoutOrNull(graceMs) { outcomes.receive() }
+                    } else {
+                        withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L) { outcomes.receive() }
                     }
                 if (next == null) {
-                    // The grace may not close on an empty hand. A fast add-on
-                    // that answered with nothing startable - a hash-only P2P
-                    // list while the account's debrid check has not run, or
-                    // an add-on whose answer was simply empty - used to end
-                    // the press-of-Play collection at 2.5 s, which is how the
-                    // one add-on that speaks first became the only add-on the
-                    // picker ever showed. Collection now continues (each
-                    // add-on still bounded by its own 15 s) until something can
-                    // be started or everyone has answered.
-                    if (
-                        !graceHeldOpen &&
-                        firstResultGraceMs != null &&
-                        collected.isNotEmpty() &&
-                        !hasStartableRow(collected)
-                    ) {
-                        graceHeldOpen = true
-                        continue
-                    }
+                    // An unstartable hand waited the full window (every add-on
+                    // has now either answered or run out its own 15 s), and a
+                    // startable hand had its grace. Either way nobody is still
+                    // answering that this collection should wait for.
                     complete = false
                     break
                 }
@@ -636,12 +636,22 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         val markedStreams = TorBoxCachedBadges.mark(withBadges, knownCached)
 
         // Per-add-on groupings for the picker's tabs: each add-on's own list,
-        // prepared by the same rules as the merged one (ranked, badged) so a
-        // tab reads like a filtered view of All rather than a raw dump. Empty
+        // prepared by the SAME rules and in the same order as the merged one -
+        // rank, the title's addon memory, the torrent dedup, badges, cached
+        // marks - so a tab is a filtered view of All rather than a second
+        // opinion about where a row belongs. It used to rank and badge only, so
+        // a tab's head could be a row the merged list had demoted (an addon
+        // whose links are dead for this title) and an add-on returning the same
+        // torrent twice showed it twice in its tab but once in All. Empty
         // groups are dropped - a tab with nothing under it is not a tab.
         _addonGroups.value = results
             .filterIsInstance<AddonLoadResult.Success>()
             .map { result ->
+                // This add-on's own identity, not the merged map's: two add-ons
+                // can serve the same stream key, and the map keeps only the
+                // last one, which would tell the memory tier and the debrid
+                // tier the wrong add-on's name inside this tab.
+                val addonOfGroup: (Stream) -> String? = { result.addonName }
                 val prepared =
                     if (useRanker) {
                         StreamRanker.rank(
@@ -649,16 +659,21 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                             requestedEpisode,
                             dolbyVisionUseful,
                             runtimeMinutes,
-                            addonOf = addonOf,
+                            addonOf = addonOfGroup,
                             debridAddons = debridAddons
                         )
                     } else {
                         result.streams
                     }
+                val ordered = SourceAddonPreference.ordered(
+                    streams = prepared,
+                    addonOf = addonOfGroup,
+                    outcomes = addonOutcomes
+                )
                 StreamAddonGroup(
                     addonName = result.addonName,
                     streams = TorBoxCachedBadges.mark(
-                        StreamBadgeEngine.apply(prepared, getApplication()),
+                        StreamBadgeEngine.apply(StreamDedup.collapse(ordered), getApplication()),
                         knownCached
                     )
                 )
@@ -713,25 +728,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Whether anything collected so far could be STARTED - url-bearing, or a
-     * hash row whose torrent the process already knows is TorBox-cached.
+     * Whether anything collected so far could be STARTED - a url-bearing row,
+     * or a hash row the walk can ask TorBox to prepare.
      *
-     * Deliberately no I/O ([TorBoxClient.knownCached] answers from memory): this
-     * is asked on the press-of-Play path, where the whole point of the grace is
-     * that nobody waits on a network call. A hash nothing is known about does
-     * not count - autoplay may still resolve it later, but it is no reason to
-     * stop listening for an add-on that is about to answer with a playable row.
+     * Deliberately no I/O: this is asked on the press-of-Play path, where the
+     * whole point of the grace is that nobody waits on a network call. A hash
+     * the process has never seen is still startable - the walk resolves it,
+     * which is what the walk is for - because the one memory that could say
+     * otherwise ([TorBoxClient.knownCached]) is filled AFTER collection, by
+     * [requestCachedBadges]. Consulting it here made a cold start's hash-first
+     * answer unstartable by construction: the grace was held open and the
+     * common case (cold process, CW autoplay, hash-first add-on) became a
+     * wait-all for sources that would have started at once.
      */
-    private fun hasStartableRow(collected: List<Pair<Int, AddonLoadResult>>): Boolean {
-        val candidates = collected
-            .flatMap { (_, result) ->
-                if (result is AddonLoadResult.Success) result.streams else emptyList()
-            }
-            .filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
-        if (candidates.isEmpty()) return false
-        if (candidates.any { !it.url.isNullOrBlank() }) return true
-        return TorBoxClient.knownCached(candidates.map { it.infoHash }).isNotEmpty()
-    }
+    private fun hasStartableRow(collected: List<Pair<Int, AddonLoadResult>>): Boolean =
+        collected.any { (_, result) ->
+            result is AddonLoadResult.Success &&
+                result.streams.any {
+                    !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank()
+                }
+        }
 
     /**
      * Requests the TorBox cached-hash answer without anyone waiting for it, then

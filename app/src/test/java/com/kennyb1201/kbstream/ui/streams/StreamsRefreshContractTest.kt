@@ -48,7 +48,7 @@ class StreamsRefreshContractTest {
 
     @Test
     fun `the row is drawn whatever the add-ons did, so refresh is never hidden`() {
-        val call = slice(screen, "AddonTabs(", "onSelect = { selectedAddonTab = it }")
+        val call = slice(screen, "AddonTabs(", "onSelect = { index ->")
         assertTrue(
             "the All tab and the provider tabs still appear only when there is more than one " +
                 "add-on to choose between (a lone All tab does nothing)",

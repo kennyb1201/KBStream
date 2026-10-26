@@ -260,12 +260,6 @@ fun StreamsScreenMobile(
         } else {
             null
         }
-        val sourceLabel = when {
-            isLoading -> "Finding sources"
-            streams.isNotEmpty() -> "${streams.size} sources found"
-            else -> "No sources found"
-        }
-
         // Per-add-on tabs, only when more than one stream add-on answered: with
         // one, the merged list IS that add-on's list.
         // Remembered by add-on NAME, not by index. REFRESH keeps loadedKey, so an
@@ -283,6 +277,15 @@ fun StreamsScreenMobile(
                 streams
             }
         val streamKeys = remember(visibleStreams) { StreamItemKeys.of(visibleStreams) }
+
+        // The count follows the list on screen: on a tab it counts that add-on's
+        // rows, not All's - the merged count read as a miscount of the rows
+        // below it.
+        val sourceLabel = when {
+            isLoading -> "Finding sources"
+            visibleStreams.isNotEmpty() -> "${visibleStreams.size} sources found"
+            else -> "No sources found"
+        }
 
         // The one case where auto-play deliberately starts nothing.
         val mismatchNotice = remember(streams, season, episode) {
@@ -336,7 +339,10 @@ fun StreamsScreenMobile(
                     episodeTitle = episodeTitle,
                     runtimeMinutes = runtimeMinutes,
                     sourceLabel = sourceLabel,
-                    mismatchNotice = mismatchNotice ?: ceilingNotice,
+                    // Both can apply at once, and the ceiling notice is the
+                    // actionable half - so stack them rather than letting the
+                    // other-episode notice hide the one that names the setting.
+                    notices = listOfNotNull(mismatchNotice, ceilingNotice),
                     onBack = { backDispatcher?.onBackPressed() }
                 )
             }
@@ -387,7 +393,10 @@ fun StreamsScreenMobile(
             }
 
             when {
-                isLoading -> item(key = "loading") {
+                // Rows render as add-ons answer (the ViewModel publishes them
+                // per add-on); only an empty hand shows the hero, so a 1 s
+                // first answer is not hidden behind a 15 s second one.
+                visibleStreams.isEmpty() && isLoading -> item(key = "loading") {
                     MobileStreamsHeroState(
                         title = "FINDING SOURCES",
                         message = "Checking installed stream add-ons.",
@@ -402,91 +411,121 @@ fun StreamsScreenMobile(
                     )
                 }
 
-                else -> itemsIndexed(
-                    items = visibleStreams,
-                    key = { index, _ -> streamKeys[index] }
-                ) { _, stream ->
-                    // The id the player will carry as `parent_id` for this title,
-                    // so a download made here lands on the same watch-history row
-                    // a streamed play does. Published by the route on a phone
-                    // only; a picker with no route memory (a direct call in a
-                    // test, say) falls back to the target's own id rather than
-                    // refusing to offer a download.
-                    val route = CurrentStreamsRoute.current(routeKey)
-                    val parentId = route?.parentId?.takeIf { it.isNotBlank() } ?: streamId
-                    val parentType = route?.parentType?.takeIf { it.isNotBlank() } ?: contentType
-                    val gate = downloadGate(context, stream, isLiveChannel = false)
-                    val mediaKey = DownloadIdentity.mediaKey(parentId, parentId)
-                    val record = downloadFor(downloads, mediaKey, season, episode)
-                    val target = downloadTargetFor(
-                        parentId = parentId,
-                        parentType = parentType,
-                        title = displayName,
-                        qualityLabel = StreamRanker.labelOf(stream),
-                        episodeLabel = episodeLabel,
-                        season = season,
-                        episode = episode,
-                        posterUrl = route?.posterUrl,
-                        episodeStreamId = streamId
-                    )
-                    MobileStreamCard(
-                        stream = stream,
-                        badgesAbove = AppPreferences.getBadgesAboveFile(context),
-                        declaredLabel = declaredLabelFor(stream, season, episode),
-                        downloadSlot = {
-                            when (gate) {
-                                // A live row has no Download action anywhere
-                                // (spec §5) - not on a card, not on Detail.
-                                DownloadGate.Hidden -> Unit
+                else -> {
+                    itemsIndexed(
+                        items = visibleStreams,
+                        key = { index, _ -> streamKeys[index] }
+                    ) { _, stream ->
+                        // The id the player will carry as `parent_id` for this
+                        // title, so a download made here lands on the same
+                        // watch-history row a streamed play does. Published by
+                        // the route on a phone only; a picker with no route
+                        // memory (a direct call in a test, say) falls back to
+                        // the target's own id rather than refusing to offer a
+                        // download.
+                        val route = CurrentStreamsRoute.current(routeKey)
+                        val parentId = route?.parentId?.takeIf { it.isNotBlank() } ?: streamId
+                        val parentType = route?.parentType?.takeIf { it.isNotBlank() } ?: contentType
+                        val gate = downloadGate(context, stream, isLiveChannel = false)
+                        val mediaKey = DownloadIdentity.mediaKey(parentId, parentId)
+                        val record = downloadFor(downloads, mediaKey, season, episode)
+                        val target = downloadTargetFor(
+                            parentId = parentId,
+                            parentType = parentType,
+                            title = displayName,
+                            qualityLabel = StreamRanker.labelOf(stream),
+                            episodeLabel = episodeLabel,
+                            season = season,
+                            episode = episode,
+                            posterUrl = route?.posterUrl,
+                            episodeStreamId = streamId
+                        )
+                        MobileStreamCard(
+                            stream = stream,
+                            badgesAbove = AppPreferences.getBadgesAboveFile(context),
+                            declaredLabel = declaredLabelFor(stream, season, episode),
+                            downloadSlot = {
+                                when (gate) {
+                                    // A live row has no Download action anywhere
+                                    // (spec §5) - not on a card, not on Detail.
+                                    DownloadGate.Hidden -> Unit
 
-                                is DownloadGate.Disabled -> MobileDownloadControl(
-                                    record = record,
-                                    idleLabel = DownloadLabel,
-                                    disabledReason = gate.reason,
-                                    inert = false,
-                                    onDownload = {},
-                                    onPlay = {},
-                                    onResume = {},
-                                    onDelete = {}
+                                    is DownloadGate.Disabled -> MobileDownloadControl(
+                                        record = record,
+                                        idleLabel = DownloadLabel,
+                                        disabledReason = gate.reason,
+                                        inert = false,
+                                        onDownload = {},
+                                        onPlay = {},
+                                        onResume = {},
+                                        onDelete = {}
+                                    )
+
+                                    DownloadGate.Offline -> MobileDownloadControl(
+                                        record = record,
+                                        idleLabel = DownloadGates.CONNECT_TO_DOWNLOAD,
+                                        disabledReason = null,
+                                        inert = true,
+                                        onDownload = {},
+                                        onPlay = {},
+                                        onResume = {},
+                                        onDelete = {}
+                                    )
+
+                                    is DownloadGate.Allowed -> MobileDownloadControl(
+                                        record = record,
+                                        idleLabel = DownloadLabel,
+                                        disabledReason = null,
+                                        inert = false,
+                                        onDownload = {
+                                            downloadPress(
+                                                context,
+                                                resolveScope,
+                                                stream,
+                                                record,
+                                                target
+                                            )
+                                        },
+                                        onPlay = { record?.let { playDownloaded(context, it) } },
+                                        onResume = {
+                                            record?.let { DownloadsManager.resume(context, it.id) }
+                                        },
+                                        onDelete = {
+                                            record?.let { DownloadsManager.delete(context, it.id) }
+                                        }
+                                    )
+                                }
+                            },
+                            onClick = { selectSource(stream, streams, sourceAddons) }
+                        )
+                    }
+                    // The final ranked list replaces these rows when the last
+                    // add-on answers, so name the state instead of letting a
+                    // settled-looking list reorder under the thumb.
+                    if (isLoading) {
+                        item(key = "loading-more") {
+                            Row(
+                                modifier = Modifier.padding(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 8.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    color = KBAccent,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.height(14.dp)
                                 )
-
-                                DownloadGate.Offline -> MobileDownloadControl(
-                                    record = record,
-                                    idleLabel = DownloadGates.CONNECT_TO_DOWNLOAD,
-                                    disabledReason = null,
-                                    inert = true,
-                                    onDownload = {},
-                                    onPlay = {},
-                                    onResume = {},
-                                    onDelete = {}
-                                )
-
-                                is DownloadGate.Allowed -> MobileDownloadControl(
-                                    record = record,
-                                    idleLabel = DownloadLabel,
-                                    disabledReason = null,
-                                    inert = false,
-                                    onDownload = {
-                                        downloadPress(
-                                            context,
-                                            resolveScope,
-                                            stream,
-                                            record,
-                                            target
-                                        )
-                                    },
-                                    onPlay = { record?.let { playDownloaded(context, it) } },
-                                    onResume = {
-                                        record?.let { DownloadsManager.resume(context, it.id) }
-                                    },
-                                    onDelete = {
-                                        record?.let { DownloadsManager.delete(context, it.id) }
-                                    }
+                                Text(
+                                    text = "Still finding sources…",
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                             }
-                        },
-                        onClick = { selectSource(stream, streams, sourceAddons) }
-                    )
+                        }
+                    }
                 }
             }
         }
@@ -537,7 +576,8 @@ private fun MobileStreamsHeader(
     episodeTitle: String?,
     runtimeMinutes: Int?,
     sourceLabel: String,
-    mismatchNotice: String?,
+    // Every explanation that applies, stacked (see the TV picker's note).
+    notices: List<String>,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -629,7 +669,7 @@ private fun MobileStreamsHeader(
                 )
             }
 
-            mismatchNotice?.let { notice ->
+            notices.forEach { notice ->
                 Text(
                     text = notice,
                     color = KBAccent,

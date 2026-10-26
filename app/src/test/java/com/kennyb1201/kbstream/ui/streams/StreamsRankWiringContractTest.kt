@@ -313,7 +313,7 @@ class StreamsRankWiringContractTest {
                 "and it must say so when the ceiling is why nothing started, or " +
                     "the picker opening instead of the player reads as a bug: $path",
                 screen.contains("AutoPlayQuality.ceilingNotice(") &&
-                    screen.contains("mismatchNotice = mismatchNotice ?: ceilingNotice")
+                    screen.contains("notices = listOfNotNull(mismatchNotice, ceilingNotice)")
             )
         }
     }

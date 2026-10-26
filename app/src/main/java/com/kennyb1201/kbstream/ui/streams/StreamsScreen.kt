@@ -34,7 +34,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -348,22 +347,37 @@ fun StreamsScreen(
         null
     }
 
-    val sourceLabel = when {
-        isLoading -> "Finding sources"
-        streams.isNotEmpty() -> "${streams.size} sources found"
-        else -> "No sources found"
-    }
-
     // Per-add-on tabs. Shown only when more than one stream add-on actually
     // answered: with a single add-on the merged list IS that add-on's list, and
     // a lone "All" tab would be a control that does nothing. -1 is All.
-    var selectedAddonTab by remember(loadedKey) { mutableIntStateOf(ALL_ADDONS_TAB) }
+    //
+    // Remembered by add-on NAME, not by index. REFRESH keeps loadedKey, so an
+    // index survived a reload while addonGroups could reorder or shrink (a
+    // failing add-on drops out, and the groups are settings-ordered), and the
+    // same index then pointed at a DIFFERENT add-on's streams - or fell out of
+    // range, where the list silently showed All while the stale chip still read
+    // selected. Resolved against the groups on every composition instead, so a
+    // name that is gone falls back to All. The phone picker carries this same
+    // rule; the TV one had never got it.
+    var selectedAddonName by remember(loadedKey) { mutableStateOf<String?>(null) }
+    val selectedAddonTab = selectedAddonName
+        ?.let { name -> addonGroups.indexOfFirst { it.addonName == name } }
+        ?: ALL_ADDONS_TAB
     val visibleStreams =
         if (addonGroups.size > 1 && selectedAddonTab in addonGroups.indices) {
             addonGroups[selectedAddonTab].streams
         } else {
             streams
         }
+
+    // The count follows the list on screen. It read the merged list, so on a
+    // tab the header said "42 sources found" over the twelve rows that tab
+    // actually shows - a count of a different list, read as a miscount.
+    val sourceLabel = when {
+        isLoading -> "Finding sources"
+        visibleStreams.isNotEmpty() -> "${visibleStreams.size} sources found"
+        else -> "No sources found"
+    }
 
     // One lazy-list key per source, built from the whole list so it is unique
     // even when two sources share every field (two blank placeholders are the
@@ -526,7 +540,12 @@ fun StreamsScreen(
                 episodeTitle = episodeTitle,
                 runtimeMinutes = runtimeMinutes,
                 sourceLabel = sourceLabel,
-                mismatchNotice = mismatchNotice ?: ceilingNotice
+                // Both explanations can apply at once (every source declares
+                // another episode AND every source is over the ceiling). They
+                // used to be an either/or, and the one that won was the
+                // unactionable half: the ceiling notice is the one that says
+                // what to change. Stack them instead.
+                notices = listOfNotNull(mismatchNotice, ceilingNotice)
             )
 
             // The row is drawn whenever the screen has a control for it, and
@@ -554,7 +573,11 @@ fun StreamsScreen(
                     refreshed = true
                     viewModel.refresh(contentType, streamId, runtimeMinutes)
                 },
-                onSelect = { selectedAddonTab = it },
+                onSelect = { index ->
+                    selectedAddonName =
+                        if (index == ALL_ADDONS_TAB) null
+                        else addonGroups.getOrNull(index)?.addonName
+                },
                 // The entry-focus fallback: with no source to land on, this is
                 // the one actionable stop the picker has.
                 refreshFocusRequester = refreshFocusRequester
@@ -575,8 +598,15 @@ fun StreamsScreen(
                     .focusGroup()
             ) {
                 when {
-                    isLoading -> {
-                        item {
+                    // Rows render as each add-on answers, not only once the
+                    // last one has: the ViewModel has always published them per
+                    // add-on, and gating the list on isLoading threw that away,
+                    // so a 1 s first answer sat invisible behind a 15 s second
+                    // one. The rank pass still replaces the raw accumulation at
+                    // the end, so rows can move; the footer says the list is
+                    // still being completed. The empty hand keeps the hero.
+                    visibleStreams.isEmpty() && isLoading -> {
+                        item(key = "loading") {
                             StreamsHeroState(
                                 title = "FINDING SOURCES",
                                 message = "Checking installed stream add-ons."
@@ -585,7 +615,7 @@ fun StreamsScreen(
                     }
 
                     visibleStreams.isEmpty() -> {
-                        item {
+                        item(key = "empty") {
                             StreamsHeroState(
                                 title = "NO SOURCES FOUND",
                                 message = "Try another add-on or check that the provider is online."
@@ -623,6 +653,19 @@ fun StreamsScreen(
                                 }
                             )
                         }
+                        // A rank pass replaces these rows when the last
+                        // add-on answers, so say the list is still arriving
+                        // rather than letting a settled-looking list jump.
+                        if (isLoading) {
+                            item(key = "streams-loading") {
+                                Text(
+                                    text = "Still finding sources\u2026",
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(start = 8.dp, top = 6.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -651,7 +694,10 @@ private fun StreamsHeader(
     episodeTitle: String?,
     runtimeMinutes: Int?,
     sourceLabel: String,
-    mismatchNotice: String?
+    // Every explanation that applies, stacked in order. They are not mutually
+    // exclusive: a list can hold only other episodes AND only sources above
+    // the viewer's ceiling, and the ceiling notice is the actionable one.
+    notices: List<String>
 ) {
     val context = LocalContext.current
 
@@ -710,7 +756,7 @@ private fun StreamsHeader(
             )
         }
 
-        mismatchNotice?.let { notice ->
+        notices.forEach { notice ->
             Text(
                 text = notice,
                 color = KBAccent,

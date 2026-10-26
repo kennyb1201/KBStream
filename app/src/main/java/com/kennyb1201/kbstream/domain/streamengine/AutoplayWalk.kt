@@ -17,9 +17,12 @@ import com.kennyb1201.kbstream.data.addon.Stream
  * So autoplay walks: a row with its own link starts immediately (the common case
  * and the untouched one), and a hash row goes through [resolve]. A failure moves
  * to the NEXT candidate rather than stopping, because autoplay's job is to find A
- * working source, not to defend one. Attempts are capped: a cached torrent's
+ * working source, not to defend one. RESOLVES are capped: a cached torrent's
  * check is one round trip, but a create on an uncached one is not, and the path
- * to the first frame has to stay bounded.
+ * to the first frame has to stay bounded - but the cap bounds the round trips,
+ * not the walk. Once it is spent the walk keeps going over the remaining
+ * candidates WITHOUT resolving them, so a url-bearing row behind a pile of
+ * hashes still starts instead of handing the viewer a picker.
  *
  * [pick] is the caller's own choice of the next candidate (episode rules, season
  * packs, the quality ceiling - see [EpisodeMatch.autoplayPick] and
@@ -66,7 +69,14 @@ object AutoplayWalk {
             if (!candidate.url.isNullOrBlank()) {
                 return Start(candidate, candidates, resolved = false)
             }
-            if (attempts >= maxAttempts) return null
+            // The resolve budget is spent, but the LIST is not: skip this hash
+            // and ask again, so a url-bearing row anywhere behind it still
+            // starts. Returning null here was how a hash-heavy list whose first
+            // three hashes had failed abandoned the free rows after them.
+            if (attempts >= maxAttempts) {
+                remaining = remaining.without(candidate) ?: return null
+                continue
+            }
             attempts++
             val prepared = resolve(candidate)
             if (prepared != null) {
@@ -78,7 +88,19 @@ object AutoplayWalk {
             }
             // Identity, not equality: two add-ons can serve the same torrent,
             // and the rows the picker ranks are the objects in this list.
-            remaining = remaining.filterNot { it === candidate }
+            remaining = remaining.without(candidate) ?: return null
         }
+    }
+
+    /**
+     * [this] without [candidate], or null when it was not in the list at all.
+     *
+     * The null is the loop's termination guard: [pick] is the caller's function
+     * and a pick that names a row it was not offered would otherwise leave
+     * `remaining` unchanged and spin forever.
+     */
+    private fun List<Stream>.without(candidate: Stream): List<Stream>? {
+        val next = filterNot { it === candidate }
+        return next.takeIf { it.size < size }
     }
 }
