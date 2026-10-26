@@ -223,24 +223,40 @@ class MobileTouchTwinContractTest {
     }
 
     /**
-     * The sheet's rows are label-only, like the TV menu's. The phone used to
-     * print every action's description under its label; that doubled the height
-     * of every long-press menu for text nobody reads before tapping - the label
-     * already says what the row does.
+     * The sheet's rows are label-only, like the TV menu's - with one deliberate
+     * exception. The phone used to print every action's description under its
+     * label; that doubled the height of every long-press menu for text nobody
+     * reads before tapping, and the label already says what the row does.
+     *
+     * A row the caller marked `isEnabled = false` is that exception: it prints
+     * its description, because there the words are why the row is on screen at
+     * all (a protected title's download says it cannot happen instead of
+     * offering nothing to guess at). It is also the only row that takes no
+     * press, so an enabled row still reads and behaves as it always has.
      */
     @Test
-    fun `long press rows are label-only, as on a tv`() {
+    fun `long press rows are label-only, except a disabled one that says why`() {
         val menu = touch("TouchContextMenu.kt")
-        assertFalse(
-            "the row must not draw a description line again",
-            menu.contains("description?.takeIf") ||
-                menu.contains("description = action.description")
+        assertTrue(
+            "only the disabled row's reason may reach the row: an enabled row " +
+                "must not draw a description line again",
+            menu.contains("description = if (action.isEnabled) null else action.description")
         )
         assertTrue(
-            "the row must still be a full-width tap target with its label",
+            "the row it does reach must draw it, muted, under the label",
+            menu.contains("description?.takeIf { it.isNotBlank() }?.let") &&
+                menu.contains("color = KBTextLo")
+        )
+        assertTrue(
+            "the row must still be a full-width tap target with its label, and " +
+                "the disabled one must take no press at all",
             menu.contains("private fun SheetActionRow(") &&
                 menu.contains("text = label") &&
-                menu.contains("clickable(onClick = onClick)")
+                menu.contains("clickable(enabled = isEnabled, onClick = onClick)")
+        )
+        assertFalse(
+            "an unconditional description (the old, always-on line) must stay gone",
+            menu.contains("description = action.description")
         )
     }
 }
