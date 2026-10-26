@@ -42,9 +42,10 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.images.ImageOverrides
-import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.download.DownloadGate
 import com.kennyb1201.kbstream.data.download.DownloadGates
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
+import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences

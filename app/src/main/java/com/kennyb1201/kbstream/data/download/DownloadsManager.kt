@@ -3,8 +3,6 @@ package com.kennyb1201.kbstream.data.download
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import androidx.media3.common.C
-import androidx.media3.common.Requirements
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.cache.CacheDataSource
@@ -16,6 +14,7 @@ import androidx.media3.exoplayer.offline.DownloadCursor
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
+import androidx.media3.exoplayer.scheduler.Requirements
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
@@ -70,6 +69,16 @@ import okhttp3.Response
 object DownloadsManager {
 
     private const val TAG = "DOWNLOADS"
+
+    /**
+     * The stop reason this app sets when the VIEWER paused one download.
+     *
+     * Media3 has no pause-one-download call - `sendPauseDownloads` stops every
+     * transfer - so a row's own pause is a stop reason on that row alone, and
+     * resuming it is the same call with [Download.STOP_REASON_NONE]. The value
+     * is the app's to choose; anything but zero means "do not run this one".
+     */
+    private const val STOP_REASON_PAUSED = 1
 
     /**
      * The user agent every download fetch uses.
@@ -143,7 +152,7 @@ object DownloadsManager {
                     finalException: Exception?
                 ) {
                     finalException?.let {
-                        Log.w(TAG, "download ${download.id} reported ${it.javaClass.simpleName}")
+                        Log.w(TAG, "download ${download.request.id} reported ${it.javaClass.simpleName}")
                     }
                     // Progress is in-memory; a terminal state is worth a write,
                     // because it is what has to survive the process.
@@ -185,7 +194,7 @@ object DownloadsManager {
         val app = context.applicationContext
         val downloadManager = ensure(app) ?: return
         runCatching { applyNetworkRequirement(app, downloadManager) }
-        runCatching { DownloadService.start(app, DownloadsService::class.java, false) }
+        runCatching { DownloadService.start(app, DownloadsService::class.java) }
         refresh(app, persist = false)
     }
 
@@ -350,7 +359,13 @@ object DownloadsManager {
     fun pause(context: Context, id: String) {
         val app = context.applicationContext
         runCatching {
-            DownloadService.sendPauseDownload(app, DownloadsService::class.java, id, false)
+            DownloadService.sendSetStopReason(
+                app,
+                DownloadsService::class.java,
+                id,
+                STOP_REASON_PAUSED,
+                false
+            )
         }.onFailure { Log.w(TAG, "pause $id failed: ${it.message}") }
         markLocally(app, id) { it.copy(state = DownloadState.PAUSED, percent = null) }
         // Persisted even though the downloader records the stop itself: a paused
@@ -362,7 +377,13 @@ object DownloadsManager {
     fun resume(context: Context, id: String) {
         val app = context.applicationContext
         runCatching {
-            DownloadService.sendResumeDownload(app, DownloadsService::class.java, id, false)
+            DownloadService.sendSetStopReason(
+                app,
+                DownloadsService::class.java,
+                id,
+                Download.STOP_REASON_NONE,
+                false
+            )
         }.onFailure { Log.w(TAG, "resume $id failed: ${it.message}") }
         markLocally(app, id) { it.copy(state = DownloadState.QUEUED, reason = null) }
         refresh(app, persist = true)
@@ -571,18 +592,24 @@ object DownloadsManager {
     private fun readLive(downloadManager: DownloadManager?): LiveSnapshot {
         val manager = downloadManager ?: return LiveSnapshot(emptyMap(), false)
         return runCatching {
+            // Media3 has no per-download "waiting for the network" flag: a
+            // download held back by an unmet requirement is simply left QUEUED
+            // while the MANAGER reports the requirement. The manager's own
+            // unmet mask is therefore the honest signal, read once per pass.
+            val networkUnmet = (manager.notMetRequirements and
+                (Requirements.NETWORK or Requirements.NETWORK_UNMETERED)) != 0
             val out = LinkedHashMap<String, LiveDownload>()
             val cursor: DownloadCursor = manager.downloadIndex.getDownloads()
             try {
                 while (cursor.moveToNext()) {
                     val download = cursor.download
-                    out[download.id] = LiveDownload(
+                    out[download.request.id] = LiveDownload(
                         state = liveStateOf(download.state),
                         percent = download.percentDownloaded.takeIf { it >= 0f },
                         bytesDownloaded = download.bytesDownloaded,
                         totalBytes = download.contentLength,
-                        waitingForNetwork =
-                            download.stopReason == Download.STOP_REASON_WAITING_FOR_NETWORK
+                        waitingForNetwork = networkUnmet &&
+                            download.state == Download.STATE_QUEUED
                     )
                 }
             } finally {
@@ -611,7 +638,8 @@ object DownloadsManager {
         // Belt and braces for the in-memory view: the service's own removal is
         // asynchronous, and the row must stop being listed the moment it is
         // deleted even if the service is slow to answer.
-        if (manager.getDownload(id) != null) {
+        val tracked = runCatching { manager.downloadIndex.getDownload(id) }.getOrNull()
+        if (tracked != null) {
             runCatching { manager.removeDownload(id) }
                 .onFailure { Log.w(TAG, "index removal of $id failed: ${it.message}") }
         }
@@ -631,15 +659,15 @@ object DownloadsManager {
      * Not a check at enqueue time: a requirement is enforced continuously, so a
      * download started on Wi-Fi and continued on cellular stops when the phone
      * leaves the network the viewer allowed, and a download enqueued on cellular
-     * with the toggle off waits - reporting `STOP_REASON_WAITING_FOR_NETWORK`,
-     * which is what the row's "Waiting for Wi-Fi" comes from. A one-shot check
-     * could not do either.
+     * with the toggle off waits - held QUEUED while the manager reports the
+     * unmet network requirement, which is what the row's "Waiting for Wi-Fi"
+     * comes from. A one-shot check could not do either.
      */
     private fun applyNetworkRequirement(context: Context, downloadManager: DownloadManager) {
         val networkType = if (DownloadsStore.getDownloadOverCellular(context)) {
-            C.NETWORK_TYPE_CONNECTED
+            Requirements.NETWORK
         } else {
-            C.NETWORK_TYPE_UNMETERED
+            Requirements.NETWORK_UNMETERED
         }
         downloadManager.setRequirements(Requirements(networkType))
     }
