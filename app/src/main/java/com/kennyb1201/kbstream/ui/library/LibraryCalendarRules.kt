@@ -619,3 +619,29 @@ internal fun pageMonth(month: YearMonth, delta: Int): YearMonth =
  */
 internal fun calendarWatchedKey(showId: String, season: Int, episode: Int): String =
     "$showId|s$season|e$episode"
+
+/**
+ * The LazyColumn key for each row of ONE day, unique by construction.
+ *
+ * [calendarWatchedKey] is a WATCHED-STATE key, and two entries legitimately can
+ * share one: the same show/season/episode can reach a day twice (an announced
+ * episode and a scheduled airing of it resolve to the same numbering), and a
+ * calendar day is not guaranteed to be de-duplicated upstream. Using it as a
+ * Compose key therefore crashed the library with
+ *
+ *   IllegalArgumentException: Key "tmdb:214162|s5|e4" was already used
+ *
+ * (ANDROID-11), which is a fatal crash in a list that only ever meant to scroll.
+ * Identity for a ROW is the watched key plus its occurrence, so the first
+ * duplicate keeps the plain key and later ones are suffixed - stable across
+ * recomposition of the same list, and never colliding.
+ */
+internal fun calendarRowKeys(episodes: List<CalendarEpisode>): List<String> {
+    val seen = HashMap<String, Int>(episodes.size)
+    return episodes.map { episode ->
+        val base = calendarWatchedKey(episode.showId, episode.season, episode.episode)
+        val occurrence = seen.getOrDefault(base, 0)
+        seen[base] = occurrence + 1
+        if (occurrence == 0) base else "$base#${occurrence + 1}"
+    }
+}

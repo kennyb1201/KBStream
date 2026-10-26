@@ -3581,7 +3581,27 @@ fun AppRoot(
                     // Continue Watching. Ignored by the two in-app engines.
                     current.runtimeMinutes?.let { putExtra("runtime_minutes", it) }
                 }
-                playerResultLauncher.launch(intent)
+                // A LaunchedEffect is not a place to assume the platform will
+                // start an activity. `ActivityResultLauncher.launch` ends in
+                // Instrumentation.execStartActivity, which throws a bare
+                // `RuntimeException: Failure from system` when the task manager
+                // REFUSES the launch - the app is already finishing, the target
+                // was disabled, or the system was unreachable during a restart.
+                // There is no stream to fall back from here, so the refusal used
+                // to propagate out of composition and take the whole app down
+                // (ANDROID-12, onn. 4K Plus): the worst possible answer to "the
+                // system would not open the player". Catch it, report it, and
+                // leave the viewer on the stream list to pick another source.
+                runCatching { playerResultLauncher.launch(intent) }
+                    .onFailure { launchError ->
+                        Log.e(
+                            TAG,
+                            "PLAYER LAUNCH FAILED engine=${playerActivity.simpleName}",
+                            launchError
+                        )
+                        com.kennyb1201.kbstream.data.reporting.CrashReporter
+                            .recordNonFatal(launchError, mapOf("source" to "player.launch"))
+                    }
             }
         }
     }

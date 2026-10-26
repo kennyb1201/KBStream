@@ -838,6 +838,8 @@ private fun CalendarDayList(
             return@Column
         }
 
+        val rowKeys = remember(episodes) { calendarRowKeys(episodes) }
+
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             // The vertical inset is the room a focused row needs INSIDE the
@@ -853,9 +855,10 @@ private fun CalendarDayList(
         ) {
             itemsIndexed(
                 items = episodes,
-                key = { _, episode ->
-                    "${episode.showId}|s${episode.season}|e${episode.episode}"
-                }
+                // Unique per ROW, not per watched key: a day can hold two
+                // entries with the same show/season/episode, and reusing that
+                // key crashed the list (ANDROID-11, see [calendarRowKeys]).
+                key = { index, _ -> rowKeys[index] }
             ) { index, episode ->
                 CalendarEpisodeRow(
                     episode = episode,
