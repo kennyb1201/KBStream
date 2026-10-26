@@ -85,7 +85,11 @@ class PartTwoWatchedKeyWiringContractTest {
         )
         assertTrue(
             "the tmdb flavor of every poster is preloaded uncapped",
-            vm.contains("WatchedStatusKeys.tmdbKeyId(tmdbId) to mediaType")
+            // The poster refresh builds its preload list from PosterWatchItem,
+            // so the pair reads `item.tmdbId`/`item.mediaType`; the rule the
+            // assertion exists for - the raw tmdb flavor beside the resolved
+            // IMDb one - is the same one.
+            vm.contains("WatchedStatusKeys.tmdbKeyId(item.tmdbId) to item.mediaType")
         )
         assertFalse(
             "a refresh whose every resolution came back null still has to badge the posters",

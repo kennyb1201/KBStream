@@ -128,7 +128,11 @@ class DetailEpisodeRailMobileContractTest {
         )
         assertTrue(
             "the rail must be the shared touch twin, not a card drawn here",
-            mobile.contains("KBEpisodeRailTouch(episodes = episodes)") &&
+            // The twin call takes the episode list plus the row key, so the
+            // assertion names the two components rather than one exact
+            // argument spelling (which the key lambda has since widened).
+            mobile.contains("KBEpisodeRailTouch(") &&
+                mobile.contains("episodes = episodes") &&
                 mobile.contains("KBEpisodeRailCardTouch(")
         )
         assertTrue(
