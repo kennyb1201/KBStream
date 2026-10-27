@@ -19,6 +19,13 @@ import org.junit.Test
  * `collectionRaw`) rather than on the filtered one, because the filtered one
  * cannot tell the two cases apart - which is the whole reason the branch has to
  * come first.
+ *
+ * The raw half ALONE is true on every populated page, which is what shipped:
+ * the branch took the ordinary case, every browse page with content on it read
+ * as "Every title here is hidden", no rail was ever drawn, and UNHIDE ALL did
+ * nothing because nothing was hidden. So the guard is pinned here too, on both
+ * halves of the condition - the first version of this test asserted the branch
+ * ORDER only, which the broken condition satisfied.
  */
 class BrowseAllHiddenContractTest {
 
@@ -45,6 +52,14 @@ class BrowseAllHiddenContractTest {
                     screen.contains("onRetry = { HiddenTitles.unhideAll(context) }")
             )
             assertTrue(
+                "$path: the branch must ALSO require the filtered page to be empty - " +
+                    "the raw half is true on every populated page, so without this " +
+                    "half the rails never drew and a normal category read as hidden",
+                screen.contains(
+                    "sections.isEmpty() && sectionsRaw.any { it.items.isNotEmpty() } ->"
+                )
+            )
+            assertTrue(
                 "$path: and a genuinely empty category still gets its own card",
                 screen.contains("message = \"Nothing found for \$name\"")
             )
@@ -66,6 +81,14 @@ class BrowseAllHiddenContractTest {
                 tv.contains("onRetry = { HiddenTitles.unhideAll(context) }")
         )
         assertTrue(
+            "and with the same guard the section pages needed: the raw collection " +
+                "holds parts on every loaded franchise, so the branch has to require " +
+                "the filtered list to be empty or it takes the ordinary case too",
+            tv.contains(
+                "detail.parts.isEmpty() && collectionRaw?.parts?.isNotEmpty() == true ->"
+            )
+        )
+        assertTrue(
             "and the listless-collection card kept for the collection that really has none",
             tv.contains("message = \"This collection lists no movies yet.\"")
         )
@@ -81,6 +104,12 @@ class BrowseAllHiddenContractTest {
             phone.contains("message = \"Every film in this collection is hidden.\"") &&
                 phone.contains("actionLabel = \"UNHIDE ALL\"") &&
                 phone.contains("onAction = { HiddenTitles.unhideAll(context) }")
+        )
+        assertTrue(
+            "and the phone's grid carries the guard as well",
+            phone.contains(
+                "parts.isEmpty() && collectionRaw?.parts?.isNotEmpty() == true ->"
+            )
         )
     }
 
@@ -101,6 +130,12 @@ class BrowseAllHiddenContractTest {
             sections.contains("message = \"Every title here is hidden.\"") &&
                 sections.contains("action = \"UNHIDE ALL\"") &&
                 sections.contains("onAction = { HiddenTitles.unhideAll(context) }")
+        )
+        assertTrue(
+            "and the filter-empty guard the raw half needs on every page",
+            sections.contains(
+                "sections.isEmpty() && sectionsRaw.any { it.items.isNotEmpty() } ->"
+            )
         )
         assertTrue(
             "while a genuinely empty page keeps the caller's own empty text",

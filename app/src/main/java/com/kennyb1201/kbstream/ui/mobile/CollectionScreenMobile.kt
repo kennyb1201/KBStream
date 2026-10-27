@@ -268,7 +268,15 @@ fun CollectionScreenMobile(
                     // below would otherwise report the collection as listless,
                     // which is a different fact, and would leave the viewer with
                     // no way back (see the TV page's branch).
-                    collectionRaw?.parts?.isNotEmpty() == true -> item(
+                    //
+                    // The `parts.isEmpty()` half is REQUIRED, not belt and
+                    // braces: the raw collection holds parts on every loaded
+                    // franchise, so the raw half alone claimed this branch for
+                    // the ordinary case too - every phone collection with films
+                    // in it read as "Every film in this collection is hidden",
+                    // no cell was ever drawn, and UNHIDE ALL did nothing because
+                    // nothing was hidden.
+                    parts.isEmpty() && collectionRaw?.parts?.isNotEmpty() == true -> item(
                         key = "all_hidden",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {

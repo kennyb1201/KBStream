@@ -387,7 +387,14 @@ internal fun SectionsBrowseMobile(
                 // draw - but the branch below would report the page as having
                 // no titles, which is a different fact, and it would leave the
                 // phone with no way back from here (see the TV pages' branch).
-                sectionsRaw.any { it.items.isNotEmpty() } -> {
+                //
+                // The `sections.isEmpty()` half is REQUIRED, not belt and
+                // braces: the raw list is non-empty on every populated page, so
+                // the raw half alone claimed this branch for the ordinary case
+                // too - every phone genre / studio / decade page with titles on
+                // it read as "Every title here is hidden", no rail was ever
+                // drawn, and UNHIDE ALL did nothing because nothing was hidden.
+                sections.isEmpty() && sectionsRaw.any { it.items.isNotEmpty() } -> {
                     item(key = "all_hidden", contentType = "status") {
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                             BrowseStatus(

@@ -349,7 +349,14 @@ fun CollectionScreen(
                 // would otherwise report the collection as listless, which is a
                 // different fact, and would leave the viewer with no way back
                 // (see the all-hidden branch on the browse pages).
-                collectionRaw?.parts?.isNotEmpty() == true -> {
+                //
+                // The `detail.parts.isEmpty()` half is REQUIRED, not belt and
+                // braces: the raw collection holds parts on every loaded
+                // franchise, so the raw half alone claimed this branch for the
+                // ordinary case too - every collection with films in it read as
+                // "Every film in this collection is hidden", no poster was ever
+                // drawn, and UNHIDE ALL did nothing because nothing was hidden.
+                detail.parts.isEmpty() && collectionRaw?.parts?.isNotEmpty() == true -> {
                     KBStatusMessage(
                         icon = KB_STATUS_ICON_EMPTY,
                         message = "Every film in this collection is hidden.",

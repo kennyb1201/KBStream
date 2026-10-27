@@ -449,7 +449,14 @@ fun TagScreen(
                 // all-hidden branch closes). `sectionsRaw` is the page the
                 // loader produced; `sections` is that page with the hidden
                 // titles dropped.
-                sectionsRaw.any { it.items.isNotEmpty() } -> {
+                //
+                // The `sections.isEmpty()` half is REQUIRED, not belt and
+                // braces: `sectionsRaw` is non-empty on every populated page,
+                // so the raw half alone claimed this branch for the ordinary
+                // case too - every genre screen with titles on it read as
+                // "Every title here is hidden", no rail was ever drawn, and
+                // UNHIDE ALL did nothing because nothing was hidden.
+                sections.isEmpty() && sectionsRaw.any { it.items.isNotEmpty() } -> {
                     item(key = "all_hidden") {
                         KBStatusMessage(
                             icon = KB_STATUS_ICON_EMPTY,
