@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -421,11 +420,33 @@ class PlayerDeepDiveContractTest {
     fun `the source-switch note carries the identity the report needs`() {
         // The session's own s/e next to the index it switched to: a dump has to
         // say which episode moved, not only that something moved.
-        assertEquals(
-            "both engines write the same line shape",
-            2,
-            Regex("index=\\$currentSourceIndex/\\$\\{sources\\.size\\} auto=\\$isAutoRecovery")
-                .findAll(native + mpv).count()
+        //
+        // The index is pinned PER ENGINE, because the two keep it differently:
+        // the Media3 ladder has a running counter, while MPV has none and derives
+        // the number from the list the picker showed. This used to assert one
+        // shared expression naming `currentSourceIndex` in both files - a field
+        // MPV never had, so the assertion was matching a line the app could not
+        // compile.
+        val d = '$'
+        val shape = "index=${d}INDEX/${d}{sources.size} auto=${d}isAutoRecovery"
+        listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
+            assertTrue(
+                "$who must record the source it switched to",
+                src.contains("source switch: s=")
+            )
+            assertTrue(
+                "$who must name the stream it landed on",
+                src.contains("label=${d}currentSourceLabel")
+            )
+        }
+        assertTrue(
+            "the ladder's index is its own running one",
+            native.contains(shape.replace("INDEX", "currentSourceIndex"))
+        )
+        assertTrue(
+            "and MPV's is derived from the picker's list, since it counts none",
+            mpv.contains(shape.replace("INDEX", "sourceIndex")) &&
+                mpv.contains("val sourceIndex = sources.indexOfFirst { it.url == newUrl }")
         )
     }
 
