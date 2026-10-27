@@ -308,9 +308,18 @@ class TorBoxOwnershipReviewTest {
                 "$pane must resolve the queue against My List as it stands now",
                 text.contains("TorBoxReview.rows(context)")
             )
+            // The phone renders the TOUCH twin of the dialog: the TV one is
+            // built from focus surfaces a remote drives with Select, so on a
+            // phone its rows and its KEEP/REMOVE row took no tap at all. Both
+            // hand the queue to the same remove call.
+            val reviewDialog = if (pane == MOBILE_SETTINGS) {
+                "TorBoxReviewDialogMobile("
+            } else {
+                "TorBoxReviewDialog("
+            }
             assertTrue(
                 "$pane must offer the review and remove through the shared path",
-                text.contains("TorBoxReviewDialog(") &&
+                text.contains(reviewDialog) &&
                     text.contains("TorBoxReview.remove(")
             )
             assertTrue(

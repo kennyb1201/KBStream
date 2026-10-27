@@ -67,9 +67,9 @@ internal object SportsDetailRules {
 
     /**
      * The detail rows, in order, with every blank omitted entirely rather than
-     * drawn as an empty line: venue, then broadcast, then the week/round line.
-     * A game with none of the three yields an empty list and the sheet draws no
-     * rows at all.
+     * drawn as an empty line: venue, then broadcast, then the week/round line,
+     * then the playoff series. A game with none of them yields an empty list and
+     * the sheet draws no rows at all.
      */
     fun detailRows(game: SportsGame): List<GameDetailRow> = buildList {
         game.venue?.takeIf { it.isNotBlank() }?.let { add(GameDetailRow("Venue", it)) }
@@ -85,6 +85,11 @@ internal object SportsDetailRules {
         } else {
             game.note?.takeIf { it.isNotBlank() }?.let { add(GameDetailRow("Round", it)) }
         }
+        // The series is context of its own: "MIL leads series 2-0" is what the
+        // 0-0 on a Game 3 card is being played for, while the round row above
+        // only names the fixture. Null on every regular-season game, so the row
+        // is absent rather than empty.
+        game.series?.takeIf { it.isNotBlank() }?.let { add(GameDetailRow("Playoff series", it)) }
     }
 
     /**

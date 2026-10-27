@@ -215,6 +215,39 @@ class LibraryCleanupContractTest {
         )
     }
 
+    @Test
+    fun `the phone's review dialog is the touch twin, not the TV one`() {
+        // The field report: the queue opened but nothing in it took a tap. The
+        // TV dialog is built from tv-material3 focus surfaces, and a thumb does
+        // nothing on those - only a remote's Select does. So the phone gets its
+        // own twin, with the same rows, copy, count line and remove path.
+        val mobilePane = normalized(source(MOBILE_SETTINGS))
+        assertTrue(
+            "the phone pane must open the touch twin and never the TV dialog",
+            mobilePane.contains("TorBoxReviewDialogMobile(") &&
+                !mobilePane.contains("TorBoxReviewDialog(")
+        )
+        val mobileDialog = normalized(source(MOBILE_DIALOG))
+        assertTrue(
+            "and the twin is drawn from the touch components",
+            mobileDialog.contains("ui.components.touch.KBCard") &&
+                mobileDialog.contains("ui.components.touch.KBButton") &&
+                mobileDialog.contains("ui.components.touch.KBDialogPanel")
+        )
+        assertTrue(
+            "with the same pinned action row, so the buttons cannot be pushed below the fold",
+            mobileDialog.contains("align(Alignment.BottomCenter)") &&
+                mobileDialog.contains("contentPadding = PaddingValues(bottom = PINNED_ROW_HEIGHT)")
+        )
+        assertTrue(
+            "and the shared wording and count line, not a second copy of them",
+            mobileDialog.contains("UNOWNED_REVIEW_BODY") &&
+                mobileDialog.contains("UNOWNED_REVIEW_REMOVAL") &&
+                mobileDialog.contains("filedCountLine(shown = rows.size, filed = filedCount)") &&
+                normalized(source(DIALOG)).contains("internal const val UNOWNED_REVIEW_BODY")
+        )
+    }
+
     private fun normalized(text: String): String = text.replace(Regex("\\s+"), " ")
 
     private fun source(relative: String): String {
@@ -244,6 +277,8 @@ class LibraryCleanupContractTest {
         const val MIRROR = "com/kennyb1201/kbstream/data/library/LibraryMirror.kt"
         const val REVIEW = "com/kennyb1201/kbstream/data/debrid/TorBoxReview.kt"
         const val DIALOG = "com/kennyb1201/kbstream/ui/settings/TorBoxReviewDialog.kt"
+        const val MOBILE_DIALOG =
+            "com/kennyb1201/kbstream/ui/mobile/TorBoxReviewDialogMobile.kt"
         const val TV_SETTINGS = "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
         const val MOBILE_SETTINGS =
             "com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"

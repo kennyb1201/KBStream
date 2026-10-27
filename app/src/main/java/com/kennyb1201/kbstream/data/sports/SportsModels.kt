@@ -185,6 +185,17 @@ data class SportsGame(
      */
     val note: String? = null,
     /**
+     * ESPN's own line for the playoff series this game belongs to - "MIL leads
+     * series 2-0", "Series tied 1-1" - or null outside one.
+     *
+     * The series is not a stat of the game: it is the state the fixture is being
+     * played IN, and during the World Series the 0-0 on the card says nothing
+     * about who is ahead in it. ESPN sends it on the competition
+     * (`series.summary`), the same shape in every team sport that plays one, so
+     * the hub reads it for MLB, the NBA, the NHL and the WNBA alike.
+     */
+    val series: String? = null,
+    /**
      * The week of a football season, as ESPN's own `week.number` reads it:
      * "Week 6". Null for every other sport, and for a football event the feed
      * does not put on a numbered week (a bowl, the playoffs). It is a card's
@@ -311,9 +322,14 @@ data class StandingEntry(
      * Soccer is the case this exists for: the table is read on points, and the
      * hub used to draw W-L-T with a win percentage and a games-behind that the
      * feed does not even publish there, so the columns a viewer actually reads
-     * were the ones missing (audit C8, 2026-10-23). Presence - not the league -
-     * is what switches the table to the points shape, so a feed that starts
-     * carrying points gets them without a code change.
+     * were the ones missing (audit C8, 2026-10-23).
+     *
+     * Read only where [SportsLeague.pointsTable] says the league is ranked on
+     * points. This stat's PRESENCE cannot be that rule: ESPN reuses the name for
+     * something else in the sports that have no points table - the NBA's is a
+     * point DIFFERENTIAL ("-1.5"), the MLB's and WNBA's are seeding numbers - so
+     * testing "did the feed send points" drew basketball and baseball as
+     * soccer-style points tables.
      */
     val points: String = "",
     /**
@@ -388,6 +404,28 @@ data class SportsLeague(
      * rather than offering a view that can only ever be empty.
      */
     val hasStandings: Boolean = false,
+    /**
+     * Whether a tie is a possible result, so the table carries a T column.
+     *
+     * Static for the same reason [hasStandings] is: the feed cannot say. ESPN
+     * ships a `ties` stat on every table and fills it with a hard 0 where the
+     * sport has no ties at all, so a column read from the data alone drew a
+     * column of zeroes on four leagues that can never tie - the NBA, the WNBA,
+     * MLB and college basketball (a game that ends level goes to overtime until
+     * someone wins). The NFL and college football keep theirs: a tie is rare
+     * there, but it is a real result.
+     */
+    val hasTies: Boolean = true,
+    /**
+     * Whether the table is read on league POINTS rather than a win percentage.
+     *
+     * True for soccer and the NHL, false for every other table. Static, like the
+     * other two flags, because the feed cannot be asked: ESPN sends a `points`
+     * stat for the NBA (a point differential), MLB and the WNBA (seeding
+     * numbers) too, so the stat's presence drew those tables as W-D-L-PTS with a
+     * meaningless number in the last column.
+     */
+    val pointsTable: Boolean = false,
 )
 
 /**
@@ -402,10 +440,34 @@ object SportsLeagues {
 
     val ALL: List<SportsLeague> = listOf(
         SportsLeague("football/nfl", "NFL", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("basketball/nba", "NBA", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("baseball/mlb", "MLB", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("hockey/nhl", "NHL", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("basketball/wnba", "WNBA", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague(
+            "basketball/nba",
+            "NBA",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            hasTies = false
+        ),
+        SportsLeague(
+            "baseball/mlb",
+            "MLB",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            hasTies = false
+        ),
+        SportsLeague(
+            "hockey/nhl",
+            "NHL",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true
+        ),
+        SportsLeague(
+            "basketball/wnba",
+            "WNBA",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            hasTies = false
+        ),
         // The long-form ESPN spellings, not the "ncf"/"ncb" shorthands the
         // site's own URLs use: `site.api.espn.com/.../football/ncf/scoreboard`
         // and `/basketball/ncb/scoreboard` answer HTTP 400 every time, so those
@@ -420,12 +482,37 @@ object SportsLeagues {
             "basketball/mens-college-basketball",
             "College Basketball",
             SportsKind.HEAD_TO_HEAD,
-            hasStandings = true
+            hasStandings = true,
+            hasTies = false
         ),
-        SportsLeague("soccer/eng.1", "Premier League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("soccer/esp.1", "La Liga", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("soccer/uefa.champions", "Champions League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("soccer/usa.1", "MLS", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague(
+            "soccer/eng.1",
+            "Premier League",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true
+        ),
+        SportsLeague(
+            "soccer/esp.1",
+            "La Liga",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true
+        ),
+        SportsLeague(
+            "soccer/uefa.champions",
+            "Champions League",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true
+        ),
+        SportsLeague(
+            "soccer/usa.1",
+            "MLS",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true,
+            pointsTable = true
+        ),
         // Individual sports: no team table exists, so the hub never offers one.
         SportsLeague("tennis/atp", "Tennis", SportsKind.HEAD_TO_HEAD),
         SportsLeague("mma/ufc", "UFC", SportsKind.HEAD_TO_HEAD),

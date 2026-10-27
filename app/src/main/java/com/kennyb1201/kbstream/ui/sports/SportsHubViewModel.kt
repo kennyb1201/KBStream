@@ -727,7 +727,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // The repository already holds a 6-hour cache; this is a network hop
             // only when that cache is cold.
             val groups = withContext(Dispatchers.IO) { espn.standings(path) }
-            _standings.value = _standings.value + (path to groups)
+            // Best record first, whichever order ESPN sent: the NBA's document
+            // arrives worst-first and the NFL's does not (see
+            // SportsStandingsOrder). Sorted here, once, so the TV table and the
+            // phone table are the same table.
+            val table = SportsStandingsOrder.sorted(
+                groups = groups,
+                pointsTable = SportsLeagues.byPath(path)?.pointsTable == true
+            )
+            _standings.value = _standings.value + (path to table)
             _standingsFailed.value = if (groups.isEmpty() && espn.lastStandingsFetchFailed(path)) {
                 _standingsFailed.value + path
             } else {

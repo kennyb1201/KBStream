@@ -174,9 +174,14 @@ class SportsHubScreenMobileContractTest {
             mobile.contains("SportsReopenRules.game(") &&
                 mobile.contains("SportsReopenRules.tournament(")
         )
+        assertFalse(
+            "a phone has no room for the two-conference split",
+            mobile.contains("SportsStandingsLayout.columns(")
+        )
         assertTrue(
-            "standings stay one column on a phone (the shared layout's own threshold)",
-            mobile.contains("SportsStandingsLayout.columns(groups, widthDp = 0)")
+            "but a long table is narrowed by the shared rule, not a phone-only list of conferences",
+            mobile.contains("SportsStandingsLayout.needsConferenceFilter(groups)") &&
+                mobile.contains("SportsStandingsLayout.filter(groups, conference)")
         )
     }
 

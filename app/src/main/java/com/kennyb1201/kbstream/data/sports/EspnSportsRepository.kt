@@ -453,10 +453,18 @@ private fun espnEventToGames(event: JSONObject, leaguePath: String): List<Sports
     // UFC 333 ships FOURTEEN bouts, so the hub drew the first prelim bout under
     // the card's own title and the other thirteen did not exist. A body with no
     // `competitions` array falls back to the event-level competitors, as before.
-    val rows: List<JSONObject?> = if (competitions == null || competitions.length() == 0) {
-        listOf(null)
-    } else {
-        (0 until competitions.length()).map { index -> competitions.optJSONObject(index) }
+    //
+    // A TENNIS tournament carries no competitions of its own: its fixtures sit in
+    // `groupings[]`, one array per draw (Men's Singles, Women's Singles,
+    // Doubles). Reading only the top-level array found none of them, and a body
+    // whose events all yield no game is the strict parse's FAILURE - so a feed
+    // that had answered fine (HTTP 200, a full ATP field) drew "Couldn't reach
+    // ESPN" on the Tennis tab. The grouped competitions are the same
+    // head-to-head shape the top-level array has everywhere else.
+    val rows: List<JSONObject?> = when {
+        competitions != null && competitions.length() > 0 ->
+            (0 until competitions.length()).map { index -> competitions.optJSONObject(index) }
+        else -> espnGroupingCompetitions(event).ifEmpty { listOf<JSONObject?>(null) }
     }
     return rows.mapIndexedNotNull { index, competition ->
         val competitors = competition?.optJSONArray("competitors")
@@ -489,6 +497,26 @@ private fun espnEventToGames(event: JSONObject, leaguePath: String): List<Sports
             leaguePath = leaguePath,
         )
     }
+}
+
+/**
+ * A tennis event's fixtures, flattened out of its `groupings`.
+ *
+ * The shape is `groupings[] = { grouping = { displayName, slug }, competitions[] }`:
+ * one entry per draw, each holding the matches of that draw. Not every event has
+ * them (only the tournaments do), which is why this answers an empty list rather
+ * than a fault when the array is missing.
+ */
+private fun espnGroupingCompetitions(event: JSONObject): List<JSONObject> {
+    val groupings = event.optJSONArray("groupings") ?: return emptyList()
+    val out = ArrayList<JSONObject>()
+    for (i in 0 until groupings.length()) {
+        val competitions = groupings.optJSONObject(i)?.optJSONArray("competitions") ?: continue
+        for (j in 0 until competitions.length()) {
+            competitions.optJSONObject(j)?.let { out += it }
+        }
+    }
+    return out
 }
 
 /** One competition read as one game. */
@@ -596,6 +624,11 @@ private fun espnGameOf(
         // names one at the top (a tour stop) reads from there instead.
         venue = espnVenue(competition?.optJSONObject("venue"), event.optJSONObject("venue")),
         note = espnNote(competition?.optJSONArray("notes"), event.optJSONArray("notes")),
+        // The playoff series this fixture belongs to, when there is one: the
+        // World Series' "MIL leads series 2-0", an NBA round's "Series tied
+        // 1-1". Carried on the competition and identical in shape across the
+        // team sports, so nothing here is league-specific.
+        series = espnSeries(competition?.optJSONObject("series")),
         // A football schedule is read in weeks, and `week.number` is where ESPN
         // puts it. Every other sport leaves it out.
         week = espnWeek(event.optJSONObject("week")),
@@ -746,8 +779,10 @@ private fun espnStandingEntry(row: JSONObject): StandingEntry? {
         winPercent = espnStatText(stats, "winPercent"),
         gamesBehind = espnStatText(stats, "gamesBehind"),
         streak = espnStatText(stats, "streak"),
-        // Soccer's table is read on points; the feed publishes them and the hub
-        // never asked (see StandingEntry.points).
+        // Read ONLY where the league is ranked on points (see
+        // [SportsLeague.pointsTable]): ESPN reuses this stat name for a point
+        // differential in the NBA and seeding numbers in MLB and the WNBA, so
+        // its presence says nothing about the table's shape.
         points = espnStatText(stats, "points"),
         // The same id a favourite is stored under, so a row can be followed
         // from the table and match the side on the scoreboard.
@@ -825,6 +860,25 @@ internal fun espnNote(vararg notes: JSONArray?): String? {
     }
     return null
 }
+
+/**
+ * ESPN's playoff-series line for a competition, or null when it is not part of
+ * one.
+ *
+ * The shape is `competitions[0].series = { type: "playoff", title: "Playoff
+ * Series", summary: "MIL leads series 2-0", completed: false,
+ * totalCompetitions: 7, competitors: [{ id, wins }, ...] }` - the same in every
+ * team sport that plays a series, so the World Series, an NBA first round and a
+ * Stanley Cup Final are all read here.
+ *
+ * The SUMMARY is what a viewer reads, and it is the feed's own sentence: it says
+ * who leads and by how much in the same line ("Series tied 1-1" when nobody
+ * does), which the two `wins` numbers alone cannot say without the hub inventing
+ * wording. A series object with no summary is no line at all - the regular
+ * season's absent object and a blank one are the same thing here.
+ */
+internal fun espnSeries(series: JSONObject?): String? =
+    series?.optString("summary", "")?.trim()?.takeIf { it.isNotBlank() }
 
 /**
  * One side of a card, whether the feed calls it a team or an athlete.

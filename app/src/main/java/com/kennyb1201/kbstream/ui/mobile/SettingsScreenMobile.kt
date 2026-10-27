@@ -94,7 +94,6 @@ import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.settings.SettingsGroup
-import com.kennyb1201.kbstream.ui.settings.TorBoxReviewDialog
 import com.kennyb1201.kbstream.ui.settings.SettingsPane
 import com.kennyb1201.kbstream.ui.settings.syncRelativeTime
 import com.kennyb1201.kbstream.ui.theme.CUSTOM_ACCENT_INDEX
@@ -202,7 +201,10 @@ fun SettingsScreenMobile(
                 // model on a phone.
                 DownloadsScreenMobile(onBack = { downloadsOpen = false })
             } else if (open == null) {
-                SettingsHomeMobile(onOpen = { pane = it })
+                SettingsHomeMobile(
+                    onOpen = { pane = it },
+                    onOpenDownloads = { downloadsOpen = true }
+                )
             } else {
                 PaneHeaderMobile(pane = open, onBack = { pane = null })
                 Box(
@@ -226,9 +228,7 @@ fun SettingsScreenMobile(
 
                         SettingsPane.HIDDEN -> HiddenTitlesPaneMobile()
 
-                        SettingsPane.PLAYBACK -> PlaybackPaneMobile(
-                            onOpenDownloads = { downloadsOpen = true }
-                        )
+                        SettingsPane.PLAYBACK -> PlaybackPaneMobile()
 
                         SettingsPane.VIDEO -> VideoPaneMobile()
 
@@ -250,9 +250,22 @@ fun SettingsScreenMobile(
     }
 }
 
-/** The rail's replacement: grouped rows, one per pane, in the TV's own order. */
+/**
+ * The rail's replacement: grouped rows, one per pane, in the TV's own order -
+ * with Downloads above them, as a section of its own.
+ *
+ * Downloads is not one of [SettingsPane]'s entries because that enum is the
+ * television's own pane inventory (see the note beside `downloadsOpen`), so the
+ * phone lists it here instead of adding a row to the TV page. Its page holds the
+ * queue and the two switches that govern it, which are the whole of what
+ * "Downloads settings" is.
+ */
 @Composable
-private fun SettingsHomeMobile(onOpen: (SettingsPane) -> Unit) {
+private fun SettingsHomeMobile(
+    onOpen: (SettingsPane) -> Unit,
+    onOpenDownloads: () -> Unit
+) {
+    val context = LocalContext.current
     val panes = remember { SettingsPane.entries }
 
     LazyColumn(
@@ -277,6 +290,20 @@ private fun SettingsHomeMobile(onOpen: (SettingsPane) -> Unit) {
             }
         }
 
+        // The phone's own section, above the television's panes. The blurb is
+        // the count and the storage figure the Downloads page's own header
+        // states, from the same source, so the two can never disagree.
+        item(key = "downloads_section") {
+            MobileEyebrow("Downloads")
+        }
+        item(key = "downloads_row") {
+            SettingsHomeRowMobile(
+                label = "Downloads",
+                blurb = downloadsSummary(context),
+                onClick = onOpenDownloads
+            )
+        }
+
         SettingsGroup.entries.forEach { group ->
             item(key = "group_${group.name}") {
                 Text(
@@ -291,26 +318,40 @@ private fun SettingsHomeMobile(onOpen: (SettingsPane) -> Unit) {
                 items = panes.filter { it.group == group },
                 key = { it.name }
             ) { pane ->
-                KBCard(
-                    onClick = { onOpen(pane) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                        Text(
-                            text = pane.label,
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = pane.blurb,
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                }
+                SettingsHomeRowMobile(
+                    label = pane.label,
+                    blurb = pane.blurb,
+                    onClick = { onOpen(pane) }
+                )
             }
+        }
+    }
+}
+
+/** One row of the settings list: a pane's name and its blurb, or Downloads'. */
+@Composable
+private fun SettingsHomeRowMobile(
+    label: String,
+    blurb: String,
+    onClick: () -> Unit
+) {
+    KBCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                text = label,
+                color = KBTextHi,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = blurb,
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }
@@ -356,8 +397,13 @@ private fun PaneScroll(content: @Composable () -> Unit) {
     }
 }
 
+/**
+ * A pane's section heading. Internal because the Downloads screen - the phone's
+ * own section, not a pane - draws its switch group with the same eyebrow, so
+ * "Download Settings" sits on the same beat as every heading in Settings.
+ */
 @Composable
-private fun SettingsSectionMobile(title: String, first: Boolean = false) {
+internal fun SettingsSectionMobile(title: String, first: Boolean = false) {
     // The shared eyebrow: the builder and the panes were drawing this label
     // with their own top/bottom insets, which is why one group sat 18dp down
     // and another 20dp.
@@ -374,8 +420,12 @@ private fun SettingsCaptionMobile(text: String) {
     )
 }
 
+/**
+ * A switch row. Internal so the Downloads screen can carry the two switches that
+ * govern it (spec §4.5) without a second copy of this row's layout and colours.
+ */
 @Composable
-private fun SettingsToggleMobile(
+internal fun SettingsToggleMobile(
     label: String,
     description: String,
     checked: Boolean,
@@ -869,7 +919,10 @@ private fun IntegrationsPaneMobile(
             )
         }
         if (torboxReviewOpen) {
-            TorBoxReviewDialog(
+            // The touch twin, not the TV dialog: that one is built out of
+            // focus surfaces a remote drives with Select, so on a phone the
+            // whole queue - rows, KEEP and REMOVE - took no tap at all.
+            TorBoxReviewDialogMobile(
                 rows = torboxReviewRows,
                 filedCount = torboxReviewFiled,
                 onKeep = { torboxReviewOpen = false },
@@ -1092,7 +1145,7 @@ private fun HiddenTitlesPaneMobile() {
 }
 
 @Composable
-private fun PlaybackPaneMobile(onOpenDownloads: () -> Unit) {
+private fun PlaybackPaneMobile() {
     val context = LocalContext.current
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
 
@@ -1182,16 +1235,6 @@ private fun PlaybackPaneMobile(onOpenDownloads: () -> Unit) {
     var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
     var externalTrustReturn by remember {
         mutableStateOf(AppPreferences.getExternalTrustReturn(context))
-    }
-    // The two download switches (spec §4.5), read straight from the downloads'
-    // own store and NOT keyed on the sync revision: they are device-local, so a
-    // pull from another device must not re-read them here (see DownloadsStore
-    // for why they are not AppPreferences keys at all).
-    var downloadOverCellular by remember {
-        mutableStateOf(DownloadsStore.getDownloadOverCellular(context))
-    }
-    var deleteAfterFinish by remember {
-        mutableStateOf(DownloadsStore.getDeleteAfterFinish(context))
     }
     var showCustomPlayerPicker by remember { mutableStateOf(false) }
     // Set when the engine pill is picked and there is more than one installed
@@ -1734,41 +1777,6 @@ private fun PlaybackPaneMobile(onOpenDownloads: () -> Unit) {
                 onDismiss = { showCustomPlayerPicker = false }
             )
         }
-
-        // ---- Downloads (spec §4.3, §4.5) ----
-        //
-        // The screen itself, the storage figure, and the two switches that
-        // govern it. Both default OFF: cellular data is not spent on a download
-        // unless the viewer says so, and a finished title is not deleted unless
-        // they ask for it.
-        SettingsSectionMobile("Downloads")
-        SettingsNavRowMobile(
-            label = "Downloads",
-            description = downloadsSummary(context),
-            onClick = onOpenDownloads
-        )
-        SettingsToggleMobile(
-            label = "Download over cellular",
-            description = "Let downloads run on mobile data. Off, a download waits for Wi-Fi.",
-            checked = downloadOverCellular,
-            onChange = { enabled ->
-                downloadOverCellular = enabled
-                DownloadsStore.setDownloadOverCellular(context, enabled)
-                // Applied to the downloader immediately, so a download already
-                // queued starts the moment the switch is flipped rather than at
-                // the next one.
-                DownloadsManager.onTogglesChanged(context)
-            }
-        )
-        SettingsToggleMobile(
-            label = "Delete after finishing",
-            description = "Remove a download once you have watched what it holds.",
-            checked = deleteAfterFinish,
-            onChange = { enabled ->
-                deleteAfterFinish = enabled
-                DownloadsStore.setDeleteAfterFinish(context, enabled)
-            }
-        )
     }
 }
 
@@ -1776,7 +1784,9 @@ private fun PlaybackPaneMobile(onOpenDownloads: () -> Unit) {
  * The Downloads row's blurb: what is on this phone and how much room it takes.
  *
  * Completed downloads only, from the manager's own total, so this line and the
- * Downloads screen's header cannot disagree about the same number.
+ * Downloads screen's header cannot disagree about the same number. Read by the
+ * settings list's own Downloads section, which is where the feature lives now
+ * (it used to be the last block of the Playback pane).
  */
 private fun downloadsSummary(context: android.content.Context): String {
     val complete = DownloadsStore.records(context).count { it.state.isComplete }

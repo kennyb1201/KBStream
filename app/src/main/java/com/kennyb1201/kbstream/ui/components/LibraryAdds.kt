@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.ui.components
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
@@ -53,6 +56,23 @@ internal object LibraryAdds {
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * Bumped after every add or removal that has finished running.
+     *
+     * A surface that PAINTS the title's membership needs it: the detail page's
+     * Library button draws "+" or "−" from the store, and the menu that saves
+     * the title is gone by the time the write lands (the add resolves an IMDB
+     * id first), so there is no callback left on screen to flip the mark. Keying
+     * a `LaunchedEffect` on this re-reads the store when the answer is actually
+     * final - and again if the picker's My List row changed it a moment later.
+     *
+     * Bumped for a FAILED attempt too: the store is the truth either way, and a
+     * caller that assumed its own press worked is exactly the bug this closes.
+     * Written on the main thread (see [runAdd]).
+     */
+    var revision by mutableIntStateOf(0)
+        private set
+
     /** True when [target] is already on this profile's My List. */
     fun inMyList(context: Context, target: LibraryAddTarget): Boolean =
         LocalLibraryStore.isInMyList(
@@ -98,6 +118,44 @@ internal object LibraryAdds {
     }
 
     /**
+     * The detail page's one Library button: saves [target] when it is not on My
+     * List and takes it back off when it is, answering the membership it left
+     * behind.
+     *
+     * The answer is read from the store after the write rather than assumed
+     * from which branch ran: an add can be refused (an unreadable blob) and a
+     * removal can match nothing, and a button painted from its own intent would
+     * then claim a state the library does not have.
+     *
+     * The removal half goes through [LibraryMirror.removeFromLibrary], the same
+     * path the Library tab's own remove takes, so every connected tracker drops
+     * its watchlist copy as well. A local-only delete would be re-merged back a
+     * moment later.
+     */
+    fun toggle(
+        context: Context,
+        target: LibraryAddTarget,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        runAdd(onResult) { toggleNow(context, target) }
+    }
+
+    /** [toggle] without the launch, for callers already inside a coroutine. */
+    suspend fun toggleNow(context: Context, target: LibraryAddTarget): Boolean {
+        if (inMyList(context, target)) {
+            LibraryMirror.removeFromLibrary(
+                context = context,
+                mediaType = target.mediaType,
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId
+            )
+        } else {
+            addNow(context, target)
+        }
+        return inMyList(context, target)
+    }
+
+    /**
      * [add] without the launch, for callers already inside a coroutine that
      * wants the result inline (the picker, whose dialog stays open so the row
      * it pressed can report itself).
@@ -124,7 +182,12 @@ internal object LibraryAdds {
     fun runAdd(onResult: (Boolean) -> Unit, body: suspend () -> Boolean) {
         scope.launch {
             val ok = runCatchingCancellable { body() }.getOrDefault(false)
-            withContext(Dispatchers.Main.immediate) { onResult(ok) }
+            withContext(Dispatchers.Main.immediate) {
+                // The write has landed (or failed) by now: this is the moment
+                // any surface drawing the title's membership is out of date.
+                revision += 1
+                onResult(ok)
+            }
         }
     }
 

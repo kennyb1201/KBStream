@@ -47,6 +47,9 @@ class DetailAuditContractTest {
     private val mobile by lazy { source("com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt") }
     private val touch by lazy { source("com/kennyb1201/kbstream/ui/components/touch/KBEpisodeTouch.kt") }
     private val viewModel by lazy { source("com/kennyb1201/kbstream/ui/detail/DetailViewModel.kt") }
+    private val libraryAdds by lazy {
+        source("com/kennyb1201/kbstream/ui/components/LibraryAdds.kt")
+    }
 
     // ── C1: mobile episode rows are keyed by the episode ────────────────────
 
@@ -206,9 +209,82 @@ class DetailAuditContractTest {
             "the Play long-press menu adds them through the shared menu",
             count(normalized(tv), "libraryTarget = LibraryAddTarget(") >= 2
         )
-        assertTrue(
-            "the phone gets a button of its own",
+        assertFalse(
+            "the phone's add-only row is gone: the action row's toggle saves AND " +
+                "unsaves, so a full-width ADD TO LIBRARY next to it would be a " +
+                "second, weaker control for the same thing",
             normalized(mobile).contains("ADD TO LIBRARY")
+        )
+        assertEquals(
+            "the phone's action row carries the toggle, one mark per state",
+            1,
+            count(normalized(mobile), "R.drawable.ic_detail_add")
+        )
+        assertEquals(
+            "and the saved state's mark",
+            1,
+            count(normalized(mobile), "R.drawable.ic_detail_remove")
+        )
+    }
+
+    // ── The action row's Library toggle ─────────────────────────────────────
+
+    @Test
+    fun `both screens save and unsave the title from the one toggle`() {
+        val tvSrc = normalized(tv)
+        val phoneSrc = normalized(mobile)
+
+        assertTrue(
+            "the TV button toggles instead of only adding",
+            tvSrc.contains("LibraryAdds.toggle(context, libraryButtonTarget)")
+        )
+        assertTrue(
+            "and the phone's is the same action on the same target shape",
+            phoneSrc.contains("LibraryAdds.toggle(context, libraryTarget)")
+        )
+
+        listOf("the TV button" to tvSrc, "the phone's" to phoneSrc).forEach { (who, src) ->
+            assertTrue(
+                "$who paints a plus when the title is not saved",
+                src.contains("R.drawable.ic_detail_add")
+            )
+            assertTrue(
+                "$who paints a minus once it is",
+                src.contains("R.drawable.ic_detail_remove")
+            )
+            assertTrue(
+                "$who repaints from the store, so an add made in the long-press menu " +
+                    "- which lands after that menu is gone - still flips it",
+                src.contains("LibraryAdds.revision")
+            )
+        }
+
+        assertTrue(
+            "the removal half is the Library tab's own remove, so the trackers lose " +
+                "their watchlist copy instead of re-adding the title on the next merge",
+            normalized(libraryAdds).contains("LibraryMirror.removeFromLibrary(")
+        )
+    }
+
+    @Test
+    fun `a hold on the toggle raises the app's shared title menu`() {
+        assertEquals(
+            "the TV's hold passes this page's target to the shared menu exactly once",
+            1,
+            count(normalized(tv), "libraryTarget = libraryButtonTarget")
+        )
+        assertTrue(
+            "and it is the menu, not a second hand-built row list",
+            normalized(tv).contains("if (libraryButtonMenu) { PosterContextMenu(")
+        )
+        assertEquals(
+            "the phone's hold does the same through the touch sheet",
+            1,
+            count(normalized(mobile), "libraryTarget = libraryTarget")
+        )
+        assertTrue(
+            "with the same target the page's other menus use",
+            normalized(mobile).contains("if (libraryMenu) { PosterContextMenu(")
         )
     }
 

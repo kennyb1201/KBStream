@@ -15,7 +15,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.data.download.DownloadRecord
 import com.kennyb1201.kbstream.data.download.DownloadState
 import com.kennyb1201.kbstream.data.download.DownloadsManager
+import com.kennyb1201.kbstream.data.download.DownloadsStore
 import com.kennyb1201.kbstream.data.download.formatDownloadBytes
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
@@ -43,12 +48,16 @@ import kotlinx.coroutines.launch
  * Downloads, for a finger: one row per download on this phone for the profile on
  * screen, and the header's storage figure (spec §4.3).
  *
- * Reached from Settings' Playback pane and rendered over it, the way the panes
- * themselves are - one screen pushed at a time, Back returns to what opened it.
- * Everything it shows comes from [DownloadsManager]: records for the active
- * profile, merged with what the downloader itself is doing, so a transfer that
- * is running right now shows its own percentage without this screen holding a
- * copy of anything.
+ * Reached from Settings' own Downloads section - the phone's one section that is
+ * not one of the television's panes - and rendered over the list, the way a pane
+ * is - one screen pushed at a time, Back returns to what opened it. Everything
+ * it shows comes from [DownloadsManager]: records for the active profile, merged
+ * with what the downloader itself is doing, so a transfer that is running right
+ * now shows its own percentage without this screen holding a copy of anything.
+ *
+ * It carries the two switches that govern it, under the queue (spec §4.5): a
+ * section that owns the downloads owns the rules they run under. They used to be
+ * the last block of the Playback pane, which is where the feature was buried.
  *
  * The empty state is the spec's own sentence, plus the storage consequence it
  * asks to be stated here rather than discovered later: downloads are app-private
@@ -73,36 +82,88 @@ fun DownloadsScreenMobile(onBack: () -> Unit) {
                 onBack = onBack
             )
 
-            if (records.isEmpty()) {
-                DownloadsEmptyState()
-                return@Column
-            }
-
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(items = records, key = { it.id }) { record ->
-                    DownloadRow(
-                        record = record,
-                        onPlay = { playDownloaded(context, record) },
-                        onPause = { DownloadsManager.pause(context, record.id) },
-                        onResume = { DownloadsManager.resume(context, record.id) },
-                        onDelete = { DownloadsManager.delete(context, record.id) },
-                        onRetry = {
-                            // Retry re-resolves the row rather than replaying a
-                            // dead URL (spec §7), so it is a suspend call and
-                            // the message is the same one a fresh press gets.
-                            scope.launch {
-                                DownloadsManager.retry(context, record.id)
+                if (records.isEmpty()) {
+                    item(key = "empty") { DownloadsEmptyState() }
+                } else {
+                    items(items = records, key = { it.id }) { record ->
+                        DownloadRow(
+                            record = record,
+                            onPlay = { playDownloaded(context, record) },
+                            onPause = { DownloadsManager.pause(context, record.id) },
+                            onResume = { DownloadsManager.resume(context, record.id) },
+                            onDelete = { DownloadsManager.delete(context, record.id) },
+                            onRetry = {
+                                // Retry re-resolves the row rather than replaying
+                                // a dead URL (spec §7), so it is a suspend call
+                                // and the message is the same one a fresh press
+                                // gets.
+                                scope.launch {
+                                    DownloadsManager.retry(context, record.id)
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
+                }
+                // The switches are here even with an empty queue: a viewer who
+                // has downloaded nothing yet is exactly who wants to decide
+                // whether downloads may use cellular data.
+                item(key = "download-settings") {
+                    Column(modifier = Modifier.padding(top = 14.dp)) {
+                        SettingsSectionMobile("Download Settings")
+                        DownloadSwitchesMobile()
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * The two switches that govern downloads on this phone (spec §4.5), read
+ * straight from the downloads' own store and NOT keyed on the sync revision:
+ * they are device-local, so a pull from another device must not re-read them
+ * here (see [DownloadsStore] for why they are not AppPreferences keys at all).
+ *
+ * Both default OFF: cellular data is not spent on a download unless the viewer
+ * says so, and a finished title is not deleted unless they ask for it.
+ */
+@Composable
+private fun DownloadSwitchesMobile() {
+    val context = LocalContext.current
+    var overCellular by remember {
+        mutableStateOf(DownloadsStore.getDownloadOverCellular(context))
+    }
+    var deleteAfterFinish by remember {
+        mutableStateOf(DownloadsStore.getDeleteAfterFinish(context))
+    }
+
+    SettingsToggleMobile(
+        label = "Download over cellular",
+        description = "Let downloads run on mobile data. Off, a download waits for Wi-Fi.",
+        checked = overCellular,
+        onChange = { enabled ->
+            overCellular = enabled
+            DownloadsStore.setDownloadOverCellular(context, enabled)
+            // Applied to the downloader immediately, so a download already
+            // queued starts the moment the switch is flipped rather than at the
+            // next one.
+            DownloadsManager.onTogglesChanged(context)
+        }
+    )
+    SettingsToggleMobile(
+        label = "Delete after finishing",
+        description = "Remove a download once you have watched what it holds.",
+        checked = deleteAfterFinish,
+        onChange = { enabled ->
+            deleteAfterFinish = enabled
+            DownloadsStore.setDeleteAfterFinish(context, enabled)
+        }
+    )
 }
 
 /** The screen's own head: back, the title, and the storage this feature is using. */

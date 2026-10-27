@@ -139,6 +139,36 @@ class SettingsScreenMobileContractTest {
     }
 
     @Test
+    fun `downloads is its own section on the phone, not the tail of a pane`() {
+        val mobile = mobileSettings()
+        assertTrue(
+            "the settings list must draw a Downloads section of its own, above the panes",
+            mobile.contains("MobileEyebrow(\"Downloads\")") &&
+                mobile.contains("SettingsHomeRowMobile(") &&
+                mobile.contains("blurb = downloadsSummary(context)") &&
+                mobile.contains("onClick = onOpenDownloads")
+        )
+        assertTrue(
+            "and the pane no longer carries it",
+            mobile.contains("SettingsPane.PLAYBACK -> PlaybackPaneMobile()") &&
+                !mobile.contains("PlaybackPaneMobile(onOpenDownloads")
+        )
+        val downloads = source("com/kennyb1201/kbstream/ui/mobile/DownloadsScreenMobile.kt")
+        assertTrue(
+            "the two switches that govern it live on its own page now, under the queue",
+            downloads.contains("SettingsToggleMobile(") &&
+                downloads.contains("Download over cellular") &&
+                downloads.contains("Delete after finishing") &&
+                downloads.contains("DownloadsStore.setDeleteAfterFinish(context, enabled)")
+        )
+        assertTrue(
+            "and they are offered even with an empty queue",
+            downloads.contains("if (records.isEmpty()) {") &&
+                downloads.contains("item(key = \"download-settings\")")
+        )
+    }
+
+    @Test
     fun `the sync pane reports the same health and offers the same actions`() {
         val mobile = mobileSettings()
         listOf(

@@ -146,6 +146,7 @@ import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.home.UNKNOWN_SHOW_NAME
 import com.kennyb1201.kbstream.ui.home.upNextDisplayTitleOrNull
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.components.LibraryAdds
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -1542,6 +1543,10 @@ fun DetailScreen(
 
     val movieDetailsFocusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
+    // The action row's Library toggle, so its long-press menu hands focus back
+    // to the button that raised it - the same return the Play button's menu
+    // makes.
+    val libraryButtonFocusRequester = remember { FocusRequester() }
 
     /**
      * The last resort of a vertical chip press whose target rail does not exist
@@ -2849,6 +2854,29 @@ fun DetailScreen(
                 handFocusBack("play button menu", playButtonFocusRequester)
             }
 
+            // The Library button in the action row: "+" saves the title this
+            // page is about, "−" takes it back off, and a long press raises the
+            // shared title menu (Add to Library / Add to list…), so a personal
+            // list is still reachable from here.
+            //
+            // The mark is painted from the STORE, never from what the last
+            // press asked for: [LibraryAdds.revision] ticks when an add or a
+            // removal has actually finished, which is how an add made through
+            // that long-press menu - one that resolves an IMDB id first, long
+            // after the menu is gone - still flips this button.
+            var inLibrary by remember(type, id) { mutableStateOf(false) }
+            var libraryButtonMenu by remember { mutableStateOf(false) }
+            val libraryButtonTarget = LibraryAddTarget(
+                mediaType = normalizedType,
+                imdbId = id.takeIf { it.startsWith("tt") },
+                tmdbId = tmdbDetail?.id,
+                title = displayName.ifBlank { "Untitled" },
+                posterUrl = viewModel.currentPosterUrl()
+            )
+            LaunchedEffect(libraryButtonTarget, LibraryAdds.revision) {
+                inLibrary = LibraryAdds.inMyList(context, libraryButtonTarget)
+            }
+
             val wantsBeginning =
                 initialTarget?.startFromBeginning == true || startOver
 
@@ -3654,6 +3682,59 @@ fun DetailScreen(
                                     contentDescription = "Trailer"
                                 )
                             }
+                        }
+
+                        // Keep this title, right after the trailer: a plus
+                        // that becomes a minus once it is saved, and turns the
+                        // page's own title into a one-press toggle instead of
+                        // only offering an add somewhere else in the app.
+                        KBCard(
+                            onClick = {
+                                val wasSaved = inLibrary
+                                val name = libraryButtonTarget.title
+                                // The press acts on the state the button is
+                                // SHOWING - "+" adds, "−" removes - and the
+                                // button is repainted from the store's answer,
+                                // so it can never claim a save that did not
+                                // happen.
+                                LibraryAdds.toggle(context, libraryButtonTarget) { nowSaved ->
+                                    inLibrary = nowSaved
+                                    val changed = nowSaved != wasSaved
+                                    feedback.show(
+                                        text = when {
+                                            changed && nowSaved -> "Added to My List: $name"
+                                            changed -> "Removed from My List: $name"
+                                            wasSaved -> "Couldn't remove $name"
+                                            else -> "Couldn't add $name"
+                                        },
+                                        isError = !changed
+                                    )
+                                }
+                            },
+                            // The hold is the same menu every poster raises,
+                            // so "Add to list…" and the title's other rows are
+                            // reachable from the page being read.
+                            onLongClick = { libraryButtonMenu = true },
+                            shape = KBShapePill,
+                            focusedScale = KBFocusButton,
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .focusRequester(libraryButtonFocusRequester)
+                        ) {
+                            IconButtonBody(
+                                iconRes = if (inLibrary) {
+                                    R.drawable.ic_detail_remove
+                                } else {
+                                    R.drawable.ic_detail_add
+                                },
+                                // Keeps what the mark means available to
+                                // TalkBack, since the glyph alone says it.
+                                contentDescription = if (inLibrary) {
+                                    "Remove from My List"
+                                } else {
+                                    "Add to My List"
+                                }
+                            )
                         }
                     }
 
@@ -6235,6 +6316,26 @@ fun DetailScreen(
                             }
                         ),
                         onDismiss = { dismissPlayButtonMenu() }
+                    )
+                }
+
+                // The Library button's hold: the app's shared title menu, so
+                // "Add to list…" behaves here exactly as it does from a poster
+                // - and its own Add to Library / In Library row is this
+                // button's long form. Nothing is spelled out again: the menu
+                // builds both library rows itself from the target.
+                if (libraryButtonMenu) {
+                    PosterContextMenu(
+                        title = displayName.ifBlank { "Untitled" },
+                        actions = emptyList(),
+                        libraryTarget = libraryButtonTarget,
+                        onDismiss = {
+                            libraryButtonMenu = false
+                            handFocusBack(
+                                "library button menu",
+                                libraryButtonFocusRequester
+                            )
+                        }
                     )
                 }
 

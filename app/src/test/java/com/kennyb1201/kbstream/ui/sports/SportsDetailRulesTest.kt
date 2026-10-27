@@ -48,6 +48,7 @@ class SportsDetailRulesTest {
         venue: String? = null,
         week: String? = null,
         note: String? = null,
+        series: String? = null,
         broadcastNames: List<String> = emptyList(),
         leaders: List<GameLeader> = emptyList(),
         possessionTeamId: String? = null,
@@ -63,6 +64,7 @@ class SportsDetailRulesTest {
         broadcastNames = broadcastNames,
         venue = venue,
         note = note,
+        series = series,
         week = week,
         leaders = leaders,
         possessionTeamId = possessionTeamId,
@@ -121,6 +123,21 @@ class SportsDetailRulesTest {
     fun `ESPN's own note becomes the round when the feed has no week`() {
         val rows = SportsDetailRules.detailRows(game(note = "ALDS - Game 4"))
         assertEquals(listOf(GameDetailRow("Round", "ALDS - Game 4")), rows)
+    }
+
+    @Test
+    fun `a playoff series is a row of its own, under the round`() {
+        val rows = SportsDetailRules.detailRows(
+            game(note = "World Series - Game 3", series = "MIL leads series 2-0")
+        )
+
+        assertEquals(
+            listOf(
+                GameDetailRow("Round", "World Series - Game 3"),
+                GameDetailRow("Playoff series", "MIL leads series 2-0"),
+            ),
+            rows
+        )
     }
 
     @Test

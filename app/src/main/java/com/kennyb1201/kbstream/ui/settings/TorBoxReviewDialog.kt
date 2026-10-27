@@ -99,11 +99,7 @@ internal fun TorBoxReviewDialog(
     androidx.compose.ui.window.Dialog(onDismissRequest = onKeep) {
         KBDialogPanel(title = "Unowned cloud titles") {
             Text(
-                text = "These titles are in your TorBox cloud and in this profile's " +
-                    "list, but nothing says whose they are: no profile has watched " +
-                    "them and no other profile lists them. The selected ones were " +
-                    "added by the sync. Untick anything that is yours, then remove " +
-                    "the rest.",
+                text = UNOWNED_REVIEW_BODY,
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
@@ -113,9 +109,7 @@ internal fun TorBoxReviewDialog(
                 style = MaterialTheme.typography.labelSmall
             )
             Text(
-                text = "Removing also drops the MDBList and Trakt copies where those " +
-                    "APIs allow it. Simkl has no removal call: a Simkl copy is hidden " +
-                    "here and can be removed on simkl.com.",
+                text = UNOWNED_REVIEW_REMOVAL,
                 color = KBTextLo,
                 style = MaterialTheme.typography.labelSmall
             )
@@ -257,10 +251,31 @@ internal fun TorBoxReviewDialog(
 private val ROW_HEIGHT = 56.dp
 
 /**
+ * The queue's explanation, and what removal also touches - the same words in
+ * both panes' dialogs. Stated once here because the phone's twin differs only in
+ * its controls (see [com.kennyb1201.kbstream.ui.mobile.TorBoxReviewDialogMobile]).
+ */
+internal const val UNOWNED_REVIEW_BODY =
+    "These titles are in your TorBox cloud and in this profile's list, but nothing " +
+        "says whose they are: no profile has watched them and no other profile lists " +
+        "them. The selected ones were added by the sync. Untick anything that is " +
+        "yours, then remove the rest."
+
+internal const val UNOWNED_REVIEW_REMOVAL =
+    "Removing also drops the MDBList and Trakt copies where those APIs allow it. " +
+        "Simkl has no removal call: a Simkl copy is hidden here and can be removed " +
+        "on simkl.com."
+
+/**
  * The queue's own count, stated against the record it came from: the viewer can
  * see that every filed title is either listed or accounted for.
+ *
+ * Internal rather than private because the phone's twin
+ * ([com.kennyb1201.kbstream.ui.mobile.TorBoxReviewDialogMobile]) states the same
+ * line in the same words - the two dialogs differ in their controls, never in
+ * what they tell the viewer.
  */
-private fun filedCountLine(shown: Int, filed: Int): String = when {
+internal fun filedCountLine(shown: Int, filed: Int): String = when {
     filed <= 0 -> "Nothing filed for review."
     shown <= 0 -> "None of the $filed filed titles is still in this list."
     shown < filed ->
@@ -269,7 +284,7 @@ private fun filedCountLine(shown: Int, filed: Int): String = when {
     else -> "All $filed filed titles are listed."
 }
 
-private fun String.isSeries(): Boolean = lowercase() == "tv" || lowercase() == "series"
+internal fun String.isSeries(): Boolean = lowercase() == "tv" || lowercase() == "series"
 
-private fun com.kennyb1201.kbstream.data.library.LibraryOrigin.isSyncMark(): Boolean =
+internal fun com.kennyb1201.kbstream.data.library.LibraryOrigin.isSyncMark(): Boolean =
     this == com.kennyb1201.kbstream.data.library.LibraryOrigin.TORBOX_SYNC

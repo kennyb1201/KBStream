@@ -1887,6 +1887,8 @@ private fun GameCard(
                 }
             }
 
+            SeriesChip(text = game.series)
+
             ContextLine(week = game.week, venue = game.venue)
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -2434,6 +2436,34 @@ private fun NoteChip(text: String?) {
 }
 
 /**
+ * The playoff series a card is being played in - "MIL leads series 2-0" - as a
+ * solid pill of its own.
+ *
+ * During a series the score on the card says nothing about who is ahead in it,
+ * and that is the one fact a postseason viewer opens the hub to check. It gets
+ * its own line rather than a third chip beside the round and the network: the
+ * feed's sentence is long, and the row it would join already carries the status
+ * and two chips. Absent on every regular-season game, where it draws nothing at
+ * all rather than a gap.
+ */
+@Composable
+private fun SeriesChip(text: String?) {
+    if (text.isNullOrBlank()) return
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = KBVoid,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .background(KBAccent, KBShapeChip)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
+}
+
+/**
  * The line that places the event inside its own season: "Week 6" where the feed
  * numbers the week (football), the venue otherwise - the stadium and its city
  * ("Rocket Arena · Cleveland, OH"), the track on a Grand Prix.
@@ -2895,54 +2925,116 @@ private fun StandingsBody(
         )
 
         else -> {
+            // A LONG table is narrowed to one conference at a time. A college
+            // document ships every one of its conferences as a sibling - 31 of
+            // them for basketball - so the table was one endless list a viewer
+            // had to scroll through to reach the one they opened STANDINGS for.
+            // ALL is the whole document, exactly as before.
+            val conferences = SportsStandingsLayout.conferences(groups)
+            var conference by remember(league.path) { mutableStateOf<String?>(null) }
+            val table = remember(groups, conference) {
+                SportsStandingsLayout.filter(groups, conference)
+            }
             val columns = SportsStandingsLayout.columns(
-                groups = groups,
+                groups = table,
                 widthDp = LocalConfiguration.current.screenWidthDp
             )
-            if (columns.size == 2) {
-                // Two conferences side by side, each stacking its own divisions
-                // - the same rows for half the vertical scroll. The two columns
-                // scroll independently, so each takes a scroll state of its own;
-                // they share one gutter with the game grid beside it.
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
-                ) {
-                    columns.forEachIndexed { index, columnGroups ->
-                        // One scroll state per column, and the two report which
-                        // of them holds the D-pad so the screen's scroll
-                        // fallback knows which list a Down/Up should move.
-                        //
-                        // Keyed by league: an unkeyed state is remembered across
-                        // a league change (same call site, same slot), so the
-                        // next table opened at the previous one's scroll depth -
-                        // mid-division, under a heading the viewer never passed.
-                        key(league.path, index) {
-                            val columnState = rememberLazyGridState()
-                            StandingsColumn(
-                                groups = columnGroups,
-                                listState = columnState,
-                                leaguePath = league.path,
-                                favoriteKeys = favoriteKeys,
-                                onToggleTeam = onToggleTeam,
-                                onColumnFocusChanged = onColumnFocusChanged,
-                                modifier = Modifier.weight(1f)
-                            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (SportsStandingsLayout.needsConferenceFilter(groups)) {
+                    StandingsConferenceFilter(
+                        conferences = conferences,
+                        selected = conference,
+                        onSelect = { conference = it }
+                    )
+                }
+                if (columns.size == 2) {
+                    // Two conferences side by side, each stacking its own
+                    // divisions - the same rows for half the vertical scroll.
+                    // The two columns scroll independently, so each takes a
+                    // scroll state of its own; they share one gutter with the
+                    // game grid beside it.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
+                    ) {
+                        columns.forEachIndexed { index, columnGroups ->
+                            // One scroll state per column, and the two report
+                            // which of them holds the D-pad so the screen's
+                            // scroll fallback knows which list a Down/Up should
+                            // move.
+                            //
+                            // Keyed by league: an unkeyed state is remembered
+                            // across a league change (same call site, same
+                            // slot), so the next table opened at the previous
+                            // one's scroll depth - mid-division, under a
+                            // heading the viewer never passed.
+                            key(league.path, index) {
+                                val columnState = rememberLazyGridState()
+                                StandingsColumn(
+                                    groups = columnGroups,
+                                    listState = columnState,
+                                    leaguePath = league.path,
+                                    ties = league.hasTies,
+                                    points = league.pointsTable,
+                                    conference = conference,
+                                    favoriteKeys = favoriteKeys,
+                                    onToggleTeam = onToggleTeam,
+                                    onColumnFocusChanged = onColumnFocusChanged,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
+                } else {
+                    // One list, and the SCREEN's own scroll state: the D-pad's
+                    // scroll fallback is built on that state, and a
+                    // single-column body is the case it has to keep working
+                    // for.
+                    StandingsColumn(
+                        groups = columns.first(),
+                        listState = listState,
+                        leaguePath = league.path,
+                        ties = league.hasTies,
+                        points = league.pointsTable,
+                        conference = conference,
+                        favoriteKeys = favoriteKeys,
+                        onToggleTeam = onToggleTeam,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
-            } else {
-                // One list, and the SCREEN's own scroll state: the D-pad's
-                // scroll fallback is built on that state, and a single-column
-                // body is the case it has to keep working for.
-                StandingsColumn(
-                    groups = columns.first(),
-                    listState = listState,
-                    leaguePath = league.path,
-                    favoriteKeys = favoriteKeys,
-                    onToggleTeam = onToggleTeam,
-                    modifier = Modifier.fillMaxSize()
-                )
+            }
+        }
+    }
+}
+
+/**
+ * The conference picker above a long table: ALL, then each top-level group.
+ *
+ * Only drawn where [SportsStandingsLayout.needsConferenceFilter] asks for it, so
+ * a two-conference league is untouched. The chips share the GAMES / STANDINGS
+ * toggle's own pill, since they are the same kind of choice one step further in.
+ */
+@Composable
+private fun StandingsConferenceFilter(
+    conferences: List<String>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 8.dp),
+    ) {
+        item(key = "conference-all") {
+            LeagueViewChip("ALL", selected == null) { onSelect(null) }
+        }
+        itemsIndexed(
+            items = conferences,
+            key = { _, name -> name }
+        ) { _, name ->
+            LeagueViewChip(SportsStandingsLayout.label(name).uppercase(), selected == name) {
+                onSelect(name)
             }
         }
     }
@@ -2962,6 +3054,15 @@ private fun StandingsColumn(
     listState: LazyGridState,
     /** The league this table belongs to; scopes a row's follow key. */
     leaguePath: String?,
+    /** Whether the league's table carries a T column - see [SportsLeague.hasTies]. */
+    ties: Boolean = true,
+    /** Whether the table is read on points - see [SportsLeague.pointsTable]. */
+    points: Boolean = false,
+    /**
+     * The conference picked above the table, or null for the whole document.
+     * A different pick is a different table, and starts at its own top.
+     */
+    conference: String? = null,
     favoriteKeys: Set<String> = emptySet(),
     onToggleTeam: ((SportsTeam, Boolean) -> Unit)? = null,
     /**
@@ -2976,14 +3077,9 @@ private fun StandingsColumn(
     // Entering the table starts at its top. The single-column body shares the
     // screen's list state with the games grid, and the two-column body's states
     // are keyed by league above - so without this a GAMES -> STANDINGS toggle
-    // opened the new table at the depth the cards were left at.
-    LaunchedEffect(leaguePath) { listState.scrollToItem(0) }
-
-    // Whether this table is read on POINTS (soccer) rather than on a win
-    // percentage and games behind, which the feed does not even publish there.
-    // Per column, from the rows themselves: presence of the stat is the rule, so
-    // no league list has to be kept in the UI.
-    val pointsTable = groups.any { group -> group.entries.any { it.points.isNotBlank() } }
+    // opened the new table at the depth the cards were left at. A conference
+    // picked above is a new table too, and starts at its own top.
+    LaunchedEffect(leaguePath, conference) { listState.scrollToItem(0) }
 
     HubList(
         listState = listState,
@@ -3006,7 +3102,9 @@ private fun StandingsColumn(
             item(key = "$groupKey-head") {
                 StandingsGroupHeader(name = group.name, count = group.entries.size)
             }
-            item(key = "$groupKey-cols") { StandingsColumnHeader(points = pointsTable) }
+            item(key = "$groupKey-cols") {
+                StandingsColumnHeader(points = points, ties = ties)
+            }
             itemsIndexed(
                 group.entries,
                 key = { _, entry ->
@@ -3020,7 +3118,8 @@ private fun StandingsColumn(
                 val followed = team.favoriteKey in favoriteKeys
                 StandingsRow(
                     entry = entry,
-                    points = pointsTable,
+                    points = points,
+                    ties = ties,
                     followed = followed,
                     onToggleFollow = {
                         onToggleTeam?.invoke(team, !followed)
@@ -3062,9 +3161,12 @@ private fun StandingsGroupHeader(name: String, count: Int) {
  * that table is read, and PCT/GB/STRK are stats the feed does not publish for it
  * - so drawing them produced three empty columns where the one number that
  * matters was missing (audit C8, 2026-10-23).
+ *
+ * And a league that cannot tie drops the T column rather than labelling a column
+ * of zeroes - see [SportsLeague.hasTies].
  */
 @Composable
-private fun StandingsColumnHeader(points: Boolean = false) {
+private fun StandingsColumnHeader(points: Boolean = false, ties: Boolean = true) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3080,8 +3182,12 @@ private fun StandingsColumnHeader(points: Boolean = false) {
             color = KBTextLo,
             modifier = Modifier.weight(1f)
         )
-        (if (points) listOf("W", "D", "L", "PTS") else listOf("W", "L", "T", "PCT", "GB", "STRK"))
-            .forEach { label ->
+        val labels = when {
+            points -> listOf("W", "D", "L", "PTS")
+            ties -> listOf("W", "L", "T", "PCT", "GB", "STRK")
+            else -> listOf("W", "L", "PCT", "GB", "STRK")
+        }
+        labels.forEach { label ->
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -3097,6 +3203,8 @@ private fun StandingsColumnHeader(points: Boolean = false) {
 private fun StandingsRow(
     entry: StandingEntry,
     points: Boolean = false,
+    /** Whether this league can tie, so the row carries a T column. */
+    ties: Boolean = true,
     followed: Boolean,
     onToggleFollow: () -> Unit
 ) {
@@ -3146,7 +3254,9 @@ private fun StandingsRow(
             } else {
                 StandingsStat(entry.wins.toString())
                 StandingsStat(entry.losses.toString())
-                StandingsStat(entry.ties.toString())
+                // A league that cannot tie has nothing to report here: ESPN
+                // still ships the stat, as a hard 0.
+                if (ties) StandingsStat(entry.ties.toString())
                 StandingsStat(standingsText(entry.winPercent))
                 StandingsStat(standingsText(entry.gamesBehind))
                 StandingsStat(standingsText(entry.streak))

@@ -649,6 +649,60 @@ class EspnSportsRepositoryTest {
         assertEquals("ZVEREV", game.away.abbreviation)
     }
 
+    @Test
+    fun `a tennis tournament reads its fixtures out of the event's groupings`() {
+        // ESPN ships a tournament as ONE event with no `competitions` of its own:
+        // each draw (Men's Singles, Women's Singles) is a grouping holding that
+        // draw's matches. Reading only the top-level array found no game at all,
+        // and a body whose events all yield nothing is the STRICT parse's
+        // failure - so the Tennis tab drew "Couldn't reach ESPN" over a healthy
+        // response (HTTP 200, the whole ATP field).
+        val atp = """
+            {
+              "events": [
+                {
+                  "id": "10-2026",
+                  "name": "Erste Bank Open",
+                  "date": "2026-10-24T04:00Z",
+                  "groupings": [
+                    {
+                      "grouping": { "slug": "mens-singles", "displayName": "Men's Singles" },
+                      "competitions": [
+                        {
+                          "id": "187149",
+                          "competitors": [
+                            { "homeAway": "home", "athlete": { "displayName": "Jannik Sinner" } },
+                            { "homeAway": "away", "athlete": { "displayName": "Alexander Zverev" } }
+                          ]
+                        },
+                        {
+                          "id": "187150",
+                          "competitors": [
+                            { "homeAway": "home", "athlete": { "displayName": "Carlos Alcaraz" } },
+                            { "homeAway": "away", "athlete": { "displayName": "Novak Djokovic" } }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val games = parseScoreboard(atp, "tennis/atp")
+
+        assertEquals(2, games.size)
+        assertEquals("Jannik Sinner", games[0].home.displayName)
+        assertEquals("Carlos Alcaraz", games[1].home.displayName)
+        // Each fixture keeps its own competition id, so two matches of one
+        // tournament are two games rather than one shared card.
+        assertEquals("10-2026:187149", games[0].id)
+        assertEquals("10-2026:187150", games[1].id)
+        // And the body is a scoreboard, not a fault: the tab shows the games.
+        assertTrue(parseScoreboardOrNull(atp, "tennis/atp") != null)
+    }
+
     // ── Tournaments ─────────────────────────────────────────────────
 
     @Test
@@ -1007,6 +1061,91 @@ class EspnSportsRepositoryTest {
 
         assertEquals("Denver, CO", game.venue)
         assertEquals("Preseason", game.note)
+    }
+
+    @Test
+    fun `a playoff series is read from the competition's own summary`() {
+        // The World Series as the feed sends it: the game itself is 0-0 before
+        // first pitch, and only the series says Milwaukee is two games up. Same
+        // shape in every team sport that plays one (an NBA round, a Stanley Cup
+        // Final), which is why nothing here is league-specific.
+        val postseason = """
+            {
+              "events": [
+                {
+                  "id": "401",
+                  "name": "Milwaukee Brewers at Tampa Bay Rays",
+                  "date": "2026-10-26T00:00Z",
+                  "competitions": [
+                    {
+                      "notes": [{ "headline": "World Series - Game 3" }],
+                      "series": {
+                        "type": "playoff",
+                        "title": "Playoff Series",
+                        "summary": "MIL leads series 2-0",
+                        "completed": false,
+                        "totalCompetitions": 7,
+                        "competitors": [
+                          { "id": "8", "wins": 2 },
+                          { "id": "30", "wins": 0 }
+                        ]
+                      },
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "team": { "abbreviation": "TB", "displayName": "Tampa Bay Rays" }
+                        },
+                        {
+                          "homeAway": "away",
+                          "team": { "abbreviation": "MIL", "displayName": "Milwaukee Brewers" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val game = parseScoreboard(postseason, "baseball/mlb").single()
+
+        assertEquals("MIL leads series 2-0", game.series)
+        assertEquals("World Series - Game 3", game.note)
+    }
+
+    @Test
+    fun `a regular-season game has no series line`() {
+        // No series object at all, and a series object with no summary, are the
+        // same answer: nothing to draw. The card must not invent a 0-0 series.
+        val regular = """
+            {
+              "events": [
+                {
+                  "id": "402",
+                  "name": "Boston Red Sox at New York Yankees",
+                  "date": "2026-06-01T23:05Z",
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "team": { "abbreviation": "NYY", "displayName": "New York Yankees" }
+                        },
+                        {
+                          "homeAway": "away",
+                          "team": { "abbreviation": "BOS", "displayName": "Boston Red Sox" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        assertNull(parseScoreboard(regular, "baseball/mlb").single().series)
+        assertNull(espnSeries(null))
+        assertNull(espnSeries(org.json.JSONObject("{ \"summary\": \"  \" }")))
     }
 
     @Test

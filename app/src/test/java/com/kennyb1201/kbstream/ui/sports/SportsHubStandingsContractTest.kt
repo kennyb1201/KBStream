@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,6 +25,8 @@ class SportsHubStandingsContractTest {
     private val model: String by lazy { flat(VIEW_MODEL) }
     private val repository: String by lazy { flat(REPOSITORY) }
     private val sportModels: String by lazy { flat("com/kennyb1201/kbstream/data/sports/SportsModels.kt") }
+    private val mobile: String by lazy { flat(MOBILE) }
+    private val orderRule: String by lazy { flat(ORDER_RULE) }
 
     @Test
     fun `the standings toggle is drawn only where a table exists`() {
@@ -82,7 +85,9 @@ class SportsHubStandingsContractTest {
         )
         assertTrue(
             "and one column header per group, not one for the whole screen",
-            hub.contains("item(key = \"\$groupKey-cols\") { StandingsColumnHeader(points = pointsTable) }")
+            hub.contains(
+                "item(key = \"\$groupKey-cols\") { StandingsColumnHeader(points = points, ties = ties) }"
+            )
         )
         assertTrue(
             "the labels are the spec's, in order",
@@ -91,9 +96,9 @@ class SportsHubStandingsContractTest {
         assertTrue(
             "and a POINTS table labels its own four columns - soccer is read on points, and the feed " +
                 "publishes neither a win percentage nor games behind for it",
-            hub.contains("if (points) listOf(\"W\", \"D\", \"L\", \"PTS\") else") &&
-                hub.contains("StandingsColumnHeader(points = pointsTable)") &&
-                hub.contains("pointsTable = groups.any { group -> group.entries.any { it.points.isNotBlank() } }")
+            hub.contains("points -> listOf(\"W\", \"D\", \"L\", \"PTS\")") &&
+                hub.contains("StandingsColumnHeader(points = points, ties = ties)") &&
+                hub.contains("points = league.pointsTable")
         )
         assertTrue(
             "and the row draws the points value last, behind wins, draws and losses",
@@ -200,7 +205,7 @@ class SportsHubStandingsContractTest {
         assertTrue(
             "the split is the pure rule's, from the groups and the display width",
             hub.contains(
-                "val columns = SportsStandingsLayout.columns( groups = groups, widthDp = LocalConfiguration.current.screenWidthDp )"
+                "val columns = SportsStandingsLayout.columns( groups = table, widthDp = LocalConfiguration.current.screenWidthDp )"
             )
         )
         assertTrue(
@@ -251,6 +256,94 @@ class SportsHubStandingsContractTest {
         )
     }
 
+    @Test
+    fun `a league that cannot tie drops the T column`() {
+        // The four that always play to a winner are marked so in the catalog:
+        // ESPN ships a `ties` stat on their tables and fills it with a hard 0,
+        // so a column read from the data alone was a column of zeroes.
+        assertEquals(
+            "the NBA, MLB, the WNBA and college basketball are the four that never tie",
+            4,
+            Regex("hasTies = false").findAll(sportModels).count()
+        )
+        assertTrue(
+            "the NFL keeps its T column, because a tie is a real result there",
+            sportModels.contains(
+                "SportsLeague(\"football/nfl\", \"NFL\", SportsKind.HEAD_TO_HEAD, hasStandings = true)"
+            )
+        )
+        assertTrue(
+            "the header drops T for a league that cannot tie",
+            hub.contains("ties -> listOf(\"W\", \"L\", \"T\", \"PCT\", \"GB\", \"STRK\")") &&
+                hub.contains("else -> listOf(\"W\", \"L\", \"PCT\", \"GB\", \"STRK\")")
+        )
+        assertTrue(
+            "and the row leaves the count out, so no column of zeroes is drawn",
+            hub.contains("if (ties) StandingsStat(entry.ties.toString())")
+        )
+        assertTrue(
+            "both bodies take the flag from the selected league",
+            hub.contains("ties = league.hasTies") && mobile.contains("ties = league.hasTies")
+        )
+    }
+
+    @Test
+    fun `a long table can be narrowed to one conference`() {
+        assertTrue(
+            "the picker is offered only where the shared rule asks for it",
+            hub.contains("if (SportsStandingsLayout.needsConferenceFilter(groups)) {")
+        )
+        assertTrue(
+            "and the table drawn under it is the filtered one",
+            hub.contains("SportsStandingsLayout.filter(groups, conference)")
+        )
+        assertTrue(
+            "ALL is the whole table, exactly as before",
+            hub.contains("LeagueViewChip(\"ALL\", selected == null)")
+        )
+        assertTrue(
+            "the phone draws the same picker, from the same rule",
+            mobile.contains("StandingsConferenceFilterMobile(") &&
+                mobile.contains("SportsStandingsLayout.label(name)")
+        )
+    }
+
+    @Test
+    fun `the table is read best record first, whatever order ESPN sent`() {
+        // The report: the NBA's standings were upside down, worst record at the
+        // top. Its document really does arrive that way (the 0-3 teams led the
+        // Eastern Conference), so the held table is ranked as it arrives.
+        assertTrue(
+            "the held table is ranked by the shared rule, on the league's own figure",
+            model.contains(
+                "val table = SportsStandingsOrder.sorted( groups = groups, " +
+                    "pointsTable = SportsLeagues.byPath(path)?.pointsTable == true )"
+            )
+        )
+        assertTrue(
+            "and the ranking is a stable sort, so equal records keep ESPN's own tiebreakers",
+            orderRule.contains("entries.sortedByDescending { entry -> rank(entry, pointsTable) }")
+        )
+    }
+
+    @Test
+    fun `a points table is the league's own fact, not a stat the feed reuses`() {
+        assertEquals(
+            "the four soccer leagues and the NHL are ranked on points",
+            5,
+            Regex("pointsTable = true").findAll(sportModels).count()
+        )
+        assertFalse(
+            "the shape is never inferred from ESPN's points stat - the NBA's is a point differential",
+            hub.contains("points.isNotBlank()") || mobile.contains("points.isNotBlank()")
+        )
+        assertTrue(
+            "both bodies take the flag from the selected league",
+            hub.contains("points = league.pointsTable") &&
+                mobile.contains("points = league.pointsTable")
+        )
+    }
+
     private fun slice(text: String, startMarker: String, endMarker: String): String {
         val start = text.indexOf(startMarker)
         assertTrue("$startMarker is missing", start >= 0)
@@ -284,5 +377,7 @@ class SportsHubStandingsContractTest {
         const val HUB = "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt"
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt"
         const val REPOSITORY = "com/kennyb1201/kbstream/data/sports/EspnSportsRepository.kt"
+        const val MOBILE = "com/kennyb1201/kbstream/ui/mobile/SportsHubScreenMobile.kt"
+        const val ORDER_RULE = "com/kennyb1201/kbstream/ui/sports/SportsStandingsOrder.kt"
     }
 }

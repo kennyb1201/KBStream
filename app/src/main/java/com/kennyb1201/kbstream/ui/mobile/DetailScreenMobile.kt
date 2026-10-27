@@ -65,6 +65,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import android.widget.Toast
+import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.download.DownloadIdentity
 import com.kennyb1201.kbstream.data.images.ImageOverrides
@@ -100,6 +101,7 @@ import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
+import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.MobileDivider
 import com.kennyb1201.kbstream.ui.components.touch.KBEpisodeRailCardTouch
@@ -132,6 +134,7 @@ import com.kennyb1201.kbstream.ui.detail.isEpisodeUnavailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -337,8 +340,17 @@ fun DetailScreenMobile(
                 posterUrl = posterUrl
             )
         }
+        // The Library toggle in the calls to action: "+" saves this title,
+        // "−" takes it back off, and a long press raises the same sheet every
+        // poster does (Add to Library / Add to list…).
+        //
+        // The mark is painted from the STORE, never from what the last press
+        // asked for: [LibraryAdds.revision] ticks when an add or a removal has
+        // actually finished, so an add made from that sheet - or from the
+        // picker behind it - flips the button without leaving the page.
         var inLibrary by remember(type, id) { mutableStateOf(false) }
-        LaunchedEffect(libraryTarget) {
+        var libraryMenu by remember { mutableStateOf(false) }
+        LaunchedEffect(libraryTarget, LibraryAdds.revision) {
             inLibrary = LibraryAdds.inMyList(context, libraryTarget)
         }
         // The TV's ladder, not "the add-on's logo, else the title": TMDB's
@@ -1144,6 +1156,60 @@ fun DetailScreenMobile(
                                     }
                                 }
                             }
+
+                            // Keep this title, after the trailer exactly as on
+                            // TV: the plus becomes a minus once it is saved, and
+                            // the same control takes it back off.
+                            KBCard(
+                                onClick = {
+                                    val wasSaved = inLibrary
+                                    LibraryAdds.toggle(context, libraryTarget) { nowSaved ->
+                                        inLibrary = nowSaved
+                                        val changed = nowSaved != wasSaved
+                                        Toast.makeText(
+                                            context,
+                                            when {
+                                                changed && nowSaved -> "Added to My List"
+                                                changed -> "Removed from My List"
+                                                wasSaved -> "Couldn't remove from My List"
+                                                else -> "Couldn't add to My List"
+                                            },
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                // Hold for the title's sheet, where the personal
+                                // lists live ("Add to list…").
+                                onLongClick = { libraryMenu = true },
+                                shape = KBShapePill,
+                                // A thumb-sized plate: the glyph is 22dp inside
+                                // it, so the icon-only control still meets the
+                                // 48dp touch target every other control here
+                                // has.
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(
+                                            if (inLibrary) {
+                                                R.drawable.ic_detail_remove
+                                            } else {
+                                                R.drawable.ic_detail_add
+                                            }
+                                        ),
+                                        // The glyph says it; TalkBack hears it.
+                                        contentDescription = if (inLibrary) {
+                                            "Remove from My List"
+                                        } else {
+                                            "Add to My List"
+                                        },
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
                         }
                         if (
                             normalizedType == "movie" &&
@@ -1154,29 +1220,6 @@ fun DetailScreenMobile(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 openMovie(fromStart = true)
-                            }
-                        }
-
-                        // Save the title being read. Hidden once it is on My
-                        // List (this page offers no remove, matching the
-                        // poster menus, which only add).
-                        if (!inLibrary) {
-                            KBButton(
-                                label = "ADD TO LIBRARY",
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                LibraryAdds.add(context, libraryTarget) { added ->
-                                    inLibrary = added
-                                    Toast.makeText(
-                                        context,
-                                        if (added) {
-                                            "Added to Library"
-                                        } else {
-                                            "Couldn't add to Library"
-                                        },
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
                             }
                         }
 
@@ -1700,6 +1743,19 @@ fun DetailScreenMobile(
                 ReviewDialog(
                     review = review,
                     onDismiss = { selectedReview = null }
+                )
+            }
+
+            // The Library button's hold: the title's own sheet, so
+            // "Add to list…" behaves here exactly as it does from a poster.
+            // Its Add to Library / In Library row is this button's long form;
+            // either way the mark repaints from the store (LibraryAdds.revision).
+            if (libraryMenu) {
+                PosterContextMenu(
+                    title = displayName.ifBlank { id },
+                    actions = emptyList(),
+                    onDismiss = { libraryMenu = false },
+                    libraryTarget = libraryTarget
                 )
             }
 

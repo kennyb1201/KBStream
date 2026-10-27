@@ -1053,6 +1053,7 @@ private fun GameCardMobile(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.padding(top = 6.dp)
             ) {
+                SeriesChipMobile(text = game.series)
                 NoteChipMobile(
                     text = game.note?.takeIf { note ->
                         context == null || !note.equals(context, ignoreCase = true)
@@ -1214,6 +1215,30 @@ private fun NoteChipMobile(text: String?) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .background(KBAccent.copy(alpha = 0.14f), KBShapeChip)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
+}
+
+/**
+ * The playoff series a card is being played in - "MIL leads series 2-0" - as a
+ * solid pill leading the card's chips.
+ *
+ * The phone's twin of the TV card's SeriesChip: same sentence, same prominence,
+ * because during a series the score on the card says nothing about who is ahead
+ * in it. Absent on every regular-season game, and it draws nothing at all then.
+ */
+@Composable
+private fun SeriesChipMobile(text: String?) {
+    if (text.isNullOrBlank()) return
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = KBVoid,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .background(KBAccent, KBShapeChip)
             .padding(horizontal = 8.dp, vertical = 3.dp)
     )
 }
@@ -1461,50 +1486,104 @@ private fun StandingsBodyMobile(
         else -> {
             // A phone is always the one-column body: the two-column split needs
             // 900dp+ of width, which is the TV's own threshold.
-            val columns = SportsStandingsLayout.columns(groups, widthDp = 0)
-            val shown = columns.firstOrNull().orEmpty()
+            //
+            // A LONG table (a college document is every one of its conferences,
+            // 31 of them for basketball) is narrowed to one at a time: on a
+            // phone the whole list was a screen after screen of rows before the
+            // conference a viewer wanted.
+            val conferences = SportsStandingsLayout.conferences(groups)
+            var conference by remember(league.path) { mutableStateOf<String?>(null) }
+            val shown = remember(groups, conference) {
+                SportsStandingsLayout.filter(groups, conference)
+            }
             // A table of its own league starts at its top: the list state is
             // remembered across a league change (same call site), so the next
-            // table opened at the previous one's depth.
-            val tableState = remember(league.path) {
+            // table opened at the previous one's depth. A conference is a
+            // different table too.
+            val tableState = remember(league.path, conference) {
                 androidx.compose.foundation.lazy.LazyListState()
             }
-            LazyColumn(
-                state = tableState,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                shown.forEachIndexed { index, group ->
-                    // Position as well as name: two same-named groups in one
-                    // column (a flattened college table) are duplicate keys,
-                    // which is a crash.
-                    val groupKey = "std-$index-" + group.name
-                    item(key = "$groupKey-head") {
-                        StandingsGroupHeaderMobile(
-                            name = group.name,
-                            count = group.entries.size
-                        )
-                    }
-                    itemsIndexed(
-                        items = group.entries,
-                        key = { _, entry ->
-                            "$groupKey-" + entry.abbreviation + "-" + entry.displayName
-                        },
-                        contentType = { _, _ -> "standing-row" }
-                    ) { _, entry ->
-                        val team = standingsTeam(league.path, entry)
-                        val followed = team.favoriteKey in favoriteKeys
-                        Box(modifier = Modifier.animateItem()) {
-                            StandingRowMobile(
-                                entry = entry,
-                                followed = followed,
-                                onToggleFollow = { onToggleTeam(team, !followed) }
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (SportsStandingsLayout.needsConferenceFilter(groups)) {
+                    StandingsConferenceFilterMobile(
+                        conferences = conferences,
+                        selected = conference,
+                        onSelect = { conference = it }
+                    )
+                }
+                LazyColumn(
+                    state = tableState,
+                    contentPadding =
+                        PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    shown.forEachIndexed { index, group ->
+                        // Position as well as name: two same-named groups in
+                        // one column (a flattened college table) are duplicate
+                        // keys, which is a crash.
+                        val groupKey = "std-$index-" + group.name
+                        item(key = "$groupKey-head") {
+                            StandingsGroupHeaderMobile(
+                                name = group.name,
+                                count = group.entries.size
                             )
+                        }
+                        itemsIndexed(
+                            items = group.entries,
+                            key = { _, entry ->
+                                "$groupKey-" + entry.abbreviation + "-" + entry.displayName
+                            },
+                            contentType = { _, _ -> "standing-row" }
+                        ) { _, entry ->
+                            val team = standingsTeam(league.path, entry)
+                            val followed = team.favoriteKey in favoriteKeys
+                            Box(modifier = Modifier.animateItem()) {
+                                StandingRowMobile(
+                                    entry = entry,
+                                    points = league.pointsTable,
+                                    ties = league.hasTies,
+                                    followed = followed,
+                                    onToggleFollow = { onToggleTeam(team, !followed) }
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The conference picker above a long table: ALL, then each top-level group.
+ *
+ * Drawn only where [SportsStandingsLayout.needsConferenceFilter] asks for it, so
+ * the NFL's two conferences keep their plain body. All is the whole table, which
+ * is what the phone drew before the picker existed.
+ */
+@Composable
+private fun StandingsConferenceFilterMobile(
+    conferences: List<String>,
+    selected: String?,
+    onSelect: (String?) -> Unit
+) {
+    LazyRow(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        item(key = "conference-all") {
+            LeagueViewChipMobile("ALL", selected == null) { onSelect(null) }
+        }
+        itemsIndexed(
+            items = conferences,
+            key = { _, name -> name }
+        ) { _, name ->
+            LeagueViewChipMobile(
+                label = SportsStandingsLayout.label(name).uppercase(),
+                selected = selected == name
+            ) { onSelect(name) }
         }
     }
 }
@@ -1536,6 +1615,10 @@ private fun StandingsGroupHeaderMobile(name: String, count: Int) {
 @Composable
 private fun StandingRowMobile(
     entry: StandingEntry,
+    /** Whether the table is read on points - see [SportsLeague.pointsTable]. */
+    points: Boolean = false,
+    /** Whether this league can tie, so the row carries a draws count. */
+    ties: Boolean = true,
     followed: Boolean,
     onToggleFollow: () -> Unit
 ) {
@@ -1569,18 +1652,19 @@ private fun StandingRowMobile(
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
-                // A POINTS table (soccer) reads W-D-L and the points behind it;
-                // the TV's four-column shape, on one line. Anything else keeps
-                // the six stats it always drew.
-                val pointsTable = entry.points.isNotBlank()
+                // A POINTS table (soccer, the NHL) reads W-D-L and the points
+                // behind it; the TV's four-column shape, on one line. Anything
+                // else keeps the stats it always drew, less the T for a league
+                // that cannot tie.
                 Text(
-                    // The six table columns, on one line: a phone cannot hold
-                    // six fixed-width columns beside a team name, and dropping
-                    // any of them would make the table say less than the TV's.
-                    text = if (pointsTable) {
-                        "${entry.wins}-${entry.ties}-${entry.losses}"
-                    } else {
-                        "${entry.wins}-${entry.losses}-${entry.ties}"
+                    // The table's columns, on one line: a phone cannot hold six
+                    // fixed-width columns beside a team name, and dropping any
+                    // of them would make the table say less than the TV's - but
+                    // a league that cannot tie has no draws count to show.
+                    text = when {
+                        points -> "${entry.wins}-${entry.ties}-${entry.losses}"
+                        ties -> "${entry.wins}-${entry.losses}-${entry.ties}"
+                        else -> "${entry.wins}-${entry.losses}"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = OswaldFamily,
@@ -1588,7 +1672,7 @@ private fun StandingRowMobile(
                     color = KBTextHi
                 )
                 Text(
-                    text = if (pointsTable) {
+                    text = if (points) {
                         "PTS ${entry.points}"
                     } else {
                         "PCT ${standingsTextMobile(entry.winPercent)} · " +

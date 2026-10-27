@@ -657,6 +657,19 @@ details, watched toggle, add to library, hide). Spoiler-free mode hides an
 unstarted episode's name on the row and in the menu, and an unaired episode in a
 trusted season is marked UNAVAILABLE.
 
+**The title's own page is one press from the Library (2026-10-27).** Both Detail
+pages carry a plus/minus toggle in the action row, right after the trailer: `+`
+saves the title this page is about and becomes `−` once it is saved, and the same
+press takes it back off (`LibraryAdds.toggle` -> `LibraryMirror
+.removeFromLibrary`, the Library tab's own remove, so every connected tracker
+drops its watchlist copy rather than re-merging the title back). A hold raises
+the shared title menu, which is where `Add to list…` lives. The mark is painted
+from the store on `LibraryAdds.revision`, not from the press that preceded it,
+so an add made through the menu - which resolves an IMDb id first, long after
+that menu is gone - still flips the button, and a failed add cannot paint a
+save. The phone's old full-width `ADD TO LIBRARY` row is gone: it could only add,
+and the toggle does both. (`DetailAuditContractTest`.)
+
 Both field reports from 2026-10-20 are closed here. A cast tile draws the
 character under the actor's name, in the TV card's own slot and type
 (`KBTextLo`, `labelSmall`, one line, centred) - the tile was reading
@@ -1002,8 +1015,11 @@ scroll: LIVE NOW, TOURNAMENTS, UPCOMING, FINAL, with the TV's own partition and
 favourites-first order (`SportsGameOrder`), the shared LIVE beat (one clock,
 held while a sheet is open, still for a reduced-motion viewer), and the card's
 full content - marks with letter fallbacks, rank/record, stars, possession ball,
-score, situation, status, note/broadcast chips, week/venue and the channel line
-with its three honest "no channel" sentences.
+score, situation, status, the playoff-series pill ("MIL LEADS SERIES 2-0") and
+the note/broadcast chips, week/venue and the channel line with its three honest
+"no channel" sentences. The series is the TV card's own line and the sheet's
+"Playoff series" row, read from ESPN's `series.summary` in every team sport that
+plays one.
 
 A tap opens the card's sheet: matchup header, score, the stats block under the
 game's own `hasStats` gate (win probability, comparison rows, last play), the
@@ -1012,7 +1028,10 @@ the scrolling middle - with the disabled button carrying
 `SportsDetailRules.watchLabel`'s reason. A long press opens the follow dialog
 for the game's two teams. Standings are the league's table, one column (a phone
 has no 900dp for the TV's two-conference body), still followable per row and
-still showing every W/L/T/PCT/GB/STRK figure. The leagues panel (toggle, ▲▼
+still showing the TV's own figures - W/L/T/PCT/GB/STRK, without the T column on
+a league that cannot tie. A long table (college) is narrowed to one conference
+by a chip row over it, ALL first, from the same `SportsStandingsLayout` rule the
+TV uses. The leagues panel (toggle, ▲▼
 order, game reminders, forget channel memory) and the follow dialog are ordinary
 dialogs.
 
@@ -1030,7 +1049,7 @@ Parity notes (not bugs to fix):
   slat opened at the old league's offset). A fresh entry with live games in
   hand also starts at the top: the remembered offset is stale when the slate
   is in play.
-- The six standings columns collapse onto two lines per row (the counts, then
+- The standings columns collapse onto two lines per row (the counts, then
   PCT/GB/STRK) rather than being dropped - the table says no less than the TV's.
 
 ### Settings
@@ -1039,6 +1058,13 @@ Parity notes (not bugs to fix):
 `SettingsPane` / `SettingsGroup` (labels, order and blurbs), shows the grouped
 list as the page, and pushes one pane at a time. BACK (the system gesture or the
 on-screen button) returns to the list first, then leaves Settings.
+
+**Downloads is a section of its own** at the top of that list, not one of the
+panes: it is a phone feature, and `SettingsPane` is the television's own pane
+inventory, so it is not a member of that enum. Its page is the queue (one row
+per download, play/pause/retry/delete) plus the two switches that govern it
+(download over cellular, delete after finishing) - the switches used to be the
+last block of the Playback pane.
 
 Ported panes and what they write:
 
