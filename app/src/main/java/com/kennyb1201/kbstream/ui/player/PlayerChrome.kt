@@ -207,22 +207,33 @@ class PlayerChrome(
     /** Whether scrubbing is in progress, so a tick does not fight the drag. */
     private var scrubbing = false
 
-    private val hideRunnable = Runnable {
-        // A panel that owns the screen answers no here, and the bar stays up
-        // until whatever raised the panel lowers it again - see
-        // PlayerChromeHost.chromeMayAutoHide. The countdown REPOSTS rather than
-        // dying: it used to run once, so a panel that outlived it (Settings open
-        // for more than the auto-hide delay, which is ordinary) left the overlay
-        // sitting over the picture until the next button press, because nothing
-        // re-armed the timer when the panel closed - the panel dismissals only
-        // hand focus back (audit U-F1, 2026-10-27). Reposted, the bar drops on
-        // the first beat after whatever is holding it down lets go.
-        if (!host.chromeMayAutoHide()) {
-            handler.postDelayed(this, autoHideMs)
-            return@Runnable
+    /**
+     * The auto-hide countdown.
+     *
+     * An object expression, not a SAM lambda: the countdown REPOSTS ITSELF while
+     * a panel holds the bar up (below), and inside a lambda `this` is the chrome,
+     * not the runnable - so the repost would hand the handler the wrong object
+     * (and does not compile). Here `this` IS the runnable being posted.
+     */
+    private val hideRunnable = object : Runnable {
+        override fun run() {
+            // A panel that owns the screen answers no here, and the bar stays up
+            // until whatever raised the panel lowers it again - see
+            // PlayerChromeHost.chromeMayAutoHide. The countdown REPOSTS rather than
+            // dying: it used to run once, so a panel that outlived it (Settings
+            // open for more than the auto-hide delay, which is ordinary) left the
+            // overlay sitting over the picture until the next button press,
+            // because nothing re-armed the timer when the panel closed - the panel
+            // dismissals only hand focus back (audit U-F1, 2026-10-27). Reposted,
+            // the bar drops on the first beat after whatever is holding it down
+            // lets go.
+            if (!host.chromeMayAutoHide()) {
+                handler.postDelayed(this, autoHideMs)
+                return
+            }
+            // An engine with its own teardown takes the bar down itself.
+            if (!host.onChromeAutoHide()) hide()
         }
-        // An engine with its own teardown takes the bar down itself.
-        if (!host.onChromeAutoHide()) hide()
     }
 
     init {

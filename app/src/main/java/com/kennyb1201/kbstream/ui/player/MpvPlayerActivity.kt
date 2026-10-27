@@ -3262,6 +3262,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // this stream, exactly as the launch path does.
         streamHeaders = stream.requestHeaders
         currentSourceLabel = stream.sourceLabel()
+        // The picker's own index for this source, for the trace line below. The
+        // MPV engine keeps no running index of its own (the Media3 ladder does,
+        // and its trace reads that field), so it is derived here from the list
+        // the picker actually showed - -1 when the stream is not in it, which is
+        // the honest answer for a source handed in from outside the list.
+        val sourceIndex = sources.indexOfFirst { it.url == newUrl }
         // Into the session trace: a source switch is one of the events a binge
         // report has to explain ("the same episode played from a different
         // provider"), and only this engine's own ring had it - the session ring
@@ -3269,7 +3275,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // between (audit S-I11, 2026-10-27).
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
             "source switch: s=${season?.toString() ?: "-"} e=${episode?.toString() ?: "-"} " +
-                "index=$currentSourceIndex/${sources.size} auto=$isAutoRecovery " +
+                "index=$sourceIndex/${sources.size} auto=$isAutoRecovery " +
                 "label=$currentSourceLabel"
         )
         currentBadges = stream.badges
