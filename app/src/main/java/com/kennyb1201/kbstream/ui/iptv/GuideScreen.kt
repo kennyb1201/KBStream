@@ -142,6 +142,16 @@ private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
 private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
 
+/**
+ * How often the program-search dialog re-reads the clock.
+ *
+ * It is open for seconds at a time and what its rows DO changes at a program
+ * boundary ([programHitPress]); half a minute is fine-grained enough that a
+ * hit never offers a reminder for something already on air, and cheap enough to
+ * run while a query is being typed.
+ */
+private const val PROGRAM_HIT_CLOCK_MS = 30_000L
+
 @Composable
 // debounce() (the channel-prefetch window below) is still a @FlowPreview API.
 @OptIn(kotlinx.coroutines.FlowPreview::class)
@@ -269,14 +279,73 @@ fun GuideScreen(
     var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
     val catchupLoading by viewModel.catchupLoading.collectAsStateWithLifecycle()
+    // A failed catch-up read is not "no DVR history": the dialog prints this
+    // instead of the import advice (see IptvViewModel.catchupError).
+    val catchupError by viewModel.catchupError.collectAsStateWithLifecycle()
 
-    // Program reminders: set from the channel menu ("REMIND ME: <next>").
+    // Program reminders: set from the channel menu ("REMIND ME: <next>") and
+    // from a program search hit (a hit that has not started yet arms one, so
+    // the press delivers the program the row names - see [programHitPress]).
     // A poller fires an in-guide banner when a reminder's program starts;
     // WATCH NOW zaps via the same path as a normal channel click.
     var reminders by remember(activeProfileId) {
         mutableStateOf(IptvReminderStore.load(guidePreferences))
     }
     var reminderBanner by remember { mutableStateOf<IptvReminderStore.Reminder?>(null) }
+
+    /**
+     * Arms or disarms ONE program's reminder, wherever it was asked for.
+     *
+     * The channel menu and a program search hit are two doors onto the same
+     * record and the same worker alert, so they go through one function: a
+     * second copy is how the search hit would have armed a reminder that the
+     * menu could not remove (or the reverse). The store key is channel + start,
+     * the pair the background worker reads.
+     */
+    fun toggleProgramReminder(
+        channelId: String,
+        channelName: String,
+        logoUrl: String?,
+        programTitle: String,
+        startUtcMillis: Long,
+        endUtcMillis: Long
+    ) {
+        val reminderKey = ReminderRules.reminderKey(channelId, startUtcMillis)
+        if (IptvReminderStore.has(guidePreferences, channelId, startUtcMillis)) {
+            IptvReminderStore.remove(guidePreferences, channelId, startUtcMillis)
+            // Drop the armed alert too, or the reminder the user just canceled
+            // still buzzes.
+            ReminderWorker.cancel(appContext, reminderKey)
+        } else {
+            IptvReminderStore.add(
+                guidePreferences,
+                IptvReminderStore.Reminder(
+                    channelId = channelId,
+                    channelName = channelName,
+                    logoUrl = logoUrl,
+                    programTitle = programTitle,
+                    startUtcMillis = startUtcMillis,
+                    endUtcMillis = endUtcMillis
+                )
+            )
+            // Arm the alert at the program's start: the guide's own banner only
+            // exists while the guide is on screen, so without this a reminder
+            // fires only if you happen to be sitting in the guide at that
+            // moment.
+            if (startUtcMillis > System.currentTimeMillis()) {
+                ReminderWorker.arm(appContext, reminderKey, startUtcMillis)
+            }
+        }
+        reminders = IptvReminderStore.load(guidePreferences)
+    }
+
+    // Every armed reminder, by the same key the worker uses - the search hits
+    // read it to show "Reminder set" instead of "set a reminder".
+    val reminderKeys = remember(reminders) {
+        reminders.mapTo(HashSet()) {
+            ReminderRules.reminderKey(it.channelId, it.startUtcMillis)
+        }
+    }
     LaunchedEffect(reminders) {
         while (true) {
             delay(15_000)
@@ -1213,7 +1282,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             onExtraPlaylistUrlsChanged = viewModel::onExtraPlaylistUrlsChanged,
             onExtraEpgUrlsChanged = viewModel::onExtraEpgUrlsChanged,
             onLoad = { viewModel.load() },
-            onReload = { viewModel.load() },
+            // RELOAD is not LOAD under a second name: it also re-imports the
+            // guide whatever the freshness window says, which is the only thing
+            // that helps when the guide itself is what has gone stale.
+            onReload = { viewModel.reload() },
             onImportGuide = { viewModel.importGuide() },
             onCancelGuideImport = { viewModel.cancelGuideImport() },
             onManageHidden = { showHiddenManager = true },
@@ -1588,30 +1660,69 @@ Spacer(modifier = Modifier.height(14.dp))
                                             )
                                         }
                                     } else {
+                                        // Why this view is empty decides what it
+                                        // offers. "This view has nothing to show
+                                        // right now" covered three different
+                                        // states: an empty playlist, a group
+                                        // with nothing in it, and a playlist
+                                        // whose channels are ALL hidden. Only the
+                                        // first wants SETUP and only the last has
+                                        // an undo at all.
+                                        val emptyPlaylist =
+                                            playlist?.channels.isNullOrEmpty()
+                                        val everyChannelHidden =
+                                            groupedChannels.isEmpty() && !emptyPlaylist
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier.fillMaxSize()
                                         ) {
                                             KBStatusMessage(
-                                                title = if (groupedChannels.isEmpty()) {
-                                                    "No channels in \"$selectedGroup\""
-                                                } else {
-                                                    "No channel selected"
+                                                title = when {
+                                                    groupedChannels.isNotEmpty() ->
+                                                        "No channel selected"
+                                                    emptyPlaylist -> "No channels in this playlist"
+                                                    else -> "No channels in \"$selectedGroup\""
                                                 },
-                                                message = if (groupedChannels.isEmpty()) {
-                                                    "This view has nothing to show " +
-                                                        "right now."
-                                                } else {
-                                                    "Choose a channel from the list to " +
-                                                        "view program details."
+                                                message = when {
+                                                    groupedChannels.isNotEmpty() ->
+                                                        "Choose a channel from the list to " +
+                                                            "view program details."
+                                                    emptyPlaylist ->
+                                                        "This playlist has no channels. Open " +
+                                                            "SETUP to load one."
+                                                    else ->
+                                                        "Every channel in this view is hidden. " +
+                                                            "Manage hidden channels to bring " +
+                                                            "one back."
                                                 },
                                                 icon = KB_STATUS_ICON_EMPTY,
                                                 modifier = Modifier.weight(1f).fillMaxWidth()
                                             )
                                             if (groupedChannels.isEmpty()) {
-                                                KBCard(onClick = { selectedGroup = "All" }) {
+                                                // The All case used to press
+                                                // `selectedGroup = "All"` while
+                                                // already on All, which is a dead
+                                                // end: the only recovery is the
+                                                // hidden-items manager, and the
+                                                // empty state never named it.
+                                                val allHidden =
+                                                    everyChannelHidden &&
+                                                        selectedGroup == "All"
+                                                KBCard(
+                                                    onClick = {
+                                                        when {
+                                                            emptyPlaylist -> showSetup = true
+                                                            allHidden -> showHiddenManager = true
+                                                            else -> selectedGroup = "All"
+                                                        }
+                                                    }
+                                                ) {
                                                     Text(
-                                                        text = "SHOW ALL CHANNELS",
+                                                        text = when {
+                                                            emptyPlaylist -> "OPEN SETUP"
+                                                            allHidden -> "MANAGE HIDDEN CHANNELS"
+                                                            else -> "SHOW ALL CHANNELS"
+                                                        },
                                                         color = KBTextHi,
                                                         style = MaterialTheme.typography.titleSmall,
                                                         modifier = Modifier.padding(
@@ -1636,6 +1747,21 @@ Spacer(modifier = Modifier.height(14.dp))
                         results = searchResults,
                         guideItems = loadedGuideItems,
                         programHits = programSearchHits,
+                        // A program hit that has not started yet arms a
+                        // reminder instead of tuning the channel: the row
+                        // promises THIS program, and live TV would deliver a
+                        // different one. See [programHitPress].
+                        reminderKeys = reminderKeys,
+                        onToggleProgramReminder = { hit ->
+                            toggleProgramReminder(
+                                channelId = hit.item.channel.id,
+                                channelName = hit.item.channel.displayName,
+                                logoUrl = hit.item.channel.logoUrl,
+                                programTitle = hit.program.title,
+                                startUtcMillis = hit.program.startUtcMillis,
+                                endUtcMillis = hit.program.endUtcMillis
+                            )
+                        },
                         channelKey = ::channelKey,
                         onQueryChanged = { searchQuery = it },
                         onPlay = { item ->
@@ -1699,39 +1825,14 @@ Spacer(modifier = Modifier.height(14.dp))
                         onDismiss = { menuItem = null },
                         onToggleReminder = item.next?.let { nxt ->
                             {
-                                val reminderKey = ReminderRules.reminderKey(
-                                    item.channel.id, nxt.startUtcMillis
+                                toggleProgramReminder(
+                                    channelId = item.channel.id,
+                                    channelName = item.channel.displayName,
+                                    logoUrl = item.channel.logoUrl,
+                                    programTitle = nxt.title,
+                                    startUtcMillis = nxt.startUtcMillis,
+                                    endUtcMillis = nxt.endUtcMillis
                                 )
-                                if (itemReminderActive) {
-                                    IptvReminderStore.remove(guidePreferences, item.channel.id, nxt.startUtcMillis)
-                                    // Drop the armed alert too, or the reminder
-                                    // the user just canceled still buzzes.
-                                    ReminderWorker.cancel(appContext, reminderKey)
-                                    reminders = IptvReminderStore.load(guidePreferences)
-                                } else {
-                                    IptvReminderStore.add(
-                                        guidePreferences,
-                                        IptvReminderStore.Reminder(
-                                            channelId = item.channel.id,
-                                            channelName = item.channel.displayName,
-                                            logoUrl = item.channel.logoUrl,
-                                            programTitle = nxt.title,
-                                            startUtcMillis = nxt.startUtcMillis,
-                                            endUtcMillis = nxt.endUtcMillis
-                                        )
-                                    )
-                                    // Arm the alert at the program's start: the
-                                    // guide's own banner only exists while the
-                                    // guide is on screen, so without this a
-                                    // reminder fires only if you happen to be
-                                    // sitting in the guide at that moment.
-                                    if (nxt.startUtcMillis > System.currentTimeMillis()) {
-                                        ReminderWorker.arm(
-                                            appContext, reminderKey, nxt.startUtcMillis
-                                        )
-                                    }
-                                    reminders = IptvReminderStore.load(guidePreferences)
-                                }
                                 menuItem = null
                             }
                         },
@@ -1832,6 +1933,7 @@ Spacer(modifier = Modifier.height(14.dp))
                         channelName = catchupItem.channel.displayName.ifBlank { "Live Channel" },
                         programs = catchupPrograms,
                         loading = catchupLoading,
+                        error = catchupError,
                         onDismiss = { catchupChannel = null },
                         onPlay = { program ->
                             catchupChannel = null
@@ -2600,10 +2702,15 @@ private fun GuideHeader(
         Column(modifier = Modifier.weight(1f)) {
             KBPageTitle(text = title)
 
-            val meta = buildList {
-                add("$channelCount channels")
-                if (selectedGroup.isNotBlank()) add(selectedGroup)
-            }.joinToString(" • ")
+            // The count is the CURRENT view's, so it has to say what it
+            // counts. "412 channels • Sports" read as a playlist total with a
+            // group name attached; on All the same words are the total. One
+            // group's own count is stated as such instead.
+            val meta = when {
+                selectedGroup.isBlank() -> "$channelCount channels"
+                selectedGroup == "All" -> "$channelCount channels • $selectedGroup"
+                else -> "$channelCount in $selectedGroup"
+            }
 
             Text(
                 text = meta,
@@ -3343,6 +3450,8 @@ private fun CatchupDialog(
     channelName: String,
     programs: List<CatchupProgram>,
     loading: Boolean,
+    /** Why the read failed, when it did - see [IptvViewModel.catchupError]. */
+    error: String? = null,
     onDismiss: () -> Unit,
     onPlay: (CatchupProgram) -> Unit
 ) {
@@ -3367,11 +3476,16 @@ private fun CatchupDialog(
                     )
                 }
             } else if (programs.isEmpty()) {
+                // A failed read is its own sentence. Printing the "no EPG history"
+                // advice for a provider that never answered sent the viewer off
+                // to wait for an import that was not the problem.
                 Text(
-                    text = "No recent programs available. The channel advertises catch-up, " +
-                        "but the guide has no aired program history for it yet \u2014 try again " +
-                        "after the EPG imports.",
-                    color = KBTextLo,
+                    text = error ?: (
+                        "No recent programs available. The channel advertises catch-up, " +
+                            "but the guide has no aired program history for it yet \u2014 try " +
+                            "again after the EPG imports."
+                        ),
+                    color = if (error != null) KBDanger else KBTextLo,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
@@ -3441,6 +3555,10 @@ private fun ChannelSearchDialog(
     /** Guide rows resolved so far, so a hit can show its now/next program. */
     guideItems: Map<String, IptvChannelWithEpg> = emptyMap(),
     programHits: List<GuideProgramHit> = emptyList(),
+    /** Armed reminders, by the key the worker uses, so a hit can say so. */
+    reminderKeys: Set<String> = emptySet(),
+    /** Arms or disarms the reminder for one hit (see [programHitPress]). */
+    onToggleProgramReminder: (GuideProgramHit) -> Unit = {},
     channelKey: (IptvChannelWithEpg) -> String,
     onQueryChanged: (String) -> Unit,
     /** Reports the query field's editing session as it starts and ends. */
@@ -3464,6 +3582,28 @@ private fun ChannelSearchDialog(
     val firstResultFocusRequester = remember { FocusRequester() }
     val closeFocusRequester = remember { FocusRequester() }
     val hasHits = results.isNotEmpty() || programHits.isNotEmpty()
+
+    // What a program hit's press DOES depends on the clock, so the dialog keeps
+    // its own beat instead of freezing the answer it opened with: left open
+    // across a start time it would otherwise offer a reminder for a program
+    // already on air.
+    var nowUtcMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(PROGRAM_HIT_CLOCK_MS)
+            nowUtcMillis = System.currentTimeMillis()
+        }
+    }
+
+    fun pressFor(hit: GuideProgramHit): ProgramHitPress = programHitPress(
+        startUtcMillis = hit.program.startUtcMillis,
+        endUtcMillis = hit.program.endUtcMillis,
+        nowUtcMillis = nowUtcMillis,
+        reminderSet = ReminderRules.reminderKey(
+            hit.item.channel.id,
+            hit.program.startUtcMillis
+        ) in reminderKeys
+    )
     // Grab focus on the first hit, retried across frames: the hit rows may not
     // have attached on the frame the query's last keystroke produced them.
     suspend fun focusFirstHit() {
@@ -3715,8 +3855,23 @@ private fun ChannelSearchDialog(
                             )
                         }
                     ) { index, hit ->
+                        val press = pressFor(hit)
                         KBCard(
-                            onClick = { onPlay(hit.item) },
+                            // The press delivers the PROGRAM the row names. A hit
+                            // that is still ahead gets a reminder for it; only
+                            // one already airing is tuned live (or one that has
+                            // ended, where live is all that is left).
+                            onClick = {
+                                when (press) {
+                                    ProgramHitPress.SET_REMINDER,
+                                    ProgramHitPress.CANCEL_REMINDER ->
+                                        onToggleProgramReminder(hit)
+
+                                    ProgramHitPress.WATCH_LIVE,
+                                    ProgramHitPress.WATCH_LIVE_ENDED ->
+                                        onPlay(hit.item)
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .let { base ->
@@ -3748,6 +3903,21 @@ private fun ChannelSearchDialog(
                                             hit.program.endUtcMillis
                                         ),
                                     color = KBTextLo,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                // What the press will do, said on the row
+                                // itself: without it a future hit tuned live
+                                // and the row had already promised otherwise.
+                                Text(
+                                    text = programHitActionLabel(press),
+                                    color = when (press) {
+                                        ProgramHitPress.SET_REMINDER,
+                                        ProgramHitPress.CANCEL_REMINDER -> KBAccent
+                                        ProgramHitPress.WATCH_LIVE,
+                                        ProgramHitPress.WATCH_LIVE_ENDED -> KBTextLo
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis

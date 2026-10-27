@@ -763,6 +763,19 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _catchupLoading = MutableStateFlow(false)
     val catchupLoading: StateFlow<Boolean> = _catchupLoading.asStateFlow()
 
+    /**
+     * Why the last catch-up read failed, or null when it answered.
+     *
+     * A failed read used to publish an empty list and nothing else, so the
+     * dialog's "no recent programs, try again after the EPG imports" spoke for
+     * a provider that never answered - the fourth instance of failure-reads-as-
+     * empty in this tree (Browse C4, Search C4, Library C4). The dialog prints
+     * this instead, and the import advice is kept for a channel that really has
+     * no history.
+     */
+    private val _catchupError = MutableStateFlow<String?>(null)
+    val catchupError: StateFlow<String?> = _catchupError.asStateFlow()
+
     private var catchupJob: Job? = null
 
     /**
@@ -785,6 +798,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         // this state the instant it opens, and leaving it populated flashed the
         // last channel's programs before the new ones landed.
         _catchupPrograms.value = emptyList()
+        _catchupError.value = null
         _catchupLoading.value = true
         catchupJob = viewModelScope.launch {
             try {
@@ -809,7 +823,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
-                if (generation == catchupGeneration) _catchupPrograms.value = emptyList()
+                if (generation == catchupGeneration) {
+                    _catchupPrograms.value = emptyList()
+                    // The dialog's empty state has to be able to tell this apart
+                    // from a channel with no DVR history: "wait for the EPG to
+                    // import" is the wrong advice for a provider that failed.
+                    _catchupError.value = CATCHUP_FAILED_LABEL
+                }
             } finally {
                 // Only the CURRENT load may clear the flag (see
                 // [catchupGeneration]).
@@ -1493,6 +1513,20 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (effectiveLineupUrl() == url) _isLoading.value = false
             }
         }
+    }
+
+    /**
+     * The setup panel's RELOAD: [load], plus a guide import whatever the
+     * freshness window says.
+     *
+     * RELOAD and LOAD were the same call, so a viewer whose guide had gone
+     * stale pressed RELOAD and got a fresh lineup behind the SAME old programs -
+     * "RELOAD didn't fix it". The force-refresh path already existed for the
+     * Free TV opt-in (a source the app had just written); this is the same path
+     * on demand, which is what the second button means.
+     */
+    fun reload() {
+        loadWithGuideRefresh()
     }
 
     fun load() {
@@ -2446,6 +2480,15 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val TAG = "IptvViewModel"
+
+        /**
+         * What the catch-up dialog says when the read FAILED, as opposed to
+         * finding nothing (see [_catchupError]). Actionable, because a failed
+         * provider is usually a connection or a source that is down.
+         */
+        const val CATCHUP_FAILED_LABEL =
+            "Couldn't load this channel's catch-up — the guide source didn't answer. " +
+                "Check your connection and try again."
 
         /** Substrings that mark a channel/group as plausibly kid-focused. */
         const val PREFS_NAME = "iptv_prefs"

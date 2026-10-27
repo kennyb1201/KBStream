@@ -455,6 +455,27 @@ class GuideRulesTest {
     }
 
     @Test
+    fun `a program starting exactly now is on air, not next as well`() {
+        // The tick lands ON a schedule boundary (21:00). A program that starts
+        // exactly at the clock satisfies both "on air" and "starts at or after
+        // now", so the old `>=` for next drew one program on BOTH cards.
+        val loaded = mapOf(
+            "ch1" to row(
+                "ch1",
+                now = hourProgram("ch1", 20),
+                next = hourProgram("ch1", 21),
+                upcoming = listOf(hourProgram("ch1", 22))
+            )
+        )
+        val moved = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 21, 0))
+            .advanced
+            .getValue("ch1")
+
+        assertEquals("the program starting exactly now is the one on air", "P21", moved.now?.title)
+        assertEquals("and the one after it is next", "P22", moved.next?.title)
+    }
+
+    @Test
     fun `a tick past a program's end promotes the loaded next in memory`() {
         // 21:05. The 21:00 program was already loaded as NEXT; it becomes NOW
         // and the strip behind it shifts up, with no query at all.
@@ -487,6 +508,59 @@ class GuideRulesTest {
         val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 21, 40))
         assertEquals(setOf("ch1"), step.expiredIds)
         assertNull(step.advanced.getValue("ch1").now)
+    }
+
+    // ------------------------------------------------------------ program hits
+
+    @Test
+    fun `a program hit's press follows the clock`() {
+        // The search row names a PROGRAM, so its press has to deliver that
+        // program: ahead is a reminder, on air is live, already over is live. It
+        // used to tune whatever was on, whatever the row said.
+        val start = utc(2026, 10, 7, 21, 0)
+        val end = start + 3_600_000L
+
+        assertEquals(
+            "still ahead",
+            ProgramHitPress.SET_REMINDER,
+            programHitPress(start, end, start - 60_000L, reminderSet = false)
+        )
+        assertEquals(
+            "still ahead, already reminded: the press takes it back off",
+            ProgramHitPress.CANCEL_REMINDER,
+            programHitPress(start, end, start - 60_000L, reminderSet = true)
+        )
+        assertEquals(
+            "the start instant counts as on air",
+            ProgramHitPress.WATCH_LIVE,
+            programHitPress(start, end, start, reminderSet = false)
+        )
+        assertEquals(
+            "and an armed reminder does not turn a live program into a toggle",
+            ProgramHitPress.WATCH_LIVE,
+            programHitPress(start, end, end - 1L, reminderSet = true)
+        )
+        assertEquals(
+            "ended: nothing to watch or remind, so the press tunes live",
+            ProgramHitPress.WATCH_LIVE_ENDED,
+            programHitPress(start, end, end, reminderSet = false)
+        )
+    }
+
+    @Test
+    fun `every program-hit press says what it will do`() {
+        // The row is the only place a viewer can learn that a future hit arms a
+        // reminder instead of tuning; without this line the press was silent.
+        assertEquals("On now · press to watch", programHitActionLabel(ProgramHitPress.WATCH_LIVE))
+        assertEquals("Press to set a reminder", programHitActionLabel(ProgramHitPress.SET_REMINDER))
+        assertEquals(
+            "Reminder set · press to cancel",
+            programHitActionLabel(ProgramHitPress.CANCEL_REMINDER)
+        )
+        assertEquals(
+            "Ended · press to watch live",
+            programHitActionLabel(ProgramHitPress.WATCH_LIVE_ENDED)
+        )
     }
 
     @Test

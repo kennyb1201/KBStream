@@ -175,10 +175,11 @@ class LibraryScreenMobileContractTest {
                 mobile.contains("viewModel.toggleHideWatched()")
         )
         assertTrue(
-            "each filter states its own empty case (the watchlist names why)",
-            mobile.contains("\"Watchlist is empty — \"") &&
-                mobile.contains("Simkl not connected") &&
-                mobile.contains("MDBList key not set")
+            "each filter states its own empty case, and the watchlist's comes " +
+                "from the one shared sentence the TV pane draws (waiting, " +
+                "unreachable, not connected, genuinely empty)",
+            mobile.contains("libraryWatchlistEmptyText(") &&
+                mobile.contains("failed = state.failedRemotes")
         )
     }
 

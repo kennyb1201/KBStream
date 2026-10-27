@@ -50,6 +50,33 @@ class LibraryReturnFocusContractTest {
     }
 
     @Test
+    fun `the long-press menu records the place it opens from, like the card press`() {
+        // The grid press was the only path that recorded, so a Detail page
+        // opened from the row's menu came back to the filter chip instead of
+        // the poster. Mobile's menu has always recorded (see
+        // LibraryScreenMobile); this is the TV side catching up.
+        val menu = source.substringAfter("onOpenDetails = { id ->")
+            .substringBefore("onRemove = {")
+        assertTrue(
+            "the menu's Go to Details raises the same record as the card press",
+            menu.contains("BrowseReturnFocus.record(") &&
+                menu.contains("screenKey = LIBRARY_BROWSE_SCREEN_KEY")
+        )
+        assertTrue(
+            "keyed by the row it opened from and where that row sits in the " +
+                "grid the viewer is looking at",
+            menu.contains("val position = libraryGridRows(state).indexOfFirst {") &&
+                menu.contains("itemId = itemKey") &&
+                menu.contains("position = position")
+        )
+        assertTrue(
+            "raised before the navigation, while the screen still exists",
+            menu.indexOf("BrowseReturnFocus.record(") <
+                menu.indexOf("onItemClick(item.mediaType, id)")
+        )
+    }
+
+    @Test
     fun `the record is read back on entry, before the selected chip is landed on`() {
         // One string, in order: the record is read, and the chip is asked for
         // only on the branch where there was no record. The other way round
@@ -92,7 +119,16 @@ class LibraryReturnFocusContractTest {
         assertTrue(
             "a Back out of Detail disposes the grid, so the state it scrolls " +
                 "on return cannot live below the screen",
-            source.contains("val gridState = remember(state.filter) { LazyGridState() }")
+            source.contains(
+                "val gridState = remember(state.filter, state.selectedList?.id) { LazyGridState() }"
+            )
+        )
+        assertTrue(
+            "and it belongs to the OPEN LIST as well as the filter: the LISTS " +
+                "pane shows one list at a time, so opening a second one kept the " +
+                "first one's scroll offset",
+            source.contains("state.selectedList?.id") &&
+                source.contains("val gridState = remember(state.filter, state.selectedList?.id)")
         )
         assertTrue(
             "and the grid draws on that state",

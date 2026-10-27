@@ -178,15 +178,20 @@ class UiPolishP3ContractTest {
 
     @Test
     fun `the empty watchlist reads as one sentence`() {
-        val library = source(LIBRARY)
+        // The copy moved out of the screen when the watchlist gained its
+        // failure state: TV and phone now draw the same sentence from
+        // libraryWatchlistEmptyText (see LibraryDeepDiveContractTest for the
+        // states themselves). The punctuation rule this test exists for is
+        // unchanged.
+        val source = source(LIBRARY_VIEW_MODEL)
         assertTrue(
             "an em dash, not a full stop: the reasons belong to the sentence " +
                 "rather than being stranded after it",
-            library.contains("\"Watchlist is empty — \" + sources.joinToString(\" · \")")
+            source.contains("\"\$headline — \${reasons.joinToString(\" · \")}.\"")
         )
         assertFalse(
             "the full stop that broke it is gone",
-            library.contains("\"Watchlist is empty. \" + sources")
+            source.contains("\"Watchlist is empty. \" + reasons")
         )
     }
 
@@ -349,7 +354,7 @@ class UiPolishP3ContractTest {
         const val KB_SCREEN = "${UI}kb/KBFolderScreen.kt"
         const val KB_VIEW_MODEL = "${UI}kb/KBFolderViewModel.kt"
         const val ACTOR = "${UI}actor/ActorScreen.kt"
-        const val LIBRARY = "${UI}library/LibraryScreen.kt"
+        const val LIBRARY_VIEW_MODEL = "${UI}library/LibraryViewModel.kt"
         const val SETTINGS = "${UI}settings/SettingsScreen.kt"
         const val STATS = "${UI}settings/StatsScreen.kt"
         const val SIMKL = "${UI}simkl/SimklConnectScreen.kt"

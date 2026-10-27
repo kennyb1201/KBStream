@@ -242,7 +242,13 @@ internal object GuideClockAdvance {
         val now = programs.firstOrNull {
             nowUtcMillis >= it.startUtcMillis && nowUtcMillis < it.endUtcMillis
         }
-        val next = programs.firstOrNull { it.startUtcMillis >= nowUtcMillis }
+        // STRICTLY ahead, not "at or after". A program whose start is exactly
+        // nowUtcMillis is the one on air (the predicate above claimed it), so
+        // `>=` here made it NEXT as well and drew one program on both cards.
+        // The clock lands on a program boundary often enough for this to be a
+        // real, if narrow, state. IptvRepository.mapChannels holds the same
+        // rule; the two must not drift.
+        val next = programs.firstOrNull { it.startUtcMillis > nowUtcMillis }
         return item.copy(
             now = now,
             next = next,
@@ -316,6 +322,66 @@ internal fun guideProgramHitKey(
     endUtcMillis: Long,
     index: Int,
 ): String = "program|$channelId|$startUtcMillis|$endUtcMillis|$index"
+
+/**
+ * What pressing a program-search hit does.
+ *
+ * The rows show a PROGRAM - its title, its channel, its time - so the press has
+ * to deliver that program. It used to tune the channel whatever the time was,
+ * which is right only while the hit is airing: for the "what's on tonight"
+ * search the guide exists for, it opened a different program with nothing on
+ * screen saying so.
+ */
+internal enum class ProgramHitPress {
+    /** Airing now: the press tunes the channel, which is showing it. */
+    WATCH_LIVE,
+
+    /** Still ahead: the press arms a reminder for this program. */
+    SET_REMINDER,
+
+    /** Ahead, already reminded: the press takes the reminder back off. */
+    CANCEL_REMINDER,
+
+    /**
+     * Already over: there is nothing to watch and nothing to remind, so the
+     * press keeps its one useful meaning and tunes the channel live. The row
+     * says so rather than implying the program itself is about to appear.
+     */
+    WATCH_LIVE_ENDED
+}
+
+/**
+ * The press [startUtcMillis]..[endUtcMillis] deserves at [nowUtcMillis].
+ *
+ * A reminder is only a toggle while the program is still AHEAD: once it has
+ * started the reminder has either fired or missed, and the channel is what the
+ * viewer can act on. Pure, so both screens (TV and phone) read one rule and
+ * [GuideRulesTest] can pin the three cases.
+ */
+internal fun programHitPress(
+    startUtcMillis: Long,
+    endUtcMillis: Long,
+    nowUtcMillis: Long,
+    reminderSet: Boolean
+): ProgramHitPress = when {
+    startUtcMillis > nowUtcMillis && reminderSet -> ProgramHitPress.CANCEL_REMINDER
+    startUtcMillis > nowUtcMillis -> ProgramHitPress.SET_REMINDER
+    nowUtcMillis < endUtcMillis -> ProgramHitPress.WATCH_LIVE
+    else -> ProgramHitPress.WATCH_LIVE_ENDED
+}
+
+/**
+ * The line under a program hit that names what its press will do.
+ *
+ * The row already carries the title and the time range; this is the half that
+ * was missing - a promise about the press itself.
+ */
+internal fun programHitActionLabel(press: ProgramHitPress): String = when (press) {
+    ProgramHitPress.WATCH_LIVE -> "On now · press to watch"
+    ProgramHitPress.SET_REMINDER -> "Press to set a reminder"
+    ProgramHitPress.CANCEL_REMINDER -> "Reminder set · press to cancel"
+    ProgramHitPress.WATCH_LIVE_ENDED -> "Ended · press to watch live"
+}
 
 /**
  * The group selection a chip's focus event must produce.

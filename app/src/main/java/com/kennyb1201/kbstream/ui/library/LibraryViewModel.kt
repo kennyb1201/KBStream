@@ -52,6 +52,21 @@ enum class LibraryFilter(val label: String) {
 }
 
 /**
+ * The account-level feeds a WATCHLIST read can fail on.
+ *
+ * Named apart from [LibrarySource] on purpose: those tag the ROWS a source
+ * contributed, while this names a source whose read did not answer at all. The
+ * empty state needs the second fact and cannot derive it from the first - a
+ * tracker that failed contributes no rows, which is indistinguishable from a
+ * watchlist that is genuinely empty (see [libraryWatchlistEmptyText]).
+ */
+enum class LibraryRemote(val label: String) {
+    SIMKL("Simkl"),
+    MDBLIST("MDBList"),
+    TRAKT("Trakt")
+}
+
+/**
  * Which field the Library's sort chips order by. "Added" is the store's own
  * order (newest first); the others sort by the field each row carries.
  *
@@ -83,6 +98,25 @@ data class LibraryUiState(
      */
     val sortAscending: Boolean = false,
     val loading: Boolean = true,
+
+    /**
+     * True while [LibraryViewModel.refresh]'s REMOTE phase has not published.
+     *
+     * [loading] describes the local phase alone - it is cleared as soon as My
+     * List is on screen, because that half is what the viewer is waiting for -
+     * so the WATCHLIST view used to treat a still-in-flight Simkl/MDBList/Trakt
+     * fetch as "nothing here" and flash "Watchlist is empty." before the rows
+     * landed. The empty copy reads THIS flag (see [libraryWatchlistEmptyText]),
+     * which is only cleared once the remote half has an answer.
+     */
+    val remoteLoading: Boolean = false,
+
+    /**
+     * The trackers whose last read FAILED, so the empty state can tell a
+     * failure from an empty watchlist instead of saying "empty" about a fetch
+     * that never answered.
+     */
+    val failedRemotes: Set<LibraryRemote> = emptySet(),
 
     // MY LIST: local, profile-scoped, works with no account connected.
     val localItems: List<LibraryItem> = emptyList(),
@@ -426,7 +460,23 @@ class LibraryViewModel(
     fun refresh() {
         val version = ++requestVersion
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(loading = true)
+            // The two badge sets are REBUILT by the enrichment pass at the end
+            // of this function, one row at a time - each row's own keys are
+            // dropped from the sets before this pass's answer is filed, so a
+            // key that no longer holds (a title un-watched, or a title the
+            // PREVIOUS profile watched) cannot survive. See the publish block
+            // in enrich().
+            //
+            // They used to be additive in both directions and nothing anywhere
+            // removed one, so a profile switch (which lands here through
+            // observeProfileSwitches) carried profile A's checkmarks and eyes
+            // onto profile B's Library, and the UNWATCHED toggle then hid B's
+            // rows under A's keys.
+            _uiState.value = _uiState.value.copy(
+                loading = true,
+                remoteLoading = true,
+                failedRemotes = emptySet()
+            )
 
             val appContext = getApplication<Application>()
 
@@ -458,6 +508,13 @@ class LibraryViewModel(
             val traktConnected =
                 traktRepository.isConfigured() && traktRepository.hasToken()
 
+            // Which trackers failed to answer at all. A failed fetch is filed
+            // as an empty list below (the tab must not break over one dead
+            // tracker), and this set is what keeps that from being reported to
+            // the viewer as "your watchlist is empty" (see
+            // [libraryWatchlistEmptyText]).
+            val failedRemotes = mutableSetOf<LibraryRemote>()
+
             // WATCHLIST merge: Simkl plan-to-watch + MDBList watchlist + Trakt
             // watchlist.
             val simklItems = if (simklConnected) {
@@ -467,6 +524,7 @@ class LibraryViewModel(
                             TAG,
                             "Simkl watchlist fetch failed: ${it.message}"
                         )
+                        failedRemotes += LibraryRemote.SIMKL
                     }
                     .getOrDefault(emptyList())
             } else {
@@ -474,25 +532,28 @@ class LibraryViewModel(
             }
 
             val mdbListWatchlist = if (mdbListConfigured) {
-                runCatchingCancellable {
-                    // orEmpty(): a null is an INCOMPLETE walk (see
-                    // MdbListClient.getWatchlist), which this row treats like a
-                    // failed fetch rather than rendering a truncated list as the
-                    // whole watchlist.
-                    MdbListClient.getWatchlist(appContext).orEmpty().map { entry ->
-                        LibraryItem(
-                            source = LibrarySource.MDBLIST_WATCHLIST,
-                            mediaType = entry.mediaType,
-                            title = entry.title ?: "Untitled",
-                            year = entry.year,
-                            posterUrl = entry.poster,
-                            imdbId = entry.imdbId,
-                            tmdbId = entry.tmdbId
-                        )
-                    }
+                // A null is an INCOMPLETE walk (see
+                // MdbListClient.getWatchlist), which this row treats like a
+                // failed fetch rather than rendering a truncated list as the
+                // whole watchlist - including in the empty state, so the two
+                // ways of not getting an answer report the same way.
+                val entries = runCatchingCancellable {
+                    MdbListClient.getWatchlist(appContext)
                 }.onFailure {
                     Log.w(TAG, "MDBList watchlist fetch failed: ${it.message}")
-                }.getOrDefault(emptyList())
+                }.getOrNull()
+                if (entries == null) failedRemotes += LibraryRemote.MDBLIST
+                entries.orEmpty().map { entry ->
+                    LibraryItem(
+                        source = LibrarySource.MDBLIST_WATCHLIST,
+                        mediaType = entry.mediaType,
+                        title = entry.title ?: "Untitled",
+                        year = entry.year,
+                        posterUrl = entry.poster,
+                        imdbId = entry.imdbId,
+                        tmdbId = entry.tmdbId
+                    )
+                }
             } else {
                 emptyList()
             }
@@ -501,6 +562,7 @@ class LibraryViewModel(
                 runCatchingCancellable { traktRepository.watchlist() }
                     .onFailure {
                         Log.w(TAG, "Trakt watchlist fetch failed: ${it.message}")
+                        failedRemotes += LibraryRemote.TRAKT
                     }
                     .getOrDefault(emptyList())
                     .mapNotNull { entry ->
@@ -594,6 +656,10 @@ class LibraryViewModel(
 
             _uiState.value = _uiState.value.copy(
                 loading = false,
+                // The remote half has answered (successfully or not), so the
+                // empty state may now speak for it.
+                remoteLoading = false,
+                failedRemotes = failedRemotes,
                 lists = lists,
                 simklConnected = simklConnected,
                 mdbListConfigured = mdbListConfigured,
@@ -793,7 +859,13 @@ class LibraryViewModel(
                 val watched: String?,
                 val partiallyWatched: String?,
                 val poster: String?,
-                val year: Int?
+                val year: Int?,
+                /**
+                 * Every badge key this row could carry, so publishing can drop
+                 * the ones this pass did not confirm before it files the ones
+                 * it did (see the badge publish below).
+                 */
+                val badgeKeys: List<String>
             )
 
             // The eye is a claim about THIS profile, so a title another profile
@@ -865,11 +937,23 @@ class LibraryViewModel(
                     partiallyWatched = "$normalizedType::$tmdbWatchedId"
                 }
 
-                // Dropped only on POSITIVE ownership: an unattributed title,
-                // a device with no profiles or a title with no name all keep
-                // the badge, so the cross-device eye a profile earned on
-                // another device survives (see [titleOwnedByAnotherProfile]).
-                if (partiallyWatched != null &&
+                // BOTH badges are claims about THIS profile, so both take the
+                // same ownership rule - dropped only on POSITIVE ownership: an
+                // unattributed title, a device with no profiles or a title with
+                // no name all keep their badge, so the cross-device marker a
+                // profile earned on another device survives (see
+                // [titleOwnedByAnotherProfile]).
+                //
+                // The checkmark used to have no filter at all, and its cache
+                // cannot supply one: WatchedStatusRepository keys watched state
+                // by type and id with no profile component, so the account-wide
+                // tracker answer painted profile 1's Library with a title the
+                // kids profile had finished - and the UNWATCHED toggle then hid
+                // that row on profile 1. The eye was filtered here and the
+                // completed twin was not, which is the same half-fix in the one
+                // direction that matters most: a CHECKMARK is the stronger
+                // claim. One rule for the pair, so they cannot drift again.
+                if ((watched != null || partiallyWatched != null) &&
                     titleOwnedByAnotherProfile(
                         ownerByTitleKey = badgeTitleOwners,
                         type = normalizedType,
@@ -877,6 +961,7 @@ class LibraryViewModel(
                         activeProfileId = badgeActiveProfileId
                     )
                 ) {
+                    watched = null
                     partiallyWatched = null
                 }
 
@@ -920,7 +1005,16 @@ class LibraryViewModel(
                     watched = watched,
                     partiallyWatched = partiallyWatched,
                     poster = poster,
-                    year = year
+                    year = year,
+                    // The row's own candidate spellings, PLUS the IMDb id this
+                    // pass resolved from its TMDB one: a badge can be filed
+                    // under a key the row did not carry into the pass, and a
+                    // key that is never named here is a key that can never be
+                    // taken back off.
+                    badgeKeys = item.watchedKeyCandidates() +
+                        listOfNotNull(
+                            imdbId?.takeIf { it.isNotBlank() }?.let { "$normalizedType::$it" }
+                        )
                 )
             }
 
@@ -956,14 +1050,37 @@ class LibraryViewModel(
                 r.year?.let { years[r.key] = it }
             }
 
+            // Badges are REPLACED per row, never accumulated.
+            //
+            // Both sets were pure unions, so nothing ever removed a key: a
+            // profile switch carried the outgoing profile's checkmarks and eyes
+            // onto the incoming one (the state behind them is not per profile -
+            // WatchedStatusRepository keys watched state by type and id), and
+            // the UNWATCHED toggle then hid the incoming profile's rows under
+            // the outgoing profile's keys. Un-watching a title had the same
+            // shape: the key stayed, because no read ever took one away.
+            //
+            // So each row in this batch drops the keys it could carry and then
+            // files the ones this pass confirmed. A row outside the batch keeps
+            // its badge - a personal list being loaded on its own, say - which
+            // is why this is done per row rather than by clearing the sets for
+            // the pass: clearing would blank every checkmark on screen until the
+            // last row resolved.
+            val watchedKeys = _uiState.value.watchedKeys.toMutableSet()
+            val partiallyWatchedKeys = _uiState.value.partiallyWatchedKeys.toMutableSet()
+            resolved.forEach { row ->
+                watchedKeys -= row.badgeKeys
+                partiallyWatchedKeys -= row.badgeKeys
+                row.watched?.let { watchedKeys += it }
+                row.partiallyWatched?.let { partiallyWatchedKeys += it }
+            }
+
             _uiState.value = _uiState.value.copy(
                 ratings = ratings,
                 posters = posters,
                 years = years,
-                watchedKeys = _uiState.value.watchedKeys +
-                    resolved.mapNotNull { it.watched }.toSet(),
-                partiallyWatchedKeys = _uiState.value.partiallyWatchedKeys +
-                    resolved.mapNotNull { it.partiallyWatched }.toSet()
+                watchedKeys = watchedKeys,
+                partiallyWatchedKeys = partiallyWatchedKeys
             )
             pushDisplay()
         }
@@ -1252,5 +1369,62 @@ internal fun applyUnwatched(
         // A row with no key at all can never be hidden; one that matches
         // under EITHER flavor is watched and drops.
         item.watchedKeyCandidates().none { it in watchedKeys }
+    }
+}
+
+/**
+ * The WATCHLIST view's empty line, for both screens.
+ *
+ * Three things used to be reported as one. A still-arriving remote fetch drew
+ * "Watchlist is empty." (the local half clears `loading` first, so the sentence
+ * spoke for a half that had not answered); a tracker that FAILED drew the same
+ * sentence as a tracker that was never connected, and - when all three were
+ * connected and all three failed - as a watchlist that genuinely holds nothing.
+ * Neither is what happened, and neither offers the viewer a reason to try
+ * again.
+ *
+ * So: the waiting state names the wait ([remoteLoading]), a failure says the
+ * read failed and which service could not be reached, and "empty" is reserved
+ * for the case where every configured source answered. A service that was
+ * never connected is still listed, because "empty — Trakt not connected" is
+ * useful information about a watchlist the viewer may have expected to be
+ * longer.
+ *
+ * One function rather than two strings: this copy lives on the TV pane and the
+ * phone pane, and the two drifting apart is how the phone ended up without the
+ * em-dash sentence the TV had.
+ */
+internal fun libraryWatchlistEmptyText(
+    loading: Boolean,
+    remoteLoading: Boolean,
+    simklConnected: Boolean,
+    mdbListConfigured: Boolean,
+    traktConnected: Boolean,
+    failed: Set<LibraryRemote>
+): String {
+    if (loading || remoteLoading) return "Loading watchlists…"
+
+    val reasons = buildList {
+        // Unreachable first: it is the one reason the viewer can act on by
+        // retrying, and the one that used to be reported as "empty".
+        LibraryRemote.entries.filter { it in failed }.forEach {
+            add("${it.label} unreachable")
+        }
+        if (!simklConnected) add("Simkl not connected")
+        if (!mdbListConfigured) add("MDBList key not set")
+        if (!traktConnected) add("Trakt not connected")
+    }
+
+    val headline = if (failed.isEmpty()) {
+        "Watchlist is empty"
+    } else {
+        "Watchlist couldn't be loaded"
+    }
+    return if (reasons.isEmpty()) {
+        "$headline."
+    } else {
+        // An em dash, not the full stop this once used: the reasons belong to
+        // the sentence rather than being stranded after it.
+        "$headline — ${reasons.joinToString(" · ")}."
     }
 }

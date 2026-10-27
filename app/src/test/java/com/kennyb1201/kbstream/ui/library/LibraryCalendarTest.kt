@@ -80,6 +80,34 @@ class LibraryCalendarTest {
     }
 
     @Test
+    fun `premiere and finale come from episode numbers, not payload order`() {
+        // The badges read the first and last episode of a SEASON. That used to
+        // be the first and last entry of whatever list TMDB sent, so a payload
+        // that arrived unordered would name two unrelated episodes.
+        val month = buildCalendarMonth(
+            month = october,
+            shows = listOf(
+                show(
+                    "Out of Order",
+                    episode(3, "2026-10-15"),
+                    episode(1, "2026-10-01"),
+                    episode(2, "2026-10-08")
+                )
+            ),
+            today = today
+        )
+
+        val rows = month.days.values.flatten().associateBy { it.episode }
+        assertEquals("all three episodes are on the month", 3, rows.size)
+        assertTrue("episode 1 opens the season", rows.getValue(1).isPremiere)
+        assertTrue("episode 3 closes it", rows.getValue(3).isFinale)
+        assertTrue(
+            "and the middle one is neither, whichever slot it arrived in",
+            !rows.getValue(2).isPremiere && !rows.getValue(2).isFinale
+        )
+    }
+
+    @Test
     fun `every show airing on one day is kept, not just the first`() {
         val month = buildCalendarMonth(
             month = october,

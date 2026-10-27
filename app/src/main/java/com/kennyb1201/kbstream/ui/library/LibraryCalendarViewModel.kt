@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListWatchedSnapshot
@@ -626,6 +627,36 @@ class LibraryCalendarViewModel(
                 tmdbRepository.resolveImdbId(detail.id, "series")
             }.getOrNull()
 
+        val title = detail.name?.takeIf { it.isNotBlank() }
+            ?: detail.title?.takeIf { it.isNotBlank() }
+            ?: candidateId
+
+        // A hidden title leaves the calendar too.
+        //
+        // The screen filters hidden rows out of all four grid views, and the
+        // calendar pane had no such filter anywhere in its path - so hiding a
+        // show emptied its posters and left every episode it airs on the
+        // month, which is the leak the Upcoming rail already closes
+        // (Home C3). Asked HERE because this is the one place the whole show is
+        // in hand: the ids the sources name it by, the title it resolves to and
+        // its first-air year are all available before any season payload is
+        // requested, so a hidden show costs no further TMDB reads either. The
+        // check is the app's own rule ([HiddenTitles.hides]), id spellings
+        // first and the name/year pair as the cross-namespace fallback.
+        if (
+            HiddenTitles.hides(
+                HiddenTitles.keys(appContext),
+                "series",
+                title,
+                detail.firstAirDate?.take(4)?.toIntOrNull(),
+                candidateId,
+                "tmdb:${detail.id}",
+                imdbId
+            )
+        ) {
+            return null
+        }
+
         val seasonNumbers = seasonsCoveringMonth(detail.seasons, month)
 
         val seasons = LinkedHashMap<Int, List<ResolvedEpisode>>()
@@ -633,6 +664,9 @@ class LibraryCalendarViewModel(
             val episodes = runCatchingCancellable {
                 tmdbRepository.getSeasonEpisodes(detail.id, season, imdbId ?: candidateId)
             }.getOrNull().orEmpty()
+            // Stored as the payload sent it: the premiere/finale badges read a
+            // season's NUMBERING, and [calendarEpisodesFor] sorts by episode
+            // number itself rather than trusting this order.
             if (episodes.isNotEmpty()) seasons[season] = episodes
         }
 
@@ -661,9 +695,7 @@ class LibraryCalendarViewModel(
             // Detail is routed by the id the app already opens titles with: an
             // IMDb id when there is one, else the TMDB number.
             openId = imdbId ?: detail.id.toString(),
-            title = detail.name?.takeIf { it.isNotBlank() }
-                ?: detail.title?.takeIf { it.isNotBlank() }
-                ?: candidateId,
+            title = title,
             poster = detail.posterPath
                 ?.takeIf { it.isNotBlank() }
                 ?.let { TmdbRepository.POSTER_BASE + it },

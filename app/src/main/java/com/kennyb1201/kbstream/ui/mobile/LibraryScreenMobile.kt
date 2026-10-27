@@ -72,6 +72,7 @@ import com.kennyb1201.kbstream.ui.library.LibraryCalendarPane
 import com.kennyb1201.kbstream.ui.library.LibraryFilter
 import com.kennyb1201.kbstream.ui.library.LibrarySort
 import com.kennyb1201.kbstream.ui.library.LibraryViewModel
+import com.kennyb1201.kbstream.ui.library.libraryWatchlistEmptyText
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -256,20 +257,18 @@ fun LibraryScreenMobile(
                     "and choose \"Add to Library\"."
             }
 
-            LibraryFilter.WATCHLIST -> if (state.loading) {
-                "Loading watchlists…"
-            } else {
-                val sources = buildList {
-                    if (!state.simklConnected) add("Simkl not connected")
-                    if (!state.mdbListConfigured) add("MDBList key not set")
-                    if (!state.traktConnected) add("Trakt not connected")
-                }
-                if (sources.isEmpty()) {
-                    "Watchlist is empty."
-                } else {
-                    "Watchlist is empty — " + sources.joinToString(" · ")
-                }
-            }
+            // The TV pane's own sentence, not a second copy of it: waiting,
+            // unreachable, not connected and genuinely empty are four different
+            // answers, and the phone read all four as "Watchlist is empty."
+            // (see [libraryWatchlistEmptyText]).
+            LibraryFilter.WATCHLIST -> libraryWatchlistEmptyText(
+                loading = state.loading,
+                remoteLoading = state.remoteLoading,
+                simklConnected = state.simklConnected,
+                mdbListConfigured = state.mdbListConfigured,
+                traktConnected = state.traktConnected,
+                failed = state.failedRemotes
+            )
 
             LibraryFilter.LISTS -> when {
                 state.loading && state.selectedList == null -> "Loading lists…"

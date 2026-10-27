@@ -89,10 +89,13 @@ import com.kennyb1201.kbstream.ui.components.touch.KBSheetContent
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
+import com.kennyb1201.kbstream.ui.iptv.ProgramHitPress
 import com.kennyb1201.kbstream.ui.iptv.formatCatchupWindow
 import com.kennyb1201.kbstream.ui.iptv.formatRemainingLabel
 import com.kennyb1201.kbstream.ui.iptv.formatStartsInLabel
 import com.kennyb1201.kbstream.ui.iptv.formatTimeRange
+import com.kennyb1201.kbstream.ui.iptv.programHitActionLabel
+import com.kennyb1201.kbstream.ui.iptv.programHitPress
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -180,6 +183,9 @@ fun GuideScreenMobile(
         val guideError by viewModel.guideError.collectAsStateWithLifecycle()
         val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
         val catchupLoading by viewModel.catchupLoading.collectAsStateWithLifecycle()
+        // A failed catch-up read is not "no DVR history" (see
+        // IptvViewModel.catchupError).
+        val catchupError by viewModel.catchupError.collectAsStateWithLifecycle()
         val playlistUrl by viewModel.playlistUrl.collectAsStateWithLifecycle()
         val epgUrl by viewModel.epgUrl.collectAsStateWithLifecycle()
         val playlistName by viewModel.playlistName.collectAsStateWithLifecycle()
@@ -234,6 +240,13 @@ fun GuideScreenMobile(
             mutableStateOf(IptvReminderStore.load(guidePrefs))
         }
         var reminderBanner by remember { mutableStateOf<IptvReminderStore.Reminder?>(null) }
+        // Every armed reminder, by the key the worker uses: a program search hit
+        // reads it to say "Reminder set" rather than offering to set one twice.
+        val reminderKeys = remember(reminders) {
+            reminders.mapTo(HashSet()) {
+                ReminderRules.reminderKey(it.channelId, it.startUtcMillis)
+            }
+        }
         LaunchedEffect(recentKeys) {
             guidePrefs.edit()
                 .putStringSet("recent_channels", recentKeys.toSet())
@@ -293,27 +306,51 @@ fun GuideScreenMobile(
         // A reminder is stored where the background worker reads it, and armed
         // for the program's start - so it fires with the app closed, not only
         // while this screen happens to be open.
-        fun toggleReminder(item: IptvChannelWithEpg) {
-            val next = item.next ?: return
-            val key = ReminderRules.reminderKey(item.channel.id, next.startUtcMillis)
-            if (IptvReminderStore.has(guidePrefs, item.channel.id, next.startUtcMillis)) {
-                IptvReminderStore.remove(guidePrefs, item.channel.id, next.startUtcMillis)
+        //
+        // One function for both doors onto a reminder: the channel sheet's
+        // "Remind me" row (the NEXT program) and a program search hit (the
+        // program the row names, when it has not started yet - see
+        // [programHitPress]). A second copy is how one of them ends up arming
+        // something the other cannot remove.
+        fun toggleProgramReminder(
+            channelId: String,
+            channelName: String,
+            logoUrl: String?,
+            programTitle: String,
+            startUtcMillis: Long,
+            endUtcMillis: Long
+        ) {
+            val key = ReminderRules.reminderKey(channelId, startUtcMillis)
+            if (IptvReminderStore.has(guidePrefs, channelId, startUtcMillis)) {
+                IptvReminderStore.remove(guidePrefs, channelId, startUtcMillis)
                 ReminderWorker.cancel(appContext, key)
             } else {
                 IptvReminderStore.add(
                     guidePrefs,
                     IptvReminderStore.Reminder(
-                        channelId = item.channel.id,
-                        channelName = item.channel.displayName,
-                        logoUrl = item.channel.logoUrl,
-                        programTitle = next.title,
-                        startUtcMillis = next.startUtcMillis,
-                        endUtcMillis = next.endUtcMillis
+                        channelId = channelId,
+                        channelName = channelName,
+                        logoUrl = logoUrl,
+                        programTitle = programTitle,
+                        startUtcMillis = startUtcMillis,
+                        endUtcMillis = endUtcMillis
                     )
                 )
-                ReminderWorker.arm(appContext, key, next.startUtcMillis)
+                ReminderWorker.arm(appContext, key, startUtcMillis)
             }
             reminders = IptvReminderStore.load(guidePrefs)
+        }
+
+        fun toggleReminder(item: IptvChannelWithEpg) {
+            val next = item.next ?: return
+            toggleProgramReminder(
+                channelId = item.channel.id,
+                channelName = item.channel.displayName,
+                logoUrl = item.channel.logoUrl,
+                programTitle = next.title,
+                startUtcMillis = next.startUtcMillis,
+                endUtcMillis = next.endUtcMillis
+            )
         }
 
         // The lineup with hidden groups removed, then the chips and the members
@@ -754,14 +791,47 @@ fun GuideScreenMobile(
                                         hit.program.startUtcMillis + ":" + index
                                 }
                             ) { _, hit ->
+                                // The tap delivers the PROGRAM the row names: one
+                                // still ahead arms a reminder for it, and only a
+                                // hit already airing is tuned live (see
+                                // [programHitPress]). It used to tune whatever
+                                // was on, which is a different program.
+                                val press = programHitPress(
+                                    startUtcMillis = hit.program.startUtcMillis,
+                                    endUtcMillis = hit.program.endUtcMillis,
+                                    nowUtcMillis = nowMs,
+                                    reminderSet = ReminderRules.reminderKey(
+                                        hit.item.channel.id,
+                                        hit.program.startUtcMillis
+                                    ) in reminderKeys
+                                )
                                 MobileProgramHitRow(
                                     hit = hit,
+                                    actionLabel = programHitActionLabel(press),
+                                    actionActive = press == ProgramHitPress.SET_REMINDER ||
+                                        press == ProgramHitPress.CANCEL_REMINDER,
                                     onClick = {
-                                        recentKeys = nextRecentKeys(
-                                            recentKeys,
-                                            hit.item.channelKey()
-                                        )
-                                        onPlayChannel?.invoke(hit.item)
+                                        when (press) {
+                                            ProgramHitPress.SET_REMINDER,
+                                            ProgramHitPress.CANCEL_REMINDER ->
+                                                toggleProgramReminder(
+                                                    channelId = hit.item.channel.id,
+                                                    channelName = hit.item.channel.displayName,
+                                                    logoUrl = hit.item.channel.logoUrl,
+                                                    programTitle = hit.program.title,
+                                                    startUtcMillis = hit.program.startUtcMillis,
+                                                    endUtcMillis = hit.program.endUtcMillis
+                                                )
+
+                                            ProgramHitPress.WATCH_LIVE,
+                                            ProgramHitPress.WATCH_LIVE_ENDED -> {
+                                                recentKeys = nextRecentKeys(
+                                                    recentKeys,
+                                                    hit.item.channelKey()
+                                                )
+                                                onPlayChannel?.invoke(hit.item)
+                                            }
+                                        }
                                     }
                                 )
                             }
@@ -870,6 +940,7 @@ fun GuideScreenMobile(
                 channelName = item.channel.displayName.ifBlank { item.channel.name },
                 programs = catchupPrograms,
                 loading = catchupLoading,
+                error = catchupError,
                 onDismiss = { catchupChannel = null },
                 onPlay = { program ->
                     catchupChannel = null
@@ -1143,11 +1214,20 @@ private fun MobileListHeading(text: String) {
 }
 
 /**
- * One EPG program hit: what is on, on which channel, and when. Tapping tunes
- * that channel - the program is the reason the channel is being offered.
+ * One EPG program hit: what is on, on which channel, when - and what a tap will
+ * do about it.
+ *
+ * The whole point of the row is the PROGRAM, so the tap cannot just tune the
+ * channel: [actionLabel] says which of the two things it will actually do
+ * (watch live, or arm a reminder for a program still ahead).
  */
 @Composable
-private fun MobileProgramHitRow(hit: MobileGuideProgramHit, onClick: () -> Unit) {
+private fun MobileProgramHitRow(
+    hit: MobileGuideProgramHit,
+    actionLabel: String,
+    actionActive: Boolean,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1167,6 +1247,13 @@ private fun MobileProgramHitRow(hit: MobileGuideProgramHit, onClick: () -> Unit)
                 formatTimeRange(hit.program.startUtcMillis, hit.program.endUtcMillis),
             color = KBTextLo,
             style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = actionLabel,
+            color = if (actionActive) KBAccent else KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1853,6 +1940,8 @@ private fun MobileCatchupDialog(
     channelName: String,
     programs: List<CatchupProgram>,
     loading: Boolean,
+    /** Why the read failed, when it did - see [IptvViewModel.catchupError]. */
+    error: String? = null,
     onDismiss: () -> Unit,
     onPlay: (CatchupProgram) -> Unit
 ) {
@@ -1876,10 +1965,14 @@ private fun MobileCatchupDialog(
                     )
                 }
 
+                // A failed read says so instead of borrowing the "no history"
+                // sentence, which is the wrong advice for a dead provider.
                 programs.isEmpty() -> Text(
-                    text = "This channel advertises catch-up, but the guide has no " +
-                        "aired programs for it in the window yet.",
-                    color = KBTextLo,
+                    text = error ?: (
+                        "This channel advertises catch-up, but the guide has no " +
+                            "aired programs for it in the window yet."
+                        ),
+                    color = if (error != null) KBDanger else KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )
 

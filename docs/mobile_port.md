@@ -810,8 +810,8 @@ title and connection line, the filter strip (ALL / MY LIST / WATCHLIST /
 PERSONAL LISTS), the UNWATCHED toggle, the four sort fields with the selected
 one carrying its ▲/▼ direction, then the posters. Every filter reads the same
 activity-scoped `LibraryViewModel`; hidden titles drop out of all four lists as
-they do on TV; each filter keeps its own empty sentence (the watchlist names
-the unconnected sources).
+they do on TV; each filter keeps its own empty sentence (the watchlist's comes
+from the same `libraryWatchlistEmptyText` the TV pane calls - see below).
 
 The personal-lists pane becomes a list of lists above the selected list's grid
 (count and source per row), with the inline "+ NEW LIST" field and the
@@ -829,6 +829,19 @@ Parity notes (not bugs to fix):
 - The D-pad plumbing has no phone twin: per-card focus requesters, the
   successor hand-off and the return-focus loop exist to keep a remote's focus
   off a removed cell, and hiding a card just removes it here.
+
+**The watchlist says what actually happened (2026-10-27).** Both panes now draw
+one sentence from `libraryWatchlistEmptyText` (in `LibraryViewModel.kt`): the
+local half clearing `loading` first no longer makes a remote fetch still in
+flight read as "Watchlist is empty." (`LibraryUiState.remoteLoading` gates the
+empty copy), and a tracker whose read FAILED no longer reads either as empty or
+as "not connected" - it names the service as unreachable
+(`LibraryUiState.failedRemotes`), with the never-connected services listed
+after it. The phone had its own copy of this string; the two can no longer
+drift. The TV grid's scroll state is also keyed on the open personal list beside
+the filter, so opening list B starts at B's top rather than list A's offset, and
+the TV long-press menu's "Go to Details" records the `BrowseReturnTarget` the
+poster press records - which the phone's menu already did.
 
 ### Browse pages (Tag, Studio, Decade)
 
@@ -1277,6 +1290,16 @@ and a per-group zapping lineup with the on-screen group selected.
 
 The TV's zapping **number pad is intentionally not ported**: a remote has no
 text entry, and on a phone the search field matches a channel number exactly.
+
+**A program search hit delivers its program (2026-10-27).** A hit's press used
+to tune the channel whatever the time was, so a "what's on tonight" hit opened a
+different program with nothing on screen saying so. Both screens now ask
+`programHitPress` (in `ui/iptv/GuideRules.kt`): a hit still ahead arms a reminder
+for THAT program through the same store/worker the channel sheet uses, a hit
+airing now tunes live, and one that has ended tunes live too. Each row carries
+the action's own line (`programHitActionLabel`), and the TV search dialog keeps a
+30s clock while it is open so it never offers a reminder for something already
+on air.
 
 Parity notes (not bugs to fix):
 - Restored `Recent` order is best-effort: TV persists it as an unordered

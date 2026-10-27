@@ -98,11 +98,17 @@ class LibraryCalendarSurfaceContractTest {
                 pane.contains("landed = runCatching { firstEpisodeRequester.requestFocus() }")
         )
         assertTrue(
-            "Down on the grid's bottom row only consumes the press when there IS " +
-                "a list to land in; otherwise the press falls through",
+            "Down on the grid's bottom row is consumed on a fresh press; it only " +
+                "enters the list when there IS one to land in",
             pane.contains("hasEpisodesBelow = days[day].orEmpty().isNotEmpty()") &&
-                pane.contains("event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow") &&
+                pane.contains("event.key == Key.DirectionDown && isLastRow -> {") &&
+                pane.contains("if (hasEpisodesBelow) onEnterDayList()") &&
                 pane.contains("onEnterDayList() true")
+        )
+        assertFalse(
+            "and an empty day's press no longer falls through to Compose's " +
+                "focus search, which had nothing below the last row to find",
+            pane.contains("event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow")
         )
         assertTrue(
             "and the heading says how many, so the grid's count has a word beside it",
@@ -195,7 +201,7 @@ class LibraryCalendarSurfaceContractTest {
                 "make that true",
             pane.contains("event.key == Key.DirectionLeft && isFirstColumn") &&
                 pane.contains("event.key == Key.DirectionRight && isLastColumn") &&
-                pane.contains("event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow") &&
+                pane.contains("event.key == Key.DirectionDown && isLastRow -> {") &&
                 pane.contains("onPrevMonth() true") &&
                 pane.contains("onNextMonth() true") &&
                 pane.contains("onEnterDayList() true")

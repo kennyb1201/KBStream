@@ -537,10 +537,11 @@ private fun CalendarGrid(
                                 isFirstColumn = column == 0,
                                 isLastColumn = column == 6,
                                 isLastRow = rowIndex == rows.lastIndex,
-                                // Down only leaves the grid when there is a
-                                // list below to land in; a day with nothing on
-                                // it lets the press fall through instead of
-                                // swallowing it.
+                                // A press on a day is a request to see that
+                                // day, and Down leaves the grid only when there
+                                // is a list to land in. (Down is consumed on
+                                // the last row either way - see the cell's key
+                                // handler.)
                                 hasEpisodesBelow = days[day].orEmpty().isNotEmpty(),
                                 requester = if (touch) null else dayRequesters[day],
                                 onSelect = onSelect,
@@ -706,8 +707,18 @@ private fun CalendarDayCell(
                             true
                         }
 
-                        event.key == Key.DirectionDown && isLastRow && hasEpisodesBelow -> {
-                            onEnterDayList()
+                        // Down on the grid's last row is consumed EVEN when
+                        // the day has nothing airing. Letting it fall through
+                        // handed the press to Compose's geometric focus
+                        // search, which has nothing below a bottom-row cell to
+                        // find - the D-pad then jumped backwards (the chip
+                        // strip is the last target above this pane), which
+                        // reads as focus escaping the calendar. A day with
+                        // episodes has a list to enter; an empty one keeps the
+                        // press as the plain selection an OK on it already
+                        // makes.
+                        event.key == Key.DirectionDown && isLastRow -> {
+                            if (hasEpisodesBelow) onEnterDayList()
                             true
                         }
 

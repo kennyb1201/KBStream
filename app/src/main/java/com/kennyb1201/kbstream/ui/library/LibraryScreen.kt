@@ -168,12 +168,16 @@ fun LibraryScreen(
     // the grid: a Back out of Detail disposes THIS composable and everything in
     // it, so the state a return has to land in cannot live below this point.
     // (See [BrowseReturnFocus].)
-    // Keyed on the filter: switching filters is a new list, and a scroll
-    // offset from the one before it means nothing in this one, so the strip
-    // still starts the new list at the top. A return reads the same filter it
+    // Keyed on the filter AND the open personal list: switching filters is a
+    // new list, and a scroll offset from the one before it means nothing in
+    // this one. The selected list is the second half of that identity - the
+    // LISTS filter shows ONE list's rows, so opening list B kept list A's
+    // offset and B opened scrolled mid-list (or clamped to its end, when B was
+    // shorter). Mobile never had this: its lists view is a different layout,
+    // keyed on the filter alone. A return reads the same filter (and list) it
     // recorded under, so its own state is the one it scrolls (see
     // [BrowseReturnFocus]).
-    val gridState = remember(state.filter) { LazyGridState() }
+    val gridState = remember(state.filter, state.selectedList?.id) { LazyGridState() }
     var returnTarget by remember {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
@@ -459,25 +463,24 @@ fun LibraryScreen(
             LibraryFilter.WATCHLIST -> {
                 ItemGrid(
                     items = state.watchlistItems,
-                    emptyText = if (state.loading) {
-                        "Loading watchlists…"
-                    } else {
-                        val sources = mutableListOf<String>()
-                        if (!state.simklConnected) sources.add("Simkl not connected")
-                        if (!state.mdbListConfigured) sources.add("MDBList key not set")
-                        if (!state.traktConnected) sources.add("Trakt not connected")
-                        if (sources.isEmpty()) {
-                            "Watchlist is empty."
-                        } else {
-                            // An em dash, not the full stop this used: "Watchlist
-                            // is empty. Simkl not connected · MDBList key not
-                            // set" left the reasons stranded after a finished
-                            // sentence, so the line read as broken copy rather
-                            // than as one sentence saying why the list is empty.
-                            "Watchlist is empty — " + sources.joinToString(" · ")
-                        }
-                    },
-                    loading = state.loading,
+                    // Four states, not two (see [libraryWatchlistEmptyText]):
+                    // waiting on the remote half, a source that could not be
+                    // reached, a source that was never connected, and a
+                    // watchlist that really is empty. The old two read all
+                    // four as "Watchlist is empty.", so a failed fetch looked
+                    // like a finished answer.
+                    emptyText = libraryWatchlistEmptyText(
+                        loading = state.loading,
+                        remoteLoading = state.remoteLoading,
+                        simklConnected = state.simklConnected,
+                        mdbListConfigured = state.mdbListConfigured,
+                        traktConnected = state.traktConnected,
+                        failed = state.failedRemotes
+                    ),
+                    // The card draws its spinner while either half is still
+                    // coming in: the local phase clears `loading` first, and
+                    // the wait the copy names is the remote one.
+                    loading = state.loading || state.remoteLoading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
                     onItemLongClick = { item, successorKey ->
@@ -553,8 +556,32 @@ fun LibraryScreen(
             onDismiss = { closeMenu(LocalLibraryStore.dedupeKey(item)) },
             onOpenDetails = { id ->
                 // Navigating away: the screen behind this one is about to be
-                // disposed, so there is nothing to hand the focus back to.
+                // disposed, so there is nothing to hand the focus back to -
+                // but the page still has to be told WHERE it is going, or the
+                // way back lands on the filter chip.
+                //
+                // Only the grid's own press recorded a return target, and the
+                // long-press menu is the other way into a Detail page from
+                // here: Back out of one opened that way fell through to the
+                // no-record fallback (the selected chip) while the poster
+                // path came back to the card. Mobile's menu has recorded this
+                // all along (see LibraryScreenMobile); this is the same
+                // record, raised from the same row, with the position the row
+                // holds in the grid the viewer is looking at.
+                val itemKey = LocalLibraryStore.dedupeKey(item)
+                val position = libraryGridRows(state).indexOfFirst {
+                    LocalLibraryStore.dedupeKey(it) == itemKey
+                }
                 menuItem = null
+                if (position >= 0) {
+                    BrowseReturnFocus.record(
+                        BrowseReturnTarget(
+                            screenKey = LIBRARY_BROWSE_SCREEN_KEY,
+                            itemId = itemKey,
+                            position = position
+                        )
+                    )
+                }
                 onItemClick(item.mediaType, id)
             },
             onRemove = {
@@ -582,6 +609,25 @@ fun LibraryScreen(
     }
     }
 }
+
+/**
+ * The rows the poster grid is showing for [state]'s filter, in the grid's own
+ * order.
+ *
+ * The screen composes one [ItemGrid] per filter, so "which list is this row
+ * in" is a function of the filter and the open personal list. The long-press
+ * menu needs it to record a return position that means something in the grid
+ * the viewer comes back to.
+ */
+private fun libraryGridRows(state: LibraryUiState): List<LibraryItem> =
+    when (state.filter) {
+        LibraryFilter.ALL -> state.allItems
+        LibraryFilter.MY_LIST -> state.localItems
+        LibraryFilter.WATCHLIST -> state.watchlistItems
+        LibraryFilter.LISTS -> state.selectedListItems
+        // The calendar is a pane, not a grid of library rows.
+        LibraryFilter.CALENDAR -> emptyList()
+    }
 
 /**
  * Long-press menu for one Library row, built on the app-wide

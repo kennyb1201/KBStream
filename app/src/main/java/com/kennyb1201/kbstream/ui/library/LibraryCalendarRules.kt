@@ -436,11 +436,18 @@ internal val calendarEpisodeOrder: Comparator<CalendarEpisode> =
  * per-show and whole-month paths share this one function, so the two can never
  * place an episode on different days.
  *
- * Premiere and finale are properties of the SEASON PAYLOAD, not of the month:
- * the first and last named episode of that season, so an episode that opened a
- * season in September still reads as a premiere when the calendar shows
- * October. That is the same first/last rule the Detail screen's season list
- * implies, applied once here so both the badge and any future summary agree.
+ * Premiere and finale are properties of the SEASON, not of the month: the first
+ * and last episode NUMBER of that season, so an episode that opened a season in
+ * September still reads as a premiere when the calendar shows October. That is
+ * the same first/last rule the Detail screen's season list implies, applied
+ * once here so both the badge and any future summary agree.
+ *
+ * "First and last" is the season's NUMBERING, and the payload is sorted here to
+ * make that true: the badges used to read `first()`/`last()` straight off
+ * whatever order TMDB sent, so a season payload that arrived unordered would
+ * label two unrelated episodes as the premiere and the finale. TMDB normally
+ * sends them in order, which is exactly why the assumption was invisible until
+ * it wasn't - one sort here and no caller can reintroduce it.
  */
 internal fun calendarEpisodesFor(
     month: YearMonth,
@@ -459,8 +466,11 @@ internal fun calendarEpisodesFor(
     // off the calendar after the pointer was first wired in.
     val dated = HashSet<Pair<Int, Int>>()
 
-    for ((season, episodes) in show.seasons) {
-        if (episodes.isEmpty()) continue
+    for ((season, payload) in show.seasons) {
+        if (payload.isEmpty()) continue
+        // The season's own order (see this function's kdoc): premiere and finale
+        // are the lowest and highest episode numbers of the season.
+        val episodes = payload.sortedBy { it.episodeNumber }
         val premiere = episodes.first().episodeNumber
         val finale = episodes.last().episodeNumber
 

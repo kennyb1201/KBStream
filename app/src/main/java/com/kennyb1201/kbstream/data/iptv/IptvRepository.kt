@@ -1269,8 +1269,13 @@ class IptvRepository(
                     nowUtcMillis < program.endUtcMillis
             }
 
+            // STRICTLY after the clock. `>=` made a program that starts exactly
+            // at nowUtcMillis both NOW (the predicate above already claimed it)
+            // and NEXT, so the detail panel drew it on both cards. The guide's
+            // in-memory clock advance (GuideClockAdvance.advancePrograms) holds
+            // the same rule and has to keep holding it.
             val next = matchedPrograms.firstOrNull { program ->
-                program.startUtcMillis >= nowUtcMillis
+                program.startUtcMillis > nowUtcMillis
             }
 
             val upcoming = matchedPrograms.asSequence()
