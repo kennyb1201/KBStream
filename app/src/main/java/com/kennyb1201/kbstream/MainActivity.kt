@@ -1199,6 +1199,12 @@ fun AppRoot(
     }
     val showProfilePicker = remember(launchProfileHasPin) {
         launchProfileHasPin ||
+            // A profiles blob this build could not read forces the picker for
+            // the same reason a PIN does: it is the screen that can say what
+            // happened, and Home behind it would be serving the legacy store for
+            // a profile nobody could resolve (see
+            // ProfileManager.profilesUnreadable).
+            com.kennyb1201.kbstream.data.sync.ProfileManager.profilesUnreadable.value ||
             com.kennyb1201.kbstream.data.settings.AppPreferences
                 .getShowProfilePicker(applicationContext)
     }
@@ -2328,9 +2334,24 @@ fun AppRoot(
                 // "Manage rails" on Home's all-hidden card (HD-P2-5): the
                 // manager is the Add-ons screen's dialog, so navigate there and
                 // leave the one-shot request for it to pick up on arrival.
+                //
+                // Kids Mode "Lock add-ons" applies here too: this was the third
+                // door to add-on management and the only one that did not check
+                // it (`onOpenAddons` and `onOpenCatalogManager` both do). The
+                // reachable path is narrow - an all-hidden Home needs rails
+                // hidden, and hiding needs the manager the lock blocks - so this
+                // closes a gap in the gate rather than a demonstrated bypass. No
+                // request is left behind on the blocked press: a one-shot that
+                // fired later would open the manager on the next visit.
                 onManageRails = {
-                    com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
-                    screen = Screen.Addons(returnTo = Screen.Home)
+                    val active =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+                    if (active?.kidsMaxAge != null && active.kidsHideAddons) {
+                        screen = Screen.Home
+                    } else {
+                        com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
+                        screen = Screen.Addons(returnTo = Screen.Home)
+                    }
                 }
             )
         }

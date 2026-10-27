@@ -71,7 +71,12 @@ class UiUniformityBatchCContractTest {
         )
         listOf(
             "title = \"Loading guide\",",
-            "title = if (groupedChannels.isEmpty()) {",
+            // The detail pane's empty state became a three-way `when` when the
+            // All-hidden recovery was fixed (an empty playlist opens SETUP, a
+            // hide-everything opens the hidden manager), so its two plain
+            // headings are named by the strings rather than by the old `if`.
+            "\"No channel selected\"",
+            "emptyPlaylist -> \"No channels in this playlist\"",
             "title = \"No groups found\",",
             "title = \"No hidden channels\","
         ).forEach { heading ->

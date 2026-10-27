@@ -162,9 +162,21 @@ class KeyFieldMaskingContractTest {
                 "$flag must not start false: a stored key has to read as stored",
                 settings.contains("var $flag by remember { mutableStateOf(false) }")
             )
+            assertFalse(
+                "nor start false behind the profile key",
+                settings.contains(
+                    "var $flag by remember(profileRowKey) { mutableStateOf(false) }"
+                )
+            )
             assertTrue(
-                "$flag must be seeded from the store the app actually reads",
-                settings.contains("var $flag by remember { mutableStateOf($getter.isNotBlank()) }")
+                "$flag must be seeded from the store the app actually reads, " +
+                    "and re-seeded on a profile switch: the store behind it is per " +
+                    "profile, so a saved key from the profile just left must not " +
+                    "keep reading as saved here",
+                settings.contains(
+                    "var $flag by remember(profileRowKey) {" +
+                        " mutableStateOf($getter.isNotBlank()) }"
+                )
             )
         }
     }

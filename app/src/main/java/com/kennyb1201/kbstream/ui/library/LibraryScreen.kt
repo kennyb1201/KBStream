@@ -466,9 +466,9 @@ fun LibraryScreen(
                     // Four states, not two (see [libraryWatchlistEmptyText]):
                     // waiting on the remote half, a source that could not be
                     // reached, a source that was never connected, and a
-                    // watchlist that really is empty. The old two read all
-                    // four as "Watchlist is empty.", so a failed fetch looked
-                    // like a finished answer.
+                    // watchlist that really is empty. The old two collapsed
+                    // all four into one finished-looking empty answer, so a
+                    // failed fetch read as though the list were empty.
                     emptyText = libraryWatchlistEmptyText(
                         loading = state.loading,
                         remoteLoading = state.remoteLoading,

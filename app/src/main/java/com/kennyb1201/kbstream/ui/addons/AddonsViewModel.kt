@@ -1012,6 +1012,21 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
                 var newCatalogTotal = 0
 
+                /*
+                 * Health comes from THIS pass's own fetches, not from a second
+                 * checkHealth() afterwards.
+                 *
+                 * The badge used to survive a refresh: health was re-checked on
+                 * add/remove/enable only, so a viewer could REFRESH ALL to fix a
+                 * dead add-on, watch the row keep its OFFLINE badge, and be told
+                 * by the screen that the fix had not worked. Re-checking with
+                 * checkHealth() would work but would re-fetch every manifest this
+                 * pass has just fetched; the results in hand already answer the
+                 * question, so they are recorded instead.
+                 */
+                val health = _health.value.toMutableMap()
+                val healthCheckedAt = System.currentTimeMillis()
+
                 // Apply each fetched manifest through the manager's OWN merge
                 // (see planManifestMerge): it carries the user's rename /
                 // visibility / Home arrangement across the refresh, remaps a
@@ -1027,10 +1042,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     // rather than wiping resources/catalogs.
                     val manifest = result.getOrNull()
                     if (manifest == null || !manifest.isUsableAddonManifest()) {
+                        health[old.id] = AddonHealth(
+                            healthy = false,
+                            checkedAt = healthCheckedAt
+                        )
                         failureCount++
                         return@forEach
                     }
 
+                    health[old.id] = AddonHealth(healthy = true, checkedAt = healthCheckedAt)
                     successCount++
 
                     newCatalogTotal += manifest.catalogs.count { catalog ->
@@ -1042,6 +1062,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
                     addonManager.updateAddonFromManifest(old.manifestUrl, manifest)
                 }
+                _health.value = health
                 refresh()
 
                 _status.value = when {
@@ -1091,6 +1112,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 val manifest = repository.fetchManifest(addon.manifestUrl)
 
                 if (!manifest.isUsableAddonManifest()) {
+                    // The fetch answered - with junk - so the row's badge is the
+                    // failure, not a stale OK (see the same rule in
+                    // refreshAllManifests).
+                    _health.value = _health.value + (
+                        addon.id to AddonHealth(
+                            healthy = false,
+                            checkedAt = System.currentTimeMillis()
+                        )
+                        )
                     _error.value =
                         "Manifest doesn't look like a Stremio add-on " +
                             "(no resources or catalogs) — kept the saved config."
@@ -1110,6 +1140,15 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 // outside it) and carries the user's rename / visibility /
                 // Home arrangement across, remapping a swapped catalog id.
                 addonManager.updateAddonFromManifest(addon.manifestUrl, manifest)
+
+                // This add-on just answered with a usable manifest: its badge
+                // follows the same rule as REFRESH ALL's.
+                _health.value = _health.value + (
+                    addon.id to AddonHealth(
+                        healthy = true,
+                        checkedAt = System.currentTimeMillis()
+                    )
+                    )
 
                 refresh()
 

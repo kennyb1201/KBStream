@@ -72,9 +72,14 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  *  - MANAGE sits in the same grid as the people.
  *
  * There is no D-pad focus ring, no first-tile focus request and no dialog focus
- * retry: the avatar is a tappable circle, and a dialog is a modal layer. Manage
- * still opens the TV profile editor, which is not ported yet (recorded in
- * docs/mobile_port.md).
+ * retry: the avatar is a tappable circle, and a dialog is a modal layer.
+ *
+ * Manage opens [ProfileEditScreenMobile], the phone's own editor - the TV page
+ * branches to it on a non-TV form factor and it carries the same [KidsGate]
+ * save/delete/first-PIN/chip gates. (This note used to say the editor was "not
+ * ported yet", which was true when the picker was written and stopped being
+ * true when the editor landed; a stale "not ported" line is how a real gap gets
+ * assumed away later.)
  */
 @Composable
 fun ProfilePickerScreenMobile(
@@ -84,6 +89,9 @@ fun ProfilePickerScreenMobile(
     val context = LocalContext.current
     val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()
     val active by ProfileManager.activeProfile.collectAsStateWithLifecycle()
+    // See ProfileManager.profilesUnreadable: the TV picker draws the same line,
+    // because an unreadable blob is not an empty first run on either screen.
+    val profilesUnreadable by ProfileManager.profilesUnreadable.collectAsStateWithLifecycle()
 
     var pinTarget by remember { mutableStateOf<ProfileManager.Profile?>(null) }
     var pinEntry by remember { mutableStateOf("") }
@@ -148,6 +156,20 @@ fun ProfilePickerScreenMobile(
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold
             )
+
+            if (profilesUnreadable) {
+                Text(
+                    text = "Profiles couldn't be read on this device. Nothing has " +
+                        "been deleted - sign in on another device to restore them, " +
+                        "then open this screen again.",
+                    color = KBDanger,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp, start = 12.dp, end = 12.dp)
+                )
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 104.dp),

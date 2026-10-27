@@ -223,10 +223,11 @@ class UiUniformityBatchDContractTest {
     @Test
     fun `the detail action row is drawn as buttons`() {
         assertEquals(
-            "Play, Random and Trailer are buttons, not cards: the pill edge and " +
-                "the button step of the focus scale, instead of the card's 12dp " +
-                "corner at 1.03",
-            3,
+            "Play, Random, Trailer and the My List toggle are buttons, not " +
+                "cards: the pill edge and the button step of the focus scale, " +
+                "instead of the card's 12dp corner at 1.03. My List joined the " +
+                "row when a title's own page learned to unsave it",
+            4,
             count(
                 source("ui/detail/DetailScreen.kt"),
                 "shape = KBShapePill, focusedScale = KBFocusButton"

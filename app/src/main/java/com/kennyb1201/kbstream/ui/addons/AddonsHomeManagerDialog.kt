@@ -386,8 +386,21 @@ internal fun CatalogManagerDialog(
                     )
                 }
                 if (configurations.isNotEmpty()) {
+                    // CATALOGS, said out loud. This button sits under "Arrange the
+                    // rails on Home" and only ever touched add-on catalogs -
+                    // builtins, collections, built catalogs and browse rails were
+                    // never in its scope - so a viewer who hid one of each and
+                    // pressed SHOW ALL came back to a Home still missing most of
+                    // them, promised by the header and not delivered by the press.
+                    // The action is deliberately unchanged: widening it would
+                    // restore rails the viewer may have hidden on purpose. The
+                    // label now says exactly what it does.
                     ActionButton(
-                        label = if (allCatalogsVisible) "HIDE ALL" else "SHOW ALL",
+                        label = if (allCatalogsVisible) {
+                            "HIDE ALL CATALOGS"
+                        } else {
+                            "SHOW ALL CATALOGS"
+                        },
                         onClick = { onToggleAll(!allCatalogsVisible) }
                     )
                     Spacer(modifier = Modifier.width(8.dp))

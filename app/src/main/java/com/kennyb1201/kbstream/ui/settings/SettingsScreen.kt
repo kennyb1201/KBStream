@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -327,18 +328,28 @@ fun SettingsScreen(
     // by that, because every handler writes its flip straight through to prefs
     // (the in-memory state is a mirror of the store, not a buffer for it).
     //
-    // The rows that stay BARE are the device-local ones on purpose - decoder,
-    // buffer, engine, aspect ratio, the external player, the API keys - so
-    // another box's answer can never move a control that describes this one
-    // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    // The rows that deliberately do NOT key on it are the device-local ones -
+    // decoder, buffer, engine, aspect ratio, the external player, the API keys -
+    // so another box's answer can never move a control that describes this one
+    // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS). Those key on the PROFILE
+    // instead (rememberProfileRowKey), which is the other thing that changes
+    // what they should be showing.
     val syncedRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
         .revision.collectAsStateWithLifecycle()
 
-    var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
-    // Device-local, and bare for that reason: whether a launch opens on Who's
-    // Watching describes how this screen is shared, not the account (see
-    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
-    var showProfilePickerOnLaunch by remember {
+    // What the DEVICE-LOCAL rows below re-seed on (see rememberProfileRowKey).
+    // They are bare against a push from another box on purpose; they are not
+    // bare against a profile switch on THIS one, because their store is per
+    // profile and a switch changes every value they mirror.
+    val profileRowKey = rememberProfileRowKey()
+
+    var bufferMode by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getDefaultBufferMode(context))
+    }
+    // Device-local, and keyed only on the profile for that reason: whether a
+    // launch opens on Who's Watching describes how this screen is shared, not
+    // the account (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    var showProfilePickerOnLaunch by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getShowProfilePicker(context))
     }
     var subtitleSize by remember(syncedRevision) {
@@ -375,7 +386,9 @@ fun SettingsScreen(
     var autoSkipCredits by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoSkipCredits(context))
     }
-    var matchFrameRate by remember { mutableStateOf(AppPreferences.getMatchFrameRate(context)) }
+    var matchFrameRate by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMatchFrameRate(context))
+    }
     var bingeGroupPrefer by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBingeGroupPrefer(context))
     }
@@ -447,28 +460,44 @@ fun SettingsScreen(
             }
         }
     }
-    var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
+    var autoSelectStream by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAutoSelectStream(context))
+    }
     var useStreamRanker by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUseStreamRanker(context))
     }
-    // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on
-    // nothing, like the decoder toggles above and below, so another device's
-    // display push never re-reads a ceiling it does not share.
-    var maxAutoPlayQuality by remember {
+    // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on the
+    // profile only, like the decoder toggles above and below, so another
+    // device's display push never re-reads a ceiling it does not share.
+    var maxAutoPlayQuality by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
-    var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
-    var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
+    var enableTunneling by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getEnableTunneling(context))
+    }
+    var enablePip by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getEnablePip(context))
+    }
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
     val isFireTv = android.os.Build.MANUFACTURER.equals("Amazon", ignoreCase = true)
-    var audioDecoder by remember { mutableIntStateOf(AppPreferences.getAudioDecoder(context)) }
+    var audioDecoder by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getAudioDecoder(context))
+    }
     // Audio downmix / dialogue / volume: the global defaults the player's own
     // panel offers to override per show (see PlayerAudioTuning).
-    var audioDownmix by remember { mutableIntStateOf(AppPreferences.getAudioDownmix(context)) }
-    var audioDialogueBoost by remember { mutableIntStateOf(AppPreferences.getAudioDialogueBoost(context)) }
-    var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }
+    var audioDownmix by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getAudioDownmix(context))
+    }
+    var audioDialogueBoost by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getAudioDialogueBoost(context))
+    }
+    var audioVolumeBoostDb by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context))
+    }
     // Decode vs passthrough (device-level, like the audio decoder above).
-    var audioOutput by remember { mutableIntStateOf(AppPreferences.getAudioOutput(context)) }
+    var audioOutput by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getAudioOutput(context))
+    }
     var heroTrailerAutoplay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context))
     }
@@ -484,7 +513,9 @@ fun SettingsScreen(
     var resumeAuthority by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getResumeAuthority(context))
     }
-    var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
+    var badgePackInput by remember(profileRowKey) {
+        mutableStateOf(StreamBadgeEngine.getPackUrl(context))
+    }
     var railShowType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
     }
@@ -539,17 +570,27 @@ fun SettingsScreen(
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
-    var dvCompatMode by remember { mutableIntStateOf(AppPreferences.getDvCompatMode(context)) }
-    var convertP5To81 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
+    var dvCompatMode by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getDvCompatMode(context))
+    }
+    var convertP5To81 by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getConvertP5To81(context))
+    }
     // Coerced read: a stored "MPV" on a device without libmpv reports as
     // ExoPlayer, which is what this row then shows and highlights.
-    var playerEngine by remember { mutableIntStateOf(PlayerEngine.selected(context)) }
-    var mpvForAnime by remember { mutableStateOf(AppPreferences.getMpvForAnime(context)) }
-    var mpvVoMode by remember { mutableStateOf(AppPreferences.getMpvVoMode(context)) }
+    var playerEngine by remember(profileRowKey) {
+        mutableIntStateOf(PlayerEngine.selected(context))
+    }
+    var mpvForAnime by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvForAnime(context))
+    }
+    var mpvVoMode by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvVoMode(context))
+    }
     // External engine, device-local like the engine itself: which video apps
     // are installed is a property of this box, not of the account.
     val externalPlayers = remember { ExternalPlayer.installed(context) }
-    var externalPackage by remember {
+    var externalPackage by remember(profileRowKey) {
         mutableStateOf(
             AppPreferences.getExternalPlayerPackage(context)?.takeIf { stored ->
                 externalPlayers.any { it.packageName == stored }
@@ -559,14 +600,16 @@ fun SettingsScreen(
     // An app the viewer named by hand, for the boxes where detection cannot find
     // their player at all (a TV build whose manifest declares no video handler).
     // Null - the default - means the probe decides.
-    var customExternalPackage by remember {
+    var customExternalPackage by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getCustomExternalPlayerPackage(context))
     }
-    var customExternalLabel by remember {
+    var customExternalLabel by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getCustomExternalPlayerLabel(context))
     }
-    var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
-    var externalTrustReturn by remember {
+    var externalAsk by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getExternalPlayerAsk(context))
+    }
+    var externalTrustReturn by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getExternalTrustReturn(context))
     }
     // Set when the engine pill below is picked and there is more than one
@@ -581,8 +624,12 @@ fun SettingsScreen(
     // must be stripped and color-corrected on the GPU: the conversion (and its
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
-    var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
-    var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
+    var stripHdr10Plus by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getStripHdr10Plus(context))
+    }
+    var aspectRatio by remember(profileRowKey) {
+        mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context))
+    }
     var preferredAudioLang by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPreferredAudioLanguage(context))
     }
@@ -601,8 +648,10 @@ fun SettingsScreen(
     // press could correct it (reported 2026-10-22). The getters are the same
     // chain ratings, Verify and the sync blob read, so the card cannot disagree
     // with what the app actually uses.
-    var mdbListKeyInput by remember { mutableStateOf(AppPreferences.getMdbListApiKey(context)) }
-    var mdbListKeySaved by remember {
+    var mdbListKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMdbListApiKey(context))
+    }
+    var mdbListKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMdbListApiKey(context).isNotBlank())
     }
     // Key-verification posture (SI-P2-3): MDBList and TorBox each have a
@@ -615,19 +664,25 @@ fun SettingsScreen(
     // TorBox's probe is not a nicety: both of its features fail soft, so a key
     // it rejects produced no chip and no library rows with nothing said. See
     // TorBoxClient.verifyKey.
-    var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
-    var subsKeySaved by remember {
+    var subsKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context))
+    }
+    var subsKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context).isNotBlank())
     }
-    var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }
-    var torboxKeySaved by remember {
+    var torboxKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getTorboxApiKey(context))
+    }
+    var torboxKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getTorboxApiKey(context).isNotBlank())
     }
     // OMDb key: awards text on the detail screen. Saved-only feedback like the
     // OpenSubtitles/TorBox fields — OMDb has no cheap verification endpoint, so
     // this does not claim a connection it has not tested.
-    var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
-    var omdbKeySaved by remember {
+    var omdbKeyInput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getOmdbApiKey(context))
+    }
+    var omdbKeySaved by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getOmdbApiKey(context).isNotBlank())
     }
     var autoFetchSubtitles by remember(syncedRevision) {
@@ -703,28 +758,38 @@ fun SettingsScreen(
         }
     }
 
+    // A picked file is not yet an apply.
+    //
+    // Import is the one row in Settings that discards state the viewer never
+    // chose to discard: it clears this profile's history and watched marks
+    // before it restores the file's, replaces the prefs behind every control on
+    // this page, and (when the file carries one) takes its add-ons - all in one
+    // transaction with no undo. Every other destructive row here asks first
+    // (Clear Continue Watching has its own dialog, CLEAR EYE BADGES is
+    // two-tap); this one went straight to work on the pick, so a wrong file
+    // pick replaced a profile silently. The URI waits here until the dialog
+    // answers, and the validation gates inside BackupManager (newer version,
+    // missing history) still run after it.
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+
+    fun applyImport(uri: Uri) {
+        backupScope.launch {
+            backupStatus = runCatchingCancellable {
+                BackupManager.import(context, uri)
+            }.getOrElse { "Import failed: ${it.message}" }
+        }
+    }
+
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            backupScope.launch {
-                backupStatus = runCatchingCancellable {
-                    BackupManager.import(context, uri)
-                }.getOrElse { "Import failed: ${it.message}" }
-            }
-        }
+        if (uri != null) pendingImportUri = uri
     }
 
     val importGetContentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) {
-            backupScope.launch {
-                backupStatus = runCatchingCancellable {
-                    BackupManager.import(context, uri)
-                }.getOrElse { "Import failed: ${it.message}" }
-            }
-        }
+        if (uri != null) pendingImportUri = uri
     }
 
     fun launchImportBackup() {
@@ -1668,7 +1733,9 @@ fun SettingsScreen(
                         // imported-state line survives leaving and re-entering
                         // settings (the OMDb "Saved" parity). Import/remove then
                         // update it live.
-                        var badgeStatus by remember { mutableStateOf(
+                        // Keyed like the pack URL beside it: the status
+                        // describes THAT profile's pack, so it re-seeds with it.
+                        var badgeStatus by remember(profileRowKey) { mutableStateOf(
                             if (StreamBadgeEngine.hasPack(context)) {
                                 "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} filters active"
                             } else {
@@ -3485,6 +3552,26 @@ fun SettingsScreen(
         )
     }
 
+    if (pendingImportUri != null) {
+        SettingsImportBackupDialog(
+            onDismiss = { pendingImportUri = null },
+            onExportFirst = {
+                val uri = pendingImportUri
+                pendingImportUri = null
+                backupStatus = null
+                if (uri != null) {
+                    val stamp = DateFormats.now(DateFormats.FILE_STAMP)
+                    exportLauncher.launch("kbstream-backup-$stamp.json")
+                }
+            },
+            onConfirm = {
+                val uri = pendingImportUri
+                pendingImportUri = null
+                if (uri != null) applyImport(uri)
+            }
+        )
+    }
+
     if (showClearHistoryConfirm) {
         SettingsClearHistoryDialog(
             onDismiss = { showClearHistoryConfirm = false },
@@ -4158,9 +4245,19 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
         SyncStatRow("CLEANUP", sync.poisonSweepStatus(context))
 
         Spacer(modifier = Modifier.height(10.dp))
+        // What the last press actually did. The button had busy feedback and
+        // then nothing: a failed resync was recorded as a non-fatal, logged, and
+        // the label quietly returned to "FORCE FULL RESYNC", so the viewer could
+        // not tell a completed resync from a failed one without re-reading the
+        // health rows above. The outcome comes back through the call now, in the
+        // same shape COPY DIAGNOSTICS uses below.
+        var resyncStatus by remember { mutableStateOf<String?>(null) }
         KBCard(
             onClick = {
-                if (!syncing) sync.forceFullResync(context)
+                if (!syncing) {
+                    resyncStatus = null
+                    sync.forceFullResync(context) { outcome -> resyncStatus = outcome }
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -4181,6 +4278,18 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )
+                resyncStatus?.let { outcome ->
+                    Text(
+                        text = outcome,
+                        color = when {
+                            outcome.startsWith(SupabaseSync.RESYNC_FAILED) -> KBDanger
+                            outcome.startsWith("resync skipped") -> KBTextLo
+                            else -> KBAccent
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
@@ -4433,6 +4542,68 @@ private fun UpdateRow() {
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsImportBackupDialog(
+    onDismiss: () -> Unit,
+    onExportFirst: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    /*
+     * The reported gap: picking a file applied it immediately, so a wrong pick
+     * replaced a profile's history, watched marks and settings with no question
+     * and no undo. The dialog names what is replaced and offers EXPORT FIRST as
+     * its own answer, because "keep the current state" is the one thing a
+     * viewer who picked the wrong file actually needs.
+     *
+     * CANCEL takes focus for the same reason SettingsClearHistoryDialog's does:
+     * the dialog enters the tree in this frame, so the focus ask is retried
+     * across frames until it answers true rather than issued once to a node that
+     * is not attached yet.
+     */
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < 12) {
+            awaitFrame()
+            landed = runCatching { cancelFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Import this backup?") {
+            Text(
+                text = "Importing replaces this profile's watch history, watched " +
+                    "marks and settings with the file's — and its add-ons when the " +
+                    "file carries them. Anything this profile has now that the " +
+                    "file does not is gone, and it cannot be undone.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "A file from a newer version is refused, and so is one with " +
+                    "no watch history in it.",
+                color = KBTextLo.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBButton(label = "IMPORT", danger = true, onClick = onConfirm)
+                KBButton(label = "EXPORT FIRST", onClick = onExportFirst)
+                KBButton(
+                    label = "CANCEL",
+                    modifier = Modifier.focusRequester(cancelFocusRequester),
+                    onClick = onDismiss
+                )
             }
         }
     }
@@ -5465,9 +5636,14 @@ private fun androidx.compose.foundation.layout.ColumnScope.HiddenTitlesSection()
         // sitting under it, so it can never be pushed off the bottom of a
         // pane whose whole point is being reachable.
         item(key = "unhide-all") {
+            // No dialog: putting them back is per-title work the viewer has to
+            // redo, but nothing is lost - so the row states the one-way-ness in
+            // its own line instead of interrupting the press that ends the
+            // hidden state.
             NavigationRow(
                 label = "Show everything again",
-                description = "Unhide all ${entries.size} of them",
+                description = "Unhide all ${entries.size} of them — hiding them again " +
+                    "is one press per title",
                 onClick = { HiddenTitles.unhideAll(context) }
             )
         }

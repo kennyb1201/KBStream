@@ -266,6 +266,16 @@ fun ProfileEditScreenMobile(
         val kidsTargetId: String?
         if (editing == null) {
             val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
+            // The TV editor's rule, for the same reason: a refused create means
+            // the stored list could not be read, not that a profile now exists.
+            if (created == null) {
+                feedback.show(
+                    text = "This device's profiles couldn't be read, so nothing " +
+                        "was saved",
+                    isError = true
+                )
+                return@save
+            }
             kidsTargetId = created.id
             pinTargetId = created.id
             when {

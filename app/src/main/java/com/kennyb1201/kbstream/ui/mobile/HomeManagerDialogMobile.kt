@@ -145,8 +145,15 @@ internal fun HomeManagerDialogMobile(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (configurations.isNotEmpty()) {
+                    // The same label rule as the TV dialog: this press only ever
+                    // touched add-on catalogs, so it says so instead of promising
+                    // the whole rail list (see AddonsHomeManagerDialog).
                     KBButton(
-                        label = if (allCatalogsVisible) "HIDE ALL" else "SHOW ALL",
+                        label = if (allCatalogsVisible) {
+                            "HIDE ALL CATALOGS"
+                        } else {
+                            "SHOW ALL CATALOGS"
+                        },
                         onClick = { onToggleAll(!allCatalogsVisible) }
                     )
                 }

@@ -37,9 +37,10 @@ class AddonConfigReadSafetyTest {
         store().edit().clear().commit()
     }
 
+    private val corrupt = """[{"id":"abc","manifestUrl":"""
+
     @Test
     fun `an unparseable blob is served as defaults but left on disk`() {
-        val corrupt = """[{"id":"abc","manifestUrl":"""
         store().edit().putString("installed_addons_json", corrupt).commit()
 
         val loaded = AddonManager(context).getInstalledAddons()
@@ -49,6 +50,53 @@ class AddonConfigReadSafetyTest {
             "the stored list is untouched, so a build that can read it still finds it",
             corrupt,
             store().getString("installed_addons_json", null)
+        )
+    }
+
+    /**
+     * The residual hole in the read fix (deep dive A1): the read kept the blob,
+     * but every mutator computes from the in-memory list - which in this session
+     * is the FALLBACK factory list - and saved unconditionally. One toggle was
+     * enough to write the factory list over the preserved blob, and with
+     * `userEdit = true` it could also publish the wipe.
+     */
+    @Test
+    fun `a mutation in a fallback session cannot replace the stored list`() {
+        store().edit().putString("installed_addons_json", corrupt).commit()
+
+        val manager = AddonManager(context)
+        val fallback = manager.getInstalledAddons()
+        assertTrue("the test needs a fallback list to mutate", fallback.isNotEmpty())
+
+        // Every shape a viewer can reach on the Add-ons screen in one session:
+        // toggle, reorder, rename, remove, and the catalog-order move.
+        manager.setAddonEnabled(fallback.first().id, false)
+        manager.moveAddon(fallback.last().id, -1)
+        manager.renameAddon(fallback.first().id, "Renamed")
+        manager.removeAddon(fallback.first().id)
+        manager.refreshAddons()
+
+        assertEquals(
+            "no mutation may overwrite a list this session could not read",
+            corrupt,
+            store().getString("installed_addons_json", null)
+        )
+    }
+
+    @Test
+    fun `a readable blob still saves normally after the guard`() {
+        // The guard must not be a permanent lock: a clean session writes.
+        val manager = AddonManager(context)
+        val seeded = manager.getInstalledAddons()
+        assertTrue(seeded.isNotEmpty())
+
+        manager.setAddonEnabled(seeded.first().id, false)
+
+        assertTrue(
+            "a seeded (blank-blob) store is the factory list the viewer really has",
+            store().getString("installed_addons_json", null)
+                .orEmpty()
+                .contains("\"enabled\":false")
         )
     }
 }

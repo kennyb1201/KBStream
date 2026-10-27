@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -91,6 +92,10 @@ fun ProfilePickerScreen(
     val pickerContext = androidx.compose.ui.platform.LocalContext.current
     val profiles by ProfileManager.profiles.collectAsStateWithLifecycle()
     val active by ProfileManager.activeProfile.collectAsStateWithLifecycle()
+    // A blob this build cannot read is not "no profiles": the list is still on
+    // disk, and this screen must not present it as an empty first run (see
+    // ProfileManager.profilesUnreadable).
+    val profilesUnreadable by ProfileManager.profilesUnreadable.collectAsStateWithLifecycle()
 
     // Parental lock: a PIN-protected profile asks for its PIN before it
     // activates. pinTarget holds the pending profile; pinEntry collects the
@@ -254,6 +259,25 @@ fun ProfilePickerScreen(
         // it was a headlineMedium+Bold of its own, so walking in from Library
         // or Add-ons changed the size of the app's name for the screen.
         KBPageTitle(text = "Who's watching?")
+
+        if (profilesUnreadable) {
+            // The one thing this state must not look like is a fresh device.
+            // Nothing is lost: the blob is preserved and no profile write will
+            // touch it until it can be read again (see ProfileManager), so the
+            // sentence says where it comes back from rather than offering a
+            // create that would be refused.
+            Text(
+                text = "Profiles couldn't be read on this device. Nothing has been " +
+                    "deleted - sign in on another device to restore them, then open " +
+                    "this screen again.",
+                color = KBDanger,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .padding(top = 16.dp, start = 32.dp, end = 32.dp)
+                    .widthIn(max = 520.dp)
+            )
+        }
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,

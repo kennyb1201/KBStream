@@ -352,6 +352,20 @@ private fun CatalogList(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // What the arrows below actually order, and what they do not.
+        //
+        // They move this list only. Home draws rails from the home
+        // arrangement, which follows this list for a rail that has never been
+        // arranged and stops following it the moment the manager moves, pins or
+        // re-shows one - so after any visit to the manager, UP/DOWN here
+        // reorder nothing the viewer can see. Nothing on screen said the two
+        // orders were different things (see moveCatalog's own kdoc).
+        Text(
+            text = "The arrows set this list's order. Where a rail sits on Home is " +
+                "set in the home manager.",
+            color = KBTextLo.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall
+        )
         catalogs.forEachIndexed { index, catalog ->
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -459,13 +473,13 @@ private fun CatalogList(
                         CatalogIconButton(
                             icon = Icons.Filled.ArrowUpward,
                             enabled = index > 0,
-                            contentDescription = "Move up",
+                            contentDescription = "Move up in this list",
                             onClick = { onMove(catalog.id, -1) }
                         )
                         CatalogIconButton(
                             icon = Icons.Filled.ArrowDownward,
                             enabled = index < catalogs.lastIndex,
-                            contentDescription = "Move down",
+                            contentDescription = "Move down in this list",
                             onClick = { onMove(catalog.id, 1) }
                         )
                         CatalogIconButton(

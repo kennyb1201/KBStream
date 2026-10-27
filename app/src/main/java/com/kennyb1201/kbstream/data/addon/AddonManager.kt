@@ -27,6 +27,21 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
+/**
+ * One profile's add-on list as read from its store, and whether that read had to
+ * fall back because the stored blob could not be understood.
+ *
+ * The two travel together because they answer different questions and only the
+ * pair is safe: the list is what this session shows, the flag is whether that
+ * list may ever be SAVED. A read that serves fallback defaults and a read that
+ * serves the viewer's own list look identical from the outside, which is how the
+ * first write after a failed load used to replace the blob.
+ */
+private class AddonLoad(
+    val addons: List<InstalledAddon>,
+    val unreadableBlob: Boolean = false
+)
+
 class AddonManager(
     private val context: Context
 ) {
@@ -65,6 +80,38 @@ class AddonManager(
 
     /** Depth of an in-progress read-modify-write; 0 at the outermost entry. */
     private var mutationDepth = 0
+
+    /**
+     * The profile whose stored add-on blob this session could NOT understand, or
+     * null when the in-memory list came from a blob it could.
+     *
+     * This is the write half of the read path's failure domain. That path
+     * stopped overwriting an unreadable blob with the factory list (see
+     * [loadFromPreferencesOrDefaults]), but it left the fallback list in memory,
+     * and every mutator computes from the in-memory list and saves
+     * unconditionally - so ONE toggle, rename, reorder, remove or manifest
+     * refresh in that session wrote the fallback defaults over the preserved
+     * blob, and `saveInstalledAddons` marks a user edit, so the wipe could also
+     * be published to the account. The read protected the blob only until the
+     * first write; this flag protects it for the session.
+     *
+     * Cleared by every load of the ACTIVE profile (including a cloud pull's own
+     * reload, so adopting a readable set repairs the profile), and never armed by
+     * a sibling-profile read ([installedAddonsFor], the copy flow).
+     */
+    private var unreadableBlobProfileId: String? = null
+
+    /**
+     * True while the in-memory list is the fallback for a store this session
+     * could not read.
+     *
+     * Deliberately separate from [unreadableBlobProfileId]: that id cannot carry
+     * the flag by itself, because a session with no profile yet (the legacy,
+     * un-namespaced store) loads with a null id - so "the guard is armed" and
+     * "there is no profile" would be the same value, and the write it must
+     * refuse would go straight through.
+     */
+    private var servingUnreadableBlob = false
 
     /**
      * The profile the app is currently showing. Falls back to the profile
@@ -243,8 +290,10 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
     init {
         loadedProfileId = activeStoreProfileId()
-        _installedAddons.value =
-            loadFromPreferencesOrDefaults(loadedProfileId)
+        val load = loadFromPreferencesOrDefaults(loadedProfileId)
+        _installedAddons.value = load.addons
+        unreadableBlobProfileId = if (load.unreadableBlob) loadedProfileId else null
+        servingUnreadableBlob = load.unreadableBlob
     }
 
     fun hasAddon(
@@ -321,14 +370,19 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     /** Loads [profileId]'s addon list into the singleton. Caller holds [stateLock]. */
     private fun loadForLocked(profileId: String?) {
         loadedProfileId = profileId
-        _installedAddons.value =
-            loadFromPreferencesOrDefaults(profileId)
+        val load = loadFromPreferencesOrDefaults(profileId)
+        _installedAddons.value = load.addons
+        // Every load of the ACTIVE profile re-answers the write question: a
+        // switch to a readable profile clears the guard, and a switch to an
+        // unreadable one arms it for that profile.
+        unreadableBlobProfileId = if (load.unreadableBlob) profileId else null
+        servingUnreadableBlob = load.unreadableBlob
         _catalogOrderVersion.value += 1
     }
 
     private fun loadFromPreferencesOrDefaults(
         profileId: String?
-    ): List<InstalledAddon> {
+    ): AddonLoad {
 
         val store = addonPrefs(profileId)
 
@@ -343,9 +397,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             val defaults =
                 defaultAddons()
 
+            // No blob at all: the factory list IS this profile's list, so the
+            // seed is legitimate and the write guard stays clear.
             saveToPrefs(defaults, profileId)
 
-            return defaults
+            return AddonLoad(defaults)
         }
 
         /*
@@ -374,7 +430,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                         "session and keeping the stored list",
                     error
                 )
-                return defaultAddons()
+                // `unreadableBlob` is what makes "keeping the stored list"
+                // true for the rest of the session: without it the first
+                // mutation saved these defaults over the blob (see
+                // [unreadableBlobProfileId]).
+                return AddonLoad(defaultAddons(), unreadableBlob = true)
             }
 
         /*
@@ -397,7 +457,9 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     "Add-on catalog order could not be normalized; using the stored order",
                     error
                 )
-                return loaded
+                // The blob itself PARSED, so it is this profile's real list:
+                // writing it back is legitimate.
+                return AddonLoad(loaded)
             }
 
         if (normalized != loaded) {
@@ -409,7 +471,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
         }
 
-        return normalized
+        return AddonLoad(normalized)
     }
 
     private fun saveToPrefs(
@@ -435,8 +497,12 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
             // Straight reload, no version bump: a profile that genuinely has
             // no addons would otherwise bump the order version on every read.
-            _installedAddons.value =
-                loadFromPreferencesOrDefaults(loadedProfileId)
+            val load = loadFromPreferencesOrDefaults(loadedProfileId)
+            _installedAddons.value = load.addons
+            // A lazy reload reads the same store a full load does, so it arms
+            // or clears the write guard the same way.
+            unreadableBlobProfileId = if (load.unreadableBlob) loadedProfileId else null
+            servingUnreadableBlob = load.unreadableBlob
 
             _installedAddons.value
         }
@@ -452,7 +518,10 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      */
     fun installedAddonsFor(profileId: String): List<InstalledAddon> {
         synchronized(stateLock) {
-            return loadFromPreferencesOrDefaults(profileId)
+            // The guard is deliberately NOT touched: it describes the ACTIVE
+            // profile's store, and a sibling's unreadable blob must not stop the
+            // viewer from editing their own.
+            return loadFromPreferencesOrDefaults(profileId).addons
         }
     }
 
@@ -485,6 +554,28 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         userEdit: Boolean = true
     ) {
         synchronized(stateLock) {
+        /*
+         * Refuse to write a list computed from a store this session could not
+         * read.
+         *
+         * Every mutator is `getInstalledAddons()` -> change -> save, and when
+         * the load fell back, that base list is the factory defaults, not the
+         * viewer's. Writing it would replace the preserved blob (and, with
+         * `userEdit`, publish the wipe). A refusal is logged, never silent, and
+         * the blob stays where it was - which is the only outcome that leaves
+         * the add-ons recoverable by a build that can read them, or by a cloud
+         * pull whose own reload clears this flag.
+         */
+        val unreadable = unreadableBlobProfileId
+        if (servingUnreadableBlob) {
+            Log.e(
+                TAG,
+                "Refusing to save add-ons for profile " +
+                    "${unreadable ?: "default"}: the stored list could not be read " +
+                    "this session, so saving would replace it with the fallback list"
+            )
+            return
+        }
         // Pin the profile this list belongs to. The ambient active profile is
         // deliberately NOT consulted here: it may already have moved on, and
         // resolving it late would persist this profile's addons into that one.

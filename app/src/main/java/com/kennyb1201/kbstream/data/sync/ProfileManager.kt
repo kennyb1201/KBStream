@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,6 +87,39 @@ object ProfileManager {
     val activeProfile: StateFlow<Profile?> = _activeProfile.asStateFlow()
 
     /**
+     * True when a profiles blob IS stored and this build cannot read it.
+     *
+     * The picker draws this instead of an empty grid, because "no profiles"
+     * and "profiles this build cannot read" look identical otherwise - and the
+     * second one used to become true the moment anyone created a profile over
+     * it (see [saveProfiles]).
+     */
+    private val _profilesUnreadable = MutableStateFlow(false)
+    val profilesUnreadable: StateFlow<Boolean> = _profilesUnreadable.asStateFlow()
+
+    /**
+     * Whether this session is serving a profile list it could not read.
+     *
+     * The read path used to swallow a parse failure into an empty list and say
+     * nothing, which made a truncated or newer-build `profiles_json` look like
+     * a device with no profiles at all. Every mutator then built "the list I
+     * have plus my change" and saved it, so the first create/rename/PIN/kids
+     * write replaced every profile, PIN, ceiling and guest flag with a
+     * one-profile list - locally, and (because the save pushes the blob) on the
+     * account too. This flag is the write half of that: set by the read, and
+     * honoured by every writer, so a list this session cannot understand is
+     * preserved for the build that can, or for a cloud pull restoring it.
+     */
+    @Volatile
+    private var servingUnreadableBlob = false
+
+    /** One read's answer: the list, and whether the blob could be understood. */
+    private class ProfileLoad(
+        val profiles: List<Profile>,
+        val unreadable: Boolean = false
+    )
+
+    /**
      * True once at least one profile exists — gates the first-launch picker.
      *
      * Reads the in-memory list first, the way [profileIds] does, because the one
@@ -94,11 +128,17 @@ object ProfileManager {
      * plus a JSON parse sitting on the launch path to the first frame. The stored
      * blob stays the fallback, so a caller that runs before [init] (a worker)
      * still gets a real answer rather than a false "no profiles".
-     */
-    fun hasProfiles(context: Context): Boolean {
+     */    fun hasProfiles(context: Context): Boolean {
         val loaded = _profiles.value
         if (loaded.isNotEmpty()) return true
-        return loadProfiles(context).isNotEmpty()
+
+        val read = readProfiles(context)
+        // A blob that IS stored but cannot be read is not a profile-less device.
+        // Answering "none" here sent the launch to Home, which hid the one
+        // message the viewer needs; the picker is where a profile is chosen, so
+        // it is where "these couldn't be read" belongs (see
+        // [profilesUnreadable]).
+        return read.unreadable || read.profiles.isNotEmpty()
     }
 
     /**
@@ -257,13 +297,20 @@ object ProfileManager {
         error("ProfileManager not initialized")
     }
 
-    fun create(context: Context, name: String, avatarIndex: Int): Profile {
+    /**
+     * Adds a profile and enters it. Null when this session could not read the
+     * stored list: there is nothing safe to add TO, and saving "the list I can
+     * see plus this profile" is how one create replaced every profile (see
+     * [writableProfiles]).
+     */
+    fun create(context: Context, name: String, avatarIndex: Int): Profile? {
+        val current = writableProfiles(context) ?: return null
         val profile = Profile(
             id = java.util.UUID.randomUUID().toString(),
             name = name.trim().ifBlank { "Profile" },
             avatarIndex = avatarIndex.coerceIn(0, AVATAR_COUNT - 1)
         )
-        val updated = loadProfiles(context) + profile
+        val updated = current + profile
         saveProfiles(context, updated)
         _profiles.value = updated
         pushProfilesBlob(context, updated)
@@ -272,7 +319,8 @@ object ProfileManager {
     }
 
     fun rename(context: Context, profileId: String, newName: String, avatarIndex: Int? = null, customAvatarUrl: String? = null) {
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return
+        val updated = current.map { p ->
             when {
                 p.id != profileId -> p
                 else -> p.copy(
@@ -319,7 +367,8 @@ object ProfileManager {
     fun setPin(context: Context, profileId: String, pin: String?): Boolean {
         val clean = pin?.trim().orEmpty()
         if (clean.isNotEmpty() && !isValidPin(clean)) return false
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return false
+        val updated = current.map { p ->
             if (p.id != profileId) p else p.copy(pinHash = clean.takeIf { it.isNotEmpty() }?.let { hashPin(it) })
         }
         saveProfiles(context, updated)
@@ -340,7 +389,8 @@ object ProfileManager {
      */
     fun setKidsMaxAge(context: Context, profileId: String, kidsMaxAge: Int?): Boolean {
         val normalized = KidsMode.normalize(kidsMaxAge)
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return false
+        val updated = current.map { p ->
             if (p.id != profileId) p else p.copy(kidsMaxAge = normalized)
         }
         saveProfiles(context, updated)
@@ -366,7 +416,8 @@ object ProfileManager {
         dailyLimitMinutes: Int,
         bedtimeMinutes: Int
     ): Boolean {
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return false
+        val updated = current.map { p ->
             if (p.id != profileId) p else p.copy(
                 kidsHideAddons = hideAddons,
                 kidsLockLiveTv = lockLiveTv,
@@ -395,7 +446,8 @@ object ProfileManager {
      * Purely a Home-presentation flag: it grants no access and hides nothing.
      */
     fun setGuest(context: Context, profileId: String, guest: Boolean): Boolean {
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return false
+        val updated = current.map { p ->
             if (p.id != profileId) p else p.copy(guest = guest)
         }
         saveProfiles(context, updated)
@@ -437,7 +489,7 @@ object ProfileManager {
      */
     private fun upgradeLegacyPin(profileId: String, pin: String) {
         val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext ?: return
-        val updated = runCatching { loadProfiles(context) }.getOrNull()?.map { p ->
+        val updated = runCatching { writableProfiles(context) }.getOrNull()?.map { p ->
             when {
                 p.id != profileId -> p
                 pinHashNeedsUpgrade(p.pinHash) -> p.copy(pinHash = hashPin(pin))
@@ -454,7 +506,8 @@ object ProfileManager {
 
     /** Explicitly sets (or clears) a profile's custom avatar URL. Clearing also drops uploaded data. */
     fun setCustomAvatar(context: Context, profileId: String, url: String?) {
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return
+        val updated = current.map { p ->
             when {
                 p.id != profileId -> p
                 url == null -> p.copy(customAvatarUrl = null, avatarData = null)
@@ -471,7 +524,8 @@ object ProfileManager {
 
     /** Sets the uploaded-avatar payload (data URL) for a profile. */
     fun setAvatarData(context: Context, profileId: String, dataUrl: String?) {
-        val updated = loadProfiles(context).map { p ->
+        val current = writableProfiles(context) ?: return
+        val updated = current.map { p ->
             if (p.id != profileId) p else p.copy(avatarData = dataUrl)
         }
         saveProfiles(context, updated)
@@ -543,6 +597,11 @@ object ProfileManager {
     }
 
     fun delete(context: Context, profileId: String) {
+        // Checked BEFORE anything is closed or wiped: a delete computed from a
+        // list this session could not read would remove nothing (that list is
+        // empty) while the wipe below destroyed the profile's data - the worst
+        // of both, and a write this session has no business making anyway.
+        val current = writableProfiles(context) ?: return
         // Close scoped DB handles FIRST: Room keeps the file locked while
         // open, and deleteDatabase on an open DB silently fails - leaving
         // the deleted profile's history on disk (a privacy leak). Next
@@ -572,7 +631,7 @@ object ProfileManager {
                     .expectedNameByProfile(context)[profileId]
             }.getOrNull()
 
-        val updated = loadProfiles(context).filterNot { it.id == profileId }
+        val updated = current.filterNot { it.id == profileId }
         saveProfiles(context, updated)
         _profiles.value = updated
         // A delete has to SYNC as a delete. The merge only ever adds, so a
@@ -700,31 +759,117 @@ object ProfileManager {
 
     // ── Persistence + sync blob ─────────────────────────────────────
 
-    private fun loadProfiles(context: Context): List<Profile> {
+    private fun loadProfiles(context: Context): List<Profile> =
+        readProfiles(context).profiles
+
+    /**
+     * The stored profile list, with whether the blob could be read at all.
+     *
+     * A missing blob is the ordinary first-run case and stays writable. An
+     * existing blob that fails to parse is NOT an empty list - it is a list
+     * this build cannot see - so it is logged, remembered for the session, and
+     * published to the picker instead of being silently reported as "none".
+     */
+    private fun readProfiles(context: Context): ProfileLoad {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_PROFILES, null) ?: return emptyList()
-        return runCatching {
+            .getString(KEY_PROFILES, null)
+        if (raw == null) {
+            servingUnreadableBlob = false
+            _profilesUnreadable.value = false
+            return ProfileLoad(emptyList())
+        }
+        val parsed = runCatching {
             json.decodeFromString(
                 kotlinx.serialization.builtins.ListSerializer(Profile.serializer()),
                 raw
             )
-        }
-            .getOrDefault(emptyList())
-            // Kids ceilings written by older builds carry the legacy
-            // "age"-era ints; coerce once at the read source so every
-            // consumer (filtering, strictness checks, editor preselect)
-            // only ever sees current ordinals.
-            .map { p ->
-                if (p.kidsMaxAge == null) p
-                else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+        }.getOrNull()
+        if (parsed == null) {
+            // LOUD, and only once per bad payload: this read runs on every
+            // launch path, and the point is that the viewer learns the profiles
+            // are still there, not that the log fills up.
+            if (!servingUnreadableBlob) {
+                Log.e(
+                    TAG,
+                    "Profiles could not be read on this device; keeping the stored " +
+                        "list and refusing profile writes until it resolves"
+                )
             }
+            servingUnreadableBlob = true
+            _profilesUnreadable.value = true
+            return ProfileLoad(emptyList(), unreadable = true)
+        }
+        servingUnreadableBlob = false
+        _profilesUnreadable.value = false
+        return ProfileLoad(
+            parsed
+                // Kids ceilings written by older builds carry the legacy
+                // "age"-era ints; coerce once at the read source so every
+                // consumer (filtering, strictness checks, editor preselect)
+                // only ever sees current ordinals.
+                .map { p ->
+                    if (p.kidsMaxAge == null) p
+                    else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
+                }
+        )
     }
 
-    private fun saveProfiles(context: Context, profiles: List<Profile>) {
+    /**
+     * The stored list when it may be WRITTEN, or null when this session could
+     * not read it.
+     *
+     * Every mutator starts here rather than at [loadProfiles], because a
+     * mutator's whole result is "the list I read, changed" - and the list it
+     * read in that case is not the viewer's. Null is the honest answer: nothing
+     * is changed, nothing is published, and the blob stays intact.
+     */
+    private fun writableProfiles(context: Context): List<Profile>? {
+        val load = readProfiles(context)
+        if (load.unreadable) {
+            Log.e(
+                TAG,
+                "Refusing to change profiles: the stored blob could not be read " +
+                    "this session, so saving would replace every profile with the " +
+                    "short list this session can see"
+            )
+            return null
+        }
+        return load.profiles
+    }
+
+    /**
+     * Persists the list. Returns false - writing nothing - when this session is
+     * serving a blob it could not read.
+     *
+     * [cloudRepair] is the one legitimate exception: a payload pulled from the
+     * account is a COMPLETE list, not "the local list plus a change", so
+     * writing it replaces an unreadable blob with a readable one. That is the
+     * repair path this guard leaves open on purpose.
+     */
+    private fun saveProfiles(
+        context: Context,
+        profiles: List<Profile>,
+        cloudRepair: Boolean = false
+    ): Boolean {
+        if (servingUnreadableBlob && !cloudRepair) {
+            Log.e(
+                TAG,
+                "Refusing to save profiles: the stored blob could not be read this " +
+                    "session, so this write would replace it with the fallback list"
+            )
+            return false
+        }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_PROFILES, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), profiles))
             .apply()
+        if (cloudRepair) {
+            // The blob just became readable, and this session has to know it: a
+            // stale flag would refuse the NEXT edit the viewer makes.
+            servingUnreadableBlob = false
+            _profilesUnreadable.value = false
+        }
+        return true
     }
 
     fun profilesSyncBlob(context: Context): JsonObject =
@@ -789,14 +934,17 @@ object ProfileManager {
      * First-profile creation path for existing installs: seeds the new
      * profile's namespace from the legacy (un-namespaced) stores.
      */
-    fun createAndMigrateLegacy(context: Context, name: String, avatarIndex: Int): Profile {
+    fun createAndMigrateLegacy(context: Context, name: String, avatarIndex: Int): Profile? {
         // KEY_MIGRATED gate: only the FIRST profile adopts the legacy
         // snapshot. Without this, every later profile would also receive a
         // copy of the frozen pre-profile history (a cross-profile leak).
         val alreadyMigrated = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_MIGRATED, false)
         val hadLegacy = !alreadyMigrated && hadLegacyData(context)
-        val profile = create(context, name, avatarIndex)
+        // Nothing to adopt when the create itself was refused (see create):
+        // the caller reports it rather than entering a profile that does not
+        // exist on disk.
+        val profile = create(context, name, avatarIndex) ?: return null
 
         if (hadLegacy) {
             // Copy the legacy (un-namespaced) stores into the new profile's
@@ -930,7 +1078,10 @@ object ProfileManager {
             .sortedBy { it.createdAt }
         val removed = local.map { it.id }.filterNot { id -> merged.any { it.id == id } }
 
-        saveProfiles(context, merged)
+        // cloudRepair: a pulled payload is a COMPLETE list, not "the local list
+        // plus a change", so writing it over a blob this build could not read is
+        // the repair that flag exists to allow - and it clears the flag.
+        saveProfiles(context, merged, cloudRepair = true)
         _profiles.value = merged
 
         val activeBefore = _activeProfile.value?.id
@@ -963,9 +1114,17 @@ object ProfileManager {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().remove(KEY_ACTIVE).apply()
             onActiveProfileChanged()
-        } else if (_activeProfile.value == null) {
-            _activeProfile.value = merged.firstOrNull()
         }
+        // Nothing is activated when this device has no active profile, for the
+        // same reason the delete branches above activate nothing: a pull is not
+        // a pick. This branch used to run `_activeProfile.value =
+        // merged.firstOrNull()`, which entered whichever profile sorted first by
+        // createdAt - with no picker, no PIN and no cache reset (KEY_ACTIVE was
+        // not persisted and onActiveProfileChanged never ran), so a device that
+        // had deliberately just cleared its profile was handed one back, and a
+        // fresh sign-in could enter a PIN'd profile without the gate. The list
+        // is published above; choosing stays an authenticated act (see
+        // KidsGate).
 
         // A profile that arrived deleted must not keep its local data either -
         // the same wipe the on-device delete performs.

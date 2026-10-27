@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.catalogs
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.kb.KBFilters
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.squareup.moshi.JsonClass
@@ -337,6 +338,7 @@ object CustomCatalogStore {
 
     private const val PREFS = "kbstream_custom_catalogs"
     private const val KEY_BLOB = "custom_catalogs_json"
+    private const val TAG = "CustomCatalog"
 
     /** The store's own encoding, handed verbatim to the cross-device payload. */
     internal const val SYNC_STORE = PREFS
@@ -365,12 +367,59 @@ object CustomCatalogStore {
         .build()
         .adapter(CustomCatalogBlob::class.java)
 
-    fun list(context: Context): List<CustomCatalog> {
-        val raw = prefs(context).getString(KEY_BLOB, null) ?: return emptyList()
-        return runCatching { adapter.fromJson(raw) }
-            .getOrNull()
-            ?.catalogs
-            .orEmpty()
+    fun list(context: Context): List<CustomCatalog> = read(context).catalogs
+
+    /**
+     * True when a blob IS stored and this build cannot read it.
+     *
+     * Exposed because the difference between "no catalogs yet" and "catalogs
+     * this build cannot read" decides whether the builder may write at all (see
+     * [save]). The list alone cannot say which one it is, and it used to be
+     * asked to: a parse failure returned the same empty list an empty store
+     * does, so the builder offered an empty catalog page for a store that was
+     * not empty - and its next save wrote that emptiness back over it.
+     */
+    fun isBlobUnreadable(context: Context): Boolean = read(context).unreadable
+
+    /**
+     * The stored blob as read, with whether the read had to give up.
+     *
+     * [unreadable] is only ever true for a blob that EXISTS and could not be
+     * parsed. A missing blob is the ordinary first-run case and stays writable.
+     */
+    private class Reading(
+        val catalogs: List<CustomCatalog>,
+        val unreadable: Boolean = false
+    )
+
+    /**
+     * The last corrupt payload this process logged, so a read that every Home
+     * load makes cannot turn one bad blob into a flood of identical errors.
+     */
+    @Volatile
+    private var loggedUnreadableBlob: String? = null
+
+    private fun read(context: Context): Reading {
+        val raw = prefs(context).getString(KEY_BLOB, null)
+            ?: return Reading(emptyList())
+        val parsed = runCatching { adapter.fromJson(raw) }.getOrNull()
+        if (parsed == null) {
+            // LOUD, and not an empty store: the catalogs are still in the blob
+            // for a build that can read them (an older agent build, a profile
+            // pulled from a newer device). Silence here is what made the empty
+            // builder page indistinguishable from "you have none".
+            if (loggedUnreadableBlob != raw) {
+                loggedUnreadableBlob = raw
+                Log.e(
+                    TAG,
+                    "Custom catalogs could not be parsed on this device; keeping " +
+                        "the stored list and refusing to write over it"
+                )
+            }
+            return Reading(emptyList(), unreadable = true)
+        }
+        loggedUnreadableBlob = null
+        return Reading(parsed.catalogs)
     }
 
     fun find(context: Context, id: String?): CustomCatalog? =
@@ -383,6 +432,30 @@ object CustomCatalogStore {
      * at all.
      */
     fun save(context: Context, catalogs: List<CustomCatalog>): List<CustomCatalog> {
+        /*
+         * A blob this build cannot read is not an empty store, so a save must not
+         * act like one.
+         *
+         * The chain this closes: corrupt/unreadable blob -> [list] answers empty
+         * -> the builder shows its "build a rail" page -> the viewer builds one
+         * catalog -> save writes a one-item list over the blob and mirrors it to
+         * the account, and every catalog that was there is gone. Unlike the addon
+         * store's read path this one had not even a log line.
+         *
+         * Returning the stored (empty) list is deliberate: it is what callers
+         * display, and the builder turns "the catalog I just saved is not in the
+         * result" into an honest "not saved" line (see saveDraft).
+         */
+        val stored = read(context)
+        if (stored.unreadable) {
+            Log.e(
+                TAG,
+                "Refusing to save custom catalogs: the stored blob could not be " +
+                    "parsed, so writing would replace every built catalog with the " +
+                    "list on screen"
+            )
+            return stored.catalogs
+        }
         val capped = catalogs.take(MAX_CUSTOM_CATALOGS)
         prefs(context).edit()
             .putString(KEY_BLOB, adapter.toJson(CustomCatalogBlob(capped)) ?: "{}")

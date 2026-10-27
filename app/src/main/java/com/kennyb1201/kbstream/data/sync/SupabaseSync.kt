@@ -77,6 +77,24 @@ object SupabaseSync {
 
     private const val TAG = "SUPABASE_SYNC"
 
+    // ── forceFullResync outcome lines ─────────────────────────────────
+    //
+    // Fixed here, not at the two call sites: TV and phone draw the same run, so
+    // they may not describe it in two different ways. Each line starts with one
+    // of three stable words, which is what Settings colours on - "failed" in the
+    // danger colour, "skipped" as plain information, "resynced" in the accent.
+    // "exchanged", not "current": a run where three of four tables answered is
+    // still a success, and the health rows above are what say which. Claiming
+    // "current" would repeat, in a smaller place, the overstatement this line
+    // exists to remove.
+    const val RESYNC_DONE =
+        "resynced — this profile's data was exchanged with the cloud"
+    const val RESYNC_FAILED = "resync failed"
+    const val RESYNC_SKIPPED = "resync skipped — not signed in to a sync account"
+    const val RESYNC_ALREADY_RUNNING = "resync skipped — one is already running"
+    const val RESYNC_NOTHING_ANSWERED =
+        "resync failed — no table answered, so nothing was pulled or pushed"
+
     // Session-restore retry: a TV box is often still offline for the first
     // seconds after boot / an app-update restart. Transient refresh failures
     // are retried with exponential backoff so the saved session signs back
@@ -2446,20 +2464,52 @@ object SupabaseSync {
      * flush → pull → push pass, so the panel reports the result of a single
      * attempt instead of three racing fire-and-forget jobs. [isSyncing] stays
      * true for the duration so the button can disable itself.
+     *
+     * [onResult] answers with one line for the press, because the panel had no
+     * way to tell a finished resync from a failed one: a failure was recorded as
+     * a non-fatal and logged, the flag reset, and the button quietly returned to
+     * its idle label. Everything here is reported through it, including the two
+     * silent early returns (signed out, already running) - a press that did
+     * nothing is a press that must say so. Copy is fixed here rather than at the
+     * two call sites so TV and phone cannot describe the same run differently;
+     * every line starts with [RESYNC_DONE], [RESYNC_FAILED] or [RESYNC_SKIPPED],
+     * which is what the caller colours on.
      */
-    fun forceFullResync(context: Context): kotlinx.coroutines.Job = scope.launch {
-        if (client == null || !isSignedIn()) return@launch
-        if (_isSyncing.value) return@launch
+    fun forceFullResync(
+        context: Context,
+        onResult: (String) -> Unit = {}
+    ): kotlinx.coroutines.Job = scope.launch {
+        if (client == null || !isSignedIn()) {
+            onResult(RESYNC_SKIPPED)
+            return@launch
+        }
+        if (_isSyncing.value) {
+            onResult(RESYNC_ALREADY_RUNNING)
+            return@launch
+        }
         _isSyncing.value = true
+        // The timestamps are how a run answers "did anything actually happen".
+        // pullAllNow/pushAllNow stamp them only when at least one table answered
+        // (see their own kdocs), so a pass in which every read and write failed
+        // leaves them where they were - which is exactly the failure the panel
+        // used to report as success.
+        val syncedBefore = _lastSyncAtMs.value
         try {
             flushOutbox()
             pullAllNow(context)
             pushAllNow(context)
             Log.i(TAG, "force full resync complete")
+            onResult(
+                if (_lastSyncAtMs.value != syncedBefore) RESYNC_DONE
+                else RESYNC_NOTHING_ANSWERED
+            )
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "force_full_resync"))
             Log.w(TAG, "force full resync failed: ${Redaction.text(t.message)}")
+            onResult(
+                "$RESYNC_FAILED — ${Redaction.text(t.message).ifBlank { "unknown error" }}"
+            )
         } finally {
             _isSyncing.value = false
         }

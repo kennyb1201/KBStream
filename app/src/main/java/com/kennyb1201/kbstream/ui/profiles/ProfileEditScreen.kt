@@ -372,6 +372,18 @@ fun ProfileEditScreen(
         val kidsTargetId: String?
         if (editing == null) {
             val created = ProfileManager.createAndMigrateLegacy(context, name, avatarIndex)
+            // Null means the stored list could not be read on this device, so
+            // there is nothing safe to add a profile to (see ProfileManager):
+            // saving here would replace every profile with this one. Say so
+            // instead of entering a profile that was never written.
+            if (created == null) {
+                feedback.show(
+                    text = "This device's profiles couldn't be read, so nothing " +
+                        "was saved",
+                    isError = true
+                )
+                return@save
+            }
             kidsTargetId = created.id
             // The PIN applies to the row that now exists (see the validation
             // block: it used to be silently dropped here).

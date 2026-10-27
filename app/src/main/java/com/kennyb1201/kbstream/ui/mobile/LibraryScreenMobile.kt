@@ -259,8 +259,9 @@ fun LibraryScreenMobile(
 
             // The TV pane's own sentence, not a second copy of it: waiting,
             // unreachable, not connected and genuinely empty are four different
-            // answers, and the phone read all four as "Watchlist is empty."
-            // (see [libraryWatchlistEmptyText]).
+            // answers, and the phone used to collapse all four into one
+            // finished-looking empty sentence (see
+            // [libraryWatchlistEmptyText]).
             LibraryFilter.WATCHLIST -> libraryWatchlistEmptyText(
                 loading = state.loading,
                 remoteLoading = state.remoteLoading,

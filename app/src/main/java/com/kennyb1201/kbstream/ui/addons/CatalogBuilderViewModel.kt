@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_DEFAULT_REGION
 import com.kennyb1201.kbstream.data.catalogs.CATALOG_MEDIA_MOVIE
+import com.kennyb1201.kbstream.data.catalogs.MAX_CUSTOM_CATALOGS
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
 import com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore
 import com.kennyb1201.kbstream.data.catalogs.csvAdd
@@ -24,6 +25,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,6 +39,16 @@ private const val KEYWORD_SUGGESTION_LIMIT = 12
 
 /** How many cast suggestions one search shows. */
 private const val PERSON_SUGGESTION_LIMIT = 12
+
+/**
+ * How long a keyword/cast query waits before it is sent.
+ *
+ * The editor's two search fields call the view model on EVERY keystroke, so
+ * without a wait "time travel" was seven TMDB requests. The job is cancelled by
+ * the next keystroke, which is what makes the delay enough: only the last query
+ * of a burst survives to be sent. 300 ms matches the search screen's own rule.
+ */
+private const val SUGGESTION_DEBOUNCE_MS = 300L
 
 /**
  * State behind the Catalog Builder: the saved catalogs, the draft being edited,
@@ -209,8 +221,28 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
             _message.value = "Give the catalog a name first"
             return
         }
+        val context = getApplication<Application>()
+        // A blob this build cannot read is NOT an empty store. Saving here would
+        // write the one catalog on screen over every catalog in it - and mirror
+        // that to the account - so the builder says what happened instead (the
+        // store refuses the write for the same reason; see CustomCatalogStore).
+        if (CustomCatalogStore.isBlobUnreadable(context)) {
+            _message.value =
+                "Not saved — your built catalogs could not be read on this device"
+            return
+        }
         val saved = catalog.copy(name = catalog.name.trim())
-        CustomCatalogStore.upsert(getApplication(), saved)
+        val stored = CustomCatalogStore.upsert(context, saved)
+        // The cap, told honestly. `save` caps the list with `take(N)` and an
+        // upsert APPENDS, so at the limit the catalog just built is exactly the
+        // one dropped - while the line below used to report "added to Home".
+        // The stored list is the answer, so the message is derived from it.
+        if (stored.none { it.id == saved.id }) {
+            _message.value = "Not saved — $MAX_CUSTOM_CATALOGS is the catalog limit"
+            // The draft stays open: the name and every rule just set are still
+            // there to keep once one of the others is deleted.
+            return
+        }
         refresh()
         _draft.value = null
         resetPreview()
@@ -360,6 +392,9 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
             return
         }
         keywordJob = viewModelScope.launch {
+            // The wait is the debounce: the next keystroke cancels this job, so
+            // a burst of typing sends one query instead of one per character.
+            delay(SUGGESTION_DEBOUNCE_MS)
             _keywordSuggestions.value = tmdbRepository.searchKeywords(trimmed)
                 .take(KEYWORD_SUGGESTION_LIMIT)
         }
@@ -367,6 +402,10 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
 
     /** Adds one keyword to the include/exclude list the picker is set to. */
     fun pickKeyword(keyword: TmdbSearchKeywordResult) {
+        // A debounced search may still be waiting for its turn (the chips on
+        // screen can belong to the PREVIOUS query while the next one types), and
+        // letting it land would re-open the suggestion row over a pick just made.
+        keywordJob?.cancel()
         val include = _keywordsInclude.value
         _keywordNames.value = _keywordNames.value + (keyword.id to keyword.name)
         setFilters { filters ->
@@ -409,12 +448,14 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
             return
         }
         peopleJob = viewModelScope.launch {
+            delay(SUGGESTION_DEBOUNCE_MS)
             _peopleSuggestions.value = tmdbRepository.searchPerson(trimmed)
                 .take(PERSON_SUGGESTION_LIMIT)
         }
     }
 
     fun pickPerson(person: TmdbSearchPersonResult) {
+        peopleJob?.cancel()
         _castNames.value = _castNames.value + (person.id to person.name)
         setFilters { filters ->
             filters.copy(withCast = csvAdd(filters.withCast, person.id))

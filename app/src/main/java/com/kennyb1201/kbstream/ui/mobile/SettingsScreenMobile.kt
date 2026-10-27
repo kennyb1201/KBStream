@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import android.content.ActivityNotFoundException
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -95,6 +96,7 @@ import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.settings.SettingsGroup
 import com.kennyb1201.kbstream.ui.settings.SettingsPane
+import com.kennyb1201.kbstream.ui.settings.rememberProfileRowKey
 import com.kennyb1201.kbstream.ui.settings.syncRelativeTime
 import com.kennyb1201.kbstream.ui.theme.CUSTOM_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
@@ -172,7 +174,23 @@ fun SettingsScreenMobile(
     onOpenCatalogBuilder: () -> Unit = {},
     onOpenStats: () -> Unit = {}
 ) {
-    var pane by remember { mutableStateOf<SettingsPane?>(null) }
+    val context = LocalContext.current
+    // Reopen on the pane last read, exactly as the TV rail does (device-local,
+    // deliberately not synced): eleven panes is a scroll to walk every time, and
+    // the one being tuned is rarely the first. The name goes through the same
+    // SettingsPane.fromStored fallback the TV page uses, so a name written by a
+    // build that has since dropped a pane cannot take out the screen a viewer
+    // opens to fix things. The pane LIST is still one Back away, and its rows
+    // are how Downloads - which is not a SettingsPane - stays reachable.
+    //
+    // The stored name is left alone when Back returns to the list: it says which
+    // pane was last open, not which page the screen should have started on.
+    var pane by remember {
+        mutableStateOf<SettingsPane?>(
+            AppPreferences.getLastSettingsPane(context)
+                ?.let { SettingsPane.fromStored(it) }
+        )
+    }
     // The Downloads page. A screen pushed over the panes the way a pane is
     // pushed over the list - and deliberately NOT a SettingsPane member: that
     // enum is the television's own pane inventory (the rail draws every entry),
@@ -202,7 +220,13 @@ fun SettingsScreenMobile(
                 DownloadsScreenMobile(onBack = { downloadsOpen = false })
             } else if (open == null) {
                 SettingsHomeMobile(
-                    onOpen = { pane = it },
+                    onOpen = { opened ->
+                        pane = opened
+                        // Recorded here rather than inside the pane: this is the
+                        // one place a pane is opened, and the value survives the
+                        // Back to the list (see the note beside `pane`).
+                        AppPreferences.setLastSettingsPane(context, opened.name)
+                    },
                     onOpenDownloads = { downloadsOpen = true }
                 )
             } else {
@@ -600,10 +624,13 @@ private fun IntegrationsPaneMobile(
     var resumeAuthority by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getResumeAuthority(context))
     }
-    // Device-local, so bare: whether a launch opens on Who's Watching is about
-    // how this phone is shared, not the account (see
-    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
-    var showProfilePickerOnLaunch by remember {
+    // Device-local, so not keyed on the sync revision: whether a launch opens on
+    // Who's Watching is about how this phone is shared, not the account (see
+    // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS). It IS keyed on the profile, like
+    // every other device-local row here (see rememberProfileRowKey): the store it
+    // mirrors is per profile, so a switch with this pane open must re-seed it.
+    val profileRowKey = rememberProfileRowKey()
+    var showProfilePickerOnLaunch by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getShowProfilePicker(context))
     }
 
@@ -955,10 +982,12 @@ private fun IntegrationsPaneMobile(
         // only change is that the field sits beside the keyboard here, so it
         // does not need the TV's tap-the-card-to-focus dance.
         SettingsSectionMobile("Badges")
-        var badgePackInput by remember {
+        // Per profile, like every device-local row (see rememberProfileRowKey):
+        // the pack URL another profile imported is not this one's.
+        var badgePackInput by remember(activeProfile?.id) {
             mutableStateOf(StreamBadgeEngine.getPackUrl(context))
         }
-        var badgeStatus by remember {
+        var badgeStatus by remember(activeProfile?.id) {
             mutableStateOf(
                 if (StreamBadgeEngine.hasPack(context)) {
                     "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} " +
@@ -1133,10 +1162,13 @@ private fun HiddenTitlesPaneMobile() {
                     }
                 }
             }
+            // No dialog, for the same reason as the TV row: nothing is lost,
+            // but putting one back is per-title work, so the row says so.
             item(key = "unhide-all") {
                 SettingsNavRowMobile(
                     label = "Show everything again",
-                    description = "Unhide all ${entries.size} of them",
+                    description = "Unhide all ${entries.size} of them — hiding them " +
+                        "again is one press per title",
                     onClick = { HiddenTitles.unhideAll(context) }
                 )
             }
@@ -1149,12 +1181,25 @@ private fun PlaybackPaneMobile() {
     val context = LocalContext.current
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
 
-    var playerEngine by remember { mutableStateOf(PlayerEngine.selected(context)) }
-    var mpvForAnime by remember { mutableStateOf(AppPreferences.getMpvForAnime(context)) }
-    var mpvVoMode by remember { mutableStateOf(AppPreferences.getMpvVoMode(context)) }
-    var dvMode by remember { mutableStateOf(AppPreferences.getDvCompatMode(context)) }
-    var convertP5 by remember { mutableStateOf(AppPreferences.getConvertP5To81(context)) }
-    var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
+    // The device-local rows of this pane, and why they key on the PROFILE rather
+    // than on the sync revision a pushed blob moves: see rememberProfileRowKey.
+    // The store behind each is per profile, so a switch with this pane open left
+    // the engine, the decoder and the HDR rows showing the profile just left.
+    val profileRowKey = rememberProfileRowKey()
+    var playerEngine by remember(profileRowKey) { mutableStateOf(PlayerEngine.selected(context)) }
+    var mpvForAnime by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvForAnime(context))
+    }
+    var mpvVoMode by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getMpvVoMode(context))
+    }
+    var dvMode by remember(profileRowKey) { mutableStateOf(AppPreferences.getDvCompatMode(context)) }
+    var convertP5 by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getConvertP5To81(context))
+    }
+    var stripHdr10Plus by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getStripHdr10Plus(context))
+    }
 
     var autoPlayNext by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoPlayNext(context))
@@ -1195,45 +1240,55 @@ private fun PlaybackPaneMobile() {
     var autoSkipCredits by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAutoSkipCredits(context))
     }
-    var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
+    var autoSelectStream by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAutoSelectStream(context))
+    }
     var useStreamRanker by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUseStreamRanker(context))
     }
     // NOT keyed on the sync revision: the cap is device-local (see
     // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS), so a pull from another device
     // must not re-read it here. The picker's own tap updates the state.
-    var qualityCap by remember {
+    var qualityCap by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
 
-    var audioDecoder by remember { mutableStateOf(AppPreferences.getAudioDecoder(context)) }
-    var audioOutput by remember { mutableStateOf(AppPreferences.getAudioOutput(context)) }
-    var audioDownmix by remember { mutableStateOf(AppPreferences.getAudioDownmix(context)) }
-    var audioDialogueBoost by remember {
+    var audioDecoder by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioDecoder(context))
+    }
+    var audioOutput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioOutput(context))
+    }
+    var audioDownmix by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioDownmix(context))
+    }
+    var audioDialogueBoost by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getAudioDialogueBoost(context))
     }
-    var audioVolumeBoost by remember {
+    var audioVolumeBoost by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getAudioVolumeBoostDb(context))
     }
 
     // External engine, device-local like the engine itself: which video apps are
     // installed is a property of this phone, not of the account.
     val externalPlayers = remember { ExternalPlayer.installed(context) }
-    var externalPackage by remember {
+    var externalPackage by remember(profileRowKey) {
         mutableStateOf(
             AppPreferences.getExternalPlayerPackage(context)?.takeIf { stored ->
                 externalPlayers.any { it.packageName == stored }
             }
         )
     }
-    var customExternalPackage by remember {
+    var customExternalPackage by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getCustomExternalPlayerPackage(context))
     }
-    var customExternalLabel by remember {
+    var customExternalLabel by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getCustomExternalPlayerLabel(context))
     }
-    var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
-    var externalTrustReturn by remember {
+    var externalAsk by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getExternalPlayerAsk(context))
+    }
+    var externalTrustReturn by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getExternalTrustReturn(context))
     }
     var showCustomPlayerPicker by remember { mutableStateOf(false) }
@@ -1798,9 +1853,17 @@ private fun downloadsSummary(context: android.content.Context): String {
 @Composable
 private fun VideoPaneMobile() {
     val context = LocalContext.current
-    var bufferMode by remember { mutableStateOf(AppPreferences.getDefaultBufferMode(context)) }
-    var pip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
-    var aspectRatio by remember { mutableStateOf(AppPreferences.getDefaultAspectRatio(context)) }
+    // Device-local rows: keyed on the profile, not on the sync revision (see
+    // rememberProfileRowKey). A switch with this pane open used to leave the
+    // buffer mode, PiP and aspect ratio of the profile just left on screen.
+    val profileRowKey = rememberProfileRowKey()
+    var bufferMode by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getDefaultBufferMode(context))
+    }
+    var pip by remember(profileRowKey) { mutableStateOf(AppPreferences.getEnablePip(context)) }
+    var aspectRatio by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getDefaultAspectRatio(context))
+    }
 
     PaneScroll {
         SettingsSectionMobile("Buffering & Playback", first = true)
@@ -2307,6 +2370,22 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
     var clearedAt by remember { mutableStateOf<Long?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
 
+    // A picked file is not yet an apply. Import clears this profile's history
+    // and watched marks before restoring the file's, replaces the prefs behind
+    // every row in this screen, and takes the file's add-ons when it carries
+    // them - with no undo. Every other destructive row here asks first (Clear
+    // Continue Watching has its own dialog), so this one does too; a wrong pick
+    // used to replace a profile silently. The file's own validation gates
+    // (newer version, missing history) still run after the answer.
+    var pendingImport by remember { mutableStateOf<Uri?>(null) }
+
+    fun applyImport(uri: Uri) {
+        scope.launch {
+            status = runCatching { BackupManager.import(context, uri) }
+                .getOrElse { "Import failed: ${it.message}" }
+        }
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -2320,22 +2399,12 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                status = runCatching { BackupManager.import(context, uri) }
-                    .getOrElse { "Import failed: ${it.message}" }
-            }
-        }
+        if (uri != null) pendingImport = uri
     }
     val importGetContent = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                status = runCatching { BackupManager.import(context, uri) }
-                    .getOrElse { "Import failed: ${it.message}" }
-            }
-        }
+        if (uri != null) pendingImport = uri
     }
 
     PaneScroll {
@@ -2448,6 +2517,66 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
                         }
                     )
                 }
+            }
+        }
+    }
+
+    if (pendingImport != null) {
+        Dialog(onDismissRequest = { pendingImport = null }) {
+            KBDialogPanel(title = "Import this backup?") {
+                Text(
+                    text = "Importing replaces this profile's watch history, watched " +
+                        "marks and settings with the file's — and its add-ons when the " +
+                        "file carries them. Anything this profile has now that the " +
+                        "file does not is gone, and it cannot be undone.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "A file from a newer version is refused, and so is one " +
+                        "with no watch history in it.",
+                    color = KBTextLo.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    KBButton(
+                        label = "CANCEL",
+                        modifier = Modifier.weight(1f),
+                        onClick = { pendingImport = null }
+                    )
+                    // The answer for a wrong pick: keep what this profile has now
+                    // in a file of its own, before anything is replaced.
+                    KBButton(
+                        label = "EXPORT FIRST",
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            pendingImport = null
+                            try {
+                                exportLauncher.launch(
+                                    "kbstream-backup-${System.currentTimeMillis()}.json"
+                                )
+                            } catch (_: ActivityNotFoundException) {
+                                status = "No file picker on this device."
+                            }
+                        }
+                    )
+                }
+                KBButton(
+                    label = "IMPORT",
+                    danger = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    onClick = {
+                        val uri = pendingImport
+                        pendingImport = null
+                        if (uri != null) applyImport(uri)
+                    }
+                )
             }
         }
     }
@@ -3033,6 +3162,12 @@ private fun SyncPaneMobile() {
     var confirmClearBadges by remember { mutableStateOf(false) }
     var clearBadgesStatus by remember { mutableStateOf<String?>(null) }
     var diagnosticsStatus by remember { mutableStateOf<String?>(null) }
+    // What the last FORCE FULL RESYNC press did. The button had busy feedback and
+    // then nothing: a failed run was recorded as a non-fatal, logged, and the
+    // label returned to idle, so a completed resync and a failed one looked the
+    // same. The line comes from SupabaseSync so the TV page describes the same
+    // run the same way.
+    var resyncStatus by remember { mutableStateOf<String?>(null) }
 
     PaneScroll {
         SettingsSectionMobile("Sync health", first = true)
@@ -3057,12 +3192,27 @@ private fun SyncPaneMobile() {
             label = if (syncing) "SYNCING…" else "FORCE FULL RESYNC",
             enabled = !syncing,
             modifier = Modifier.fillMaxWidth(),
-            onClick = { SupabaseSync.forceFullResync(context) }
+            onClick = {
+                resyncStatus = null
+                SupabaseSync.forceFullResync(context) { outcome -> resyncStatus = outcome }
+            }
         )
         SettingsCaptionMobile(
             "Uploads pending changes, then pulls the account's history, watched " +
                 "marks and settings for this profile."
         )
+        resyncStatus?.let { outcome ->
+            Text(
+                text = outcome,
+                color = when {
+                    outcome.startsWith(SupabaseSync.RESYNC_FAILED) -> KBDanger
+                    outcome.startsWith("resync skipped") -> KBTextLo
+                    else -> KBAccent
+                },
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+            )
+        }
 
         Spacer(modifier = Modifier.height(10.dp))
         KBButton(
@@ -3347,10 +3497,18 @@ private fun KeyCardMobile(
     savedHint: String = "Connected as"
 ) {
     val scope = rememberCoroutineScope()
-    var value by remember { mutableStateOf(loadedValue) }
-    var saved by remember { mutableStateOf(loadedValue.isNotBlank()) }
+    // Seeded from the caller's stored value and re-seeded when THAT changes: the
+    // caller passes the active profile's own key, so a profile switch must not
+    // leave the previous profile's key in the field, and a key pushed in from
+    // another device must show up here rather than behind an unsaved edit of the
+    // old one. `remember(loadedValue)` is the whole rule; a save writes the same
+    // string back, so it does not re-seed anything.
+    var value by remember(loadedValue) { mutableStateOf(loadedValue) }
+    var saved by remember(loadedValue) { mutableStateOf(loadedValue.isNotBlank()) }
     var verifying by remember { mutableStateOf(false) }
-    var verifyResult by remember { mutableStateOf<Pair<String?, String?>?>(null) }
+    var verifyResult by remember(loadedValue) {
+        mutableStateOf<Pair<String?, String?>?>(null)
+    }
 
     fun save() {
         onSave(value.trim())

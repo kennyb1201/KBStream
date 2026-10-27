@@ -331,6 +331,17 @@ private fun CatalogListMobile(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxSize()
     ) {
+        // The same note the TV list carries: these arrows order THIS list. A
+        // rail's place on Home belongs to the home arrangement, which stops
+        // following this order once the manager has moved that rail.
+        item(key = "order-note") {
+            Text(
+                text = "The arrows set this list's order. Where a rail sits on Home " +
+                    "is set in the home manager.",
+                color = KBTextLo.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
         items(items = catalogs, key = { it.id }) { catalog ->
             val index = catalogs.indexOf(catalog)
             val hidden = hiddenKeys.contains(KBHomeOrderPrefs.customCatalogKey(catalog.id))
@@ -425,8 +436,8 @@ private fun CatalogRowMobile(
                     label = if (hidden) "SHOW ON HOME" else "HIDE FROM HOME",
                     onClick = onToggleHidden
                 )
-                KBButton(label = "UP", enabled = canMoveUp, onClick = onMoveUp)
-                KBButton(label = "DOWN", enabled = canMoveDown, onClick = onMoveDown)
+                KBButton(label = "MOVE UP", enabled = canMoveUp, onClick = onMoveUp)
+                KBButton(label = "MOVE DOWN", enabled = canMoveDown, onClick = onMoveDown)
                 KBButton(label = "DELETE", danger = true, onClick = onDelete)
             }
         }

@@ -1013,6 +1013,62 @@ Parity notes (not bugs to fix):
   options behind a gesture nobody performs, and the wrap keeps the picked state
   of a long section visible while the form scrolls.
 
+**What these screens stopped over-promising (2026-10-27).** The add-ons /
+Catalog Builder / Home manager deep dive's fixes, all of them shared by both
+form factors because every one lives below the screens:
+
+- **A blob this build cannot read is no longer a write source.** Both stores had
+the same hole in different degrees. `AddonManager` already refused to OVERWRITE
+an unparseable add-on blob on the read path, but the fallback factory list stayed
+in memory as the base every mutator computed from — one toggle, rename, reorder,
+remove or manifest refresh in that session wrote the defaults over the preserved
+blob, and a user-edit save could publish the wipe. The load now reports the
+fallback and `saveInstalledAddons` refuses while it is armed
+(`servingUnreadableBlob` — its own flag, because the profile id alongside it is
+null in a session with no profile yet, where the refusal is just as necessary):
+a sibling profile's unreadable blob does not arm it, and any load of the active
+profile re-answers the question (so a cloud pull that adopts a readable set
+repairs the profile). `CustomCatalogStore` had the weaker version — a silent
+empty list — so a corrupt catalog blob plus ONE new catalog wiped every built
+catalog; the parse failure is now logged once per bad payload, `isBlobUnreadable`
+says which empty it is, and `save` refuses instead of replacing the blob.
+- **A manifest refresh re-answers the health badge.** Health was re-checked on
+add/remove/enable only, so a viewer could REFRESH ALL a dead add-on, fix it, and
+watch the row keep OFFLINE — the screen contradicting the fix it had just made.
+Both refresh paths now record what their own fetches answered, which is also why
+they do not call `checkHealth()`: that would re-fetch every manifest a second
+time for an answer already in hand.
+- **The catalog cap is reported, not faked.** `save` caps and `upsert` appends,
+so at 100 catalogs the one just built was exactly the one dropped while the
+builder said “added to Home”. The message now comes from the stored list, says
+“Not saved — 100 is the catalog limit”, and the draft stays open so the rules
+just set are not lost.
+- **The builder's move arrows say what they order.** They move the builder's list
+only; Home draws rails from the home arrangement, which stops following that
+list the moment the manager moves a rail. Both lists carry that sentence
+(“The arrows set this list's order. Where a rail sits on Home is set in the home
+manager.”), the TV arrows' descriptions say “in this list”, and the phone's bare
+UP/DOWN became MOVE UP/MOVE DOWN.
+- **Keyword and cast search wait for the typing to stop.** The editor called the
+view model on every keystroke, so “time travel” was seven TMDB requests; a 300 ms
+wait inside the cancelled job (the search screen's own rule) sends one per burst,
+and a pick cancels a search still waiting so the suggestion row cannot re-open
+over it.
+- **SHOW ALL names its scope.** In the home manager it only ever toggled add-on
+catalogs, under a header promising the rail list — so hiding one builtin and one
+catalog and pressing SHOW ALL left the builtin hidden. The action is unchanged
+(widening it would restore rails hidden on purpose); the label now reads SHOW ALL
+CATALOGS / HIDE ALL CATALOGS on both dialogs.
+- **Home's “Manage rails” card is gated like the other two doors.** It navigated
+to the Add-ons screen (and the manager dialog) with no kids “Lock add-ons” check,
+while `onOpenAddons` and `onOpenCatalogManager` both had one. Same check now, and
+no manager request is left behind on a blocked press.
+
+Deliberately not done: the ADD dialog still closes before the add resolves (a
+failure surfaces in the screen's banner and the URL must be retyped), and the
+builder still shows no rail POSITION — only ON HOME / HIDDEN. Both are noted in
+the dive as improvements rather than bugs.
+
 ### Sports hub
 
 **Finished on the phone**, on the same activity-scoped `SportsHubViewModel`:
@@ -1110,9 +1166,10 @@ Ported panes and what they write:
   rail, poster captions, spoiler-free, poster size / border / edge, landscape
   cards and posters, the partial-watch badge, English-only browse.
 - **Data & Backup** — backup export and import (SAF, with the TV page's
-  no-picker message), Viewing stats, and Clear Continue Watching behind a
-  confirmation that clears the cloud half first and then the local rows and
-  watched markers, in the TV page's order.
+  no-picker message; a picked file waits behind the same "Import this
+  backup?" dialog the TV page shows — see below), Viewing stats, and Clear
+  Continue Watching behind a confirmation that clears the cloud half first and
+  then the local rows and watched markers, in the TV page's order.
 - **Viewing stats** — the phone screen (`ui/mobile/StatsScreenMobile.kt`), on
   the same `StatsViewModel`: finished titles / episodes / movies and finished
   runtime, the streak, and the top-shows table with the TV's wording. The four
@@ -1156,6 +1213,51 @@ Ported panes and what they write:
 
 Every synced pref read is re-seeded on `PrefsPayloadApplier.revision`, so a
 change made on another device reaches a Settings page that is already open.
+Every DEVICE-LOCAL row (engine, decoder, buffer, PiP, aspect ratio, the key
+fields, the badge pack URL, Who's Watching on launch) is keyed on
+`rememberProfileRowKey()` instead — the active profile id. Those two keys are
+the whole rule: the revision is what the ACCOUNT changed, the profile id is
+what THIS box's own store changed, and a device-local row must never be keyed
+on the revision (a push would then select a decoder this phone may not have).
+
+**Settings answers before it acts (2026-10-27).** The settings deep dive's
+confirmed findings, fixed on both screens:
+
+- **Import asks first.** Picking a backup file used to apply it on the spot;
+  import clears this profile's history and watched marks before restoring the
+  file's, replaces the prefs behind every row, and takes the file's add-ons when
+  it carries them. It now waits behind a dialog that names all of that, says it
+  cannot be undone, and offers EXPORT FIRST (the answer for a wrong pick). TV
+  puts CANCEL in focus, as its clear-history dialog does; the phone's Import
+  button is the only path to the apply. The file's own gates (newer version,
+  missing history) still run after the answer, and the status line is unchanged.
+- **Device-local rows follow the profile.** `rememberProfileRowKey()`
+  (`ui/settings/ProfileRowKey.kt`) is the shared key; see the paragraph above.
+  The phone's API-key card re-seeds on the stored value its caller passes, so a
+  switch cannot leave the previous profile's key in the field, and the badge
+  pack URL is keyed on the active profile id.
+- **Force full resync reports its outcome.** `SupabaseSync.forceFullResync`
+  takes a result callback and answers every press — `resynced — …`, `resync
+  failed — …`, or `resync skipped — …` for the two early returns (signed out,
+  already running). A pass in which no table answered is a FAILURE, not a
+  success: the pull/push timestamps only move when something was actually
+  attempted, so the outcome compares them either side of the run. Both screens
+  draw the line under the button in COPY DIAGNOSTICS's shape.
+- **The phone remembers its pane.** Settings reopens on the last pane read,
+  through the same `SettingsPane.fromStored` fallback the TV rail uses, so a
+  pane name written by a build that has since dropped one cannot take out the
+  screen. Back from a pane still returns to the list (and Downloads is still a
+  row there, not a pane); the stored name is not cleared on the way, because it
+  records which pane was last open, not that the list is where the screen
+  should start.
+- **"Show everything again" says it is one-way.** No dialog — nothing is lost —
+  but the row now states that hiding them again is one press per title.
+
+Still open from that dive, deliberately: mobile has no settings SEARCH (TV's
+index, results and scroll-to-row are a parity build of their own), and the
+search contract is still one-directional (index → screen; a row added to the
+screen but never declared in the index is silently unsearchable). Neither is a
+bug claim, and `SettingsDeepDiveContractTest` pins the five fixes above.
 
 Nothing else is deferred in Settings: the only remaining differences are the
 TV-only surfaces listed below, whose prefs are left untouched.
@@ -1273,6 +1375,38 @@ Parity notes (not bugs to fix):
   is the one who sets the parent PIN - so set it on a new device before handing
   the remote over. A deployment note, not a code path: a synced credential would
   have to travel through the same cloud account that curates the profile.
+
+**An unreadable profiles blob is not an empty one (2026-10-27).** `profiles_json`
+that this build could not parse used to be read as "no profiles", so the picker
+showed only MANAGE and the first create/rename/PIN/kids write saved "the list I
+can see plus my change" over every profile on the device - and pushed it. The
+store now keeps the blob, publishes `ProfileManager.profilesUnreadable` (both
+pickers draw "Profiles couldn't be read on this device. Nothing has been
+deleted..."), refuses every profile write while that is true, and lets a pulled
+cloud blob repair it: a payload is a COMPLETE list, not a local edit, so it may
+replace an unreadable blob and reopens writing. `ProfileManager.create` returns
+null in that state; both editors report it instead of entering a profile that
+was never written. Pinned by `ProfileStoreReadSafetyTest` (real store, corrupt
+blob) and `ProfileReadSafetyContractTest` (wiring, both form factors).
+
+**A sync pull is not a pick.** When this device had no active profile, a pull
+used to set the in-memory active to whichever profile sorted first by
+`createdAt` - no picker, no PIN gate, no persisted `KEY_ACTIVE` and no cache
+reset - so a device that had just cleared its profile was handed one back, and a
+fresh sign-in could enter a PIN'd profile without its gate. Nothing is activated
+by a pull now, matching the delete paths: the list is published, and choosing
+stays an authenticated act (`KidsGate`).
+
+Still open, both product calls rather than code gaps:
+- **PINs do not travel** (by design: a device secret, not account state). A
+  profile PIN'd on the TV arrives unPIN'd on a device that pulls the list, and
+  the parent PIN is device-local too, so the first exit there falls to the
+  gate's CREATE fallback. Whether a first-pull device should SAY so is a copy
+  decision nobody has made.
+- **No PIN attempt throttling** anywhere (pickers, exit gate, the editor's
+  current-PIN check): a wrong code clears the entry and says "Wrong PIN". The  4-digit space costs hours of PBKDF2 to sweep, but it is unbounded work; an
+  escalating delay after N failures is a calibration decision, not a bug fix.
+
 
 ### Streams
 - TV-only by design: focus-entry latch and scroll-reset effects.
