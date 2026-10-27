@@ -253,7 +253,10 @@ fun StreamsScreen(
                 } ?: "none - the picker is showing instead " +
                     "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
             )
-            start?.let { onStreamSelected(it.stream, it.sources, addons) }
+            // Auto-play carries no tab: it is not a tab selection at all, so the
+            // player's manual advance must stay merged if the viewer reaches
+            // for it.
+            start?.let { onStreamSelected(it.stream, it.sources, addons, null) }
         }
     }
 
