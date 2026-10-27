@@ -126,7 +126,14 @@ fun StreamsScreenMobile(
     onStreamSelected: (
         selected: Stream,
         allSources: List<Stream>,
-        sourceAddons: List<String?>
+        sourceAddons: List<String?>,
+        // The add-on tab the viewer had selected when they tapped this row
+        // (null for All, or for a launch with no picker at all). It travels
+        // ONLY on this manual-tap path: the player keeps a manual "next
+        // source" inside that tab while every automatic recovery stays merged.
+        // The name, never a tab index - the groups can reorder (see
+        // StreamsViewModel.addonGroups).
+        selectedAddon: String?
     ) -> Unit,
     viewModel: StreamsViewModel
 ) {
@@ -160,12 +167,17 @@ fun StreamsScreenMobile(
         // nothing when the card is pressed.
         val resolveScope = rememberCoroutineScope()
 
-        fun selectSource(selected: Stream, allSources: List<Stream>, addons: List<String?>) {
+        fun selectSource(
+            selected: Stream,
+            allSources: List<Stream>,
+            addons: List<String?>,
+            selectedAddon: String?
+        ) {
             if (selected.drm?.licenseUrl != null) {
                 PlayerEngine.clearLaunchAnime()
             }
             if (!TorBoxResolve.isUnresolved(selected)) {
-                onStreamSelected(selected, allSources, addons)
+                onStreamSelected(selected, allSources, addons, selectedAddon)
                 return
             }
             resolveScope.launch {
@@ -181,7 +193,8 @@ fun StreamsScreenMobile(
                 onStreamSelected(
                     resolved,
                     allSources.map { if (it === selected) resolved else it },
-                    addons
+                    addons,
+                    selectedAddon
                 )
             }
         }
@@ -473,7 +486,17 @@ fun StreamsScreenMobile(
                                     )
                                 }
                             },
-                            onClick = { selectSource(stream, streams, sourceAddons) }
+                            // The tab the viewer is looking at goes with the
+                            // tap and with nothing else: an auto-play start
+                            // carries no tab (see autoplayStart).
+                            onClick = {
+                                selectSource(
+                                    stream,
+                                    streams,
+                                    sourceAddons,
+                                    selectedAddonName
+                                )
+                            }
                         )
                     }
                     // The final ranked list replaces these rows when the last

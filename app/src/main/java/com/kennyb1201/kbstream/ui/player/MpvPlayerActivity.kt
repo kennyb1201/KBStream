@@ -346,6 +346,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var sourceAddons: List<String?> = emptyList()
 
     /**
+     * The add-on TAB the streams picker had selected when this source was
+     * pressed, or null when the launch had none (All, or no picker at all -
+     * Continue Watching, a next-episode advance, a direct link). Read from the
+     * `selected_addon` launch extra, which arrives beside `sources_json`.
+     *
+     * It is the scope a MANUAL advance is confined to: the error card's TRY
+     * NEXT SOURCE walks only this add-on's rows and opens the SOURCES picker
+     * when they run out, while every automatic recovery ignores it and walks
+     * the merged list (see [tryNextSource]). Session state, never persisted and
+     * never applied to the picker's own list.
+     */
+    private var selectedAddon: String? = null
+
+    /**
      * Addons whose links failed to OPEN in this session (normalized names).
      *
      * Session-scoped: a new playback session starts empty. Deliberately NOT
@@ -1137,7 +1151,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             val advance =
                 PlaybackRecoveryRules.shouldAdvancePastOpenFailure(
                     sourcesTried = openFailureSourcesTried,
-                    hasAnotherSource = nextSourceOrNull() != null
+                    hasAnotherSource = nextSourceOrNull(tab = null) != null
                 )
             if (advance) {
                 Log.w(
@@ -1158,7 +1172,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     )
                 )
                 showToast("That source won't open. Trying the next one\u2026")
-                tryNextSource()
+                tryNextSource(tab = null)
             } else {
                 showError(
                     message,
@@ -1529,6 +1543,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // or short reads as "unknown" for the missing entries, which are never
         // skipped and never demoted.
         val parsedAddons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
+        // The picker's tab, when the viewer pressed a row from one: the scope a
+        // MANUAL advance stays inside. Absent (All, or a launch with no picker
+        // at all) reads as null, which is the merged walk.
+        selectedAddon = intent.getStringExtra("selected_addon")?.takeIf { it.isNotBlank() }
         // Whether a Dolby Vision label is worth anything on this box, read the
         // same way the resolver reads it (see StreamsViewModel): the device has
         // to advertise a DV decoder AND the viewer must not have said their
@@ -1622,7 +1640,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The card's one-tap retry on a DIFFERENT source (see tryNextSource):
         // the same switch the SOURCES picker makes, without the dig.
         errorNextSourceButton = findViewById(R.id.mpv_error_next)
-        errorNextSourceButton?.setOnClickListener { tryNextSource() }
+        errorNextSourceButton?.setOnClickListener { tryNextSource(tab = selectedAddon) }
         // ...and its retry on the SAME source, which needs no ranked-list
         // check to be offered (see retryCurrentSource).
         errorRetryButton = findViewById(R.id.mpv_error_retry)
@@ -4681,7 +4699,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             "Source rebuffered $stalledCount times in ${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min " +
                 "— downshifting to the next source"
         )
-        val next = nextSourceOrNull()
+        val next = nextSourceOrNull(tab = null)
         rebufferDownshift.reset()
         if (next == null) {
             rebufferDownshiftGivenUp = true
@@ -5597,8 +5615,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // "TRY NEXT SOURCE" only where the ranked list actually has one left:
         // a dead-end button is worse than none. Kept the secondary action -
         // SWITCH PLAYER stays the card's default focus.
+        //
+        // The VISIBILITY check stays MERGED (tab = null) even when the session
+        // came from a tab: the button must be offered whenever ANY recovery
+        // exists, or a tab-exhausted viewer would be left on a card that hides
+        // their only way forward. Only the PRESS is tab-scoped (see
+        // tryNextSource), and a press with nothing left in the tab opens the
+        // SOURCES picker rather than switching.
         errorNextSourceButton?.visibility =
-            if (nextSourceOrNull() != null) View.VISIBLE else View.GONE
+            if (nextSourceOrNull(tab = null) != null) View.VISIBLE else View.GONE
         errorSwitchButton?.post {
             // The card may have gone (a retry took, the source switched) and
             // focus moved on: requesting on a hidden button only takes the
@@ -5609,27 +5634,50 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
-     * The next source in the ranked list after the one playing now, or null
-     * when nothing else is loaded. The list is the same ranked order the
-     * SOURCES picker shows, so "next" means what the viewer sees: the row
-     * under the current one.
+     * The next source after the one playing now, or null when nothing else is
+     * loaded. The list is the same ranked order the SOURCES picker shows, so
+     * "next" means what the viewer sees: the row under the current one.
+     *
+     * [tab] is the SCOPE, and every call site passes it rather than leaning on a
+     * default:
+     *
+     *  - null walks the MERGED list and crosses add-ons - every automatic
+     *    recovery, and a manual press made from All;
+     *  - an add-on NAME confines the walk to that add-on's rows (see
+     *    [SourceAddonSession.tabbedNextIndex]), which is what keeps a manual
+     *    press from jumping into another add-on behind the viewer's back. An
+     *    exhausted tab answers null and the caller surfaces the picker (see
+     *    [tryNextSource]).
      */
-    private fun nextSourceOrNull(): Stream? {
+    private fun nextSourceOrNull(tab: String?): Stream? {
         val current = currentUrl
         val index = sources.indexOfFirst { it.url == current }
-        var start = if (index >= 0) index + 1 else 0
+        val start = if (index >= 0) index + 1 else 0
+        if (tab != null) {
+            val candidate = SourceAddonSession.tabbedNextIndex(
+                addons = sourceAddons,
+                fromIndex = start,
+                dead = sessionDeadAddons,
+                tab = tab
+            ) { i ->
+                val url = sources.getOrNull(i)?.url
+                !url.isNullOrBlank() && url != current
+            } ?: return null
+            return sources.getOrNull(candidate)
+        }
+        var from = start
         while (true) {
             // First pass skips every add-on this session has marked dead (see
             // SourceAddonSession.nextIndex); when nothing live is left it falls
             // back to plain order, because a dead link is still better than no
             // sources. The blank-URL / same-URL guard below is the pre-existing
             // rule and applies to whichever index the skip lands on.
-            val candidateIndex = SourceAddonSession.nextIndex(sourceAddons, start, sessionDeadAddons)
+            val candidateIndex = SourceAddonSession.nextIndex(sourceAddons, from, sessionDeadAddons)
                 ?: return null
             val stream = sources.getOrNull(candidateIndex) ?: return null
             val url = stream.url
             if (!url.isNullOrBlank() && url != current) return stream
-            start = candidateIndex + 1
+            from = candidateIndex + 1
         }
     }
 
@@ -5643,9 +5691,32 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * repeated-rebuffer downshift (see [onMpvBufferingChanged]), so a source
      * that is dead, or one that opens but cannot keep up, is not left to fail
      * on this engine when the list has another one to try.
+     *
+     * [tab] is the scope, and each caller passes it explicitly (see
+     * [nextSourceOrNull]) because the two callers ARE the manual/automatic
+     * split:
+     *
+     *  - the card's own button is the ONE manual advance, so it passes the
+     *    picker's tab: the walk stays inside that add-on, and when its rows run
+     *    out the card comes down and the SOURCES picker opens - the viewer
+     *    chooses there, from the full list, across add-ons if they wish (only
+     *    the ADVANCE is ever scoped);
+     *  - the open-failure advance passes null, so recovery crosses add-ons
+     *    exactly as it always has.
      */
-    private fun tryNextSource() {
-        val next = nextSourceOrNull() ?: return
+    private fun tryNextSource(tab: String?) {
+        val next = nextSourceOrNull(tab)
+        if (next == null) {
+            // A tab-scoped press has run out of ITS add-on's rows. It must not
+            // advance into another add-on behind the viewer's back, and it must
+            // not do nothing with no word either. The merged walk keeps its old
+            // terminal behaviour: nothing left to try, so the card stays.
+            if (tab != null) {
+                errorContainer?.visibility = View.GONE
+                showPicker(PickerMode.SOURCE)
+            }
+            return
+        }
         // The card is otherwise terminal for this engine; the new load replaces
         // it, and a failure of the new source raises the card again with fresh
         // state (see showError).

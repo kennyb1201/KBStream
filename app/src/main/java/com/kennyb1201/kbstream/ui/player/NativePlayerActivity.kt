@@ -2374,6 +2374,22 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var sourceAddons: List<String?> = emptyList()
 
     /**
+     * The add-on TAB the streams picker had selected when this source was
+     * pressed, or null when the launch had none (All, or no picker at all).
+     * Read from the `selected_addon` launch extra, which arrives beside
+     * `sources_json`, so a session that switched here from MPV carries the
+     * scope of the pick it came from.
+     *
+     * This engine has no MANUAL "next source" entry point: all four
+     * [tryNextSource] call sites are automatic recoveries, so each names the
+     * merged scope explicitly and this field is deliberately not consulted for
+     * them - a session that started inside one tab must still recover across
+     * add-ons. The one manual press belongs to the MPV engine's error card (see
+     * its own copy of this field).
+     */
+    private var selectedAddon: String? = null
+
+    /**
      * Addons whose links failed to OPEN in this session (normalized names).
      *
      * Session-scoped: a new playback session starts empty. Deliberately NOT
@@ -3774,6 +3790,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             parsed = parsedSources,
             addons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
         )
+        // The picker's tab, when there was one. Read so the session keeps it
+        // across an engine handoff; no call site below consults it (see
+        // [selectedAddon]).
+        selectedAddon = intent.getStringExtra("selected_addon")?.takeIf { it.isNotBlank() }
 
         // Parse cast from JSON
         val castJson = intent.getStringExtra("cast_json")
@@ -7097,7 +7117,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 val switching = tryNextSource(
                     delayMs = DECODER_RESOURCE_RETRY_DELAY_MS,
                     statusText = "This TV is out of video decoder resources — " +
-                        "trying a smaller source…"
+                        "trying a smaller source…",
+                    // Automatic recovery: the merged walk, across add-ons.
+                    tab = null
                 )
                 if (switching) return
                 Log.w(
@@ -7944,7 +7966,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         } ?: ""
         val triedOtherSources = autoSourceSwitchCount > 0
         if (!triedOtherSources && sources.size > 1) {
-            if (tryNextSource()) return
+            // Automatic recovery: the merged walk, across add-ons.
+            if (tryNextSource(tab = null)) return
         }
         Log.w(
             "PLAYER_VIDEO",
@@ -11168,7 +11191,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val attemptLimit = if (unopenable) MAX_UNOPENABLE_RETRY_ATTEMPTS else MAX_RETRY_ATTEMPTS
         if (retryAttempt >= attemptLimit) {
             if (unopenable &&
-                tryNextSource(statusText = "That source won't open. Trying the next one…")
+                tryNextSource(
+                    statusText = "That source won't open. Trying the next one…",
+                    // Automatic recovery: the merged walk, across add-ons.
+                    tab = null
+                )
             ) {
                 return
             }
@@ -14035,7 +14062,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // the verdict belongs to the one that stalled.
         val stalledAddon = currentAddonName
         val switching = tryNextSource(
-            statusText = "This source keeps stalling — trying the next one…"
+            statusText = "This source keeps stalling — trying the next one…",
+            // Automatic recovery: the merged walk, across add-ons.
+            tab = null
         )
         // The window is spent either way: a switch starts the next source
         // fresh, and with no rung left there is nothing more to reach for, so
@@ -14064,8 +14093,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * decoder pool showed the box returning no codec at all for ~15s after a
      * failure), and [statusText] replaces the generic "Trying next source"
      * line when the reason is worth naming.
+     *
+     * [tab] is the SCOPE, and every call site passes it rather than leaning on a
+     * default: null is the MERGED walk, which is what every automatic recovery
+     * here uses so it can cross add-ons. A name confines the walk to that
+     * add-on's rows (see [SourceAddonSession.tabbedNextIndex]) - the shape the
+     * MPV engine's manual TRY NEXT SOURCE uses; this engine has no manual
+     * advance, so nothing passes one, but a future caller that does must say so
+     * out loud.
      */
-    private fun tryNextSource(delayMs: Long = 0L, statusText: String? = null): Boolean {
+    private fun tryNextSource(
+        delayMs: Long = 0L,
+        statusText: String? = null,
+        tab: String? = null
+    ): Boolean {
         if (autoSourceSwitchCount >= MAX_AUTO_SOURCE_SWITCHES) return false
         // Which source is next, not how many tries are allowed: the first
         // remaining source whose addon is not dead this session, else plain
@@ -14084,21 +14125,36 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // caller falls through to the card.
         var fromIndex = currentSourceIndex + 1
         var nextIndex: Int? = null
-        while (true) {
-            val candidate = SourceAddonSession.nextIndex(
+        if (tab != null) {
+            // A tab-scoped advance: only this add-on's rows, stepped past when
+            // this session found the add-on dead or the row carries no direct
+            // URL (see SourceAddonSession.tabbedNextIndex).
+            nextIndex = SourceAddonSession.tabbedNextIndex(
                 addons = sourceAddons,
                 fromIndex = fromIndex,
-                dead = sessionDeadAddons
-            ) ?: break
-            if (!sources[candidate].url.isNullOrBlank()) {
-                nextIndex = candidate
-                break
+                dead = sessionDeadAddons,
+                tab = tab
+            ) { i ->
+                val url = sources.getOrNull(i)?.url
+                !url.isNullOrBlank()
             }
-            Log.w(
-                "PLAYER_VIDEO",
-                "skipping source ${candidate} with no direct URL (hash row)"
-            )
-            fromIndex = candidate + 1
+        } else {
+            while (true) {
+                val candidate = SourceAddonSession.nextIndex(
+                    addons = sourceAddons,
+                    fromIndex = fromIndex,
+                    dead = sessionDeadAddons
+                ) ?: break
+                if (!sources[candidate].url.isNullOrBlank()) {
+                    nextIndex = candidate
+                    break
+                }
+                Log.w(
+                    "PLAYER_VIDEO",
+                    "skipping source ${candidate} with no direct URL (hash row)"
+                )
+                fromIndex = candidate + 1
+            }
         }
         val index = nextIndex ?: return false
         val nextStream = sources[index]

@@ -115,7 +115,10 @@ class MpvOpenFailureAdvanceContractTest {
     @Test
     fun `a failed open advances before the card is shown`() {
         val rule = errorHandler.indexOf("shouldAdvancePastOpenFailure(")
-        val advance = errorHandler.indexOf("tryNextSource()")
+        // The open-failure advance is the AUTOMATIC half of the manual/automatic
+        // split, so it names the merged scope; the card's own button is the one
+        // caller that passes a tab.
+        val advance = errorHandler.indexOf("tryNextSource(tab = null)")
         val card = errorHandler.indexOf("showError(")
         assertTrue("the handler must ask the bounded rule", rule >= 0)
         assertTrue("and use the ranked list's own next source", advance >= 0)
@@ -127,7 +130,7 @@ class MpvOpenFailureAdvanceContractTest {
     fun `the list is checked before advancing, so the card is never unreachable`() {
         assertTrue(
             "advancing needs a source to advance TO",
-            errorHandler.contains("hasAnotherSource = nextSourceOrNull() != null")
+            errorHandler.contains("hasAnotherSource = nextSourceOrNull(tab = null) != null")
         )
         assertTrue(
             "and the counter is what the bound is applied to",

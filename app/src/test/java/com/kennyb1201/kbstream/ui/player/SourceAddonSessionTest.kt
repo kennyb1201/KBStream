@@ -94,6 +94,102 @@ class SourceAddonSessionTest {
         assertEquals(2, SourceAddonSession.nextIndex(addons, 2, emptySet()))
     }
 
+    // ── the tab-scoped advance ──────────────────────────────────────
+    //
+    // The manual/automatic split: a press that names the tab the viewer is
+    // looking at walks ONLY that tab's rows - it must not jump into another
+    // add-on behind their back - while every automatic recovery walks the
+    // merged list pinned above. The engines open their SOURCES picker when a
+    // tab runs out, so an exhausted tab answers null instead of falling back to
+    // a link already known dead.
+
+    /** The walk with every row usable: these cases are membership and death. */
+    private fun tabWalk(
+        addons: List<String?>,
+        fromIndex: Int,
+        tab: String?,
+        dead: Set<String> = emptySet(),
+        usable: (Int) -> Boolean = { true }
+    ) = SourceAddonSession.tabbedNextIndex(addons, fromIndex, dead, tab, usable)
+
+    @Test
+    fun `a tab walk lands on its own next row and on nothing outside it`() {
+        val addons = listOf<String?>("A", "A", "B", "A", "C")
+        assertEquals("the next A after index 0 is 1", 1, tabWalk(addons, 0, tab = "A"))
+        assertEquals("from 1 it is 3, stepping over B", 3, tabWalk(addons, 1, tab = "A"))
+        assertNull("and from 3 there is no A left", tabWalk(addons, 3, tab = "A"))
+        assertEquals(
+            "B's whole tab is index 2, and C's is 4 - never another add-on's row",
+            2,
+            tabWalk(addons, 0, tab = "B")
+        )
+    }
+
+    @Test
+    fun `a dead tab row is skipped to the next live row of the same tab, then stops`() {
+        // Inside one add-on every row IS that add-on, so a dead add-on empties
+        // its tab: the walk must stop rather than hand back a link already
+        // known dead (the engine opens the SOURCES picker instead of switching).
+        val addons = listOf<String?>("A", "A", "A", "B")
+        assertNull(tabWalk(addons, 0, tab = "A", dead = deadOf("A")))
+        assertEquals(
+            "while a tab whose own add-on is alive still walks",
+            1,
+            tabWalk(addons, 0, tab = "A", dead = deadOf("B"))
+        )
+    }
+
+    @Test
+    fun `a row the engine cannot open is stepped past inside the tab`() {
+        // The engines' blank-URL / hash guard rides the scope, so a hash row in
+        // the tab is not read as the tab's end while a url-bearing row follows.
+        val addons = listOf<String?>("A", "A", "B")
+        assertEquals(
+            "index 0 is a hash row, so the walk steps to index 1",
+            1,
+            tabWalk(addons, 0, tab = "A") { it != 0 }
+        )
+        assertNull(
+            "and when only unopenable rows are left the tab is exhausted",
+            tabWalk(addons, 0, tab = "A") { false }
+        )
+    }
+
+    @Test
+    fun `a tab that is not in this session's list is empty`() {
+        // A stale name: the add-on dropped out of the payload between the picker
+        // and the player. There is nothing to advance to, and the walk must not
+        // fall back to the merged list - the ADVANCE is scoped, the choice is
+        // not, and the in-player SOURCES picker is where that choice is made.
+        val addons = listOf<String?>("A", "B")
+        assertNull("a name matching nothing", tabWalk(addons, 0, tab = "Gone"))
+        assertNull("a blank name scopes nothing", tabWalk(addons, 0, tab = "  "))
+        assertNull("and neither does a null one", tabWalk(addons, 0, tab = null))
+    }
+
+    @Test
+    fun `unknown rows are never members of any tab`() {
+        // A null/blank entry is an add-on the payload did not describe. The
+        // merged walk never skips one (pinned above); the tab walk must never
+        // claim one either.
+        val addons = listOf<String?>(null, "", "A")
+        assertNull(
+            "a blank name matches no entry, not even the blank ones",
+            tabWalk(addons, 0, tab = " ")
+        )
+        assertEquals("while the real A at index 2 still does", 2, tabWalk(addons, 0, tab = "A"))
+    }
+
+    @Test
+    fun `tab membership compares through the shared normalization`() {
+        val addons = listOf<String?>("AIOStreams", "Other")
+        assertEquals(
+            "the picker's spelling and the player's are the same add-on",
+            0,
+            tabWalk(addons, 0, tab = "aiostreams")
+        )
+    }
+
     // ── marking dead ────────────────────────────────────────────────
 
     @Test

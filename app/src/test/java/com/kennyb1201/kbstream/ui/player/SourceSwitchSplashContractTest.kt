@@ -74,7 +74,13 @@ class SourceSwitchSplashContractTest {
     private val nativeLadder: String by lazy {
         functionBody(
             NATIVE,
-            "private fun tryNextSource(delayMs: Long = 0L, statusText: String? = null): Boolean {"
+            // The signature grew the scope argument this session (the tab a
+            // manual advance stays inside; every Exo caller passes null).
+            "private fun tryNextSource(\n" +
+                "        delayMs: Long = 0L,\n" +
+                "        statusText: String? = null,\n" +
+                "        tab: String? = null\n" +
+                "    ): Boolean {"
         )
     }
 
@@ -186,7 +192,7 @@ class SourceSwitchSplashContractTest {
         assertFalse(
             "the error card's next-source button stays a manual switch",
             readSource(MPV)
-                .substringAfter("private fun tryNextSource() {")
+                .substringAfter("private fun tryNextSource(tab: String?) {")
                 .substringBefore("\n    }")
                 .contains("isAutoRecovery")
         )

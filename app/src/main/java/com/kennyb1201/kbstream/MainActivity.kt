@@ -441,6 +441,14 @@ sealed class Screen {
          * entries.
          */
         val sourceAddons: List<String?> = emptyList(),
+        /**
+         * The add-on tab the streams picker had selected when this source was
+         * pressed, or null when the launch had no tab at all (All, Continue
+         * Watching, a next-episode advance, a direct link). It reaches the
+         * player so a MANUAL "next source" stays inside that tab; every
+         * automatic recovery ignores it (see SourceAddonSession).
+         */
+        val selectedAddon: String? = null,
         val streamHeaders: Map<String, String> = emptyMap(),
         val totalEpisodesInSeason: Int? = null,
         val runtimeMinutes: Int? = null,
@@ -493,7 +501,13 @@ private data class PendingPlay(
     fun toPlayerScreen(
         stream: Stream,
         allSources: List<Stream>,
-        sourceAddons: List<String?> = emptyList()
+        sourceAddons: List<String?> = emptyList(),
+        /**
+         * The picker's tab, for the manual-press path only; null - the default,
+         * and what Continue Watching and every next-episode advance pass -
+         * means the merged walk.
+         */
+        selectedAddon: String? = null
     ): Screen.Player {
         // A DRM stream cannot play on MPV (the engine's own handoff excludes
         // those too), so it must not inherit the anime route's engine choice.
@@ -534,6 +548,7 @@ private data class PendingPlay(
             returnTo = returnTo,
             sources = allSources,
             sourceAddons = sourceAddons,
+            selectedAddon = selectedAddon,
             totalEpisodesInSeason = totalEpisodesInSeason,
             runtimeMinutes = target.runtimeMinutes,
             // The addon's own HTTP headers for this link (Referer / Origin /
@@ -3108,7 +3123,8 @@ fun AppRoot(
                 onStreamSelected = {
                         stream,
                         allSources,
-                        sourceAddons ->
+                        sourceAddons,
+                        selectedAddon ->
 
                     val streamUrl =
                         stream.url.orEmpty()
@@ -3159,6 +3175,11 @@ fun AppRoot(
                             returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
                             sourceAddons = sourceAddons,
+                            // The picker's tab rides this manual press and
+                            // nothing else: the auto-play path builds its
+                            // Screen.Player through toPlayerScreen with no
+                            // tab (see PendingPlay).
+                            selectedAddon = selectedAddon,
                             totalEpisodesInSeason =
                                 current.target.totalEpisodesInSeason,
                             runtimeMinutes =
@@ -3666,6 +3687,14 @@ fun AppRoot(
                     // session when the viewer (or the open-failure ladder) asks
                     // for the next source (see SourceAddonSession).
                     putExtra("source_addons", sourceAddonsJson(current.sourceAddons))
+                    // The tab the picker had selected, when the viewer pressed
+                    // a row from one: the scope the player's MANUAL
+                    // next-source advance stays inside (see
+                    // MpvPlayerActivity.tryNextSource). Absent for every
+                    // launch with no picker, which reads as the merged walk.
+                    current.selectedAddon?.takeIf { it.isNotBlank() }?.let {
+                        putExtra("selected_addon", it)
+                    }
                     // Pass cast as JSON array
                     val castArray = JSONArray()
                     current.cast.forEach { member ->

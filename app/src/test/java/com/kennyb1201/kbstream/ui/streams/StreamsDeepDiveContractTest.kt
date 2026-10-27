@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.streams
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,11 +15,18 @@ import org.junit.Test
  * Each test names the viewer-visible failure it prevents, not the line it
  * matches.
  *
- * The grace's own product call is DECIDED (2026-10-27 weak-head amendment): the
- * collection closes early only on a hand autoplay could start with a LINK, and
- * a weak hand keeps it open for the add-ons still out — pinned by the cases
- * below, with the rule's own cases in AutoPlayQualityTest. Still open, and
- * deliberately not pinned here: whether a tab filter scopes "next source".
+ * Two product calls are DECIDED, and both are pinned here:
+ *
+ *  - the grace (2026-10-27 weak-head amendment): the collection closes early
+ *    only on a hand autoplay could start with a LINK, and a weak hand keeps it
+ *    open for the add-ons still out — pinned by the cases below, with the
+ *    rule's own cases in AutoPlayQualityTest;
+ *  - the tab filter (2026-10-27 tab-scope spec): MANUAL SCRATCHES THE TAB,
+ *    AUTOMATIC DOES NOT. A manual "next source" walks only the tab the viewer
+ *    is looking at, and opens the in-player SOURCES picker once that tab runs
+ *    out; every automatic recovery walks the merged list and crosses add-ons.
+ *    Pinned at the end of this file, with the rule's own cases in
+ *    SourceAddonSessionTest.
  */
 class StreamsDeepDiveContractTest {
 
@@ -27,6 +35,12 @@ class StreamsDeepDiveContractTest {
     private val mobile: String by lazy { read(MOBILE_SCREEN) }
 
     private val viewModel: String by lazy { read(VIEW_MODEL) }
+
+    private val mainActivity: String by lazy { read(MAIN_ACTIVITY) }
+
+    private val mpv: String by lazy { read(MPV_PLAYER) }
+
+    private val exo: String by lazy { read(EXO_PLAYER) }
 
     @Test
     fun `the grace is re-armed from a startable hand, not held open from a bad first answer`() {
@@ -250,6 +264,112 @@ class StreamsDeepDiveContractTest {
         )
     }
 
+    // ── the tab filter's scope (decided above) ──────────────────────
+
+    /**
+     * The picker's tab travels on the MANUAL press and on nothing else. It is
+     * threaded through `selectSource` into `onStreamSelected`; the auto-play
+     * start keeps its shape, so a cold start's recovery is never confined to a
+     * tab nobody chose.
+     */
+    @Test
+    fun `the picker's tab goes with a manual press and with nothing else`() {
+        listOf("tv" to tv, "mobile" to mobile).forEach { (which, screen) ->
+            assertTrue(
+                "$which: the picker's launch callback carries the selected tab",
+                screen.contains("selectedAddon: String?")
+            )
+            assertTrue(
+                "$which: the press path forwards it to its direct launch",
+                screen.contains("onStreamSelected(selected, allSources, addons, selectedAddon)")
+            )
+            assertTrue(
+                "$which: and to the launch that resolved a hash row first",
+                screen
+                    .substringAfter("allSources.map { if (it === selected) resolved else it },")
+                    .substringBefore(")")
+                    .contains("selectedAddon")
+            )
+            assertTrue(
+                "$which: and the row's press is the only caller that hands it over",
+                1 == Regex("selectSource\\(\\s*stream,").findAll(screen).count() &&
+                    screen.contains("selectedAddonName\n")
+            )
+            assertFalse(
+                "$which: the tab is the add-on NAME, never the tab index",
+                Regex("selectSource\\([^)]*selectedAddonIndex").containsMatchIn(screen)
+            )
+            assertFalse(
+                "$which: auto-play carries no tab, so a cold start is never scoped",
+                Regex("autoplayStart\\([^)]*selectedAddon").containsMatchIn(screen)
+            )
+        }
+    }
+
+    @Test
+    fun `the selected tab reaches the player, and only a manual press carries it`() {
+        assertTrue(
+            "the player screen state carries the tab, defaulted so a no-picker launch is merged",
+            mainActivity.contains("val selectedAddon: String? = null,")
+        )
+        assertTrue(
+            "the picker's manual press is what fills it",
+            mainActivity.contains("selectedAddon = selectedAddon,")
+        )
+        assertTrue(
+            "and the launch intent writes it beside the source list and its add-ons",
+            mainActivity.contains("putExtra(\"selected_addon\", it)") &&
+                mainActivity.contains(
+                    "putExtra(\"source_addons\", sourceAddonsJson(current.sourceAddons))"
+                )
+        )
+        assertTrue(
+            "the player still gets the merged list - only the name is added",
+            mainActivity.contains("sources = allSources,") &&
+                mainActivity.contains("sourceAddons = sourceAddons,")
+        )
+        assertTrue(
+            "both engines read the extra beside sources_json/source_addons",
+            mpv.contains("intent.getStringExtra(\"selected_addon\")") &&
+                exo.contains("intent.getStringExtra(\"selected_addon\")")
+        )
+    }
+
+    @Test
+    fun `a manual advance is tab-scoped and automatic recovery is not`() {
+        assertTrue(
+            "the MPV card's own button is the manual press, so it passes the session's tab",
+            mpv.contains("tryNextSource(tab = selectedAddon)")
+        )
+        assertTrue(
+            "the open-failure advance and the rebuffer downshift are recovery: merged",
+            mpv.contains("tryNextSource(tab = null)") &&
+                mpv.contains("val next = nextSourceOrNull(tab = null)")
+        )
+        assertTrue(
+            "the card's button VISIBILITY stays merged, or a tab-exhausted viewer loses it",
+            mpv.contains("if (nextSourceOrNull(tab = null) != null) View.VISIBLE else View.GONE")
+        )
+        val manualWalk = mpv
+            .substringAfter("private fun tryNextSource(tab: String?) {")
+            .substringBefore("\n    }")
+        assertTrue(
+            "an exhausted tab dismisses the card and opens the SOURCES picker instead of switching",
+            manualWalk.contains("if (tab != null) {") &&
+                manualWalk.contains("showPicker(PickerMode.SOURCE)")
+        )
+        assertEquals(
+            "every Exo advance is automatic, so all four name the merged scope",
+            4,
+            Regex("tab = null").findAll(exo).count()
+        )
+        assertTrue(
+            "and both engines walk the tabbed rule rather than a second copy of it",
+            mpv.contains("SourceAddonSession.tabbedNextIndex(") &&
+                exo.contains("SourceAddonSession.tabbedNextIndex(")
+        )
+    }
+
     private fun read(relative: String): String {
         val file = File(findSourceRoot(), relative)
         assertTrue("source missing: $file", file.isFile)
@@ -283,5 +403,8 @@ class StreamsDeepDiveContractTest {
         const val TV_SCREEN = "com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt"
         const val MOBILE_SCREEN = "com/kennyb1201/kbstream/ui/mobile/StreamsScreenMobile.kt"
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/streams/StreamsViewModel.kt"
+        const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
+        const val MPV_PLAYER = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
+        const val EXO_PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
     }
 }

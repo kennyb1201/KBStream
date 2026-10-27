@@ -95,7 +95,13 @@ class PlayerDeepDiveContractTest {
     fun `the exo walk steps past a hash row instead of reporting a phantom switch`() {
         val ladder = functionBody(
             native,
-            "private fun tryNextSource(delayMs: Long = 0L, statusText: String? = null): Boolean {"
+            // The scope argument (tab = null here: every automatic recovery is
+            // the merged walk) is part of the signature this pins.
+            "private fun tryNextSource(\n" +
+                "        delayMs: Long = 0L,\n" +
+                "        statusText: String? = null,\n" +
+                "        tab: String? = null\n" +
+                "    ): Boolean {"
         )
         assertTrue(
             "a row with no direct URL cannot be opened by this engine, so the walk keeps looking",

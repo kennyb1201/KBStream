@@ -92,6 +92,56 @@ internal object SourceAddonSession {
         }
         return fromIndex
     }
+
+    /**
+     * The index a TAB-SCOPED advance lands on, or null when [tab] has nothing
+     * left to give.
+     *
+     * The manual/automatic split. A press that names the tab the viewer is
+     * looking at walks ONLY that tab's rows, so the advance cannot jump into
+     * another add-on's links behind their back; every automatic recovery walks
+     * the merged list ([nextIndex]) and crosses add-ons freely, because a dead
+     * add-on must not strand recovery inside a tab.
+     *
+     * [nextIndex] is the merged half of the rule and this is the tabbed half,
+     * and the differences are deliberate:
+     *
+     *  1. membership - an index counts only when its add-on normalizes
+     *     ([normalize]) to [tab]'s name. A null/blank entry (an add-on the
+     *     payload did not describe) is never a member of anything, and a [tab]
+     *     matching no entry at all answers null at once: a stale name means the
+     *     picker's tab is gone and the in-player SOURCES picker is the answer.
+     *  2. no second pass - [nextIndex] falls back to plain order so that a dead
+     *     link still beats "no sources". Inside one add-on every row IS that
+     *     add-on, so that fallback could only hand back a link already known
+     *     dead; this walk stops instead, and the engines surface the picker
+     *     rather than switch to it.
+     *
+     * @param usable whether index `i` may be landed on at all - the engines'
+     *   pre-existing blank-URL / same-URL guard. A row that fails it is stepped
+     *   past exactly as the merged walk steps past it, so a hash row in the tab
+     *   is not read as the tab's end while a url-bearing row still follows.
+     * @return null when [tab] is blank, when [fromIndex] is outside the list,
+     *   or when no member of the tab survives the dead-skip and [usable].
+     */
+    fun tabbedNextIndex(
+        addons: List<String?>,
+        fromIndex: Int,
+        dead: Set<String>,
+        tab: String?,
+        usable: (Int) -> Boolean
+    ): Int? {
+        val key = normalize(tab)
+        if (key.isEmpty()) return null
+        if (fromIndex < 0) return null
+        for (i in fromIndex until addons.size) {
+            if (normalize(addons.getOrNull(i)) != key) continue
+            if (isDead(addons, i, dead)) continue
+            if (!usable(i)) continue
+            return i
+        }
+        return null
+    }
 }
 
 /**
