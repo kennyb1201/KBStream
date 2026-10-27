@@ -7,6 +7,7 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.os.Build
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -96,6 +97,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Border
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -3985,10 +3987,12 @@ private fun AboutSection(modifier: Modifier = Modifier) {
     // visible without waiting for an update to exist.
     val changelog by AppUpdater.latestChangelog.collectAsStateWithLifecycle()
     Column(modifier = modifier) {
-        // A plain plate, not a card: this pane is read, never pressed. A
+        // A plain plate, not a card - and not a D-pad stop either, because it
+        // sits above the fold and nothing below it needs it to be reachable. A
         // KBCard with an empty onClick gave it a focus ring, a glow and a D-pad
         // stop that answered OK with nothing - the same class of dead stop the
-        // stats tiles were.
+        // stats tiles were. (The changelog, credits and footer ARE stops, but
+        // as scroll drivers: see the changelog plate.)
         Surface(
             shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
@@ -4027,14 +4031,51 @@ private fun AboutSection(modifier: Modifier = Modifier) {
         }
         if (changelog.isNotBlank()) {
             Spacer(modifier = Modifier.height(10.dp))
-            // Same non-focusable plate as the version line above: the
-            // changelog is long, and a focusable box around it made the D-pad
-            // walk into a wall of text that does nothing when pressed.
+            // This plate IS a D-pad stop - twice over - and that is a change of
+            // mind, not an oversight. With nothing focusable below the Update
+            // row, a pane taller than the window could not scroll at all: on a
+            // long changelog (the feed's body runs to MAX_CHANGELOG_CHARS) the
+            // credits and the footer under it were unreachable, because Down
+            // from the Update row found nothing and the viewport never moved.
+            //
+            // Two 1dp anchors rather than one node around the plate: the plate
+            // itself can be taller than the window, and asking bring-into-view
+            // for a rect taller than its viewport lands neither end of it. The
+            // head anchor shows the first lines, the tail anchor the last, and
+            // at the feed's cap the two stops overlap, so every line is on
+            // screen at one of them.
+            //
+            // Neither anchor is a button: focusable() and nothing else, so OK
+            // does nothing here. The old objection - a focusable box around the
+            // text walked the D-pad into a wall of text that does nothing when
+            // pressed - is answered by the treatment rather than by its
+            // absence: no card, no scale, no glow, no ring beyond the 2dp
+            // accent border every focused plate draws (transparent when it is
+            // not, so the plate never resizes), exactly as the stats ranking
+            // rows do it.
+            //
+            // Two states rather than one, because the anchors hand focus to
+            // each other: a single state written by both would be cleared by
+            // whichever callback ran last. The plate reads as focused when
+            // either anchor holds it.
+            var changelogHeadFocused by remember { mutableStateOf(false) }
+            var changelogTailFocused by remember { mutableStateOf(false) }
+            val changelogFocused = changelogHeadFocused || changelogTailFocused
             Surface(
                 shape = KBShapeCard,
                 colors = SurfaceDefaults.colors(
-                    containerColor = KBSurface,
+                    containerColor = if (changelogFocused) KBSurfaceRaised else KBSurface,
                     contentColor = KBTextHi
+                ),
+                // Always 2dp wide, transparent until focused: swapping the
+                // border in and out with focus would resize the plate as the
+                // D-pad moved through it (see TopShowRow in StatsScreen).
+                border = Border(
+                    border = BorderStroke(
+                        width = 2.dp,
+                        color = KBAccent.copy(alpha = if (changelogFocused) 1f else 0f)
+                    ),
+                    shape = KBShapeCard
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -4044,6 +4085,15 @@ private fun AboutSection(modifier: Modifier = Modifier) {
                         .background(KBSurfaceRaised, KBShapeSmall)
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
+                    // The head stop, at the top of the plate's content so the
+                    // WHAT'S NEW label stays on screen with the first lines.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .onFocusChanged { changelogHeadFocused = it.isFocused }
+                            .focusable()
+                    )
                     Text(
                         text = "WHAT'S NEW",
                         color = KBAccent,
@@ -4053,6 +4103,16 @@ private fun AboutSection(modifier: Modifier = Modifier) {
                         text = changelog,
                         color = KBTextHi,
                         style = MaterialTheme.typography.bodySmall
+                    )
+                    // The tail stop. Composed whenever the plate is, with no
+                    // length gate and no measurement: a changelog short enough
+                    // to fit simply has both stops on screen at once.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .onFocusChanged { changelogTailFocused = it.isFocused }
+                            .focusable()
                     )
                 }
             }
@@ -4089,13 +4149,28 @@ private fun AboutSection(modifier: Modifier = Modifier) {
         // one-time "data from Simkl" line as an accepted placement. Both are
         // read-only, like every other line in this pane.
         Spacer(modifier = Modifier.height(10.dp))
+        // The credits plate is the second scroll driver below the Update row:
+        // with the changelog's stops ahead of it this one is reached by Down,
+        // and it is what brings the two attribution rows into view when they
+        // start below the fold. Focusable, not pressable - OK does nothing.
+        var creditsFocused by remember { mutableStateOf(false) }
         Surface(
             shape = KBShapeCard,
             colors = SurfaceDefaults.colors(
-                containerColor = KBSurface,
+                containerColor = if (creditsFocused) KBSurfaceRaised else KBSurface,
                 contentColor = KBTextHi
             ),
-            modifier = Modifier.fillMaxWidth()
+            border = Border(
+                border = BorderStroke(
+                    width = 2.dp,
+                    color = KBAccent.copy(alpha = if (creditsFocused) 1f else 0f)
+                ),
+                shape = KBShapeCard
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { creditsFocused = it.isFocused }
+                .focusable()
         ) {
             Column(
                 modifier = Modifier
@@ -4130,18 +4205,48 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             }
         }
         // The credit the pane ends on. Centred because it is the one line here
-        // that is about the app's author rather than the install, and read-only
-        // like every other line in this pane - nothing in About is a D-pad stop.
+        // that is about the app's author rather than the install.
+        //
+        // The last D-pad stop in the pane, and a scroll driver like the two
+        // above it: a read-only line that took no focus is exactly what made a
+        // long About unreachable, because the pane's only focusable node was at
+        // the top. It is focusable, not pressable - there is nothing here to
+        // open, and OK does nothing. The border is drawn on this wrapper with a
+        // transparent container, so the footer line itself gains no filled
+        // background.
+        //
+        // Nothing follows it: Down from here finds no target and the focus
+        // stays put, which is the end of the pane.
+        var footerFocused by remember { mutableStateOf(false) }
         Spacer(modifier = Modifier.height(14.dp))
-        Text(
-            text = "Made with ❤️ by Kenny B",
-            color = KBTextLo.copy(alpha = 0.7f),
-            style = MaterialTheme.typography.labelSmall,
-            textAlign = TextAlign.Center,
+        Surface(
+            shape = KBShapeCard,
+            colors = SurfaceDefaults.colors(
+                containerColor = Color.Transparent,
+                contentColor = KBTextHi
+            ),
+            border = Border(
+                border = BorderStroke(
+                    width = 2.dp,
+                    color = KBAccent.copy(alpha = if (footerFocused) 1f else 0f)
+                ),
+                shape = KBShapeCard
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp)
-        )
+                .onFocusChanged { footerFocused = it.isFocused }
+                .focusable()
+        ) {
+            Text(
+                text = "Made with ❤️ by Kenny B",
+                color = KBTextLo.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp)
+            )
+        }
     }
 }
 

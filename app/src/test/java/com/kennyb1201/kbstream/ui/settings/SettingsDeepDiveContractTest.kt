@@ -51,6 +51,7 @@ class SettingsDeepDiveContractTest {
         const val MOBILE = "com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"
         const val PROFILE_KEY = "com/kennyb1201/kbstream/ui/settings/ProfileRowKey.kt"
         const val SYNC = "com/kennyb1201/kbstream/data/sync/SupabaseSync.kt"
+        const val UPDATER = "com/kennyb1201/kbstream/data/update/AppUpdater.kt"
     }
 
     /** Everything between two anchors, both of which must exist. */
@@ -107,6 +108,22 @@ class SettingsDeepDiveContractTest {
 
     private fun count(source: String, needle: String): Int =
         Regex(Regex.escape(needle)).findAll(source).count()
+
+    /**
+     * A slice with its comments removed.
+     *
+     * The About plates name the treatment they rejected, in those words - "a
+     * KBCard with an empty onClick..." - so a test asking "is anything in this
+     * pane pressable?" has to read the code, not the reasoning around it.
+     */
+    private fun code(source: String): String =
+        source
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), " ")
+            .replace(Regex("//[^\n]*"), " ")
+
+    /** The About pane's composable, from its header to its closing brace. */
+    private fun aboutSection(): String =
+        functionBody(source(SCREEN), "private fun AboutSection(")
 
     // ── C1: Import asks first ────────────────────────────────────────
 
@@ -346,6 +363,172 @@ class SettingsDeepDiveContractTest {
         assertFalse(
             "the first pane is no longer forced on open",
             mobile.contains("mutableStateOf<SettingsPane?>(null)")
+        )
+    }
+
+    // ── About: the pane scrolls with the D-pad, and nothing there acts ──
+
+    /**
+     * The About pane's own finding (2026-10-27): a long changelog parked the
+     * credits and the footer below the fold with nothing focusable under the
+     * Update row, so Down moved nothing and the pane could not be read past its
+     * first screen. The fix is the stats ranking rows' answer (stats C4):
+     * focusable scroll drivers that OK does nothing on. These assertions pin
+     * the shape; the device walk in the field checklist is the settler, because
+     * no source read proves the D-pad reaches the footer.
+     */
+    @Test
+    fun `the about pane's stops run update row to footer in composition order`() {
+        val about = aboutSection()
+        var previous = -1
+        listOf(
+            "UpdateRow()",
+            "changelogHeadFocused = it.isFocused",
+            "changelogTailFocused = it.isFocused",
+            "creditsFocused = it.isFocused",
+            "footerFocused = it.isFocused"
+        ).forEach { stop ->
+            val at = about.indexOf(stop)
+            assertTrue("the pane is missing the stop: $stop", at >= 0)
+            assertTrue(
+                "focus follows composition order and nothing sets focusProperties, " +
+                    "so $stop has to be composed after the stop before it",
+                at > previous
+            )
+            previous = at
+        }
+    }
+
+    @Test
+    fun `the changelog plate carries a head and a tail stop, and the plates show focus`() {
+        val about = aboutSection()
+        val changelog = between(
+            about,
+            "if (changelog.isNotBlank()) {",
+            "// The attribution this pane owes"
+        )
+        assertTrue(
+            "the changelog plate needs TWO stops: the plate can be taller than " +
+                "the window, and one node around it asks bring-into-view for a " +
+                "rect taller than the viewport, which lands neither end",
+            Regex("\\.focusable\\(\\)").findAll(changelog).count() >= 2
+        )
+        listOf(
+            "changelogHeadFocused = it.isFocused",
+            "changelogTailFocused = it.isFocused",
+            "color = KBAccent.copy(alpha = if (changelogFocused) 1f else 0f)"
+        ).forEach { shape ->
+            assertTrue("the changelog plate must show where focus is: $shape", changelog.contains(shape))
+        }
+
+        val credits = between(
+            about,
+            "// The credits plate is the second scroll driver",
+            "// The credit the pane ends on"
+        )
+        assertTrue(
+            "the credits plate is a stop of its own, so the attribution rows can " +
+                "be brought into view",
+            credits.contains(".focusable()")
+        )
+        listOf(
+            "creditsFocused = it.isFocused",
+            "color = KBAccent.copy(alpha = if (creditsFocused) 1f else 0f)"
+        ).forEach { shape ->
+            assertTrue("the credits plate must show where focus is: $shape", credits.contains(shape))
+        }
+
+        val footer = about.substring(about.indexOf("// The credit the pane ends on"))
+        assertTrue(
+            "the footer is the last stop in the chain",
+            footer.contains(".focusable()") && footer.contains("footerFocused = it.isFocused")
+        )
+        assertTrue(
+            "its border is drawn on the wrapper over a transparent container, so " +
+                "the footer line gains no filled background",
+            footer.contains("containerColor = Color.Transparent") &&
+                footer.contains("color = KBAccent.copy(alpha = if (footerFocused) 1f else 0f)")
+        )
+    }
+
+    @Test
+    fun `the new stops are composed outside the update row's gate`() {
+        val about = aboutSection()
+        val updateCall = about.indexOf("UpdateRow()")
+        assertTrue("the update row is missing", updateCall >= 0)
+        // The gate is `if (!PLAY_BUILD && !DEBUG) { ... UpdateRow() }`, so the
+        // first brace after the call closes it.
+        val gateCloses = about.indexOf('}', updateCall)
+        assertTrue("the update row's gate never closes", gateCloses > updateCall)
+        listOf(".focusable()", "onFocusChanged").forEach { needle ->
+            val matches = Regex(Regex.escape(needle)).findAll(about).toList()
+            assertTrue("the pane is missing $needle", matches.isNotEmpty())
+            matches.forEach { match ->
+                assertTrue(
+                    "$needle is gated behind the update row: a Play or debug " +
+                        "build composes no update row at all, and the pane still " +
+                        "has to scroll there",
+                    match.range.first > gateCloses
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `nothing new in the about pane acts`() {
+        val body = code(aboutSection())
+        listOf("onClick", "clickable", "KBCard").forEach { action ->
+            assertFalse(
+                "the plates are scroll drivers, not controls: focusable() and " +
+                    "nothing else, so OK does nothing - see the stats ranking rows. " +
+                    "Found $action in AboutSection",
+                body.contains(action)
+            )
+        }
+        assertTrue(
+            "and the update row is still the pane's one button",
+            code(functionBody(source(SCREEN), "private fun UpdateRow(")).contains("KBCard(")
+        )
+    }
+
+    @Test
+    fun `the plates are unchanged at rest`() {
+        val about = aboutSection()
+        listOf(
+            "markWidth = 154.dp",
+            "markHeight = 20.dp",
+            "markWidth = 20.dp",
+            "text = TMDB_ATTRIBUTION_NOTICE",
+            "text = SIMKL_DATA_CREDIT",
+            "text = \"Made with ❤️ by Kenny B\","
+        ).forEach { literal ->
+            assertTrue("the plates' content is untouched: $literal", about.contains(literal))
+        }
+        // The changelog is drawn whole: clamping it would hide the release body
+        // and quietly undo the point of the plate.
+        val changelogText = between(about, "text = changelog,", "}")
+        assertFalse(
+            "the changelog must not be clamped",
+            changelogText.contains("maxLines") || changelogText.contains("overflow")
+        )
+        assertTrue(
+            "and the feed's own cap is untouched: the plate's length is what made " +
+                "the missing scroll visible in the first place",
+            source(UPDATER).contains("private const val MAX_CHANGELOG_CHARS = 2400")
+        )
+    }
+
+    @Test
+    fun `the phone about pane still asks for no focus at all`() {
+        assertFalse(
+            "the phone scrolls with a finger, so it asks for no focus at all",
+            source(MOBILE).contains(".focusable()")
+        )
+        val paneScroll = functionBody(source(MOBILE), "private fun PaneScroll(")
+        assertTrue(
+            "and the phone's pane scroll is untouched",
+            paneScroll.contains("verticalScroll(rememberScrollState())") &&
+                paneScroll.contains("Spacer(modifier = Modifier.height(24.dp))")
         )
     }
 
