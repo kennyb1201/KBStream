@@ -2,8 +2,10 @@ package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -172,6 +174,88 @@ class AutoPlayQualityTest {
         assertEquals(
             candidates[2],
             AutoPlayQuality.cappedPick(candidates[0], candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    // ── the strong-head test the short grace closes on ───────────────────────
+    //
+    // Auto-play's press-of-Play resolve stops collecting 2.5 s after the first
+    // answer when the hand holds a row it can start with a LINK (see
+    // StreamsViewModel). A WEAK hand - hashes only, wrong episodes, everything
+    // over the ceiling, or nothing at all - keeps the collection open for the
+    // add-ons still out. Reported: the fastest add-on answered with hashes, the
+    // grace closed on them, and a slower add-on's url-bearing row never landed.
+
+    @Test
+    fun `a hash-only hand is weak, so the grace does not close on it`() {
+        val hashes = listOf(
+            Stream(title = "Movie 2160p REMUX", infoHash = "aaa111"),
+            Stream(title = "Movie 1080p WEB-DL", infoHash = "bbb222")
+        )
+        assertFalse(
+            AutoPlayQuality.hasStrongHead(hashes, null, null, null, AutoPlayQuality.CAP_AUTO)
+        )
+    }
+
+    @Test
+    fun `a link under the ceiling is strong`() {
+        assertTrue(
+            AutoPlayQuality.hasStrongHead(ranked, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+        // ... and with no ceiling at all, the ranker's head is the link that opens.
+        assertTrue(
+            AutoPlayQuality.hasStrongHead(ranked, null, null, null, AutoPlayQuality.CAP_AUTO)
+        )
+    }
+
+    @Test
+    fun `this episode's link is strong even behind an over-cap head`() {
+        // The head alone would be weak, but the 1080p copy behind it is what
+        // autoplay would actually start - so the hand is strong.
+        val candidates = listOf(s("Show S01E05 2160p"), s("Show S01E05 1080p"))
+        assertTrue(
+            AutoPlayQuality.hasStrongHead(candidates, 1, 5, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `a hand whose every link declares another episode is weak`() {
+        val wrongEpisodes = listOf(s("Show S01E04 1080p"), s("Show S01E06 720p"))
+        assertFalse(
+            AutoPlayQuality.hasStrongHead(wrongEpisodes, 1, 5, null, AutoPlayQuality.CAP_AUTO)
+        )
+    }
+
+    @Test
+    fun `a hand whose every link is over the ceiling is weak`() {
+        val allUhd = listOf(s("Movie 2160p A"), s("Movie 4K B"))
+        assertFalse(
+            AutoPlayQuality.hasStrongHead(allUhd, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `a hand whose best row is a hash the cap would fall back to is weak`() {
+        // cappedPick itself permits that hash fallback (see its own note), but a
+        // hash still needs a resolve before it can start - and a resolve is a
+        // round trip, which is not strong enough to close the collection while
+        // another add-on may be holding a direct row.
+        val hash4k = Stream(title = "Movie 2160p REMUX", infoHash = "aaa111")
+        val hash1080 = Stream(title = "Movie 1080p WEB-DL", infoHash = "bbb222")
+        val candidates = listOf(hash4k, hash1080)
+        assertEquals(
+            hash1080,
+            AutoPlayQuality.cappedPick(hash4k, candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+        assertFalse(
+            AutoPlayQuality.hasStrongHead(candidates, null, null, null, AutoPlayQuality.CAP_1080)
+        )
+    }
+
+    @Test
+    fun `an empty hand is weak`() {
+        assertFalse(
+            AutoPlayQuality.hasStrongHead(emptyList(), 1, 5, null, AutoPlayQuality.CAP_AUTO)
         )
     }
 

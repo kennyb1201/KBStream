@@ -119,6 +119,48 @@ internal object AutoPlayQuality {
     }
 
     /**
+     * Whether [rows] hold a head auto-play could start RIGHT NOW — a row whose
+     * own link is what would open, no round trip in between.
+     *
+     * This is the test behind auto-play's short collection grace (see
+     * StreamsViewModel): a press-of-Play resolve may stop collecting 2.5 s after
+     * an answer only when the hand in front of it is STRONG. Anything else is
+     * WEAK — a hash-only set, a set whose url-bearing rows declare another
+     * episode or sit above the viewer's ceiling, a set the ceiling emptied
+     * entirely — and a weak hand keeps the collection open for the add-ons that
+     * have not answered yet. The add-on that answers FIRST is not necessarily
+     * the one holding the best row, and the reported case is exactly that: the
+     * fastest add-on answered with hashes, the grace closed on them, and a
+     * slower add-on's url-bearing row never landed at all.
+     *
+     * The composition is autoplay's own, so the grace's question and
+     * [AutoplayWalk]'s cannot become two opinions about the same hand: the
+     * episode rules and the ceiling are applied by the same calls autoplay
+     * makes. A pick the walk would only reach by RESOLVING a hash is
+     * deliberately NOT strong, cap fallback included — that resolve is a
+     * network round trip, which is the cost the grace exists to keep off the
+     * path to the first frame. No I/O here either: whether a hash is cached is
+     * the walk's business, not the grace's.
+     */
+    fun hasStrongHead(
+        rows: List<Stream>,
+        season: Int?,
+        episode: Int?,
+        runtimeMinutes: Int?,
+        cap: Int
+    ): Boolean {
+        val capped = cappedPick(
+            pick = EpisodeMatch.autoplayPick(rows, season, episode, runtimeMinutes),
+            candidates = rows,
+            season = season,
+            episode = episode,
+            runtimeMinutes = runtimeMinutes,
+            cap = cap
+        )
+        return !capped?.url.isNullOrBlank()
+    }
+
+    /**
      * The name the Settings pickers use for a cap: "Auto", "4K", "1080p",
      * "720p".
      *

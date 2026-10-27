@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
@@ -127,7 +128,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         /**
          * How long AUTO-PLAY keeps collecting add-ons once its hand holds a row
-         * it could start (audit P1).
+         * it could start with a LINK (audit P1; strengthened by the 2026-10-27
+         * weak-head amendment).
          *
          * The picker wants every add-on: its tabs are per add-on, and a source
          * that arrives late still belongs in the list. Auto-play does not - it
@@ -135,8 +137,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
          * costs the viewer the full 15 s before the first frame even though the
          * top add-on answered in under a second. This is the extra time the
          * head of the list gets to be improved by a second answer - re-decided
-         * per wait, so a startable row that arrives after an unstartable first
-         * answer still gets it (see [fetch]).
+         * per wait, so a row that can be started directly and arrives after a
+         * first answer of hashes still gets it (see [fetch] and
+         * [AutoPlayQuality.hasStrongHead]). A hand that is only STARTABLE -
+         * hashes the walk would have to resolve - does not earn it: the resolve
+         * is a round trip, and a slower add-on may hold a direct row.
          */
         const val AUTOPLAY_FIRST_RESULT_GRACE_MS = 2_500L
     }
@@ -472,19 +477,30 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 // The wait-all case (the picker) keeps waiting for every
                 // add-on, each of which is already bounded by its own 15 s
                 // timeout. The auto-play case stops [firstResultGraceMs] after
-                // the collection holds something that can actually be started.
+                // the collection holds a row it could start with a LINK.
                 //
                 // The grace is decided per WAIT from the hand in front of it,
                 // not set once from the first answer: a hash-first answer used
                 // to hold the collection open to the full window, so a second
                 // add-on answering with a playable row at 9 s still paid the
-                // rest of a 17 s wait before auto-play could start. Startable =
-                // short grace; still unstartable = keep listening (each add-on
-                // still bounded by its own 15 s) until something can be started
-                // or everyone has answered - which is what the comment here
-                // always promised and the code did not do.
+                // rest of a 17 s wait before auto-play could start. It is also
+                // earned by the RIGHT KIND of row now (2026-10-27 weak-head
+                // amendment): a hand whose best row is a hash - or one the
+                // episode rules or the viewer's ceiling exclude - is WEAK, and
+                // stays open for the add-on still out, because a slower add-on's
+                // direct row beats resolving the fastest add-on's hash, and that
+                // resolve is a round trip the grace exists to keep off the path
+                // to the first frame. Strong = short grace; empty or weak = keep
+                // listening (each add-on still bounded by its own 15 s) until
+                // something startable is there or everyone has answered. The
+                // picker's own load passes no grace at all, so its wait is the
+                // full window whatever the head is.
                 val graceMs =
-                    if (collected.isNotEmpty() && hasStartableRow(collected)) {
+                    if (firstResultGraceMs != null &&
+                        collected.isNotEmpty() &&
+                        hasStartableRow(collected) &&
+                        hasStrongHead(collected, streamId, runtimeMinutes)
+                    ) {
                         firstResultGraceMs
                     } else {
                         null
@@ -496,9 +512,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L) { outcomes.receive() }
                     }
                 if (next == null) {
-                    // An unstartable hand waited the full window (every add-on
+                    // An empty or weak hand waited the full window (every add-on
                     // has now either answered or run out its own 15 s), and a
-                    // startable hand had its grace. Either way nobody is still
+                    // strong hand had its grace. Either way nobody is still
                     // answering that this collection should wait for.
                     complete = false
                     break
@@ -748,6 +764,38 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank()
                 }
         }
+
+    /**
+     * Whether the hand in front of the loop holds a row auto-play could start
+     * with a LINK - the test that EARNS the short grace, where
+     * [hasStartableRow] only says the hand is not empty.
+     *
+     * The rule itself lives in [AutoPlayQuality.hasStrongHead], applied here to
+     * the raw collected rows with the episode identity this request carries: the
+     * grace's question and autoplay's own pick have to be the same question, or
+     * collection could close on a hand autoplay would then have to walk past.
+     *
+     * Deliberately no I/O: a hash row's cached-ness is the walk's business (see
+     * [AutoplayWalk]), and asking about it here would put a network round trip
+     * on the path to the first frame - the cost this grace exists to bound.
+     */
+    private fun hasStrongHead(
+        collected: List<Pair<Int, AddonLoadResult>>,
+        streamId: String,
+        runtimeMinutes: Int?
+    ): Boolean {
+        val rows = collected.flatMap { (_, result) ->
+            if (result is AddonLoadResult.Success) result.streams else emptyList()
+        }
+        val episode = EpisodeMatch.requestedFrom(streamId)
+        return AutoPlayQuality.hasStrongHead(
+            rows = rows,
+            season = episode?.first,
+            episode = episode?.second,
+            runtimeMinutes = runtimeMinutes,
+            cap = AppPreferences.getMaxAutoPlayQuality(getApplication())
+        )
+    }
 
     /**
      * Requests the TorBox cached-hash answer without anyone waiting for it, then

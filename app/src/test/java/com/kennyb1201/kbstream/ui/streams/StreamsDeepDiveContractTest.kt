@@ -14,9 +14,11 @@ import org.junit.Test
  * Each test names the viewer-visible failure it prevents, not the line it
  * matches.
  *
- * Deliberately NOT pinned here (product calls, still open): whether autoplay's
- * pick may come from the grace-truncated set, and whether a tab filter scopes
- * "next source".
+ * The grace's own product call is DECIDED (2026-10-27 weak-head amendment): the
+ * collection closes early only on a hand autoplay could start with a LINK, and
+ * a weak hand keeps it open for the add-ons still out — pinned by the cases
+ * below, with the rule's own cases in AutoPlayQualityTest. Still open, and
+ * deliberately not pinned here: whether a tab filter scopes "next source".
  */
 class StreamsDeepDiveContractTest {
 
@@ -66,6 +68,75 @@ class StreamsDeepDiveContractTest {
                 "(requestCachedBadges), so consulting it made every cold-start hash-first " +
                 "answer unstartable by construction",
             body.contains("knownCached")
+        )
+    }
+
+    @Test
+    fun `a weak head keeps the collection open for the add-on that has not answered`() {
+        val loop = slice(
+            viewModel,
+            "while (collected.size < streamAddons.size) {",
+            "if (next == null) {"
+        )
+        assertTrue(
+            "the grace has to be earned by a head autoplay could start with a LINK, not by " +
+                "any row the walk would merely have to resolve: the fastest add-on's hashes " +
+                "closed the collection before a slower add-on's direct row landed",
+            loop.contains("hasStrongHead(collected, streamId, runtimeMinutes)")
+        )
+        assertTrue(
+            "and it is only the auto-play path that shortens: the picker's own load passes " +
+                "no grace, so its wait stays the full window",
+            loop.contains("firstResultGraceMs != null") &&
+                loop.contains("withTimeoutOrNull(ADDON_TIMEOUT_MS + 2_000L)")
+        )
+        assertTrue(
+            "the empty-hand rule still stands beside the new one rather than being " +
+                "replaced by it",
+            loop.contains("hasStartableRow(collected)")
+        )
+        assertTrue(
+            "and a strong hand still waits the short grace, so the common case is untouched",
+            loop.contains("if (graceMs != null)") &&
+                loop.contains("withTimeoutOrNull(graceMs)")
+        )
+    }
+
+    @Test
+    fun `the strong-head test is autoplay's own pick, asked with no I/O`() {
+        val predicate = slice(
+            viewModel,
+            "private fun hasStrongHead(",
+            "private fun requestCachedBadges("
+        )
+        assertTrue(
+            "the episode identity comes from the id the request carries, the runtime from " +
+                "the same parameter the ranker reads, and the ceiling from the pref the " +
+                "pickers read",
+            predicate.contains("EpisodeMatch.requestedFrom(streamId)") &&
+                predicate.contains("runtimeMinutes = runtimeMinutes") &&
+                predicate.contains("AppPreferences.getMaxAutoPlayQuality(getApplication())")
+        )
+        assertTrue(
+            "and the verdict is AutoPlayQuality's own, so the grace's question and the " +
+                "walk's cannot become two opinions about the same hand",
+            predicate.contains("AutoPlayQuality.hasStrongHead(")
+        )
+        val loop = slice(
+            viewModel,
+            "while (collected.size < streamAddons.size) {",
+            "if (next == null) {"
+        )
+        listOf("TorBoxResolve", "checkCached", "knownCached").forEach { io ->
+            assertFalse(
+                "no I/O in the grace decision - whether a hash is cached is the walk's " +
+                    "business, and a round trip here is the cost the grace exists to bound: $io",
+                loop.contains(io) || predicate.contains(io)
+            )
+        }
+        assertFalse(
+            "and the old one-way hold-open flag is gone from the file, not just the loop",
+            viewModel.contains("graceHeldOpen")
         )
     }
 
