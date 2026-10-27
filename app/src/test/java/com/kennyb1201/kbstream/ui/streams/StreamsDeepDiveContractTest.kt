@@ -103,7 +103,7 @@ class StreamsDeepDiveContractTest {
     }
 
     @Test
-    fun `the strong-head test is autoplay's own pick, asked with no I/O`() {
+    fun `the strong-head test is autoplay's own pick, asked with no IO`() {
         val predicate = slice(
             viewModel,
             "private fun hasStrongHead(",
