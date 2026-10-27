@@ -3684,8 +3684,8 @@ fun DetailScreen(
                             }
                         }
 
-                        // Keep this title, right after the trailer: a plus
-                        // that becomes a minus once it is saved, and turns the
+                        // Keep this title, right after the trailer: an outline
+                        // bookmark that fills in once it is saved, and turns the
                         // page's own title into a one-press toggle instead of
                         // only offering an add somewhere else in the app.
                         KBCard(
@@ -3693,10 +3693,10 @@ fun DetailScreen(
                                 val wasSaved = inLibrary
                                 val name = libraryButtonTarget.title
                                 // The press acts on the state the button is
-                                // SHOWING - "+" adds, "−" removes - and the
-                                // button is repainted from the store's answer,
-                                // so it can never claim a save that did not
-                                // happen.
+                                // SHOWING - an outline bookmark adds, a filled
+                                // one removes - and the button is repainted from
+                                // the store's answer, so it can never claim a
+                                // save that did not happen.
                                 LibraryAdds.toggle(context, libraryButtonTarget) { nowSaved ->
                                     inLibrary = nowSaved
                                     val changed = nowSaved != wasSaved
@@ -3723,9 +3723,9 @@ fun DetailScreen(
                         ) {
                             IconButtonBody(
                                 iconRes = if (inLibrary) {
-                                    R.drawable.ic_detail_remove
+                                    R.drawable.ic_detail_bookmark_filled
                                 } else {
-                                    R.drawable.ic_detail_add
+                                    R.drawable.ic_detail_bookmark_outline
                                 },
                                 // Keeps what the mark means available to
                                 // TalkBack, since the glyph alone says it.

@@ -218,12 +218,12 @@ class DetailAuditContractTest {
         assertEquals(
             "the phone's action row carries the toggle, one mark per state",
             1,
-            count(normalized(mobile), "R.drawable.ic_detail_add")
+            count(normalized(mobile), "R.drawable.ic_detail_bookmark_outline")
         )
         assertEquals(
             "and the saved state's mark",
             1,
-            count(normalized(mobile), "R.drawable.ic_detail_remove")
+            count(normalized(mobile), "R.drawable.ic_detail_bookmark_filled")
         )
     }
 
@@ -245,12 +245,12 @@ class DetailAuditContractTest {
 
         listOf("the TV button" to tvSrc, "the phone's" to phoneSrc).forEach { (who, src) ->
             assertTrue(
-                "$who paints a plus when the title is not saved",
-                src.contains("R.drawable.ic_detail_add")
+                "$who paints an outline bookmark when the title is not saved",
+                src.contains("R.drawable.ic_detail_bookmark_outline")
             )
             assertTrue(
-                "$who paints a minus once it is",
-                src.contains("R.drawable.ic_detail_remove")
+                "$who paints a filled bookmark once it is",
+                src.contains("R.drawable.ic_detail_bookmark_filled")
             )
             assertTrue(
                 "$who repaints from the store, so an add made in the long-press menu " +
@@ -301,6 +301,102 @@ class DetailAuditContractTest {
             "the gesture is withheld when there is no episode set",
             src.contains("episodeNumbers.isNullOrEmpty()")
         )
+    }
+
+    // ── The toggle's mark is a bookmark pair, not plus/minus ────────────────
+
+    /**
+     * The saved-state mark used to be a bare "−", which reads at TV distance as
+     * a stray dash: nothing in it says "library". The pair is one bookmark that
+     * fills, and because it is the whole state signal, the OLD drawables must be
+     * gone - a leftover call site would leave one surface still showing the dash.
+     */
+    @Test
+    fun `the plus and minus drawables are gone with every reference to them`() {
+        listOf("ic_detail_add.xml", "ic_detail_remove.xml").forEach { name ->
+            assertFalse(
+                "$name is superseded by the bookmark pair and must be deleted",
+                drawable(name).isFile
+            )
+        }
+        productionSources().forEach { (path, text) ->
+            listOf("ic_detail_add", "ic_detail_remove").forEach { dead ->
+                assertFalse(
+                    "$path still references $dead",
+                    text.contains(dead)
+                )
+            }
+        }
+    }
+
+    /**
+     * The pair is checked as files, since no unit test renders Compose: the two
+     * marks have to share a viewport, a colour and the bookmark body, and differ
+     * in fill - the outline carrying the interior cut the filled mark lacks.
+     */
+    @Test
+    fun `the bookmark pair shares its box and colour and differs only in fill`() {
+        val outline = drawable("ic_detail_bookmark_outline.xml").readText()
+        val filled = drawable("ic_detail_bookmark_filled.xml").readText()
+
+        listOf("the outline" to outline, "the filled" to filled).forEach { (who, xml) ->
+            listOf(
+                "android:width=\"24dp\"",
+                "android:height=\"24dp\"",
+                "android:viewportWidth=\"24\"",
+                "android:viewportHeight=\"24\"",
+                "#FFF3EFE4",
+                "v16l7"
+            ).forEach { part ->
+                assertTrue("$who bookmark is missing $part", xml.contains(part))
+            }
+            assertTrue(
+                "$who bookmark must have a drawn path",
+                xml.contains("android:pathData=")
+            )
+        }
+
+        assertFalse(
+            "the filled mark is solid: it has no interior cut",
+            filled.contains("M17,18")
+        )
+        assertTrue(
+            "the outline mark is the same silhouette with the interior cut",
+            outline.contains("M17,18")
+        )
+        assertTrue(
+            "the outline is drawn path-level distinct from the filled mark, " +
+                "not a copy of it",
+            outline != filled
+        )
+    }
+
+    /** The watched badge owns the checkmark; the Library toggle must not borrow it. */
+    @Test
+    fun `neither toggle paints a checkmark`() {
+        listOf("the TV button" to tv, "the phone's" to mobile).forEach { (who, src) ->
+            listOf("ic_check", "Icons.Filled.Check", "\u2713").forEach { check ->
+                assertFalse(
+                    "$who must not use $check - a tick here would read as watched, " +
+                        "not saved",
+                    src.contains(check)
+                )
+            }
+        }
+    }
+
+    /** `src/main` for this module, the root the drawable directory hangs off. */
+    private val mainRoot: File get() = sourceRoot.parentFile
+
+    private fun drawable(name: String): File = File(mainRoot, "res/drawable/$name")
+
+    /** Every production source file, so a deleted drawable's references can't hide. */
+    private fun productionSources(): List<Pair<String, String>> {
+        val root = File(mainRoot, "java")
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.relativeTo(root).path to it.readText() }
+            .toList()
     }
 
     private fun count(text: String, needle: String): Int {

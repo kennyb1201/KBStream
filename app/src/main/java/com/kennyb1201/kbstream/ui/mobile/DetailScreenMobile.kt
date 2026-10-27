@@ -1158,8 +1158,8 @@ fun DetailScreenMobile(
                             }
 
                             // Keep this title, after the trailer exactly as on
-                            // TV: the plus becomes a minus once it is saved, and
-                            // the same control takes it back off.
+                            // TV: the outline bookmark fills in once it is saved,
+                            // and the same control takes it back off.
                             KBCard(
                                 onClick = {
                                     val wasSaved = inLibrary
@@ -1195,9 +1195,9 @@ fun DetailScreenMobile(
                                     Icon(
                                         painter = painterResource(
                                             if (inLibrary) {
-                                                R.drawable.ic_detail_remove
+                                                R.drawable.ic_detail_bookmark_filled
                                             } else {
-                                                R.drawable.ic_detail_add
+                                                R.drawable.ic_detail_bookmark_outline
                                             }
                                         ),
                                         // The glyph says it; TalkBack hears it.
