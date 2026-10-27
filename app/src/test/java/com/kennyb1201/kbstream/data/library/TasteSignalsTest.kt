@@ -210,7 +210,17 @@ class TasteSignalsTest {
         val guestId = guest!!.id
         assertTrue("the flag is what makes it a guest", ProfileManager.setGuest(context, guestId, true))
 
-        useProfile(guestId)
+        // Activate the STORED profile, not a hand-built stand-in: the guest flag
+        // lives on the profile the manager holds, and a `Profile(id, name)`
+        // built here would be a non-guest wearing that id - activeIsGuest reads
+        // the ACTIVE profile's own flag, so the switch would not be onto a guest
+        // at all (which is how this case first failed).
+        ProfileManager.setActive(
+            context,
+            requireNotNull(
+                ProfileManager.profiles.value.firstOrNull { it.id == guestId }
+            )
+        )
         assertTrue("the switch really is onto a guest", ProfileManager.activeIsGuest())
         like()
 

@@ -48,7 +48,11 @@ class HomeRailCardKeyContractTest {
         // The key is written at focus time in the same card modifier that
         // registered the requester, so the restore's lookup (which reads the
         // remembered key straight out of this map) moves with it.
-        val focusBlock = home.substringAfter(".onFocusChanged { focusState ->")
+        // Anchored on the catalog rail's own prefix: every poster rail reports
+        // focus now (the built-in rows included), so the first `.onFocusChanged`
+        // in the file is not necessarily this rail's.
+        val focusBlock = home.substringAfter("val catalogCardKeyPrefix")
+            .substringAfter(".onFocusChanged { focusState ->")
             .substringBefore(".then(")
         assertTrue(
             "a focused catalog card must remember its namespaced key",

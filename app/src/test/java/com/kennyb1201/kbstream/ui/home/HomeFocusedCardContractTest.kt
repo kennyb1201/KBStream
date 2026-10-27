@@ -102,7 +102,12 @@ class HomeFocusedCardContractTest {
         // `lastFocusedItemKey` that nothing ever read - a dead state write that
         // invalidated the whole HomeScreen composition on every D-pad move; the
         // remembered key is `viewModel.lastFocusedRailItemKey` below.)
-        val catalogFocusBlock = home.substringAfter(".onFocusChanged { focusState ->")
+        // Sliced from the CATALOG rail's own marker rather than from the first
+        // `.onFocusChanged` in the file: every poster rail reports focus now
+        // (the built-in rows included), so an unanchored slice reads whichever
+        // rail happens to be composed first.
+        val catalogFocusBlock = home.substringAfter("val catalogCardKeyPrefix")
+            .substringAfter(".onFocusChanged { focusState ->")
             .substringBefore(".then(")
         assertTrue(
             "a catalog card reports itself on focus, not only on long press",
