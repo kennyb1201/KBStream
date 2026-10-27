@@ -19,9 +19,11 @@ import org.junit.Test
  * so that card sat a third of the way down, and everything above it - the bio -
  * went off the top. Focusing the toggle then re-applied the same line.
  *
- * The first three cases are the arithmetic this page now answers for itself (see
- * [ActorListBringIntoViewSpec]); the last three pin the wiring, so the rail line
- * cannot creep back onto the page or the page's line onto a row.
+ * The arithmetic cases are what this page now answers for itself (see
+ * [ActorListBringIntoViewSpec]) - including the bottom-hugging row whose caption
+ * row was cut off below the fold, and the landing that must stand down while the
+ * bio's toggle owns the move. The rest pin the wiring, so the rail line cannot
+ * creep back onto the page or the page's line onto a row.
  *
  * There is no TV in CI and the module has no Compose UI harness for a screen
  * that wants a ViewModel and a network round trip, so the structure is read out
@@ -171,14 +173,105 @@ class ActorListLandingContractTest {
     }
 
     @Test
+    fun `a bottom-hugging poster still scrolls its caption row into view`() {
+        // The landscape case the first fix missed, and the reason the report
+        // survived it: a landscape tile is ~118dp tall, so in its
+        // bottom-hugging position it is FULLY inside the viewport - the old
+        // early return answered 0 for it while the title/year/rating drew below
+        // the fold. Only downward entry lands a row there, which is the
+        // asymmetry that was reported (down cut, up fine).
+        val captionSpec = ActorListBringIntoViewSpec(insetPx = INSET_PX + CAPTION_PX)
+        // 800 + 200 = 1000 against a 1000 viewport clearing 120 of margin: 120.
+        assertEquals(
+            "a poster inside the viewport but within caption height of its bottom " +
+                "edge must still clear the margin",
+            120f,
+            captionSpec.calculateScrollDistance(offset = 800f, size = 200f, containerSize = 1000f),
+            0f
+        )
+        // 750 + 200 = 950, still inside the 880 line: 70.
+        assertEquals(
+            "and the move is exactly the margin deficit, not a landing line",
+            70f,
+            captionSpec.calculateScrollDistance(offset = 750f, size = 200f, containerSize = 1000f),
+            0f
+        )
+        // 680 + 200 = 880, exactly the last pixel that clears it: no move.
+        assertEquals(
+            "a poster whose caption row is on screen is not nudged",
+            0f,
+            captionSpec.calculateScrollDistance(offset = 680f, size = 200f, containerSize = 1000f),
+            0f
+        )
+        // And the same landing with a poster height that never reaches the edge
+        // is untouched: this is a bottom-margin rule, not a "always scroll" rule.
+        assertEquals(
+            "a short row resting in the middle of the viewport stays put",
+            0f,
+            captionSpec.calculateScrollDistance(offset = 300f, size = 200f, containerSize = 1000f),
+            0f
+        )
+    }
+
+    @Test
+    fun `a landing can be taken out of the move it would fight`() {
+        // The toggle's snap and the focus system's landing used to ask for two
+        // different positions in the same frame (see the toggle in ActorScreen).
+        // The page's landing answers zero while that snap owns the list, and the
+        // default stays the ordinary rule for every other call site.
+        var owned = false
+        val gated = ActorListBringIntoViewSpec(insetPx = INSET_PX, canLand = { !owned })
+        assertEquals(
+            "the ordinary answer while nobody else owns the scroll",
+            132f,
+            gated.calculateScrollDistance(offset = 900f, size = 200f, containerSize = 1000f),
+            0f
+        )
+        owned = true
+        assertEquals(
+            "and no landing at all while the toggle's snap does",
+            0f,
+            gated.calculateScrollDistance(offset = 900f, size = 200f, containerSize = 1000f),
+            0f
+        )
+    }
+
+    @Test
     fun `focusing the toggle only snaps the top while the bio is collapsed`() {
         // Expanded, the bio item is taller than the viewport, so snapping its
         // top to the viewport's top put the toggle below the bottom edge - the
         // clipped-on-focus report. Collapsed, the snap is what recovers the
         // paragraph's first lines.
+        val page = flat()
         assertTrue(
             "the snap has to know whether the bio is expanded",
-            flat().contains("if (focusState.hasFocus && !bioExpanded) {")
+            page.contains("if (bioExpanded) {")
+        )
+        // One driver: the snap takes the list, the page's landing stands down,
+        // and the focus it travels for is re-read a frame later.
+        val handler = page.substringAfter("modifier = Modifier .onFocusChanged { focusState ->")
+            .substringBefore("\"View more\"")
+        assertTrue(
+            "the toggle claims the list's scroll while it snaps",
+            handler.contains("pillOwnsListScroll.value = true")
+        )
+        assertTrue(
+            "and hands it back, finished or cancelled",
+            handler.contains("pillOwnsListScroll.value = false") &&
+                handler.contains("finally {")
+        )
+        assertTrue(
+            "exactly one scroll animation belongs to the toggle: the second one " +
+                "was the other half of the clip",
+            handler.split("animateScrollToItem(0)").size == 2
+        )
+        assertTrue(
+            "the page's landing is what stands down, and it says so",
+            page.contains("canLand = { !pillOwnsListScroll.value }")
+        )
+        assertTrue(
+            "a snap already travelling is cancelled the moment the focus leaves",
+            handler.contains("snapJob?.cancel()")
         )
     }
 

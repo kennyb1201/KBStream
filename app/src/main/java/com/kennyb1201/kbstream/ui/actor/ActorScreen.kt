@@ -110,6 +110,8 @@ import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import kotlin.math.abs
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -195,22 +197,49 @@ private val ActorCaptionRoom = 44.dp
  * arithmetic a contract test asserts exactly, with no device and no D-pad.
  */
 @OptIn(ExperimentalFoundationApi::class)
-internal class ActorListBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+internal class ActorListBringIntoViewSpec(
+    private val insetPx: Float,
+    /**
+     * Whether this surface may answer a landing at all right now.
+     *
+     * The biography's "View more" toggle owns the list's scroll while it is
+     * focused and collapsed (see the toggle's own comment): it snaps the bio's
+     * item to the viewport's top, because the paragraph is what the viewer came
+     * up to read. Two landings asking different questions in the same frame - the
+     * focus system's and the snap - is what left that pill clipped at the bottom
+     * edge, so while one of them owns the move the other answers zero.
+     *
+     * A lambda rather than a value because the answer changes without the spec
+     * being rebuilt: it is page state, and the spec is remembered for the
+     * density.
+     */
+    private val canLand: () -> Boolean = { true },
+) : BringIntoViewSpec {
 
     override fun calculateScrollDistance(
         offset: Float,
         size: Float,
         containerSize: Float
     ): Float {
+        if (!canLand()) return 0f
         // A margin can never eat the viewport: a row taller than the room two
         // margins leave still lands on the nearest edge rather than being
         // scrolled somewhere it could not be seen at all.
         val margin = insetPx.coerceAtMost(containerSize / 3f)
         val trailingEdge = offset + abs(size)
-        // Already inside the viewport: there is no landing to make. This is the
-        // answer the page was missing, and it is also what keeps a row that
-        // merely remeasured from being nudged by its own re-request.
-        if (offset >= 0f && trailingEdge <= containerSize) return 0f
+        // Already inside the viewport AND clearing the bottom margin: there is no
+        // landing to make. This is the answer the page was missing, and it is
+        // also what keeps a row that merely remeasured from being nudged by its
+        // own re-request.
+        //
+        // The margin is part of "already inside", and leaving it out of this
+        // line was the caption-clipping fault: a landscape poster is ~118dp tall
+        // and lands fully inside the viewport in its bottom-hugging position, so
+        // the early return fired for a row whose title/year/rating sat below the
+        // fold - and only on the way DOWN into the rail, which is exactly the
+        // asymmetry that was reported. A poster that clears the line still asks
+        // for nothing.
+        if (offset >= 0f && trailingEdge <= containerSize - margin) return 0f
         return when {
             // Past the bottom margin: scroll forward just far enough to clear it.
             trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
@@ -292,6 +321,13 @@ fun ActorScreen(
     // the top (see [BrowseReturnFocus]).
     val browseReturnKey = remember(actorId) { actorBrowseScreenKey(actorId) }
     val browseListState = rememberLazyListState()
+    // Whether the biography's "View more" toggle owns this list's scroll at this
+    // instant. Set while the toggle is focused and the bio is collapsed, and read
+    // by the page's landing (see [ActorListBringIntoViewSpec.canLand]): the
+    // toggle snaps the bio's item to the viewport's top in that state, and a
+    // second landing asking for a different position in the same frame is what
+    // left the pill clipped at the bottom edge (see the toggle's comment).
+    val pillOwnsListScroll = remember { mutableStateOf(false) }
     // All four of these are PER ACTOR, so they are keyed on [actorId]: this
     // screen is one composable for every actor, and a page opened FROM another
     // actor's page (a cast list, a "More Like This" poster) reuses it. Unkeyed,
@@ -595,7 +631,10 @@ fun ActorScreen(
                     // The poster's own clearance plus the caption row that sits
                     // under it: a landing that clears only the poster leaves the
                     // date, title and rating off the bottom edge.
-                    insetPx = with(density) { (KBFocusRowInset + ActorCaptionRoom).toPx() }
+                    insetPx = with(density) { (KBFocusRowInset + ActorCaptionRoom).toPx() },
+                    // One driver per move: while the bio's toggle is snapping
+                    // the list itself, this landing stays out of it.
+                    canLand = { !pillOwnsListScroll.value }
                 )
             }
 
@@ -761,6 +800,12 @@ fun ActorScreen(
                                     ) {
                                         var bioExpanded by remember { mutableStateOf(false) }
                                         var bioOverflows by remember { mutableStateOf(false) }
+                                        // The toggle's own focus, re-read a frame
+                                        // after it arrives (see its handler):
+                                        // a focus that lands and leaves within
+                                        // that frame must move nothing.
+                                        var pillFocused by remember { mutableStateOf(false) }
+                                        var snapJob by remember { mutableStateOf<Job?>(null) }
                                         Text(
                                             biography,
                                             color = KBTextHi,
@@ -854,11 +899,80 @@ fun ActorScreen(
                                                 // Expanded, the standard landing
                                                 // applies and keeps the toggle
                                                 // inside the viewport.
+                                                //
+                                                // ONE DRIVER owns the move, which is
+                                                // the other half of that report: the
+                                                // focus system lands the pill on its
+                                                // own inset in the same frame this
+                                                // snap launches, and two landings
+                                                // asking for different positions -
+                                                // the pill against the bottom edge of
+                                                // a 1.06x scale with its 2dp border
+                                                // and 8dp glow drawn OUTSIDE its
+                                                // bounds - is how the clip survived
+                                                // the collapsed-only fix. So the snap
+                                                // takes the list for itself
+                                                // ([pillOwnsListScroll]), the page's
+                                                // landing answers zero meanwhile, and
+                                                // the snap is the only thing that
+                                                // animates. Its position is checked
+                                                // once more a frame later, exactly as
+                                                // Detail's header snap does, so a
+                                                // focus that lands and leaves again
+                                                // inside that frame moves nothing.
                                                 modifier = Modifier
                                                     .onFocusChanged { focusState ->
-                                                        if (focusState.hasFocus && !bioExpanded) {
-                                                            scope.launch {
+                                                        pillFocused = focusState.hasFocus
+                                                        if (!focusState.hasFocus) {
+                                                            // Whatever was
+                                                            // travelling belongs
+                                                            // to the focus that
+                                                            // just left: let it
+                                                            // stop here rather
+                                                            // than settle the page
+                                                            // somewhere nobody
+                                                            // asked for.
+                                                            snapJob?.cancel()
+                                                            pillOwnsListScroll.value = false
+                                                            return@onFocusChanged
+                                                        }
+                                                        if (bioExpanded) {
+                                                            // The item is taller than
+                                                            // the viewport: the
+                                                            // standard landing is the
+                                                            // one that keeps the
+                                                            // toggle inside it.
+                                                            pillOwnsListScroll.value = false
+                                                            return@onFocusChanged
+                                                        }
+                                                        val scrolled =
+                                                            browseListState.firstVisibleItemIndex > 0 ||
+                                                                browseListState.firstVisibleItemScrollOffset > 0
+                                                        if (!scrolled) {
+                                                            // Already at the top: the
+                                                            // paragraph is in view and
+                                                            // nothing needs to move.
+                                                            pillOwnsListScroll.value = false
+                                                            return@onFocusChanged
+                                                        }
+                                                        snapJob?.cancel()
+                                                        pillOwnsListScroll.value = true
+                                                        snapJob = scope.launch {
+                                                            try {
+                                                                awaitFrame()
+                                                                // The viewer's own
+                                                                // arrival, not a focus
+                                                                // the framework was
+                                                                // passing through.
+                                                                if (!pillFocused || bioExpanded) return@launch
                                                                 browseListState.animateScrollToItem(0)
+                                                            } finally {
+                                                                // Give the page's
+                                                                // landing back, whether
+                                                                // the move finished, was
+                                                                // superseded or was
+                                                                // cancelled.
+                                                                pillOwnsListScroll.value = false
                                                             }
                                                         }
                                                     }
