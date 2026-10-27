@@ -5,11 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * The two cache rules that decide WHICH slate is read.
+ * The cache rules that decide WHICH slate is read.
  *
- * Pure, and here rather than in the repository, because both are arithmetic a
- * unit test can pin exactly: one is a timezone, the other is "a game in progress
- * must not vanish when the feed's day rolls over" (audit C1, 2026-10-23).
+ * Pure, and here rather than in the repository, because each is arithmetic a
+ * unit test can pin exactly: one is a timezone, one is "a game in progress must
+ * not vanish when the feed's day rolls over" (audit C1's first half,
+ * 2026-10-23), and one is the other side of the same rollover - the viewer's own
+ * day, whose evening the feed has already dated tomorrow (C1's second half).
  */
 class EspnCacheRulesTest {
 
@@ -24,6 +26,35 @@ class EspnCacheRulesTest {
         assertEquals("20261023", EspnCacheRules.espnDay(espnDateMs("2026-10-24T03:00Z")))
         // 05:00 UTC is 1 AM Eastern, so the day has rolled.
         assertEquals("20261024", EspnCacheRules.espnDay(espnDateMs("2026-10-24T05:00Z")))
+    }
+
+    /**
+     * The other side of the same rollover: the viewer's own day.
+     *
+     * A Pacific evening is already tomorrow in the feed's calendar, so the
+     * default window answers the NEXT slate and the games that finished earlier
+     * that evening - the ones in the FINAL group a moment ago - are on the day
+     * the endpoint has stopped asking for (audit C1's second half, 2026-10-23).
+     */
+    @Test
+    fun `a west-coast evening also asks for the viewer's own day`() {
+        val pacific = java.time.ZoneId.of("America/Los_Angeles")
+        val eastern = java.time.ZoneId.of("America/New_York")
+        // 9:30 PM in California on 23 October is 12:30 AM on the 24th Eastern:
+        // the feed has rolled over; the viewer has not.
+        val evening = espnDateMs("2026-10-24T04:30Z")
+        assertEquals("20261024", EspnCacheRules.espnDay(evening))
+        assertEquals("20261023", EspnCacheRules.viewerDay(evening, pacific))
+        assertEquals("20261023", EspnCacheRules.earlierViewerDay(evening, pacific))
+
+        // An Eastern viewer's day IS the feed's: no second window.
+        assertNull(EspnCacheRules.earlierViewerDay(evening, eastern))
+        // 6 PM Pacific is 9 PM Eastern - same date, and the default window
+        // already answers that evening.
+        assertNull(EspnCacheRules.earlierViewerDay(espnDateMs("2026-10-24T01:00Z"), pacific))
+        // East of the feed the viewer's date is AHEAD, so asking for their day
+        // would fetch a slate they are not watching.
+        assertNull(EspnCacheRules.earlierViewerDay(evening, java.time.ZoneId.of("Europe/London")))
     }
 
     @Test

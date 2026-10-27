@@ -82,22 +82,40 @@ class EspnSportsRepository(
             return cached?.value.orEmpty()
         }
         failed -= leaguePath
-        // A game still in play after midnight Eastern belongs to ESPN's
-        // PREVIOUS day window, which the default request stops asking for the
-        // moment the day rolls over - so a 10:30 PM ET tip simply vanished from
-        // its tab mid-play (audit C1, 2026-10-23). The day's own body is read
-        // once, and only for the games that fell out of the fresh slate; the
-        // ones that finished with it are not resurrected.
+        // A viewer west of Eastern watches the feed's day roll over in the
+        // middle of their evening, and from that moment the default window is
+        // tomorrow's: tonight's finished games are on a day the endpoint has
+        // stopped answering for. So the viewer's own day is read too, once, and
+        // only when it really is earlier than the feed's (see
+        // [EspnCacheRules.earlierViewerDay]); the two windows are merged by id,
+        // with the default window's copy winning because it is the one the
+        // endpoint just answered.
+        val viewerDayGames = EspnCacheRules.earlierViewerDay(now)
+            ?.let { day ->
+                fetch(leaguePath, day)
+                    ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
+            }
+            .orEmpty()
+            .filter { game -> fetched.none { it.id == game.id } }
+        val fresh = if (viewerDayGames.isEmpty()) fetched else fetched + viewerDayGames
+        // And a game still in play after midnight Eastern belongs to ESPN's
+        // PREVIOUS day window too, which the default request stops asking for
+        // the moment the day rolls over - so a 10:30 PM ET tip simply vanished
+        // from its tab mid-play (audit C1's first half, 2026-10-23). The day's
+        // own body is read for the games that fell out of BOTH windows - a game
+        // that outlived its day by more than the viewer's own day, or a viewer
+        // whose window was already the right one - and only for a game still in
+        // play; the ones that finished with it are not resurrected.
         val carried = EspnCacheRules
-            .carryOverDay(cached?.value.orEmpty(), fetched, now)
+            .carryOverDay(cached?.value.orEmpty(), fresh, now)
             ?.let { day ->
                 fetch(leaguePath, day)
                     ?.let { body -> parseScoreboardOrNull(body, leaguePath) }
                     .orEmpty()
-                    .filter { game -> fetched.none { it.id == game.id } }
+                    .filter { game -> fresh.none { it.id == game.id } }
             }
             .orEmpty()
-        val merged = if (carried.isEmpty()) fetched else fetched + carried
+        val merged = if (carried.isEmpty()) fresh else fresh + carried
         scoreboards[leaguePath] = Cached(now, merged)
         return merged
     }
@@ -345,8 +363,21 @@ private const val STALE_STATE_BUFFER_MS = 6L * 60L * 60_000L
  * LIVE 47 hours after it finished - so anything more than
  * [STALE_STATE_BUFFER_MS] past its own end time is read as FINAL whatever the
  * word says. 0 (no end time, the case for most US league games) leaves the
- * state word as the only signal, exactly as before, and [nowMs] exists so a
- * test can pin the clock rather than wait for it.
+ * clock out of it, exactly as before, and [nowMs] exists so a test can pin the
+ * clock rather than wait for it.
+ *
+ * [feedDetail] is the feed's own status text (`status.type.shortDetail`, then
+ * `detail`) - the line a card prints as its clock or its result. It is read for
+ * ONE case: a `state` of "in" whose text says the fixture is not being played.
+ * A suspended MLB game keeps "in" for as long as the feed leaves it there - no
+ * `endDate` to sanity-check, and the state word never flips - so the hub listed
+ * it under LIVE NOW indefinitely (audit C4, 2026-10-23). FINAL would claim a
+ * result that does not exist and LIVE claims play that is not happening, so it
+ * reads as UPCOMING: the same answer the feed's own "post" + `completed=false`
+ * postponed case gets below, and the one that keeps the card on the slate.
+ * A rain DELAY is deliberately not in that list - a delayed game is a game in
+ * progress that is paused - and a feed that ships no text at all keeps the
+ * state word, because inventing a clock is how live games get ended early.
  */
 internal fun espnGameState(
     state: String?,
@@ -360,12 +391,13 @@ internal fun espnGameState(
      * FINAL, with no score, indistinguishable from a real result.
      */
     completed: Boolean? = null,
+    feedDetail: String? = null,
 ): GameState {
     if (eventEndMs > 0L && nowMs > eventEndMs + STALE_STATE_BUFFER_MS) {
         return GameState.FINAL
     }
     return when (state?.trim()?.lowercase()) {
-        "in" -> GameState.LIVE
+        "in" -> if (espnStoppedPlay(feedDetail)) GameState.UPCOMING else GameState.LIVE
         // "post" is the END of the scheduled slot, not proof the game was played:
         // a postponed or canceled game keeps the slot and carries the reason in
         // its status detail. Only an explicitly un-completed post is UPCOMING;
@@ -374,6 +406,24 @@ internal fun espnGameState(
         "post" -> if (completed == false) GameState.UPCOMING else GameState.FINAL
         else -> GameState.UPCOMING
     }
+}
+
+/**
+ * Whether the feed's status TEXT says a fixture is not being played.
+ *
+ * Stems, not whole words: ESPN writes "Suspended", "Susp. Bottom 5th",
+ * "Postponed", "Postponement", "Canceled" and "Cancelled" for the same three
+ * facts, and the card only needs to know that play is not happening. "Delay" is
+ * deliberately absent - see [espnGameState]: a delayed game is live and paused,
+ * and reading it as not-in-play would drop it out of LIVE NOW during a rain
+ * shower, which is the opposite of the fault this guards (audit C4).
+ */
+private val STOPPED_PLAY_STEMS = listOf("suspend", "postpon", "cancel")
+
+private fun espnStoppedPlay(detail: String?): Boolean {
+    val text = detail?.trim()?.lowercase().orEmpty()
+    if (text.isEmpty()) return false
+    return STOPPED_PLAY_STEMS.any { text.contains(it) }
 }
 
 /**
@@ -574,15 +624,19 @@ private fun espnGameOf(
     val status = statusObject?.optJSONObject("type")
     // Both read once, because the situation line is built from the same two
     // facts the state and the clock are (see espnSituation). The feed's end
-    // time rides along so a stale "in" cannot show a finished game as LIVE.
+    // time rides along so a stale "in" cannot show a finished game as LIVE,
+    // and so does its own status text: a "Suspended" word is the only signal a
+    // league game without an end time ever gives that play has stopped (audit
+    // C4).
+    val statusDetail = status?.optString("shortDetail", "")
+        ?.takeIf { it.isNotBlank() }
+        ?: status?.optString("detail", "").orEmpty()
     val state = espnGameState(
         state = status?.optString("state"),
         eventEndMs = espnEventEndMs(event, competition),
         completed = espnCompleted(status),
+        feedDetail = statusDetail,
     )
-    val statusDetail = status?.optString("shortDetail", "")
-        ?.takeIf { it.isNotBlank() }
-        ?: status?.optString("detail", "").orEmpty()
     // The situation block is read ONCE: the card's line and the sheet's
     // possession marker are the two halves of the same answer, so neither can
     // be derived from a different read of the feed than the other.
@@ -1010,6 +1064,47 @@ internal object EspnCacheRules {
             .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
 
     /**
+     * The VIEWER's own calendar day, in the same form, in [zone].
+     *
+     * The feed's day is Eastern; a viewer's evening is not. Between midnight ET
+     * and the viewer's own midnight, those are two different dates - 9 PM in
+     * California is already tomorrow in the feed's calendar.
+     */
+    fun viewerDay(
+        dateMs: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+    ): String =
+        java.time.Instant.ofEpochMilli(dateMs)
+            .atZone(zone)
+            .toLocalDate()
+            .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
+
+    /**
+     * The feed day a read must ALSO ask for, or null when the default window is
+     * the whole story.
+     *
+     * The scoreboard endpoint's default window is the current EASTERN day. It
+     * rolls over at midnight ET - 9 PM in California - and from that moment the
+     * default request answers the NEW day's slate. A game still in play is
+     * carried below (see [carryOverDay]); the ones that finished earlier that
+     * Pacific evening are dated on the day the endpoint has stopped asking for,
+     * so the FINAL group emptied out and the evening's results vanished from a
+     * tab that had just shown them (audit C1's second half, 2026-10-23).
+     *
+     * Only an EARLIER local day can be the missing window: west of Eastern the
+     * viewer's calendar trails the feed's (that is the whole bug), while a
+     * viewer east of it is already on the feed's date or later, and asking for a
+     * LATER day would fetch a slate nobody is watching instead of the one that
+     * is already in hand. String comparison is chronological here because
+     * [espnDay] and [viewerDay] are both `BASIC_ISO_DATE`.
+     */
+    fun earlierViewerDay(
+        dateMs: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+    ): String? =
+        viewerDay(dateMs, zone).takeIf { it < espnDay(dateMs) }
+
+    /**
      * The ESPN day whose slate must also be read, or null when today's is enough.
      *
      * A game that is LIVE in the cached slate, absent from the fresh one, and
@@ -1159,21 +1254,24 @@ private fun espnEventToTournament(
     // recent that started, else the next one due.
     val competition = tournamentSession(event.optJSONArray("competitions"), nowMs)
     val status = event.optJSONObject("status")?.optJSONObject("type")
+    val statusDetail = status?.optString("shortDetail", "")
+        ?.takeIf { it.isNotBlank() }
+        ?: status?.optString("detail", "").orEmpty()
     return TournamentEvent(
         id = id,
         league = leaguePath,
         name = event.optString("name", "").ifBlank { event.optString("shortName", "") },
         dateMs = espnDateMs(event.optString("date", "")),
         // A tournament's end time is what stops ESPN's days-stale "in" from
-        // showing a finished tournament as LIVE (see espnGameState).
+        // showing a finished tournament as LIVE (see espnGameState), and its
+        // status text is the same guard a league game gets (audit C4).
         state = espnGameState(
             state = status?.optString("state"),
             eventEndMs = espnEventEndMs(event, competition),
             completed = espnCompleted(status),
+            feedDetail = statusDetail,
         ),
-        statusDetail = status?.optString("shortDetail", "")
-            ?.takeIf { it.isNotBlank() }
-            ?: status?.optString("detail", "").orEmpty(),
+        statusDetail = statusDetail,
         leaders = espnLeaders(competition?.optJSONArray("competitors")),
         broadcastNames = espnBroadcasts(event, competition),
         // A race names its track on the event (`circuit`); a golf round or

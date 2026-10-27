@@ -29,6 +29,14 @@ import org.junit.Test
  *     selection, leaving the first D-pad press to scroll the list instead of
  *     focusing anything.
  *
+ * Four more are about the shape of a pass rather than a rule inside it: the
+ * EPG ceiling's order (F2 - a shared counter let a big slate take every
+ * tournament's tier-1 question, and slate order took the last leagues'), and the
+ * second day window a west-coast evening needs (C1 - the feed's day rolls over
+ * at midnight Eastern, which is 9 PM in California). Both are pinned here for
+ * the same reason: what they get wrong is invisible in a screenshot and only
+ * shows up as one league or one evening quietly missing.
+ *
  * Plus the RSN map's league keys (C12's remaining half is data, and data is
  * checked as data below). The parse itself is behaviour, so it is pinned by
  * real payloads in [com.kennyb1201.kbstream.data.sports.EspnSportsRepositoryTest]
@@ -209,6 +217,68 @@ class SportsHubDeepDiveContractTest {
             "and the lookup builds exactly the key the map is written in - the " +
                 "league from the path, the team's own abbreviation",
             matcher.contains("return TEAM_RSN[\"${d}league:${d}abbreviation\"].orEmpty()")
+        )
+    }
+
+    // ── F2: the EPG ceiling's order ─────────────────────────────────
+
+    @Test
+    fun `the ceiling trims depth, not whole leagues or tournaments`() {
+        assertTrue(
+            "games and tournaments each get their own ceiling: the games are " +
+                "always asked first, so one shared counter let a big slate leave " +
+                "every tournament with no tier-1 question at all",
+            viewModel.contains("val gamesBudget = EpgLookups(MAX_EPG_LOOKUPS)") &&
+                viewModel.contains("val tournamentsBudget = EpgLookups(MAX_EPG_LOOKUPS)") &&
+                viewModel.contains("epgCandidates(games, guideIndex, gamesBudget)") &&
+                viewModel.contains(
+                    "epgTournamentCandidates(events, guideIndex, tournamentsBudget)"
+                )
+        )
+        val candidates = slice(
+            viewModel,
+            "private suspend fun epgCandidates(",
+            "private suspend fun epgTournamentCandidates("
+        )
+        assertTrue(
+            "and the games are walked round-robin across leagues, so a reached " +
+                "ceiling costs each league its depth instead of costing the last " +
+                "leagues every question",
+            candidates.contains("epgMatchupOrder(games.filter { it.state != GameState.FINAL })")
+        )
+        assertFalse(
+            "the shared counter that starved the last leagues is gone",
+            viewModel.contains("val budget = EpgLookups(MAX_EPG_LOOKUPS)") ||
+                viewModel.contains("epgCandidates(games, guideIndex, budget)")
+        )
+    }
+
+    // ── C1: the viewer's own day window ─────────────────────────────
+
+    @Test
+    fun `a west-coast evening is read from the viewer's own day too`() {
+        val scoreboard = slice(
+            repository,
+            "suspend fun scoreboard(",
+            "suspend fun tournamentEvents("
+        )
+        assertTrue(
+            "the earlier local day is asked for when the feed's day has already " +
+                "rolled over, which is the only window a Pacific evening's finished " +
+                "games are in",
+            scoreboard.contains("EspnCacheRules.earlierViewerDay(now)") &&
+                scoreboard.contains("fetch(leaguePath, day)")
+        )
+        assertTrue(
+            "the two windows are merged by id, so a game in both is not listed twice",
+            scoreboard.contains("filter { game -> fetched.none { it.id == game.id } }") &&
+                scoreboard.contains("val fresh = if (viewerDayGames.isEmpty()) fetched else fetched + viewerDayGames")
+        )
+        assertTrue(
+            "and the carry-over now compares against both windows, so it only " +
+                "reads a third day for a game neither one carries",
+            scoreboard.contains("carryOverDay(cached?.value.orEmpty(), fresh, now)") &&
+                scoreboard.contains("filter { game -> fresh.none { it.id == game.id } }")
         )
     }
 

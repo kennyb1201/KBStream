@@ -1179,22 +1179,26 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             val guideIndex = cachedGuideIndex(channels)
             val guideMs = SystemClock.elapsedRealtime() - guideStarted
             // ~0 on every pass after the first, which is the cached index doing
-            // its job: the guide index is a pure function of the lineup and the
-            // guide URLs, both fixed while the hub is open.
+            // its job: the index is keyed on the lineup AND the guide source
+            // set, so a live tick reuses it and a source that joined the set
+            // since the last build rebuilds it (see [guideIndexSourceKey]).
             PerfTrace.record("sports.match.guide_index", guideMs)
             val epgStarted = SystemClock.elapsedRealtime()
-            // Games and tournaments draw from ONE ceiling over the one index
-            // (see [EpgLookups]); the tournament rows are the fix for a golf
-            // card reading "not in your playlist" while Golf Channel carries it
-            // - the index was never asked about a tournament at all (see
+            // Games and tournaments get their OWN ceiling (see [EpgLookups]).
+            // One shared counter was ordered work rather than fair work: games
+            // are asked first, so a slate that filled the ceiling left every
+            // tournament with no tier-1 signal at all (deep dive F2) - and the
+            // tournament rows are the fix for a golf card reading "not in your
+            // playlist" while Golf Channel carries it (see
             // [epgTournamentCandidates]).
-            val budget = EpgLookups(MAX_EPG_LOOKUPS)
+            val gamesBudget = EpgLookups(MAX_EPG_LOOKUPS)
+            val tournamentsBudget = EpgLookups(MAX_EPG_LOOKUPS)
             val programs = if (guideIndex.isEmpty()) {
                 emptyList()
             } else {
                 runCatchingCancellable {
-                    epgCandidates(games, guideIndex, budget) +
-                        epgTournamentCandidates(events, guideIndex, budget)
+                    epgCandidates(games, guideIndex, gamesBudget) +
+                        epgTournamentCandidates(events, guideIndex, tournamentsBudget)
                 }.getOrDefault(emptyList())
             }
             val epgMs = SystemClock.elapsedRealtime() - epgStarted
@@ -1523,6 +1527,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * slate, with the count bounded by the slate rather than by an arbitrary
      * constant.
      *
+     * The order is [epgMatchupOrder]: round-robin across leagues, so that when
+     * the ceiling IS reached it costs each league its depth instead of costing
+     * the last leagues every question (deep dive F2). The ceiling itself is
+     * unchanged - a lookup is a database query, so the pass must stay bounded.
+     *
      * Two games between the same teams ask the same question, so a matchup is
      * looked up once (a doubleheader, a home-and-home).
      *
@@ -1544,8 +1553,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     ): List<MatcherProgram> {
         val out = LinkedHashMap<String, MatcherProgram>()
         val asked = HashSet<String>()
-        games.asSequence()
-            .filter { it.state != GameState.FINAL }
+        epgMatchupOrder(games.filter { it.state != GameState.FINAL })
             .forEach { game ->
                 val terms = listOf(game.away, game.home).mapNotNull(::titleSearchTerm)
                 if (terms.size < 2) return@forEach
@@ -1588,8 +1596,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * invent a match.
      *
      * Final tournaments are skipped for the same reason a final game is, and the
-     * whole pass shares ONE [MAX_EPG_LOOKUPS] ceiling with the games above (see
-     * [EpgLookups]) - it is one index, so it is one budget.
+     * tournaments draw from their OWN [MAX_EPG_LOOKUPS] ceiling, not the games'
+     * (see [EpgLookups]): they are asked after every game, so a shared counter
+     * meant a big slate could leave every tournament without a single tier-1
+     * question (deep dive F2).
      */
     private suspend fun epgTournamentCandidates(
         events: List<TournamentEvent>,
@@ -1724,12 +1734,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         }.distinct()
 
     /**
-     * The shared ceiling on indexed EPG lookups for one matching pass.
+     * A ceiling on indexed EPG lookups for one matching pass, per kind of card.
      *
-     * Games and tournaments draw from the SAME counter: it is one index, so it is
-     * one budget, and a tournament question is the same kind of work as a game's.
-     * A safety net rather than an allowance (see [MAX_EPG_LOOKUPS]) - reaching it
-     * means a slate bigger than any single day's.
+     * Games and tournaments each get one, rather than a single counter both draw
+     * from: it is one index, but it is not one queue of equally-placed work - the
+     * games are always asked first, so a shared ceiling turned the games' size
+     * into the tournaments' coverage (deep dive F2). Within each, the questions
+     * are ordered fairly across leagues (see [epgMatchupOrder]), so a reached
+     * ceiling trims depth instead of cutting off whichever leagues came last.
+     * A safety net rather than an allowance (see [MAX_EPG_LOOKUPS]).
      */
     private class EpgLookups(private val max: Int) {
         private var used = 0
@@ -1757,15 +1770,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         const val EPG_SEARCH_LIMIT = 60
 
         /**
-         * Ceiling on the indexed EPG lookups one pass makes.
+         * Ceiling on the indexed EPG lookups one pass makes, per kind of card.
          *
-         * Sized for a full slate with every league enabled (a Saturday of
-         * college football plus the pros and the soccer), because a cap below
-         * the slate is how whole leagues used to be left with no EPG signal at
-         * all - see [epgCandidates]. Each lookup is an indexed FTS query the
-         * size of a handful of rows, and a matchup is asked once however many
-         * cards it covers, so this is a safety net rather than a budget:
-         * reaching it means a slate bigger than any single day's.
+         * Each lookup is an indexed FTS query the size of a handful of rows, and
+         * a matchup is asked once however many cards it covers, so a full slate
+         * (every league enabled, college football on) normally sits well under
+         * this. It is a safety net, not an allowance: what it must never do is
+         * decide WHICH leagues are covered, which is why the questions are
+         * ordered round-robin across leagues (see [epgMatchupOrder]) and why
+         * tournaments do not draw from the games' counter (see [EpgLookups]).
          */
         const val MAX_EPG_LOOKUPS = 200
 

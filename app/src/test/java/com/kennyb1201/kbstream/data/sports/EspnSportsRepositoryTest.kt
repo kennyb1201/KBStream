@@ -57,6 +57,69 @@ class EspnSportsRepositoryTest {
     }
 
     @Test
+    fun `a suspended game stops reading as live`() {
+        // Audit C4's remaining half: a league game carries no endDate, so the
+        // clock check above has nothing to compare, and ESPN keeps the state
+        // word "in" for as long as a suspended game sits there - the hub listed
+        // it under LIVE NOW indefinitely.
+        assertEquals(
+            GameState.UPCOMING,
+            espnGameState("in", eventEndMs = 0L, nowMs = NOW, feedDetail = "Suspended")
+        )
+        // The same fact in the shapes ESPN writes it.
+        assertEquals(GameState.UPCOMING, espnGameState("in", feedDetail = "Suspend. Bottom 6th"))
+        assertEquals(GameState.UPCOMING, espnGameState("in", feedDetail = "Postponed"))
+        assertEquals(GameState.UPCOMING, espnGameState("in", feedDetail = "Canceled"))
+    }
+
+    @Test
+    fun `a rain delay is still a live game`() {
+        // The guard must not fire on the one stoppage that IS a game in
+        // progress: reading a delay as not-in-play would drop it out of LIVE NOW
+        // during a rain shower, which is the opposite fault.
+        assertEquals(GameState.LIVE, espnGameState("in", feedDetail = "Delayed"))
+        assertEquals(GameState.LIVE, espnGameState("in", feedDetail = "Rain Delay"))
+        // And a feed that says nothing keeps the word, as it always did.
+        assertEquals(GameState.LIVE, espnGameState("in", feedDetail = ""))
+    }
+
+    @Test
+    fun `a suspended scoreboard event parses as not live, with its own status line`() {
+        val suspended = """
+            {
+              "events": [
+                {
+                  "id": "777",
+                  "name": "Yankees at Red Sox",
+                  "date": "2026-10-24T00:10Z",
+                  "status": {
+                    "period": 6,
+                    "type": { "state": "in", "detail": "Suspended", "completed": false }
+                  },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "homeAway": "home", "score": "3", "team": { "abbreviation": "BOS", "displayName": "Boston Red Sox" } },
+                        { "homeAway": "away", "score": "2", "team": { "abbreviation": "NYY", "displayName": "New York Yankees" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val game = parseScoreboard(suspended, "baseball/mlb").single()
+
+        assertEquals(GameState.UPCOMING, game.state)
+        assertEquals("Suspended", game.statusDetail)
+        // Nothing else about the fixture is lost: the score it stopped at stays
+        // on the card, which is the only record a suspended game has.
+        assertEquals("2", game.away.score)
+        assertEquals("3", game.home.score)
+    }
+
+    @Test
     fun `no end time leaves the state word as the only signal`() {
         // Most US league events carry no endDate at all: the sanity check must
         // stay out of the way rather than reading a live game as final because
