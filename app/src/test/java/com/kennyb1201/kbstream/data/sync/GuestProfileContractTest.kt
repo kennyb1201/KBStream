@@ -60,10 +60,19 @@ class GuestProfileContractTest {
         assertTrue("hasProfiles must have a body to inspect", start >= 0)
         val body = src.substring(start, src.indexOf("}\n", start))
         val memoryReadAt = body.indexOf("_profiles.value")
-        val diskReadAt = body.indexOf("loadProfiles(context)")
+        // The stored read, by whatever entry point performs it: the fallback is
+        // `readProfiles` now, because it also has to report whether a blob that
+        // IS stored failed to parse (see the assertion below) - the anchor
+        // named the older `loadProfiles` and went red when the two answers were
+        // split apart.
+        val diskReadAt = body.indexOf("readProfiles(context)")
 
         assertTrue("the in-memory list has to be consulted first", memoryReadAt >= 0)
         assertTrue("the blob is still the fallback", diskReadAt > memoryReadAt)
+        assertTrue(
+            "and a stored-but-unreadable blob is not a profile-less device",
+            body.contains("read.unreadable")
+        )
     }
 
     @Test

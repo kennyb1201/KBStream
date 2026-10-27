@@ -276,9 +276,15 @@ class SettingsDeepDiveContractTest {
         ).forEach { outcome ->
             assertTrue("$outcome must be reported, not swallowed", resync.contains(outcome))
         }
+        // Anchored on the failure PATH, not on one line's formatting: the call
+        // and its string sat on separate lines, and an assertion that required
+        // them together went red on source that reports the failure correctly.
+        val failurePath = resync.substringAfter("catch (t: Throwable)", "")
+        assertTrue("the resync must catch its own failure", failurePath.isNotEmpty())
         assertTrue(
             "a failed run reports the failure rather than only logging it",
-            resync.contains("onResult(\"\$RESYNC_FAILED")
+            failurePath.contains("onResult(") &&
+                failurePath.contains("\"\$RESYNC_FAILED")
         )
         assertTrue(
             "a pass in which no table answered is not a completed resync - the " +
