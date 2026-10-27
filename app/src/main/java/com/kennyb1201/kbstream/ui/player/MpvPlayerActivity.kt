@@ -4859,9 +4859,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (!sessionHasPlayed()) {
             Log.w(TAG, "ignoring end-of-playback: this session never played")
             return
-        }            endedHandled = true
-            runOnUiThread {
-                hideMpvBuffering()
+        }
+        endedHandled = true
+        runOnUiThread {
+            hideMpvBuffering()
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
         }
