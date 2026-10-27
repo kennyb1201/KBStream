@@ -115,13 +115,15 @@ class SourceAddonSessionTest {
     @Test
     fun `a tab walk lands on its own next row and on nothing outside it`() {
         val addons = listOf<String?>("A", "A", "B", "A", "C")
-        assertEquals("the next A after index 0 is 1", 1, tabWalk(addons, 0, tab = "A"))
-        assertEquals("from 1 it is 3, stepping over B", 3, tabWalk(addons, 1, tab = "A"))
-        assertNull("and from 3 there is no A left", tabWalk(addons, 3, tab = "A"))
+        // [fromIndex] is INCLUSIVE, as it is for nextIndex above: the engines
+        // scan from the row AFTER the one playing, so they pass index + 1.
+        assertEquals("the scan starts on the first candidate and takes it", 1, tabWalk(addons, 1, tab = "A"))
+        assertEquals("the one after B is 3", 3, tabWalk(addons, 3, tab = "A"))
+        assertNull("past the last A there is no A left", tabWalk(addons, 4, tab = "A"))
         assertEquals(
             "B's whole tab is index 2, and C's is 4 - never another add-on's row",
             2,
-            tabWalk(addons, 0, tab = "B")
+            tabWalk(addons, 1, tab = "B")
         )
     }
 
@@ -131,11 +133,11 @@ class SourceAddonSessionTest {
         // its tab: the walk must stop rather than hand back a link already
         // known dead (the engine opens the SOURCES picker instead of switching).
         val addons = listOf<String?>("A", "A", "A", "B")
-        assertNull(tabWalk(addons, 0, tab = "A", dead = deadOf("A")))
+        assertNull(tabWalk(addons, 1, tab = "A", dead = deadOf("A")))
         assertEquals(
             "while a tab whose own add-on is alive still walks",
             1,
-            tabWalk(addons, 0, tab = "A", dead = deadOf("B"))
+            tabWalk(addons, 1, tab = "A", dead = deadOf("B"))
         )
     }
 
