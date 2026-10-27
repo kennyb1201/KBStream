@@ -517,11 +517,17 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
                     existing.keywordNames
                 },
                 genreIds = existing.genreIds ?: genreIds,
-                backdropPath = existing.backdropPath ?: backdropPath,
-                overview = existing.overview ?: overview,
-                releaseDate = existing.releaseDate ?: releaseDate,
-                firstAirDate = existing.firstAirDate ?: firstAirDate,
-                voteAverage = existing.voteAverage ?: voteAverage
+                // The description fields live on the candidate's PICK, not on
+                // the candidate itself: they are what the card and the PLAY
+                // handoff render, and a tier that knows the title but not its
+                // synopsis must not blank the one an earlier tier supplied.
+                pick = existing.pick.copy(
+                    backdropPath = existing.pick.backdropPath ?: backdropPath,
+                    overview = existing.pick.overview ?: overview,
+                    releaseDate = existing.pick.releaseDate ?: releaseDate,
+                    firstAirDate = existing.pick.firstAirDate ?: firstAirDate,
+                    voteAverage = existing.pick.voteAverage ?: voteAverage
+                )
             )
             if (merged != existing) candidates[tmdbId] = merged
             return
