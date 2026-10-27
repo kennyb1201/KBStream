@@ -129,7 +129,12 @@ data class TmdbRecommendationItem(
     @Json(name = "vote_average") val voteAverage: Double? = null,
     // Formats have to be separable: a recommendation row for a scripted
     // series should not surface talk shows (see UNSCRIPTED_TV_GENRES).
-    @Json(name = "genre_ids") val genreIds: List<Int>? = null
+    @Json(name = "genre_ids") val genreIds: List<Int>? = null,
+    // The blend's one-line reason for this pick ("Directed by ...", "Similar
+    // theme: heist", "Same series"). Detail's More Like This rail is filled by
+    // RecommendationBlend now, and this is the field that carries the label
+    // from the blend to the card. TMDB's own payload never sends it.
+    val reason: String? = null
 )
 
 @JsonClass(generateAdapter = true)

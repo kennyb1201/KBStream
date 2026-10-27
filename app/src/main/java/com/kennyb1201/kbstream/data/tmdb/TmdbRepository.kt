@@ -1672,6 +1672,27 @@ class TmdbRepository private constructor(context: Context) :
         }.getOrNull()
     }
 
+    /**
+     * TMDB's `/similar` list for a title: the recommendation blend's fill-only
+     * tier.
+     *
+     * Deliberately uncached: the blend asks for it only when its four other
+     * tiers could not fill the row, which is rare, and TMDB's similarity list
+     * rotates the same way its recommendations do - a cached copy would be a
+     * stale answer to the one question the blend asks it. A failure (no key,
+     * offline, an API error) reads as "no fill", never as an error surface.
+     */
+    suspend fun getSimilar(tmdbId: Int, type: String): TmdbRecommendations? {
+        if (apiKey.isBlank() || tmdbId <= 0) return null
+        return runCatchingCancellable {
+            if (normalizeType(type) == "series") {
+                api.getTvSimilar(tmdbId, apiKey)
+            } else {
+                api.getMovieSimilar(tmdbId, apiKey)
+            }
+        }.getOrNull()
+    }
+
     suspend fun getKBCollectionItems(collectionId: Int): List<TmdbCollectionPart>? {
         if (apiKey.isBlank()) return null
         return runCatchingCancellable {

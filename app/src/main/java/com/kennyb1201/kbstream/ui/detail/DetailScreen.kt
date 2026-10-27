@@ -121,6 +121,7 @@ import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
@@ -160,6 +161,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -2877,6 +2879,70 @@ fun DetailScreen(
                 inLibrary = LibraryAdds.inMyList(context, libraryButtonTarget)
             }
 
+            // Taste, the two rows right after the Library toggle.
+            //
+            // The identification is the same pair the poster menus hand the
+            // store - the TMDB id plus the resolved IMDB one - so a thumb
+            // pressed here and a thumb pressed on the title's poster in a rail
+            // are ONE signal, not two. The year rides along for the name
+            // fallback that bridges the two id namespaces.
+            val tasteYear: Int? = (tmdbDetail?.releaseDate ?: tmdbDetail?.firstAirDate)
+                ?.take(4)
+                ?.toIntOrNull()
+            val tasteIds = remember(type, id, tmdbDetail?.id) {
+                listOf(
+                    id.takeIf { it.startsWith("tt") },
+                    tmdbDetail?.id?.let { "tmdb:$it" }
+                )
+            }
+            // Painted from the store, never from the last press, and re-read
+            // when the store changes - so a thumb set from a poster menu flips
+            // this row without a revisit (see rememberTasteSignal).
+            val tasteSignal = rememberTasteSignal(
+                mediaType = normalizedType,
+                title = libraryButtonTarget.title,
+                year = tasteYear,
+                ids = tasteIds
+            )
+
+            // The press: the thumb that was pressed decides the next signal
+            // (the active one clears it, the other flips it), the store
+            // answers, and the buttons repaint from its answer - the bookmark
+            // toggle's own rule, so a press can never claim a signal that did
+            // not persist. Nothing here writes to a tracker: v1 is local (see
+            // TasteSignals).
+            fun pressTaste(signal: String) {
+                val next = TasteSignals.nextSignal(tasteSignal, signal)
+                val stored = if (next == null) {
+                    TasteSignals.clearSignal(
+                        context = context,
+                        mediaType = normalizedType,
+                        title = libraryButtonTarget.title,
+                        year = tasteYear,
+                        ids = tasteIds
+                    )
+                } else {
+                    TasteSignals.setSignal(
+                        context = context,
+                        mediaType = normalizedType,
+                        title = libraryButtonTarget.title,
+                        posterUrl = viewModel.currentPosterUrl(),
+                        year = tasteYear,
+                        ids = tasteIds,
+                        signal = next
+                    )
+                }
+                feedback.show(
+                    text = when {
+                        !stored -> "Couldn't save your rating"
+                        next == null -> "Rating removed: ${libraryButtonTarget.title}"
+                        next == TasteSignals.LIKE -> "Liked: ${libraryButtonTarget.title}"
+                        else -> "Disliked: ${libraryButtonTarget.title}"
+                    },
+                    isError = !stored
+                )
+            }
+
             val wantsBeginning =
                 initialTarget?.startFromBeginning == true || startOver
 
@@ -3734,6 +3800,59 @@ fun DetailScreen(
                                 } else {
                                     "Add to My List"
                                 }
+                            )
+                        }
+
+                        // Taste, after the Library toggle: thumbs down first
+                        // looks natural but thumbs UP is the one the viewer
+                        // reaches for, so the like sits first and the dislike
+                        // beside it. Outline until the signal lands, filled
+                        // once it has - the bookmark pair's own grammar, so the
+                        // row reads as one set of state marks. Not a tracker
+                        // control and not a dialog: a press records the signal
+                        // and says so, and pressing the active thumb again takes
+                        // it back off.
+                        KBCard(
+                            onClick = { pressTaste(TasteSignals.LIKE) },
+                            shape = KBShapePill,
+                            focusedScale = KBFocusButton,
+                            modifier = Modifier.padding(start = 8.dp)
+                        ) {
+                            IconButtonBody(
+                                iconRes = if (tasteSignal == TasteSignals.LIKE) {
+                                    R.drawable.ic_detail_thumb_up_filled
+                                } else {
+                                    R.drawable.ic_detail_thumb_up_outline
+                                },
+                                // The glyph alone never says which thumb this
+                                // is or what pressing it again does, so
+                                // TalkBack is told both.
+                                contentDescription = if (tasteSignal == TasteSignals.LIKE) {
+                                    "Liked — tap to remove your like"
+                                } else {
+                                    "Like this title"
+                                }
+                            )
+                        }
+
+                        KBCard(
+                            onClick = { pressTaste(TasteSignals.DISLIKE) },
+                            shape = KBShapePill,
+                            focusedScale = KBFocusButton,
+                            modifier = Modifier.padding(start = 8.dp)
+                        ) {
+                            IconButtonBody(
+                                iconRes = if (tasteSignal == TasteSignals.DISLIKE) {
+                                    R.drawable.ic_detail_thumb_down_filled
+                                } else {
+                                    R.drawable.ic_detail_thumb_down_outline
+                                },
+                                contentDescription =
+                                    if (tasteSignal == TasteSignals.DISLIKE) {
+                                        "Disliked — tap to remove your dislike"
+                                    } else {
+                                        "Dislike this title"
+                                    }
                             )
                         }
                     }
@@ -5511,6 +5630,11 @@ fun DetailScreen(
                                                     ?: rec.firstAirDate)?.take(4),
                                             captionRating =
                                                 rec.voteAverage,
+                                            // Why the blend put this
+                                            // title here. The rail's own
+                                            // one-line answer, never a
+                                            // match percentage.
+                                            captionReason = rec.reason,
                                             isWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -7590,6 +7714,11 @@ private fun PosterGridCard(
     isPartiallyWatched: Boolean = false,
     captionYear: String? = null,
     captionRating: Double? = null,
+    // Why the recommendation blend put this title here ("Directed by ...",
+    // "Similar theme: heist"). Only More Like This carries one - the collection
+    // rail's entries are here because the title is in the same saga, which the
+    // rail itself already says.
+    captionReason: String? = null,
     // Raw id + type for the shared landscape-art resolver, so a recommendation
     // or collection part (which carries only a poster path) still draws a real
     // backdrop with a corner clearlogo when landscape mode is on.
@@ -7642,6 +7771,22 @@ private fun PosterGridCard(
                 .fillMaxWidth()
                 .padding(top = 5.dp)
         )
+
+        // The reason line, under the caption it belongs to and in the accent so
+        // it reads as the app talking rather than as another fact about the
+        // title. One line, ellipsised, never a second row of layout.
+        captionReason?.takeIf { it.isNotBlank() }?.let { reason ->
+            Text(
+                text = reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = KBAccent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp)
+            )
+        }
     }
 }
 

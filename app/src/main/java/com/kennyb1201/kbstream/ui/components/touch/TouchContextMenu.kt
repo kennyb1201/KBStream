@@ -38,6 +38,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.contextMenuSectionRank
 import com.kennyb1201.kbstream.ui.components.isSeriesType
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
+import com.kennyb1201.kbstream.ui.components.tasteMenuActions
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
@@ -144,6 +145,14 @@ fun PosterContextMenu(
                     libraryPickTarget = target
                 }
             )
+        }
+
+        // The taste rows, from the same builder the TV panel uses: the two
+        // signals are one pair of rows defined once, and
+        // [contextMenuSectionRank] drops them into the taste section on both
+        // surfaces. Only menus about a title carry them (see the hide target).
+        hideTarget?.let { target ->
+            addAll(tasteMenuActions(context, target, feedback, onDismiss))
         }
 
         if (reminderShowId != null) {

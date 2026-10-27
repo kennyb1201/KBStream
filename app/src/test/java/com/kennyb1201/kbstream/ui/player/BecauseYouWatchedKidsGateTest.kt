@@ -1,6 +1,11 @@
 package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.sync.KidsMode
+import com.kennyb1201.kbstream.data.tmdb.BYW_KIDS_CERT_POOL
+import com.kennyb1201.kbstream.data.tmdb.BlendCandidate
+import com.kennyb1201.kbstream.data.tmdb.BlendPick
+import com.kennyb1201.kbstream.data.tmdb.blendKidsGate
+import com.kennyb1201.kbstream.data.tmdb.blendKidsGenrePool
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
@@ -21,7 +26,9 @@ import org.junit.Test
  * The new decision is split in two, and both halves are testable without a
  * network: the genre pre-filter and the certification gate are pure functions
  * over scored candidates with the certification lookup injected, so the cases
- * below drive them directly. What a plain JUnit test cannot drive - the tiers,
+ * below drive them directly. Both halves live in the shared recommendation
+ * blend now (RecommendationBlend.kt), which is the same engine Detail's "More
+ * Like This" rail runs - one ceiling for both surfaces. What a plain JUnit test cannot drive - the tiers,
  * the cached repository read the players inject, and the call sites that supply
  * the ceiling - is pinned on the sources, the way this repo's rail contracts do
  * it. The distinction that matters: the gate's DECISIONS are executed here, not
@@ -72,9 +79,13 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `a PG ceiling drops the sitcom and never shows anything above PG`() = runBlocking {
-        val gated = bywKidsGate(moanaPool, KidsMode.CEIL_PG, certifyFrom(ratings))
+        val gated = blendKidsGate(moanaPool, KidsMode.CEIL_PG, certifyFrom(ratings))
 
-        assertEquals("the row still fills from the pool", BYW_KIDS_CERT_POOL / 2, gated.size)
+        assertEquals(
+            "the gate keeps every survivor - the pick count is applied later",
+            11,
+            gated.size
+        )
         assertFalse(
             "TV-14 ranks with R for kids purposes: That '70s Show must be gone",
             gated.any { it.pick.name == "That '70s Show" }
@@ -95,7 +106,7 @@ class BecauseYouWatchedKidsGateTest {
             candidate(3, "Spider-Man", score = 60)
         )
 
-        val gated = bywKidsGate(
+        val gated = blendKidsGate(
             pool,
             KidsMode.CEIL_PG13,
             certifyFrom(ratingsOf("That '70s Show" to "TV-14", "Deadpool" to "R", "Spider-Man" to "PG-13"))
@@ -114,7 +125,7 @@ class BecauseYouWatchedKidsGateTest {
             candidate(4, "Cars", score = 30)
         )
 
-        val gated = bywKidsGate(
+        val gated = blendKidsGate(
             pool,
             KidsMode.CEIL_G,
             certifyFrom(
@@ -138,7 +149,7 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `a pool that all fails certification shows a short row, never an adult title`() = runBlocking {
-        val gated = bywKidsGate(
+        val gated = blendKidsGate(
             moanaPool,
             KidsMode.CEIL_PG,
             certifyFrom(ratings.mapValues { "R" })
@@ -150,7 +161,7 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `one survivor still comes back on its own`() = runBlocking {
-        val gated = bywKidsGate(
+        val gated = blendKidsGate(
             moanaPool,
             KidsMode.CEIL_PG,
             certifyFrom(ratings.mapValues { "R" } + ("Coco" to "PG"))
@@ -176,23 +187,23 @@ class BecauseYouWatchedKidsGateTest {
         assertEquals(
             "PG: an unresolvable certification must not be shown to a child",
             listOf("Toy Story", "Inside Out"),
-            bywKidsGate(pool, KidsMode.CEIL_PG, unrated).map { it.pick.name }
+            blendKidsGate(pool, KidsMode.CEIL_PG, unrated).map { it.pick.name }
         )
         assertEquals(
             "G is stricter still",
             listOf("Toy Story"),
-            bywKidsGate(pool, KidsMode.CEIL_G, unrated).map { it.pick.name }
+            blendKidsGate(pool, KidsMode.CEIL_G, unrated).map { it.pick.name }
         )
         assertEquals(
             "PG-13 keeps the unknown, per KidsMode's known-unknown rule",
             listOf("Obscure Indie", "Toy Story", "Inside Out"),
-            bywKidsGate(pool, KidsMode.CEIL_PG13, unrated).map { it.pick.name }
+            blendKidsGate(pool, KidsMode.CEIL_PG13, unrated).map { it.pick.name }
         )
     }
 
     @Test
     fun `a certification lookup that blows up is an unknown, not a lost row`() = runBlocking {
-        val gated = bywKidsGate(
+        val gated = blendKidsGate(
             moanaPool,
             KidsMode.CEIL_PG,
             certify = { candidate ->
@@ -205,7 +216,11 @@ class BecauseYouWatchedKidsGateTest {
         // a PG ceiling along with the adult titles; the other PG titles still
         // fill the row. One bad lookup must not take the panel down.
         assertFalse(gated.any { it.pick.name == "Coco" })
-        assertEquals(BYW_KIDS_CERT_POOL / 2, gated.size)
+        assertEquals(
+            "the other ten PG titles survive; the row is cut later",
+            10,
+            gated.size
+        )
     }
 
     // ── spec: the genre pre-filter ──────────────────────────────────────
@@ -222,7 +237,7 @@ class BecauseYouWatchedKidsGateTest {
             candidate(6, "Unknown Genres", score = 100, genres = emptyList())
         )
 
-        val filtered = bywKidsGenrePool(pool, parentGenreIds = listOf(16, 10751, 12))
+        val filtered = blendKidsGenrePool(pool, parentGenreIds = listOf(16, 10751, 12))
 
         assertEquals(
             "unknown genres are not 'neither': they stay for the ceiling to decide",
@@ -240,11 +255,11 @@ class BecauseYouWatchedKidsGateTest {
 
         // A comedy's picks are not expected to be Animation OR Family, so the
         // pre-filter is a no-op and certification alone decides.
-        assertSame(pool, bywKidsGenrePool(pool, parentGenreIds = listOf(35)))
+        assertSame(pool, blendKidsGenrePool(pool, parentGenreIds = listOf(35)))
         assertEquals(
             "a kids MODE profile watching a live-action comedy gets no genre gate",
             pool.map { it.pick.name },
-            bywKidsGenrePool(pool, listOf(35)).map { it.pick.name }
+            blendKidsGenrePool(pool, listOf(35)).map { it.pick.name }
         )
     }
 
@@ -255,9 +270,9 @@ class BecauseYouWatchedKidsGateTest {
         // loses an increment under load and this test then reads 10 in a full
         // suite run while passing on its own.
         val calls = AtomicInteger()
-        val pool = bywKidsGenrePool(moanaPool, parentGenreIds = listOf(16, 10751))
+        val pool = blendKidsGenrePool(moanaPool, parentGenreIds = listOf(16, 10751))
 
-        bywKidsGate(pool, KidsMode.CEIL_PG) { candidate ->
+        blendKidsGate(pool, KidsMode.CEIL_PG) { candidate ->
             calls.incrementAndGet()
             ratings[candidate.pick.name]
         }
@@ -277,7 +292,7 @@ class BecauseYouWatchedKidsGateTest {
     fun `a null ceiling certifies nothing and returns the same list`() = runBlocking {
         var calls = 0
 
-        val gated = bywKidsGate(moanaPool, kidsMaxAge = null) { candidate ->
+        val gated = blendKidsGate(moanaPool, kidsMaxAge = null) { candidate ->
             calls++
             ratings[candidate.pick.name]
         }
@@ -291,46 +306,60 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `the four tiers still score and order exactly as before`() {
-        val body = bywBody()
+        val body = blendBody()
 
-        // Weights, unchanged and still applied at add time...
-        listOf("score = 100", "score = 60", "score = 30", "score = 25").forEach { weight ->
-            assertTrue("the tier weight $weight is missing", body.contains(weight))
+        // The weights, in one place, applied when the blend scores...
+        listOf(
+            "FRANCHISE(100)",
+            "CREATIVES(60)",
+            "RECOMMENDATIONS(30)",
+            "KEYWORDS(25)",
+            "SIMILAR(15)"
+        ).forEach { tier ->
+            assertTrue("the tier weight $tier is missing", body.contains(tier))
         }
-        // ...and the ranking is still score first, then tier order.
+        // ...and the ranking is still score first, strongest tier second, then
+        // source order.
         assertTrue(
-            body.contains("sortedWith(compareByDescending<BywCandidate> { it.score }.thenBy { it.order })")
+            "the ranking must be the blend's own",
+            body.contains("compareByDescending<BlendCandidate> { blendScore(it, seedGenreIds) }") &&
+                body.contains(".thenByDescending { it.strongestTier()?.weight ?: 0 }") &&
+                body.contains(".thenBy { it.order }")
         )
         // Filtering happens AFTER scoring: the gate is downstream of the sort.
+        val pipeline = blendPipeline()
         assertTrue(
-            body.indexOf("sortedWith(compareByDescending<BywCandidate>") <
-                body.indexOf("bywKidsGate(")
+            pipeline.indexOf("blendRank(scored, seedGenreIds)") <
+                pipeline.indexOf("blendKidsGate(")
         )
     }
 
     @Test
     fun `the existing dedupes still run before the ceiling`() {
-        val body = bywBody()
+        val body = blendBody()
 
         assertTrue(
             "an unposter-ed candidate is still refused at add time",
-            body.contains("if (poster.isNullOrBlank()) return")
+            body.contains("if (posterPath.isNullOrBlank()) return")
         )
         assertTrue(
             "the finished title itself is still refused",
-            body.contains("if (candidateTmdbId == detail.id) return")
+            body.contains("if (tmdbId == detail.id) return")
         )
-        // Watched history is resolved over the ranked pool, and the kids gate
-        // only ever sees what survived it.
+        // Watched history is resolved while the ranked list is walked, and the
+        // kids gate only ever sees what survived it.
+        val pipeline = blendPipeline()
         assertTrue(
-            body.indexOf("repo.resolveImdbId(pick.tmdbId, pick.type)") <
-                body.indexOf("bywKidsGate(")
+            pipeline.indexOf(
+                "repo.resolveImdbId(candidate.pick.tmdbId, candidate.pick.type)"
+            ) < pipeline.indexOf("blendKidsGate(")
         )
     }
 
     @Test
     fun `the ceiling is the profile's own setting, not a hardcoded rating`() {
-        val body = bywBody()
+        val body = blendBody()
+        val wrapper = bywWrapperBody()
 
         assertTrue(
             "the gate must call KidsMode, not reimplement the scale",
@@ -342,11 +371,11 @@ class BecauseYouWatchedKidsGateTest {
         )
         assertTrue(
             "and the ceiling reaches the gate from the caller",
-            body.contains("kidsMaxAge = kidsMaxAge")
+            wrapper.contains("kidsMaxAge = kidsMaxAge")
         )
         assertTrue(
             "null by default, so a caller that passes nothing gets today's row",
-            body.contains("kidsMaxAge: Int? = null")
+            wrapper.contains("kidsMaxAge: Int? = null")
         )
     }
 
@@ -413,7 +442,7 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `the player's gate passes the bounded cached lookup`() {
-        val certify = bywBody().substringAfter("certify = { candidate ->").take(300)
+        val certify = bywWrapperBody().substringAfter("certify = { candidate ->").take(300)
 
         assertTrue(
             "the injected lookup is the repository's cached one",
@@ -423,7 +452,7 @@ class BecauseYouWatchedKidsGateTest {
             "with the player's timeout",
             certify.contains("timeoutMs = BYW_CERT_TIMEOUT_MS")
         )
-        val calls = bywBody().split("repo.usCertification(").size - 1
+        val calls = bywWrapperBody().split("repo.usCertification(").size - 1
         assertEquals("one certification call site, not a second uncached one", 1, calls)
     }
 
@@ -435,15 +464,12 @@ class BecauseYouWatchedKidsGateTest {
         score: Int,
         type: String = "movie",
         genres: List<Int>? = null
-    ) = BywCandidate(
-        pick = BywPick(
+    ) = BlendCandidate(
+        pick = BlendPick(
             tmdbId = id,
             type = type,
             name = name,
-            posterUrl = "poster$id",
-            backdropUrl = null,
-            logoUrl = null,
-            overview = null
+            posterPath = "poster$id"
         ),
         score = score,
         order = id,
@@ -455,27 +481,56 @@ class BecauseYouWatchedKidsGateTest {
 
     /** A certification lookup that answers from [byName], the way the repo's
      * cached detail read does (a miss reads as unknown). */
-    private fun certifyFrom(byName: Map<String, String?>): suspend (BywCandidate) -> String? =
+    private fun certifyFrom(byName: Map<String, String?>): suspend (BlendCandidate) -> String? =
         { candidate -> byName[candidate.pick.name] }
 
-    /** `buildBecauseYouWatchedPicks`, whitespace-collapsed. */
-    private fun bywBody(): String {
-        val file = source(BYW)
-        assertTrue("the pick engine is missing", file.contains("internal suspend fun buildBecauseYouWatchedPicks("))
-        assertTrue("the gate is missing", file.contains("internal suspend fun bywKidsGate("))
+    /** The shared blend engine, whitespace-collapsed: every tier and rule. */
+    private fun blendBody(): String {
+        val file = source(BLEND)
+        assertTrue(
+            "the recommendation engine is missing",
+            file.contains("internal suspend fun buildRecommendationBlend(")
+        )
+        assertTrue("the gate is missing", file.contains("internal suspend fun blendKidsGate("))
+        return file.replace(Regex("\\s+"), " ")
+    }
+
+    /**
+     * The blend's own build order: the builder and everything after it, so the
+     * internal helper declarations above cannot make an "A comes before B"
+     * assertion true for the wrong reason.
+     */
+    private fun blendPipeline(): String {
+        val file = source(BLEND)
+        assertTrue(
+            "the recommendation engine is missing",
+            file.contains("internal suspend fun buildRecommendationBlend(")
+        )
         return file
-            .substringAfter("internal suspend fun buildBecauseYouWatchedPicks(")
-            .substringBefore("internal data class BywCandidate(")
+            .substringAfter("internal suspend fun buildRecommendationBlend(")
             .replace(Regex("\\s+"), " ")
     }
 
-    /** [bywKidsGate] itself, whitespace-collapsed. */
+    /** [blendKidsGate] itself, whitespace-collapsed. */
     private fun gateBody(): String {
-        val file = source(BYW)
-        assertTrue("the gate is missing", file.contains("internal suspend fun bywKidsGate("))
+        val file = source(BLEND)
+        assertTrue("the gate is missing", file.contains("internal suspend fun blendKidsGate("))
         return file
-            .substringAfter("internal suspend fun bywKidsGate(")
-            .substringBefore("internal fun activeKidsMaxAge()")
+            .substringAfter("internal suspend fun blendKidsGate(")
+            .substringBefore(" * The reason line one pick shows")
+            .replace(Regex("\\s+"), " ")
+    }
+
+    /** The player's own wrapper (`buildBecauseYouWatchedPicks`), collapsed. */
+    private fun bywWrapperBody(): String {
+        val file = source(BYW)
+        assertTrue(
+            "the player's pick engine is missing",
+            file.contains("internal suspend fun buildBecauseYouWatchedPicks(")
+        )
+        return file
+            .substringAfter("internal suspend fun buildBecauseYouWatchedPicks(")
+            .substringBefore("/** The blend's pick, as the panel's own card shape")
             .replace(Regex("\\s+"), " ")
     }
 
@@ -502,6 +557,7 @@ class BecauseYouWatchedKidsGateTest {
 
     private companion object {
         const val BYW = "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt"
+        const val BLEND = "com/kennyb1201/kbstream/data/tmdb/RecommendationBlend.kt"
         const val NATIVE = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val MPV = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val EXTERNAL = "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"

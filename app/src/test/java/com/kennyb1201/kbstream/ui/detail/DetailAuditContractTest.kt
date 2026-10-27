@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -385,6 +386,213 @@ class DetailAuditContractTest {
         }
     }
 
+    // ── Taste: the thumbs the action row gained ─────────────────────────────
+
+    /**
+     * The two signals sit on the title's own page, after the Library toggle, and
+     * in that order: like first, dislike beside it. The ORDER is what is pinned
+     * here - the row is the page's primary control strip, and a re-ordered row is
+     * how a viewer presses the wrong thumb.
+     */
+    @Test
+    fun `the TV action row runs play, random, trailer, bookmark, like, dislike`() {
+        val src = normalized(tv)
+        val rowStart = src.indexOf("KBCard( onClick = openStreams,")
+        val rowEnd = src.indexOf(
+            "Column( modifier = Modifier .padding( start = 24.dp,",
+            rowStart.coerceAtLeast(0)
+        )
+        assertTrue("the action row could not be located", rowStart >= 0 && rowEnd > rowStart)
+        val row = src.substring(rowStart, rowEnd)
+
+        val order = listOf(
+            "R.drawable.ic_brand_play",
+            "R.drawable.ic_detail_shuffle",
+            "R.drawable.ic_detail_trailer",
+            "R.drawable.ic_detail_bookmark_outline",
+            "pressTaste(TasteSignals.LIKE)",
+            "pressTaste(TasteSignals.DISLIKE)"
+        ).map { needle ->
+            row.indexOf(needle).also { at ->
+                assertTrue("the row no longer carries $needle", at >= 0)
+            }
+        }
+        assertEquals("the controls have to stay in reading order", order.sorted(), order)
+    }
+
+    /**
+     * Both rows paint four marks, and paint them from the STORE: a thumb set from
+     * a poster menu (or the other screen) has to flip this one without a revisit,
+     * and a press may never claim a signal that did not persist.
+     */
+    @Test
+    fun `both Detail rows carry all four thumb marks, painted from the store`() {
+        listOf("the TV row" to normalized(tv), "the phone's" to normalized(mobile))
+            .forEach { (who, src) ->
+                listOf(
+                    "R.drawable.ic_detail_thumb_up_outline",
+                    "R.drawable.ic_detail_thumb_up_filled",
+                    "R.drawable.ic_detail_thumb_down_outline",
+                    "R.drawable.ic_detail_thumb_down_filled"
+                ).forEach { mark ->
+                    assertTrue("$who no longer paints $mark", src.contains(mark))
+                }
+                assertTrue(
+                    "$who has to read the signal from the store",
+                    src.contains("rememberTasteSignal(")
+                )
+                assertTrue(
+                    "$who has to turn the press into the next signal through the " +
+                        "shared rule (the active thumb clears, the other flips)",
+                    src.contains("TasteSignals.nextSignal(")
+                )
+                assertTrue(
+                    "and report the outcome",
+                    src.contains("Couldn't save your rating")
+                )
+            }
+    }
+
+    /**
+     * The phone's added row is its own: PLAY and TRAILER already take the full
+     * width of the row above, so the thumbs sit in a second row between it and
+     * the START OVER button rather than being squeezed in beside them.
+     */
+    @Test
+    fun `the phone gives the thumbs their own row under the action row`() {
+        val src = normalized(mobile)
+        val bookmark = src.indexOf("R.drawable.ic_detail_bookmark_outline")
+        val like = src.indexOf("pressTaste(TasteSignals.LIKE)")
+        val dislike = src.indexOf("pressTaste(TasteSignals.DISLIKE)")
+        val startOver = src.indexOf("label = \"START OVER\"")
+
+        assertTrue("the thumbs follow the Library toggle", bookmark >= 0 && like > bookmark)
+        assertTrue("like and dislike stay in that order", dislike > like)
+        assertTrue("and the pair stays above the row's later controls", startOver > dislike)
+    }
+
+    /**
+     * Nothing else grows a thumb. Every rail reaches the signal through the
+     * poster menu's rows, not through a glyph on the card - the watched
+     * checkmark/eye badge family owns card corners - so the only sources that
+     * may name these drawables are the two Detail screens.
+     */
+    @Test
+    fun `the thumbs exist only in the two Detail action rows`() {
+        assertEquals(
+            "a thumb anywhere else is a surface the spec did not put one on",
+            listOf(
+                "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
+                "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
+            ),
+            productionSources()
+                .filter { (_, text) -> text.contains("ic_detail_thumb") }
+                .map { (path, _) -> path }
+                .sorted()
+        )
+    }
+
+    /**
+     * v1 is local, and that is a property of the code, not a promise: neither
+     * tracker API this app talks to has a rating write, the sync payload has no
+     * carrier for the signals, and there is no preference gating them. Any of the
+     * three appearing means the feature grew an endpoint, a carrier or a switch
+     * nobody asked for.
+     */
+    @Test
+    fun `no tracker rating write, no sync key and no preference for taste`() {
+        listOf(SIMKL_API, TRAKT_API).forEach { path ->
+            assertFalse(
+                "$path gained a rating call - a thumb press must not claim a " +
+                    "tracker action it did not take",
+                normalized(source(path)).contains("rating")
+            )
+        }
+        val mdbList = normalized(source(MDBLIST))
+        listOf("sync/ratings", "@POST(", "/rate").forEach { write ->
+            assertFalse("MDBList is read-only here; it gained $write", mdbList.contains(write))
+        }
+        assertFalse(
+            "the signals are device-local in v1: a sync key means a carrier was added",
+            normalized(source(SYNC_PAYLOAD)).contains("taste")
+        )
+        assertFalse(
+            "and there is no taste preference to switch them off with",
+            normalized(source(APP_PREFS)).lowercase().contains("taste")
+        )
+    }
+
+    /**
+     * The store is one more profile-scoped blob, not a new kind of store: its
+     * file has to come from `ProfileStorage`, which is what keeps a kids or guest
+     * profile's signals to itself, and its state has to re-read on a switch.
+     */
+    @Test
+    fun `the taste store is scoped like every other profile store`() {
+        val store = normalized(source(TASTE_STORE))
+        assertTrue(
+            "the store must resolve its file through the profile namespacing",
+            store.contains("ProfileStorage.prefsName(")
+        )
+        assertTrue(
+            "and a profile switch has to be noticed",
+            store.contains("private var loadedFor")
+        )
+    }
+
+    /**
+     * The four marks are one glyph in two states each: same box, same baked
+     * colour, and an outline that is its filled mark's own open variant rather
+     * than a copy of it. Copied from Google's published Material paths (the
+     * bookmark pair's rule), so the anchors below are segments those paths carry.
+     */
+    @Test
+    fun `the thumb pairs share their box and colour and differ by state`() {
+        val upOutline = drawable("ic_detail_thumb_up_outline.xml").readText()
+        val upFilled = drawable("ic_detail_thumb_up_filled.xml").readText()
+        val downOutline = drawable("ic_detail_thumb_down_outline.xml").readText()
+        val downFilled = drawable("ic_detail_thumb_down_filled.xml").readText()
+
+        listOf(
+            "the up outline" to upOutline,
+            "the up filled" to upFilled,
+            "the down outline" to downOutline,
+            "the down filled" to downFilled
+        ).forEach { (who, xml) ->
+            listOf(
+                "android:width=\"24dp\"",
+                "android:height=\"24dp\"",
+                "android:viewportWidth=\"24\"",
+                "android:viewportHeight=\"24\"",
+                "#FFF3EFE4",
+                "android:pathData=\"M"
+            ).forEach { part ->
+                assertTrue("$who thumb is missing $part", xml.contains(part))
+            }
+        }
+
+        assertTrue(
+            "the filled up mark keeps Material's solid body",
+            upFilled.contains("M1 21h4V9H1v12z")
+        )
+        assertTrue(
+            "the outline up mark is the published open variant, not the filled path",
+            upOutline.contains("M14 2L7.59 8.41") &&
+                !upOutline.contains("M1 21h4V9H1v12z")
+        )
+        assertTrue(
+            "the filled down mark is the published mirror of it",
+            downFilled.contains("M15 3H6c-.83 0-1.54.5-1.84 1.22")
+        )
+        assertTrue(
+            "and the outline down mark is its open variant",
+            downOutline.contains("M10 22l6.41-6.41") &&
+                !downOutline.contains("M15 3H6c-.83")
+        )
+        assertNotEquals("a state pair cannot be one file", upOutline, upFilled)
+        assertNotEquals("a state pair cannot be one file", downOutline, downFilled)
+    }
+
     /** `src/main` for this module, the root the drawable directory hangs off. */
     private val mainRoot: File get() = sourceRoot.parentFile
 
@@ -408,5 +616,14 @@ class DetailAuditContractTest {
             n++
             from = at + needle.length
         }
+    }
+
+    private companion object {
+        const val SIMKL_API = "com/kennyb1201/kbstream/data/simkl/SimklApiService.kt"
+        const val TRAKT_API = "com/kennyb1201/kbstream/data/trakt/TraktApiService.kt"
+        const val MDBLIST = "com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt"
+        const val SYNC_PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
+        const val APP_PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
+        const val TASTE_STORE = "com/kennyb1201/kbstream/data/library/TasteSignals.kt"
     }
 }

@@ -52,6 +52,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.notifications.AirReminderRules
 import com.kennyb1201.kbstream.data.notifications.AirReminderStore
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -143,13 +144,21 @@ data class PosterContextAction(
  *  0. Open / navigate - "Go to Details", "Open in Grid", "Add to Home"
  *  1. Playback - "Play Manually", "Play from Beginning", "Resume"
  *  2. Library - "Add to Library" / "In Library ✓", "Add to list…"
- *  3. Reminders - "Remind me when it airs"
- *  4. Watched - any "Mark …" row
- *  5. Anything else the caller adds
- *  6. Destructive last - "Hide", "Remove"
+ *  3. Taste - "Like this title" / "Liked ✓", "Dislike this title" / "Disliked ✓"
+ *  4. Reminders - "Remind me when it airs"
+ *  5. Watched - any "Mark …" row
+ *  6. Anything else the caller adds
+ *  7. Destructive last - "Hide", "Remove"
+ *
+ * Taste sits directly under the library rows because both are the viewer's own
+ * verdict on the title (keep it / rate it) rather than something the app does
+ * with it, and above the reminder because a reminder is about a future episode
+ * while a signal is about the title as it stands. It is ranked by LABEL PREFIX,
+ * not by who added the row, so the TV panel and the phone sheet - which build
+ * their rows independently - still order them the same way.
  */
 internal fun contextMenuSectionRank(action: PosterContextAction): Int = when {
-    action.isDestructive -> 6
+    action.isDestructive -> 7
     action.label == "Add to Home" ||
         action.label.startsWith("Go to") ||
         action.label.startsWith("Open") -> 0
@@ -160,9 +169,10 @@ internal fun contextMenuSectionRank(action: PosterContextAction): Int = when {
         action.label.startsWith("Remove from Library") ||
         action.label.startsWith("Add to My List") ||
         action.label.startsWith("Remove from My List") -> 2
-    action.label.startsWith("Remind") -> 3
-    action.label.startsWith("Mark") -> 4
-    else -> 5
+    action.label.startsWith("Like") || action.label.startsWith("Dislike") -> 3
+    action.label.startsWith("Remind") -> 4
+    action.label.startsWith("Mark") -> 5
+    else -> 6
 }
 
 /**
@@ -214,6 +224,116 @@ fun rememberHiddenTitleKeys(): Set<String> {
     val context = LocalContext.current
     val version by HiddenTitles.version.collectAsStateWithLifecycle()
     return remember(version) { HiddenTitles.keys(context) }
+}
+
+/**
+ * The active profile's taste signal for one title, re-read whenever the store
+ * changes, so a thumb set from a poster menu flips the Detail page's own row
+ * without a revisit - and the other way round. Same repaint rule as the
+ * library toggle's [LibraryAdds.revision]: state is painted from the store,
+ * never from the last press.
+ *
+ * [ids] are the spellings this surface knows, in the watched-key order (the
+ * resolved IMDB flavor first, the raw `tmdb:<n>` second); the name and year
+ * bridge the two id namespaces when only one of them is known.
+ */
+@Composable
+fun rememberTasteSignal(
+    mediaType: String?,
+    title: String?,
+    year: Int?,
+    ids: List<String?>
+): String? {
+    val context = LocalContext.current
+    val version by TasteSignals.version.collectAsStateWithLifecycle()
+    return remember(version, mediaType, title, year, ids) {
+        TasteSignals.signalFor(context, mediaType, title, year, ids)
+    }
+}
+
+/**
+ * The taste rows one title's menu carries: "Like this title" / "Liked ✓" and
+ * the dislike pair.
+ *
+ * Built here rather than at the two menus' call sites (the TV panel and the
+ * phone sheet) for the same reason the library rows are: a long press has to
+ * mean the same thing on both, and a signal set from a rail has to be the same
+ * signal the title's own page paints. The title's identity is the menu's own
+ * [HideTarget] - the id spellings the surface already knows - so the store keys
+ * a press here exactly as it keys a press from Detail.
+ *
+ * The labels carry the state-mark pattern the library and reminder rows use
+ * ("Liked ✓"), and the press reports through the shared feedback channel: a
+ * row that changes what the app thinks of a title while saying nothing is
+ * indistinguishable from a row that failed. Pressing the active thumb clears
+ * it, pressing the other flips it (see [TasteSignals.nextSignal]).
+ */
+internal fun tasteMenuActions(
+    context: android.content.Context,
+    target: HideTarget,
+    feedback: KBFeedbackState,
+    dismiss: () -> Unit
+): List<PosterContextAction> {
+    val current = TasteSignals.signalFor(
+        context = context,
+        mediaType = target.mediaType,
+        title = target.title,
+        year = target.year,
+        ids = target.ids
+    )
+
+    val press: (String) -> Unit = { signal ->
+        val next = TasteSignals.nextSignal(current, signal)
+        val stored = if (next == null) {
+            TasteSignals.clearSignal(
+                context = context,
+                mediaType = target.mediaType,
+                title = target.title,
+                year = target.year,
+                ids = target.ids
+            )
+        } else {
+            TasteSignals.setSignal(
+                context = context,
+                mediaType = target.mediaType,
+                title = target.title,
+                posterUrl = target.posterUrl,
+                year = target.year,
+                ids = target.ids,
+                signal = next
+            )
+        }
+        feedback.show(
+            text = when {
+                !stored -> "Couldn't save your rating"
+                next == null -> "Rating removed: ${target.title}"
+                next == TasteSignals.LIKE -> "Liked: ${target.title}"
+                else -> "Disliked: ${target.title}"
+            },
+            isError = !stored
+        )
+        dismiss()
+    }
+
+    return listOf(
+        PosterContextAction(
+            label = if (current == TasteSignals.LIKE) "Liked ✓" else "Like this title",
+            description = if (current == TasteSignals.LIKE) {
+                "Already liked on this profile"
+            } else {
+                "Tell the recommendations you like this title"
+            }
+        ) { press(TasteSignals.LIKE) },
+        PosterContextAction(
+            label =
+                if (current == TasteSignals.DISLIKE) "Disliked ✓" else "Dislike this title",
+            description = if (current == TasteSignals.DISLIKE) {
+                "Already disliked on this profile"
+            } else {
+                "Keep this title out of your recommendations"
+            }
+        ) { press(TasteSignals.DISLIKE) }
+    )
 }
 
 /**
@@ -589,6 +709,15 @@ fun PosterContextMenu(
                     libraryPickTarget = target
                 }
             )
+        }
+
+        // The taste rows, for any menu that is about a title at all (the same
+        // hide target the library rows key off). A menu built around one
+        // episode - Continue Watching, the season and episode lists - passes
+        // no hide target and so offers no thumbs, which is right: a signal is
+        // about a title, and those rows are about a file.
+        hideTarget?.let { target ->
+            addAll(tasteMenuActions(context, target, feedback, dismiss))
         }
 
         if (reminderShowId != null && libraryTarget != null) {

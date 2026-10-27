@@ -28,25 +28,23 @@ import androidx.core.content.ContextCompat
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
-import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.runCatchingCancellable
-import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
+import com.kennyb1201.kbstream.data.tmdb.BYW_CERT_TIMEOUT_MS
+import com.kennyb1201.kbstream.data.tmdb.BYW_PICK_COUNT
+import com.kennyb1201.kbstream.data.tmdb.BlendParams
+import com.kennyb1201.kbstream.data.tmdb.BlendPick
+import com.kennyb1201.kbstream.data.tmdb.BlendWatchedMode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.buildRecommendationBlend
 import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
-import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
-import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -76,6 +74,12 @@ internal data class BywPick(
     val backdropUrl: String?,
     val logoUrl: String?,
     val overview: String?,
+    /**
+     * Why this pick is here, one short line ("Directed by ...", "Same
+     * series", "Similar theme: heist"). Filled by the shared blend; the card
+     * renders it under the name.
+     */
+    val reason: String? = null,
     var imdbId: String? = null
 )
 
@@ -86,89 +90,27 @@ internal fun bywMediaType(parentType: String): String = when (parentType.lowerca
 }
 
 /**
- * How many picks the credits row fills in.
+ * The credits row's picks: the shared recommendation blend, with the player's
+ * own parameters.
  *
- * Seven, not six: the row is built from a wrap-content set of cards packed to
- * the left, so the six it used to stop at left a visible gap at the end of the
- * line while the end-credits arrangement has the whole screen's width to fill.
- * One more card closes that gap without pushing the row into its scroll.
- */
-private const val BYW_PICK_COUNT = 7
-
-/**
- * How many scored candidates the kids gate certifies: twice the row, so a
- * candidate the ceiling turns away still leaves room for the row to fill.
- */
-internal const val BYW_KIDS_CERT_POOL = BYW_PICK_COUNT * 2
-
-/** Animation (16) and Family (10751): the two genres a kids title's picks should
- * come from when the finished title is one of them. */
-internal val BYW_KIDS_GENRES = setOf(16, 10751)
-
-/** Ceiling on one candidate's certification fetch (see [bywKidsGate]). */
-internal const val BYW_CERT_TIMEOUT_MS = 4_000L
-
-/**
- * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
- * blended toward a 6.5 prior worth 200 votes. The cast tier used to sort by
- * `popularity`, which is why "Because you watched Ted Lasso" filled up with talk
- * shows — a guest spot on a nightly show is very popular but rates ~5-6, so it
- * outranked the scripted work the actor is actually known for. This ranks a
- * well-reviewed credit of theirs first and makes a single 9.5 from a dozen
- * voters unable to jump the queue.
- */
-private fun personCreditRank(credit: TmdbPersonCredit): Double {
-    val votes = (credit.voteCount ?: 0).coerceAtLeast(0).toDouble()
-    val average = credit.voteAverage ?: 0.0
-    return (average * votes + 6.5 * 200.0) / (votes + 200.0)
-}
-
-/**
- * True when a credit is the person appearing as themselves rather than playing a
- * role: talk and award shows, documentaries, archive-footage cameos. TMDB
- * credits these as "Himself" / "Herself" / "Self - Guest" / "(1998) (archive
- * footage)". Without this the cast tier spends one of its four slots per person
- * on a guest appearance — a suggestion for a show rather than for the actor's
- * work.
- */
-private fun isSelfAppearance(character: String?): Boolean {
-    val role = character?.lowercase()?.trim().orEmpty()
-    if (role.isEmpty()) return false
-    if (role.contains("archive footage")) return true
-    return role.startsWith("self") ||
-        role.startsWith("himself") ||
-        role.startsWith("herself") ||
-        role.startsWith("themselves")
-}
-
-/**
- * Builds the because-you-watched lineup as a weighted blend of four signals, then
- * de-dupes against what this profile already watched:
+ * The tiers, the scoring, the ranking, the reason labels and the kids ceiling
+ * all live in [buildRecommendationBlend] - one engine, shared with Detail's
+ * "More Like This" rail, so the two surfaces cannot drift apart. This function
+ * is the player's own wrapper around it and supplies only what is genuinely the
+ * panel's:
  *
- *  1. SAME FRANCHISE (weight 100) — the TMDB collection the finished title
- *     belongs to, minus its own entry. "You finished Fast Five -> here's Fast &
- *     Furious 6" is the single most-wanted next watch.
- *  2. SAME KEY CREATIVES (weight 60) — other works by the director(s) and
- *     top-billed cast via combined credits, ranked by rating weight
- *     (personCreditRank) rather than popularity. People are the strongest taste
- *     signal in the data.
- *  3. TMDB RECOMMENDATIONS (weight 30) — the content engine; good genre-adjacent
- *     fill but generic on its own.
- *  4. SAME KEYWORDS (weight 25) — TMDB keywords ("heist", "space western")
- *     sharpen the theme match when they exist.
+ *  - the finished title's detail as the seed;
+ *  - the SAME FRANCHISE tier, which belongs to this surface only (Detail's
+ *    Collections rail already carries the saga);
+ *  - seven picks;
+ *  - the DROP watched rule: this panel suggests something NEW to watch, so a
+ *    title this profile has already seen is gone rather than pushed down;
+ *  - hidden titles dropped, the same rule Detail's rail uses;
+ *  - the profile's own Kids Mode ceiling, certified through the repository's
+ *    cached lookup with the player's bounded timeout.
  *
- * Earlier tiers win ties; within a tier the source order stands (TMDB sorts by
- * its own relevance). Already-watched titles, the finished title itself, and
- * unposter-ed entries are dropped.
- *
- * On a KIDS profile every one of those tiers can surface adult content - the
- * ratings are never consulted while the blend is built, so a kids profile was
- * recommended That '70s Show after Moana - and [kidsMaxAge] is what stops it:
- * the candidates are scored exactly as above, then the profile's own ceiling
- * ([KidsMode.allowed], the same rule every rail uses) decides who survives, and
- * the row shows what survives rather than backfilling with content the ceiling
- * rejected. [kidsMaxAge] is null for an ordinary profile, which keeps this
- * function's output byte-for-byte what it was and makes no certification call.
+ * A null [kidsMaxAge] is an ordinary profile: the ceiling never runs and no
+ * certification fetch is made.
  */
 internal suspend fun buildBecauseYouWatchedPicks(
     ctx: Context,
@@ -181,308 +123,49 @@ internal suspend fun buildBecauseYouWatchedPicks(
         repo.getDetailByTmdbId(tmdbId, mediaType)
     }.getOrNull() ?: return emptyList()
 
-    // "Because you watched Ted Lasso" came back all talk shows: the cast tier
-    // takes each person's top works by popularity, and a guest spot on a nightly
-    // talk show out-popularizes every scripted credit they have. Same for TMDB's
-    // own recommendation blob now and then. Drop the unscripted formats - unless
-    // the title being watched IS one, in which case they are exactly the right
-    // suggestion.
-    val parentIsUnscripted = detail.genres.any { it.id in UNSCRIPTED_TV_GENRES }
-    val keepScripted: (List<Int>?) -> Boolean = { genreIds ->
-        keepRecommendedGenre(genreIds, parentIsUnscripted)
-    }
-
-    // What this profile has already watched (any parent id, completed or
-    // started): the ids come back as imdb ids / raw stream ids, so the filter
-    // below normalizes through the same tmdb->imdb resolution.
-    val watchedParentIds = runCatchingCancellable {
-        WatchHistoryDatabase.getInstanceScoped(ctx)
-            .watchHistoryDao()
-            .getAll()
-            .map { it.parentId }
-            .toHashSet()
-    }.getOrNull() ?: HashSet()
-
-    val candidates = LinkedHashMap<Int, BywCandidate>()
-    var order = 0
-
-    fun addCandidate(
-        candidateTmdbId: Int,
-        type: String,
-        name: String,
-        poster: String?,
-        backdrop: String?,
-        overview: String?,
-        score: Int,
-        genreIds: List<Int>? = null
-    ) {
-        if (candidateTmdbId <= 0) return
-        if (candidateTmdbId == detail.id) return
-        if (poster.isNullOrBlank()) return
-        val existing = candidates[candidateTmdbId]
-        if (existing != null) {
-            // Keep the higher score but original position. A genre-less first
-            // sighting (the franchise tier) adopts the ids a later tier knows,
-            // so the kids pre-filter below can see what the list endpoints saw.
-            val merged = existing.copy(
-                score = maxOf(score, existing.score),
-                genreIds = existing.genreIds ?: genreIds
-            )
-            if (merged != existing) candidates[candidateTmdbId] = merged
-            return
-        }
-        candidates[candidateTmdbId] = BywCandidate(
-            pick = BywPick(
-                tmdbId = candidateTmdbId,
-                type = type,
-                name = name,
-                posterUrl = poster?.let { TmdbRepository.POSTER_BASE + it },
-                backdropUrl = backdrop?.let { TmdbRepository.BACKDROP_BASE + it },
-                logoUrl = null,
-                overview = overview?.takeIf { it.isNotBlank() },
-                imdbId = null
-            ),
-            score = score,
-            order = order++,
-            genreIds = genreIds
-        )
-    }
-
-    // T1: franchise - same collection, ordered by release date so the "next"
-    // entry of the saga is the first suggestion.
-    val collectionId = detail.belongsToCollection?.id
-    if (collectionId != null) {
-        runCatchingCancellable {
-            repo.getKBCollectionItems(collectionId)
-        }.getOrNull().orEmpty()
-            .sortedBy { it.releaseDate.orEmpty() }
-            .forEach { part ->
-                addCandidate(
-                    candidateTmdbId = part.id,
-                    type = "movie",
-                    name = part.title ?: part.name.orEmpty(),
-                    poster = part.posterPath,
-                    backdrop = null,
-                    overview = null,
-                    score = 100
-                )
-            }
-    }
-
-    // T2: key creatives - directors first, then top-billed cast, using combined
-    // credits. Each person contributes their top few works.
-    val people = buildList {
-        addAll(
-            detail.credits?.crew.orEmpty()
-                .filter { it.job.equals("Director", ignoreCase = true) }
-                .map { it.id }
-        )
-        addAll(
-            detail.credits?.cast.orEmpty()
-                .sortedBy { it.order }
-                .take(3)
-                .map { it.id }
-        )
-    }.distinct().take(4)
-
-    if (people.isNotEmpty()) {
-        coroutineScope {
-            people.map { personId ->
-                async(Dispatchers.IO) {
-                    runCatchingCancellable {
-                        repo.getPerson(personId)
-                    }.getOrNull()
-                }
-            }.awaitAll()
-        }.filterNotNull().forEach { person ->
-            person.combinedCredits?.cast.orEmpty()
-                .filter { credit ->
-                    val type = credit.mediaType.orEmpty()
-                    (type == "movie" || type == "tv") &&
-                        !credit.posterPath.isNullOrBlank() &&
-                        !isSelfAppearance(credit.character) &&
-                        keepScripted(credit.genreIds)
-                }
-                // Rank by rating weight, not popularity: a talk-show guest spot
-                // is popular but rated ~5-6, so popularity handed the row to The
-                // Tonight Show.
-                .sortedByDescending { personCreditRank(it) }
-                .take(4)
-                .forEach { credit ->
-                    addCandidate(
-                        candidateTmdbId = credit.id,
-                        type = if (credit.mediaType == "tv") "series" else "movie",
-                        name = credit.title ?: credit.name.orEmpty(),
-                        poster = credit.posterPath,
-                        backdrop = null,
-                        overview = null,
-                        score = 60,
-                        genreIds = credit.genreIds
+    return runCatchingCancellable {
+        buildRecommendationBlend(
+            BlendParams(
+                context = ctx,
+                repo = repo,
+                detail = detail,
+                mediaType = bywMediaType(mediaType),
+                seedName = detail.title ?: detail.name.orEmpty(),
+                pickCount = BYW_PICK_COUNT,
+                includeFranchise = true,
+                watchedMode = BlendWatchedMode.DROP,
+                kidsMaxAge = kidsMaxAge,
+                dropHidden = true,
+                // The profile's taste signals, so a title this viewer thumbed
+                // down is never suggested to them here either (the same rule
+                // More Like This applies). Local and profile-scoped.
+                taste = TasteSignals.snapshot(ctx),
+                certify = { candidate ->
+                    repo.usCertification(
+                        tmdbId = candidate.pick.tmdbId,
+                        mediaType = candidate.pick.type,
+                        timeoutMs = BYW_CERT_TIMEOUT_MS
                     )
                 }
-        }
-    }
-
-    // T3: TMDB's own recommendation engine.
-    detail.recommendations?.results.orEmpty()
-        .filter { !it.posterPath.isNullOrBlank() && keepScripted(it.genreIds) }
-        .take(10)
-        .forEach { rec ->
-            addCandidate(
-                candidateTmdbId = rec.id,
-                type = if (rec.name != null) "series" else "movie",
-                name = (rec.title ?: rec.name).orEmpty(),
-                poster = rec.posterPath,
-                backdrop = rec.backdropPath,
-                overview = rec.overview,
-                score = 30,
-                genreIds = rec.genreIds
             )
-        }
-
-    // T4: keyword neighbors when the title carries them.
-    val keywordIds = detail.keywords.list().map { it.id }.take(3)
-    if (keywordIds.isNotEmpty()) {
-        keywordIds.forEach { kw ->
-            runCatchingCancellable {
-                repo.getKeywordItems(kw, mediaType)
-            }.getOrNull().orEmpty()
-                .take(6)
-                .forEach { item ->
-                    addCandidate(
-                        candidateTmdbId = item.id,
-                        type = if (mediaType == "series") "series" else "movie",
-                        name = item.name ?: item.title.orEmpty(),
-                        poster = item.posterPath,
-                        backdrop = item.backdropPath,
-                        overview = item.overview,
-                        score = 25
-                    )
-                }
-        }
-    }
-
-    // Resolve imdb ids only for the survivors (the final ordering), so the
-    // stream resolution on PLAY doesn't burn a lookup burst. The pool is a few
-    // wider than the row: the watched-history filter below cuts into it, and a
-    // pool the same size as the row would then show a short row. A kids profile
-    // needs a deeper pool still, because its ceiling can turn away candidates
-    // after this cut and the row must still be able to fill.
-    val poolSize = if (kidsMaxAge == null) BYW_PICK_COUNT + 5 else BYW_KIDS_CERT_POOL
-    val ranked = candidates.values
-        .sortedWith(compareByDescending<BywCandidate> { it.score }.thenBy { it.order })
-        .toList()
-        .take(poolSize)
-
-    val deduped = ranked.filter { candidate ->
-        val pick = candidate.pick
-        // Cross-check watch history by tmdb id: history stores imdb ids, so
-        // resolve lazily (single lookup per finalist) - candidates whose imdb id
-        // matches a watched parent are dropped.
-        val imdb = runCatchingCancellable {
-            repo.resolveImdbId(pick.tmdbId, pick.type)
-        }.getOrNull()
-        pick.imdbId = imdb
-        val seen = imdb != null && imdb in watchedParentIds
-        !seen
-    }
-
-    // An ordinary profile: exactly the row this always built, from exactly the
-    // pool it always used, with no certification lookups at all.
-    if (kidsMaxAge == null) return deduped.take(BYW_PICK_COUNT).map { it.pick }
-
-    // A kids profile: the cheap genre pre-filter, then the profile's own
-    // ceiling, then the row. Certifications are CACHED TMDB detail reads (see
-    // TmdbRepository.usCertification), so a second build for the same finished
-    // title pays for nothing it already resolved.
-    val gated = bywKidsGate(
-        candidates = bywKidsGenrePool(
-            candidates = deduped,
-            parentGenreIds = detail.genres.map { it.id }
-        ),
-        kidsMaxAge = kidsMaxAge,
-        certify = { candidate ->
-            repo.usCertification(
-                tmdbId = candidate.pick.tmdbId,
-                mediaType = candidate.pick.type,
-                timeoutMs = BYW_CERT_TIMEOUT_MS
-            )
-        }
-    )
-    return gated.map { it.pick }
+        )
+    }.getOrNull().orEmpty().map { it.toBywPick() }
 }
 
-/**
- * One scored because-you-watched candidate, before the kids gate.
- *
- * [genreIds] is what the candidate's own list endpoint carried: the
- * recommendation and combined-credits tiers have them, the franchise and
- * keyword tiers do not. Null means "not known", never "neither".
- */
-internal data class BywCandidate(
-    val pick: BywPick,
-    val score: Int,
-    val order: Int,
-    val genreIds: List<Int>? = null
+/** The blend's pick, as the panel's own card shape (paths -> the URLs it loads). */
+private fun BlendPick.toBywPick(): BywPick = BywPick(
+    tmdbId = tmdbId,
+    type = type,
+    name = name,
+    posterUrl = posterPath?.let { TmdbRepository.POSTER_BASE + it },
+    backdropUrl = backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+    logoUrl = null,
+    overview = overview,
+    reason = reason,
+    imdbId = imdbId
 )
 
-/**
- * The kids ceiling's cheap pre-filter: when the finished title is itself
- * Animation (16) or Family (10751), a candidate that shares NEITHER genre is
- * obviously not the same kind of thing the child was watching, so it is dropped
- * before anything is spent certifying it.
- *
- * A pre-filter, not the gate - the certification check decides. Candidates
- * whose genres are unknown are KEPT: "unknown" is not "neither", and dropping
- * them here would empty a row the ceiling itself would have passed.
- */
-internal fun bywKidsGenrePool(
-    candidates: List<BywCandidate>,
-    parentGenreIds: List<Int>
-): List<BywCandidate> {
-    if (parentGenreIds.none { it in BYW_KIDS_GENRES }) return candidates
-    return candidates.filter { candidate ->
-        val genres = candidate.genreIds
-        genres.isNullOrEmpty() || genres.any { it in BYW_KIDS_GENRES }
-    }
-}
 
-/**
- * The kids ceiling's gate over an already-scored, already-deduped list:
- * certify every candidate concurrently, keep the ones the profile's ceiling
- * allows, and take the top [BYW_PICK_COUNT] survivors.
- *
- * A null ceiling is not this profile's business: the list comes back exactly as
- * it went in and [certify] is never called, which is what keeps an ordinary
- * profile's row identical - and free of certification requests.
- *
- * Fewer than seven survivors means a shorter row. It is never backfilled with
- * content above the ceiling: the whole point of the ceiling is that the
- * alternative is worse than a gap.
- */
-internal suspend fun bywKidsGate(
-    candidates: List<BywCandidate>,
-    kidsMaxAge: Int?,
-    certify: suspend (BywCandidate) -> String?
-): List<BywCandidate> {
-    if (kidsMaxAge == null) return candidates
-    return coroutineScope {
-        val ratings = candidates
-            .map { candidate ->
-                async(Dispatchers.IO) {
-                    // A lookup that fails or runs out of time reads as
-                    // "unrated", which KidsMode.allowed resolves with its
-                    // known-unknown rule: one unresolvable certification must
-                    // not take the whole row down with it.
-                    runCatchingCancellable { certify(candidate) }.getOrNull()
-                }
-            }
-            .awaitAll()
-        candidates
-            .filterIndexed { index, _ -> KidsMode.allowed(kidsMaxAge, ratings[index]) }
-            .take(BYW_PICK_COUNT)
-    }
-}
 
 /**
  * The active profile's Kids Mode ceiling, or null for an ordinary profile.
@@ -1068,6 +751,31 @@ internal class BecauseYouWatchedUi(
                 )
             }
             card.addView(name)
+
+            // WHY this pick is here: one short line from the shared blend,
+            // "Directed by ...", "Same series", "Similar theme: heist". A
+            // second caption line rather than a replacement for the year and
+            // rating below it - "why" and "should I bother" are different
+            // questions, and the row is wide enough for both. Accent-tinted so
+            // the reason reads as the panel talking rather than as metadata,
+            // and held to the poster's width so every card keeps one pitch.
+            pick.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                card.addView(
+                    TextView(host).apply {
+                        text = reason
+                        textSize = 9f
+                        setTextColor(themeAccentColor(host))
+                        maxWidth = dp(108)
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.END
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        setPadding(0, dp(3), 0, 0)
+                        typeface = androidx.core.content.res.ResourcesCompat.getFont(
+                            host, R.font.oswald_medium
+                        )
+                    }
+                )
+            }
 
             // Year + length under the name: enough to compare picks without
             // focusing each one. Filled by the metadata pass.

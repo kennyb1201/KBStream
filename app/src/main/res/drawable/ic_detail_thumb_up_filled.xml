@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Like this title: a filled thumbs-up.
+
+     The ACTIVE state of the detail header's like toggle (see
+     ic_detail_thumb_up_outline, and ic_detail_bookmark_filled for the row's
+     geometry): 24x24 viewport, the same box and baked kb_text_hi (#FFF3EFE4) as
+     every other glyph in the row, so the button does not change size or weight
+     when the signal lands. One mark that fills, rather than two unrelated
+     glyphs.
+
+     Path data is Google's Material Icons "thumb_up" (24 unit viewport), copied
+     rather than hand-drawn: the forearm fills x 7..20 and the separate cuff bar
+     sits at x 1..5, both solid, which is what makes the filled state read as a
+     decision at the 18dp the header renders it at. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFF3EFE4"
+        android:pathData="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z" />
+</vector>

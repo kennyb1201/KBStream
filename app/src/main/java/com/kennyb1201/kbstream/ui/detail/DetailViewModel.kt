@@ -31,7 +31,13 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.tmdb.BlendParams
+import com.kennyb1201.kbstream.data.tmdb.BlendWatchedMode
+import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendationItem
+import com.kennyb1201.kbstream.data.tmdb.TmdbRecommendations
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import com.kennyb1201.kbstream.data.tmdb.buildRecommendationBlend
 import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -207,6 +213,15 @@ internal fun resumeMatchesCompletedEpisode(
                 )
     }
 }
+
+/**
+ * How many picks More Like This paints on the TV rail (the phone takes the
+ * first 20 of the same list, as it always has).
+ *
+ * The blend builds the TV rail's size and both screens trim from it, so the
+ * two surfaces describe the same list.
+ */
+private const val MLT_PICK_COUNT = 30
 
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val repository = AddonRepository.getInstance()
@@ -1728,6 +1743,93 @@ for ((metaAddon, response, error) in probeResults) {
                             // separates "no video on TMDB" from "we hid it".
                             "videos=${detail?.videos?.results?.size}"
                     )
+                    // "More Like This", from the shared recommendation blend.
+                    //
+                    // The trimmed list set above is now the FALLBACK: it paints
+                    // the rail at once and stays exactly where it is if the
+                    // blend answers nothing, so a thin TMDB payload never
+                    // leaves the rail empty. The blend itself runs after the
+                    // page is up, so the header, the episodes, the people and
+                    // the collection never wait for it.
+                    //
+                    // Franchise is deliberately OFF here: the Collections rail
+                    // sits directly above this one and already carries the
+                    // saga, so a franchise tier in More Like This would repeat
+                    // the same posters a rail higher up.
+                    val blendSeed = detail ?: return@onSuccess
+                    viewModelScope.launch {
+                        val blended = runCatchingCancellable {
+                            buildRecommendationBlend(
+                                BlendParams(
+                                    context = app,
+                                    repo = tmdbRepository,
+                                    detail = blendSeed,
+                                    mediaType = normalizedType,
+                                    seedName = blendSeed.title
+                                        ?: blendSeed.name.orEmpty(),
+                                    pickCount = MLT_PICK_COUNT,
+                                    includeFranchise = false,
+                                    watchedMode = BlendWatchedMode.DEMOTE,
+                                    // The profile's taste signals, so a title
+                                    // this viewer thumbed down is not served
+                                    // back to them on this rail. Local and
+                                    // profile-scoped, read here rather than
+                                    // pushed in.
+                                    taste = TasteSignals.snapshot(app)
+                                )
+                            )
+                        }.getOrNull().orEmpty()
+                        if (blended.isEmpty()) return@launch
+
+                        // The children's ceiling and the digital-release filter
+                        // are this screen's own rules, applied ONCE to the
+                        // whole blend - the same two rules the trimming above
+                        // applied to the recommendations list, not a per-tier
+                        // copy of them.
+                        var items = blended.map { pick ->
+                            TmdbRecommendationItem(
+                                id = pick.tmdbId,
+                                title = pick.name.takeIf { pick.type != "series" },
+                                name = pick.name.takeIf { pick.type == "series" },
+                                posterPath = pick.posterPath,
+                                backdropPath = pick.backdropPath,
+                                overview = pick.overview,
+                                releaseDate = pick.releaseDate,
+                                firstAirDate = pick.firstAirDate,
+                                voteAverage = pick.voteAverage,
+                                genreIds = pick.genreIds,
+                                reason = pick.reason
+                            )
+                        }
+                        if (tmdbRepository.kidsMaxAge() != null) {
+                            items = tmdbRepository.kidsFilter(items) {
+                                it.id to normalizedType
+                            }
+                        }
+                        if (tmdbRepository.isDigitalFilterEnabled()) {
+                            items = tmdbRepository.filterByHomeAvailability(items) {
+                                it.id to normalizedType
+                            }
+                        }
+                        // A load the viewer has already left (or a newer one
+                        // for another title) owns the page now: an answer that
+                        // lands late must not repaint it.
+                        if (detailKey != loadedDetailKey) return@launch
+                        val current = _tmdbDetail.value ?: return@launch
+                        if (current.id != blendSeed.id) return@launch
+                        if (items.isEmpty()) return@launch
+                        _tmdbDetail.value = current.copy(
+                            recommendations = (
+                                current.recommendations ?: TmdbRecommendations()
+                                ).copy(results = items)
+                        )
+                        Log.e(
+                            "KBStream",
+                            "recs blend type=$normalizedType id=${blendSeed.id} " +
+                                "picks=${items.size} franchise=off"
+                        )
+                    }
+
                     val collectionId = detail?.belongsToCollection?.id
                     // The collection row is the only thing this call feeds,
                     // and nothing else on the load path reads it - so it runs

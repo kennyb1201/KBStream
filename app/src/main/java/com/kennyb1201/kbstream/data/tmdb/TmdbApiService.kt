@@ -81,6 +81,30 @@ interface TmdbApiService {
         @Query("append_to_response") append: String = "combined_credits"
     ): TmdbPersonDetail
 
+    /**
+     * TMDB's own similarity endpoint: "which titles are most like this one".
+     *
+     * The results are the movie/tv list shape - the same items a detail
+     * payload's `recommendations` carries - so they parse as
+     * [TmdbRecommendations] and feed the blend's fill-only tier. Separate from
+     * `recommendations`, which is a different (and shorter) TMDB list: on titles
+     * where the recommendation blob is thin, this is what still fills the row.
+     */
+    @GET("movie/{id}/similar")
+    suspend fun getMovieSimilar(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbRecommendations
+
+    /** See [getMovieSimilar]. */
+    @GET("tv/{id}/similar")
+    suspend fun getTvSimilar(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbRecommendations
+
     @GET("collection/{id}")
     suspend fun getCollection(
         @Path("id") id: Int,

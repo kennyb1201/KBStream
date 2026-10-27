@@ -93,12 +93,14 @@ import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.RatingChipSource
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.WatchedCheckBadge
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
@@ -352,6 +354,64 @@ fun DetailScreenMobile(
         var libraryMenu by remember { mutableStateOf(false) }
         LaunchedEffect(libraryTarget, LibraryAdds.revision) {
             inLibrary = LibraryAdds.inMyList(context, libraryTarget)
+        }
+
+        // Taste, the pair of thumbs under this row (the row itself is full at
+        // phone width). The identity is the same id pair the store keys on
+        // everywhere else - the TMDB id plus the resolved IMDB one - so a thumb
+        // here and a thumb on the title's poster in a rail are ONE signal. The
+        // year rides along for the name fallback between the two namespaces.
+        val tasteYear: Int? = (tmdbDetail?.releaseDate ?: tmdbDetail?.firstAirDate)
+            ?.take(4)
+            ?.toIntOrNull()
+        val tasteIds = remember(type, id, tmdbDetail?.id) {
+            listOf(
+                id.takeIf { it.startsWith("tt") },
+                tmdbDetail?.id?.let { "tmdb:$it" }
+            )
+        }
+        // Painted from the store, never from the last press (see
+        // rememberTasteSignal).
+        val tasteSignal = rememberTasteSignal(
+            mediaType = normalizedType,
+            title = libraryTarget.title,
+            year = tasteYear,
+            ids = tasteIds
+        )
+        // Same action as the TV row and the poster menus' rows, reported
+        // through this surface's channel: a toast, because the phone has no
+        // app-wide feedback banner.
+        fun pressTaste(signal: String) {
+            val next = TasteSignals.nextSignal(tasteSignal, signal)
+            val stored = if (next == null) {
+                TasteSignals.clearSignal(
+                    context = context,
+                    mediaType = normalizedType,
+                    title = libraryTarget.title,
+                    year = tasteYear,
+                    ids = tasteIds
+                )
+            } else {
+                TasteSignals.setSignal(
+                    context = context,
+                    mediaType = normalizedType,
+                    title = libraryTarget.title,
+                    posterUrl = posterUrl,
+                    year = tasteYear,
+                    ids = tasteIds,
+                    signal = next
+                )
+            }
+            Toast.makeText(
+                context,
+                when {
+                    !stored -> "Couldn't save your rating"
+                    next == null -> "Rating removed"
+                    next == TasteSignals.LIKE -> "Liked"
+                    else -> "Disliked"
+                },
+                Toast.LENGTH_SHORT
+            ).show()
         }
         // The TV's ladder, not "the add-on's logo, else the title": TMDB's
         // English clearlogo or nothing (the add-on `logo` is a bare URL with no
@@ -1206,6 +1266,77 @@ fun DetailScreenMobile(
                                         } else {
                                             "Add to My List"
                                         },
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Taste, in its own row under the action row: PLAY and
+                        // TRAILER already take the full width of the one above,
+                        // so two more 48dp plates would either squeeze the
+                        // primary control or wrap onto a line of their own
+                        // anyway. Same plates, same 22dp glyphs, same order as
+                        // the TV row: like first, dislike beside it, outline
+                        // until the signal lands and filled once it has.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            KBCard(
+                                onClick = { pressTaste(TasteSignals.LIKE) },
+                                shape = KBShapePill,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(
+                                            if (tasteSignal == TasteSignals.LIKE) {
+                                                R.drawable.ic_detail_thumb_up_filled
+                                            } else {
+                                                R.drawable.ic_detail_thumb_up_outline
+                                            }
+                                        ),
+                                        // The glyph alone never says what a
+                                        // second press does; TalkBack is told.
+                                        contentDescription =
+                                            if (tasteSignal == TasteSignals.LIKE) {
+                                                "Liked — tap to remove your like"
+                                            } else {
+                                                "Like this title"
+                                            },
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+
+                            KBCard(
+                                onClick = { pressTaste(TasteSignals.DISLIKE) },
+                                shape = KBShapePill,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(
+                                            if (tasteSignal == TasteSignals.DISLIKE) {
+                                                R.drawable.ic_detail_thumb_down_filled
+                                            } else {
+                                                R.drawable.ic_detail_thumb_down_outline
+                                            }
+                                        ),
+                                        contentDescription =
+                                            if (tasteSignal == TasteSignals.DISLIKE) {
+                                                "Disliked — tap to remove your dislike"
+                                            } else {
+                                                "Dislike this title"
+                                            },
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
@@ -2518,6 +2649,19 @@ private fun RecommendationTile(
             rating = item.voteAverage,
             modifier = Modifier.width(tileWidth)
         )
+        // The blend's one-line reason ("Directed by ...", "Same series"): why
+        // this title is in the rail, in the accent under the caption. Same
+        // line on both surfaces.
+        item.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+            Text(
+                text = reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = KBAccent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(tileWidth)
+            )
+        }
     }
 }
 
