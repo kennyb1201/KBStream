@@ -1271,11 +1271,35 @@ class TmdbRepository private constructor(context: Context) :
      * ViewModel. Split into movies/TV (not multi-search) so every result
      * carries a reliable type.
      */
-    suspend fun searchMovies(query: String): List<TmdbSearchTitleResult> {
-        if (apiKey.isBlank()) return emptyList()
+    suspend fun searchMovies(query: String): List<TmdbSearchTitleResult> =
+        searchMoviesOrNull(query).orEmpty()
+
+    suspend fun searchTv(query: String): List<TmdbSearchTitleResult> =
+        searchTvOrNull(query).orEmpty()
+
+    /**
+     * A movie search that keeps FAILURE distinct from an empty answer: null when
+     * the request could not be made at all (no key, an outage, a bad body), the
+     * matches otherwise - possibly none.
+     *
+     * The plain [searchMovies] folds both into `emptyList()` because every
+     * screen says "nothing found" either way, which is the honest thing to
+     * DISPLAY and the wrong thing to act on. The TorBox cloud sync gives up on a
+     * title after a few empty searches and that record never expires, so a TMDB
+     * outage read as "no match" drops torrents for good (sweep 7 M2). Only that
+     * caller needs the difference, so it is here - one extra entry point -
+     * rather than a change to the list-shaped API the whole app reads.
+     *
+     * The availability filter is not part of the distinction, deliberately: it
+     * keeps an item whose verdict it could not learn (see
+     * [filterByHomeAvailability]), so it can hide a title but never report one
+     * as absent because the network failed.
+     */
+    suspend fun searchMoviesOrNull(query: String): List<TmdbSearchTitleResult>? {
+        if (apiKey.isBlank()) return null
         val results =
-            runCatchingCancellable { api.searchMovie(query, apiKey).results }
-                .getOrDefault(emptyList())
+            runCatchingCancellable { api.searchMovie(query, apiKey).results }.getOrNull()
+                ?: return null
 
         if (!isDigitalFilterEnabled()) return results
 
@@ -1284,10 +1308,10 @@ class TmdbRepository private constructor(context: Context) :
         }
     }
 
-    suspend fun searchTv(query: String): List<TmdbSearchTitleResult> {
-        if (apiKey.isBlank()) return emptyList()
-        return runCatchingCancellable { api.searchTv(query, apiKey).results }
-            .getOrDefault(emptyList())
+    /** [searchMoviesOrNull] for television: null on a failed request, not on an empty one. */
+    suspend fun searchTvOrNull(query: String): List<TmdbSearchTitleResult>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable { api.searchTv(query, apiKey).results }.getOrNull()
     }
 
     /**

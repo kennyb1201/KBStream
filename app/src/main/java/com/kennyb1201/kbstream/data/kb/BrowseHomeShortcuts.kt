@@ -68,8 +68,12 @@ object BrowseHomeShortcuts {
     private const val PREFS = "kbstream_browse_home_shortcuts"
     private const val KEY_BLOB = "browse_home_shortcuts_json"
 
-    /** Where an unparseable blob is parked instead of being overwritten. */
+    /** Where an unparseable blob is preserved, beside the original. */
     private const val KEY_BLOB_CORRUPT = "browse_home_shortcuts_json_corrupt"
+
+    /** The unreadable blob already reported, so a read on every Home load is not a log storm. */
+    @Volatile
+    private var loggedUnreadable: String? = null
 
     /**
      * The profile's raw chip blob, verbatim, for the cross-device payload.
@@ -140,22 +144,45 @@ object BrowseHomeShortcuts {
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return emptyList()
         val parsed = runCatching { adapter.fromJson(raw) }.getOrNull()
         if (parsed == null) {
-            // A blob that will not parse used to read as "no chips", and the next
-            // add() saved that emptiness plus the one new chip - the
-            // AddonManager blob wipe one store over. The bad blob is kept (so it
-            // can be inspected or restored) instead of being silently replaced.
-            android.util.Log.w(
-                "BROWSE_SHORTCUTS",
-                "chip blob will not parse; keeping a copy under $KEY_BLOB_CORRUPT and " +
-                    "starting from an empty row"
-            )
-            prefs(context).edit()
-                .putString(KEY_BLOB_CORRUPT, raw)
-                .remove(KEY_BLOB)
-                .apply()
+            archiveUnreadable(context, raw)
             return emptyList()
         }
         return parsed.shortcuts
+    }
+
+    /**
+     * Whether the stored chip blob exists but this build cannot read it.
+     *
+     * The state a caller needs to say so rather than report a write that did
+     * not happen - and the one [save] refuses on (sweep 7 3.11).
+     */
+    fun isBlobUnreadable(context: Context): Boolean {
+        val raw = prefs(context).getString(KEY_BLOB, null) ?: return false
+        return runCatching { adapter.fromJson(raw) }.getOrNull() == null
+    }
+
+    /**
+     * Keeps an unreadable blob where the reader looks, and a copy beside it.
+     *
+     * The blob is NOT removed: it is the viewer's whole chip row, and it is
+     * unreadable because of a shape THIS build does not know (a sideloaded
+     * newer one, a schema drift) - so the next build that can read it restores
+     * the row with no user action. The copy is written once, so a second
+     * corruption cannot overwrite the first one's evidence.
+     */
+    private fun archiveUnreadable(context: Context, raw: String) {
+        if (loggedUnreadable != raw) {
+            loggedUnreadable = raw
+            android.util.Log.w(
+                "BROWSE_SHORTCUTS",
+                "chip blob will not parse; keeping it in place (restored by a build that " +
+                    "can read it), a copy under $KEY_BLOB_CORRUPT, and starting from an " +
+                    "empty row. Writes are refused until it parses again."
+            )
+        }
+        val store = prefs(context)
+        if (store.contains(KEY_BLOB_CORRUPT)) return
+        store.edit().putString(KEY_BLOB_CORRUPT, raw).apply()
     }
 
     fun contains(
@@ -176,8 +203,9 @@ object BrowseHomeShortcuts {
         val current = list(context)
         if (current.any { it.chipKey() == shortcut.chipKey() }) return current
         val updated = current + shortcut
-        save(context, updated)
-        return updated
+        // The list returned is what is STORED, so a refused write cannot read
+        // as an added chip on the screen that asked for it (see [save]).
+        return if (save(context, updated)) updated else current
     }
 
     /** Removes one chip; returns the updated set. */
@@ -190,11 +218,31 @@ object BrowseHomeShortcuts {
         val current = list(context)
         val updated = current.filterNot { it.chipKey() == chipKey(categoryKey, id, name) }
         if (updated.size == current.size) return current
-        save(context, updated)
-        return updated
+        // As in [add]: the returned list is what is stored.
+        return if (save(context, updated)) updated else current
     }
 
-    private fun save(context: Context, shortcuts: List<BrowseHomeShortcut>) {
+    /**
+     * Writes [shortcuts]; false when the write was refused.
+     *
+     * Refused while the stored blob is unreadable (see [archiveUnreadable]):
+     * `list()` has just served an empty row, so saving would replace the
+     * viewer's real chips with that emptiness plus this one edit - the blob wipe
+     * this store's read-side fix stopped from happening silently (sweep 7 3.11).
+     * Nothing is lost by refusing: the blob stays exactly where a build that can
+     * read it will find it, and this session's row is already empty either way.
+     * The cloud adoption path (PrefsPayloadApplier.applyBrowseShortcuts) writes
+     * the blob wholesale, so a valid row from another device still restores it.
+     */
+    private fun save(context: Context, shortcuts: List<BrowseHomeShortcut>): Boolean {
+        if (isBlobUnreadable(context)) {
+            android.util.Log.w(
+                "BROWSE_SHORTCUTS",
+                "refusing to write ${shortcuts.size} chip(s): the stored blob is " +
+                    "unreadable on this build and is the only copy of the viewer's row"
+            )
+            return false
+        }
         // Write the blob AND stamp the local sync marker BEFORE enqueuing, so
         // the pushed payload carries this edit and the pull's staleness guard
         // treats it as already synced — an older sibling-device copy can then
@@ -220,6 +268,7 @@ object BrowseHomeShortcuts {
                     .buildBrowseShortcuts(appContext)
             )
         }
+        return true
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(

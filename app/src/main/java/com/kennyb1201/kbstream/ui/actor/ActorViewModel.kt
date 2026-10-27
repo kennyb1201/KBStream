@@ -184,7 +184,10 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 val result = tmdbRepository.getPerson(personId)
                 // A newer load owns the page now: publish nothing. Everything
                 // below - the error line, the spinner and the two follow-up
-                // launches - is that page's to set, not this answer's.
+                // launches - is that page's to set, not this answer's; the
+                // follow-ups are handed this generation because nothing cancels
+                // them once this coroutine has returned (see
+                // [loadTopWorkBackdrop]).
                 if (generation != loadGeneration) return@launch
                 _person.value = result
                 _topWorkCredit.value = result?.let { sortedCredits(it).firstOrNull() }
@@ -206,27 +209,41 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
 
             _person.value?.let { loadedPerson ->
                 launch {
-                    resolveAndPreloadWatched(loadedPerson)
+                    resolveAndPreloadWatched(loadedPerson, generation)
                 }
                 launch {
-                    loadTopWorkBackdrop(loadedPerson)
+                    loadTopWorkBackdrop(loadedPerson, generation)
                 }
             }
         }
     }
 
-    private suspend fun loadTopWorkBackdrop(person: TmdbPersonDetail) {
+    /** Whether [generation] still owns the page - see [loadGeneration]. */
+    private fun ownsPage(generation: Int): Boolean = generation == loadGeneration
+
+    /**
+     * The page hero's backdrop for [person]'s top credit.
+     *
+     * [generation] is checked before every publish, because this runs as a CHILD
+     * of the load coroutine: a newer load does not cancel it (nothing cancels a
+     * finished coroutine's children once it has returned), so actor A's backdrop
+     * could land - or be cleared to null - under actor B's header after B had
+     * already set its own (sweep 7 M6). The stale PERSON was already guarded; the
+     * stale backdrop was not.
+     */
+    private suspend fun loadTopWorkBackdrop(person: TmdbPersonDetail, generation: Int) {
         val topCredit = sortedCredits(person).firstOrNull()
+        if (!ownsPage(generation)) return
         _topWorkCredit.value = topCredit
 
         if (topCredit == null) {
-            _topWorkBackdropUrl.value = null
+            if (ownsPage(generation)) _topWorkBackdropUrl.value = null
             return
         }
 
         val normalizedType = normalizeMediaType(topCredit.mediaType)
         if (normalizedType == null) {
-            _topWorkBackdropUrl.value = null
+            if (ownsPage(generation)) _topWorkBackdropUrl.value = null
             return
         }
 
@@ -234,6 +251,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             tmdbRepository.getDetailByTmdbId(topCredit.id, normalizedType)
         }.getOrNull()
 
+        if (!ownsPage(generation)) return
         _topWorkBackdropUrl.value = detail?.backdropPath
             ?.takeIf { it.isNotBlank() }
             ?.let { TmdbRepository.BACKDROP_BASE + it }
@@ -319,7 +337,15 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     private fun keyOwnedByAnotherProfile(key: String, siblingOwned: Set<String>): Boolean =
         siblingOwned.any { id -> key.endsWith("::$id") }
 
-    private suspend fun resolveAndPreloadWatched(person: TmdbPersonDetail) {
+    /**
+     * Resolves the IMDb ids behind this page's credit badges and preloads them.
+     *
+     * [generation] guards every publish for the same reason as
+     * [loadTopWorkBackdrop]: this is a child of the load coroutine, so a stale
+     * page's map could otherwise replace - or, in the catch below, WIPE - the
+     * newer page's badges (sweep 7 M6).
+     */
+    private suspend fun resolveAndPreloadWatched(person: TmdbPersonDetail, generation: Int) {
         try {
             // The badge preload first, and UNCAPPED: every credit's own
             // `tmdb:<n>` flavor, over the whole list rather than the `.take(60)`
@@ -343,7 +369,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 .take(60)
 
             if (cast.isEmpty()) {
-                _resolvedCreditIds.value = emptyMap()
+                if (ownsPage(generation)) _resolvedCreditIds.value = emptyMap()
                 Log.d("ACTOR_WATCHED", "no actor credits eligible for watched preload")
                 return
             }
@@ -371,6 +397,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            if (!ownsPage(generation)) return
             _resolvedCreditIds.value = resolvedMap
 
             if (preloadItems.isEmpty()) {
@@ -390,7 +417,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             // if the work had simply failed.
             throw e
         } catch (e: Exception) {
-            _resolvedCreditIds.value = emptyMap()
+            // Cleared only for the page that owns the state: a stale failure must
+            // not wipe the newer page's badges.
+            if (ownsPage(generation)) _resolvedCreditIds.value = emptyMap()
             Log.e("ACTOR_WATCHED", "resolveAndPreloadWatched failed", e)
         }
     }

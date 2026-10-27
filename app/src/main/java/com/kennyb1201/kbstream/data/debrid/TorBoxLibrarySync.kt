@@ -435,12 +435,15 @@ internal object TorBoxLibrarySync {
      * TMDB search results for [parsed], mapped into [TorBoxCloudRules.Candidate],
      * or NULL when a search could not be made at all.
      *
-     * The null is the whole point: the repository's search methods answer
-     * `emptyList()` for "nothing matched" and for "the request failed" alike
-     * (they collapse every failure through `getOrDefault`), and the two need
-     * opposite treatment here - a no-match may be given up on, a failure may
-     * not. Catching at the call site is what keeps that distinction without
-     * changing a search API the rest of the app reads as a plain list.
+     * The null is the whole point: "nothing matched" may be given up on, "the
+     * request failed" may not. It used to be inferred from a call-site
+     * `runCatching` around the repository's list-shaped search methods - which
+     * was structurally unable to deliver it, because those collapse every
+     * failure into `emptyList()` and never throw, so a TMDB outage still spent
+     * the give-up budget and permanently marked the torrent handled (sweep 7
+     * M2). The distinction now comes from the seam: [TmdbRepository.searchTvOrNull]
+     * and [TmdbRepository.searchMoviesOrNull] answer null for a failed request
+     * and an ordinary list (possibly empty) for an answered one.
      *
      * A name with a season/episode marker is a series, so only the TV search
      * runs; anything else is searched as both a movie and a show, because a
@@ -454,15 +457,12 @@ internal object TorBoxLibrarySync {
         val query = parsed.title
 
         if (TorBoxCloudRules.looksLikeSeries(rawName)) {
-            val shows = runCatchingCancellable { repository.searchTv(query) }.getOrNull()
-                ?: return null
+            val shows = repository.searchTvOrNull(query) ?: return null
             return shows.map { it.toCandidate("series") }
         }
 
-        val movies = runCatchingCancellable { repository.searchMovies(query) }.getOrNull()
-            ?: return null
-        val shows = runCatchingCancellable { repository.searchTv(query) }.getOrNull()
-            ?: return null
+        val movies = repository.searchMoviesOrNull(query) ?: return null
+        val shows = repository.searchTvOrNull(query) ?: return null
         return movies.map { it.toCandidate("movie") } + shows.map { it.toCandidate("series") }
     }
 

@@ -6,9 +6,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The sweep-7 tail in one place: four stores that turned a FAILURE into an
- * ordinary empty answer, and three that rebuilt or re-scoped state they should
- * have carried.
+ * The sweep-7 tail in one place: stores that turned a FAILURE into an ordinary
+ * empty answer, two that preserved an unreadable blob but still let the next
+ * ordinary write replace it, and three that rebuilt or re-scoped state they
+ * should have carried.
  *
  * Each case below is the same rule applied one file further than the last fix
  * reached - a failed fetch, a body that will not parse, or a lineup that changed
@@ -76,13 +77,52 @@ class FailureNotEmptinessContractTest {
     fun `an unparseable home arrangement is kept, not overwritten by the default`() {
         val prefs = source("com/kennyb1201/kbstream/data/kb/KBHomeOrderPrefs.kt")
         assertTrue(
-            "the failed blob is preserved under its own key, the browse-shortcut rule",
+            "a copy of the failed blob is preserved under its own key for evidence",
             prefs.contains("private const val KEY_BLOB_CORRUPT = \"home_order_json_corrupt\"") &&
                 prefs.contains(".putString(KEY_BLOB_CORRUPT, raw)")
         )
         assertTrue(
             "and it is logged, so a schema drift names itself instead of vanishing",
-            prefs.contains("\"home order blob will not parse; keeping a copy under \"")
+            prefs.contains("\"home order blob will not parse; keeping it in place")
+        )
+        assertTrue(
+            "the blob itself stays where the reader looks, so a build that CAN read " +
+                "it restores the arrangement with no user action - removing it here " +
+                "was the last way the arrangement was lost for good",
+            prefs.contains("private fun archiveUnreadable(context: Context, raw: String)") &&
+                // Exactly one removal left: reset(), the viewer's deliberate discard.
+                prefs.split(".remove(KEY_BLOB)").size == 2
+        )
+        assertTrue(
+            "and every write is refused while it is unreadable (sweep 7 3.11): the " +
+                "saved value would be the default arrangement plus one edit",
+            prefs.contains("if (isBlobUnreadable(context)) {") &&
+                prefs.contains("save refused: the stored home order is unreadable") &&
+                prefs.contains("fun isBlobUnreadable(context: Context): Boolean")
+        )
+    }
+
+    @Test
+    fun `an unparseable browse chip row is kept the same way, and its writes refused`() {
+        val shortcuts = source("com/kennyb1201/kbstream/data/kb/BrowseHomeShortcuts.kt")
+        assertTrue(
+            "the chip blob stays in place with an evidence copy beside it",
+            shortcuts.contains("chip blob will not parse; keeping it in place") &&
+                shortcuts.contains(".putString(KEY_BLOB_CORRUPT, raw)")
+        )
+        assertTrue(
+            "add/remove report what is STORED, so a refused write cannot read as an " +
+                "added chip on the screen that asked for it",
+            shortcuts.contains("return if (save(context, updated)) updated else current")
+        )
+        assertTrue(
+            "and the refusal itself is the shared read/write rule of the blob family",
+            shortcuts.contains("if (isBlobUnreadable(context)) {") &&
+                shortcuts.contains("private fun save(context: Context, shortcuts: List<BrowseHomeShortcut>): Boolean")
+        )
+        assertFalse(
+            "no path removes the blob on a parse failure any more",
+            shortcuts.contains(".remove(KEY_BLOB)")
         )
     }
 
@@ -119,6 +159,79 @@ class FailureNotEmptinessContractTest {
             "and a catalog grid by the catalog it opened",
             source("com/kennyb1201/kbstream/ui/mobile/CatalogGridScreenMobile.kt")
                 .contains("val gridState = key(title, addonName) { rememberLazyGridState() }")
+        )
+    }
+
+    @Test
+    fun `a failed TMDB search reaches the cloud sync as a failure, not an empty answer`() {
+        val tmdb = source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
+        assertTrue(
+            "the seam now answers null for a request that could not be made, and a " +
+                "list - possibly empty - for one that was: a `runCatching` around the " +
+                "old list-shaped methods could never tell them apart, because those " +
+                "collapse every failure through getOrDefault and never throw",
+            tmdb.contains(
+                "suspend fun searchMoviesOrNull(query: String): List<TmdbSearchTitleResult>?"
+            ) &&
+                tmdb.contains(
+                    "suspend fun searchTvOrNull(query: String): List<TmdbSearchTitleResult>?"
+                )
+        )
+        assertTrue(
+            "and the display-shaped methods stay the plain lists every screen reads",
+            tmdb.contains("searchMoviesOrNull(query).orEmpty()") &&
+                tmdb.contains("searchTvOrNull(query).orEmpty()")
+        )
+        val sync = source("com/kennyb1201/kbstream/data/debrid/TorBoxLibrarySync.kt")
+        assertTrue(
+            "the sync asks the failure-distinct seam, so a TMDB outage leaves the " +
+                "torrent unrecorded instead of spending the irreversible give-up budget",
+            sync.contains("repository.searchTvOrNull(query) ?: return null") &&
+                sync.contains("repository.searchMoviesOrNull(query) ?: return null")
+        )
+        assertFalse(
+            "the call-site catch that claimed the distinction while being unable to " +
+                "deliver it is gone",
+            sync.contains("runCatchingCancellable { repository.searchTv(query) }") ||
+                sync.contains("runCatchingCancellable { repository.searchMovies(query) }")
+        )
+    }
+
+    @Test
+    fun `a superseded actor or collection load cannot publish its follow-ups`() {
+        val actor = source("com/kennyb1201/kbstream/ui/actor/ActorViewModel.kt")
+        assertTrue(
+            "the actor's backdrop and badge follow-ups are handed the load's " +
+                "generation - they are children of the load coroutine, which a newer " +
+                "load does not cancel",
+            actor.contains("loadTopWorkBackdrop(loadedPerson, generation)") &&
+                actor.contains("resolveAndPreloadWatched(loadedPerson, generation)")
+        )
+        assertTrue(
+            "and they re-check it before every publish, including the clears",
+            actor.contains(
+                "private fun ownsPage(generation: Int): Boolean = generation == loadGeneration"
+            ) &&
+                actor.split("ownsPage(generation)").size >= 4
+        )
+        assertTrue(
+            "the stale-failure branch no longer wipes the newer page's badge map",
+            actor.contains("if (ownsPage(generation)) _resolvedCreditIds.value = emptyMap()")
+        )
+
+        val collection = source("com/kennyb1201/kbstream/ui/collection/CollectionViewModel.kt")
+        assertTrue(
+            "the same follow-up in Collection takes the generation it is running for",
+            collection.contains("resolveAndPreload(detail.parts.map { it.id }, generation)") &&
+                collection.contains(
+                    "private suspend fun resolveAndPreload(tmdbIds: List<Int>, generation: Int)"
+                )
+        )
+        assertTrue(
+            "and guards its publishes and its catch branch with it",
+            collection.contains(
+                "private fun ownsPage(generation: Int): Boolean = generation == loadGeneration"
+            ) && collection.contains("if (ownsPage(generation)) _resolvedIds.value = emptyMap()")
         )
     }
 

@@ -241,7 +241,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 viewModelScope.launch {
                     loadHeaderBackdrop(collectionId, generation)
                 }
-                resolveAndPreload(detail.parts.map { it.id })
+                resolveAndPreload(detail.parts.map { it.id }, generation)
             }
         }
     }
@@ -261,7 +261,20 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         _headerBackdropUrl.value = url
     }
 
-    private suspend fun resolveAndPreload(tmdbIds: List<Int>) {
+    /** Whether [generation] still owns the page - see [loadGeneration]. */
+    private fun ownsPage(generation: Int): Boolean = generation == loadGeneration
+
+    /**
+     * Resolves the IMDb ids behind this collection's part badges and preloads
+     * them.
+     *
+     * [generation] guards the publish for the same reason
+     * [loadHeaderBackdrop] takes it: this runs INLINE in the load coroutine,
+     * which a newer load does not cancel, so parts' resolutions can finish after
+     * the next collection is on screen and replace - or, in the catch below,
+     * wipe - its badge map (sweep 7 M6).
+     */
+    private suspend fun resolveAndPreload(tmdbIds: List<Int>, generation: Int) {
         if (tmdbIds.isEmpty()) return
 
         // The badge preload, UNCAPPED and ahead of the resolution below: parts
@@ -304,6 +317,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             if (resolved.isEmpty()) return
+            if (!ownsPage(generation)) return
 
             _resolvedIds.value = resolved.mapNotNull { (tmdbId, imdbId) ->
                 imdbId?.let { lookupKey(tmdbId, "movie") to it }
@@ -319,7 +333,9 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             throw e
         } catch (e: Exception) {
             Log.e("COLLECTION_VM", "resolveAndPreload failed: ${e.message}", e)
-            _resolvedIds.value = emptyMap()
+            // Cleared only for the page that owns the state: a stale failure
+            // must not wipe the newer collection's badges.
+            if (ownsPage(generation)) _resolvedIds.value = emptyMap()
         }
     }
 

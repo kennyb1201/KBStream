@@ -341,6 +341,10 @@ object KBHomeOrderPrefs {
 
     private const val TAG = "KB_HOME_ORDER"
 
+    /** The unreadable blob already reported, so a read on every Home load is not a log storm. */
+    @Volatile
+    private var loggedUnreadable: String? = null
+
     /**
      * Last arrangement this device considers already synced (mirrors the key
      * [PrefsPayloadApplier.applyHomeOrder] reads). Written on every local save
@@ -785,18 +789,10 @@ object KBHomeOrderPrefs {
             // A blob that will not parse used to read as "no arrangement" with
             // no log, and the next read-modify-write caller saved that default
             // (plus its one move) over the viewer's entire Home order. The bad
-            // blob is preserved under its own key and logged loudly, so a
-            // schema drift from a sideloaded build is diagnosable rather than
-            // silently destructive.
-            Log.w(
-                TAG,
-                "home order blob will not parse; keeping a copy under " +
-                    "$KEY_BLOB_CORRUPT and serving the default arrangement"
-            )
-            prefs(context).edit()
-                .putString(KEY_BLOB_CORRUPT, raw)
-                .remove(KEY_BLOB)
-                .apply()
+            // blob is kept IN PLACE (see [archiveUnreadable]) and logged loudly,
+            // so a schema drift from a sideloaded build is diagnosable rather
+            // than silently destructive - and [save] refuses to write over it.
+            archiveUnreadable(context, raw)
             return KBHomeOrder()
         }
         // Repairs the catalogs an older build pinned, on every read path
@@ -805,7 +801,64 @@ object KBHomeOrderPrefs {
         return normalizeHomeOrder(parsed)
     }
 
+    /**
+     * Whether the stored arrangement exists but this build cannot read it.
+     *
+     * The state [save] refuses on, and the one a caller needs to explain a move
+     * that did not stick (sweep 7 3.11).
+     */
+    fun isBlobUnreadable(context: Context): Boolean {
+        val raw = prefs(context).getString(KEY_BLOB, null) ?: return false
+        return runCatching { adapter.fromJson(raw) }.getOrNull() == null
+    }
+
+    /**
+     * Keeps an unreadable blob where the reader looks, and a copy beside it.
+     *
+     * The blob is NOT removed, despite what the old comment here implied: it is
+     * the viewer's whole Home arrangement, it is unreadable because of a shape
+     * THIS build does not know, and the next build that can read it restores the
+     * arrangement with no user action. [reset] is the deliberate discard, and is
+     * the one write that still works while the blob is unreadable. The copy is
+     * written once, so a second corruption cannot overwrite the first one's
+     * evidence.
+     */
+    private fun archiveUnreadable(context: Context, raw: String) {
+        // Once per blob, not once per read: the blob now stays in place, so every
+        // Home load parses the same failure - and a log line per load is noise
+        // that would hide the next real one.
+        if (loggedUnreadable != raw) {
+            loggedUnreadable = raw
+            Log.w(
+                TAG,
+                "home order blob will not parse; keeping it in place (restored by a build " +
+                    "that can read it), a copy under $KEY_BLOB_CORRUPT, and serving the " +
+                    "default arrangement. Writes are refused until it parses again."
+            )
+        }
+        val store = prefs(context)
+        if (store.contains(KEY_BLOB_CORRUPT)) return
+        store.edit().putString(KEY_BLOB_CORRUPT, raw).apply()
+    }
+
     fun save(context: Context, value: KBHomeOrder) {
+        // Refuse to replace a blob this build could not read (see
+        // [archiveUnreadable]): `get()` has just served the default arrangement,
+        // so this write would replace the viewer's whole Home order with that
+        // default plus one edit, and the arrangement would never come back even
+        // on a build that can read the old blob. Nothing is lost by refusing -
+        // this session's arrangement is the default either way - and
+        // [reset] is the deliberate way out. The cloud adoption path
+        // (PrefsPayloadApplier.applyHomeOrder) writes the blob wholesale, so a
+        // valid arrangement from another device still restores it.
+        if (isBlobUnreadable(context)) {
+            Log.w(
+                TAG,
+                "save refused: the stored home order is unreadable on this build, " +
+                    "and it is the only copy of the arrangement"
+            )
+            return
+        }
         // Write the local blob FIRST. buildHomeOrder() below reads this same
         // pref, so enqueuing before the write pushed the PREVIOUS arrangement
         // to the cloud — and because it stamped it "now", the next pull
@@ -842,7 +895,14 @@ object KBHomeOrderPrefs {
         if (updated != current) save(context, updated)
     }
 
-    /** Drop every manual arrangement (used by "Reset order" in Settings). */
+    /**
+     * Drop every manual arrangement (used by "Reset order" in Settings).
+     *
+     * Deliberately NOT guarded by [isBlobUnreadable]: this is the viewer asking
+     * for the arrangement to go, and it is the escape from a blob this build
+     * cannot read (after it, [save] works again). The copy under
+     * [KEY_BLOB_CORRUPT] is left alone - it is the evidence.
+     */
     fun reset(context: Context) {
         prefs(context).edit().remove(KEY_BLOB).apply()
     }
