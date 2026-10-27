@@ -111,9 +111,13 @@ class SourceSwitchSplashContractTest {
             Regex("switchToSource\\(nextStream, isAutoRecovery = true\\)")
                 .findAll(nativeLadder).count()
         )
+        // The in-player SOURCES picker's own row - its selected state is what
+        // marks it, and the row now refuses a hash row before switching (deep
+        // dive S-F2), so the pick is read from the row rather than from one
+        // exact onClick line.
         val manual = readSource(NATIVE)
-            .substringAfter("onClick = { switchToSource(stream); dismissPicker() }")
-            .substringBefore("\n")
+            .substringAfter("isSelected = stream.url == currentUrl")
+            .take(1_200)
         assertFalse(
             "a manual pick must not be marked automatic",
             manual.contains("isAutoRecovery")

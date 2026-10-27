@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,6 +69,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 
 /**
+ * How long the open effect waits between attempts while the rail it needs is
+ * still being built. The phone's page carries the TV grid's own rule (see
+ * CatalogGridScreen): the wait is on the rails, not on a clock.
+ */
+private const val CATALOG_GRID_OPEN_POLL_MS = 100L
+
+/** How long the open effect keeps trying after the rail list stops changing. */
+private const val CATALOG_GRID_OPEN_SETTLE_MS = 2_000L
+
+/** Hard ceiling on the open wait, so a build that never settles gives up. */
+private const val CATALOG_GRID_OPEN_MAX_MS = 30_000L
+
+/** Polls allowed while the restored tile is indexed by the re-collected pager. */
+private const val CATALOG_GRID_RESTORE_STEPS = 20
+
+/**
  * The catalog grid ("Open in Grid" on a Home rail's long-press menu), for a
  * finger.
  *
@@ -90,6 +107,10 @@ import kotlinx.coroutines.flow.map
 fun CatalogGridScreenMobile(
     title: String,
     addonName: String,
+    // The rail's real identity, carried by the route so two rails sharing a
+    // catalog name under one add-on cannot open each other's grid (grid S2).
+    catalogId: String? = null,
+    type: String? = null,
     onItemClick: (MetaPreview) -> Unit,
     onBack: () -> Unit,
     viewModel: HomeViewModel = viewModel()
@@ -97,6 +118,16 @@ fun CatalogGridScreenMobile(
     MobileTheme {
         val header by viewModel.catalogGridHeader.collectAsStateWithLifecycle()
         val paging by viewModel.catalogGridPaging.collectAsStateWithLifecycle()
+
+        // The raw half of the hidden-everything guard below: whether the pager
+        // holds any title at all, whatever the filter then does with them.
+        val catalogGridServed by
+            viewModel.catalogGridServedItems.collectAsStateWithLifecycle()
+
+        // A tile press leaves for a title page - a DETOUR, not an exit (see the
+        // dispose effect below). Recorded by both ways into Detail, so the grid
+        // keeps its loaded pages and the viewer's place for the trip back.
+        var leftForDetail by remember { mutableStateOf(false) }
 
         // Hidden titles leave the grid the same way they leave the rails. The
         // filter rides the paging stream, so hiding a title that is already on
@@ -142,21 +173,38 @@ fun CatalogGridScreenMobile(
         // pop-back lives in the open effect: a fresh open composes one frame
         // with an unseeded grid, and a Back launched from that frame still
         // fires after the seed has landed.
-        LaunchedEffect(title, addonName) {
-            repeat(50) {
-                viewModel.openCatalogInGrid(title, addonName)
+        //
+        // The wait is on the RAILS, not on a clock (grid S1): a cold restore or
+        // a profile switch can still be building rails longer than the fixed
+        // five seconds this used to allow, and it backed out of a grid whose
+        // catalog exists. The loop keeps trying while a build is running or
+        // while the rail list is still landing, and gives up once the list has
+        // been still for CATALOG_GRID_OPEN_SETTLE_MS without this catalog in it
+        // - or at the CATALOG_GRID_OPEN_MAX_MS ceiling.
+        LaunchedEffect(title, addonName, catalogId, type) {
+            var elapsedMs = 0L
+            var settledMs = 0L
+            var lastRailCount = -1
+            while (
+                elapsedMs < CATALOG_GRID_OPEN_MAX_MS &&
+                settledMs < CATALOG_GRID_OPEN_SETTLE_MS
+            ) {
+                viewModel.openCatalogInGrid(title, addonName, catalogId, type)
                 if (viewModel.catalogGridHeader.value != null) {
                     return@LaunchedEffect
                 }
-                delay(100L)
+                delay(CATALOG_GRID_OPEN_POLL_MS)
+                elapsedMs += CATALOG_GRID_OPEN_POLL_MS
+
+                val railCount = viewModel.rails.value.size
+                if (viewModel.isLoading.value || railCount != lastRailCount) {
+                    settledMs = 0L
+                } else {
+                    settledMs += CATALOG_GRID_OPEN_POLL_MS
+                }
+                lastRailCount = railCount
             }
             onBack()
-        }
-
-        DisposableEffect(title, addonName) {
-            onDispose {
-                viewModel.closeCatalogGrid()
-            }
         }
 
         val openHeader = header
@@ -168,6 +216,53 @@ fun CatalogGridScreenMobile(
         // grids do: unkeyed, opening another catalog in the same slot restored
         // the previous one's offset instead of starting at the top.
         val gridState = key(title, addonName) { rememberLazyGridState() }
+
+        // Leaving the grid: a trip to a title page keeps its pager and its
+        // place, any other way out drops them.
+        //
+        // Keyed on Unit on purpose (see the TV grid): what it answers is "is
+        // this screen leaving", and a route-keyed effect would also run for the
+        // grid being replaced in the same slot.
+        DisposableEffect(Unit) {
+            onDispose {
+                if (leftForDetail) {
+                    // Detail is a detour. The pager and its pages stay alive
+                    // (the re-open above is a no-op for the same rail), so all
+                    // this owes the return is the tile the viewer was on.
+                    viewModel.rememberCatalogGridScroll(gridState.firstVisibleItemIndex)
+                } else {
+                    // Any other departure is final: the shared state goes with
+                    // it, so a grid opened later starts fresh instead of
+                    // resuming a catalog the viewer has left.
+                    viewModel.closeCatalogGrid()
+                }
+            }
+        }
+
+        // Back from a title page: put the viewer back on the tile they pressed.
+        // Only the index survives the trip (the composition that held the
+        // scroll state was disposed), so it is applied once the pager has
+        // indexed those pages again - which, with them cached, is the first
+        // pass in practice.
+        var returnRestored by remember { mutableStateOf(false) }
+        LaunchedEffect(title, addonName, lazyItems) {
+            if (returnRestored) return@LaunchedEffect
+            returnRestored = true
+            val restored = viewModel.catalogGridReturnIndex()
+            if (restored <= 0) return@LaunchedEffect
+            val restoredItems = lazyItems ?: return@LaunchedEffect
+            var waits = 0
+            while (
+                restoredItems.itemCount <= restored &&
+                waits < CATALOG_GRID_RESTORE_STEPS
+            ) {
+                delay(CATALOG_GRID_OPEN_POLL_MS)
+                waits++
+            }
+            if (restoredItems.itemCount > restored) {
+                gridState.scrollToItem(restored)
+            }
+        }
 
         if (openHeader == null || lazyItems == null) {
             // The one loading frame (plus a possible cold-restore wait). The
@@ -196,9 +291,10 @@ fun CatalogGridScreenMobile(
                     }
                 }
                 // The screen's way back is here from the first frame: the
-                // catalog can take a moment to seed (and gives up after five
-                // seconds), and a skeleton with no visible exit is exactly the
-                // dead end this pass removes.
+                // catalog can take a moment to seed (the open effect waits on
+                // the rails, and gives up once they settle without it), and a
+                // skeleton with no visible exit is exactly the dead end this
+                // pass removes.
                 MobileBackButton(
                     onBack = onBack,
                     modifier = Modifier
@@ -279,6 +375,25 @@ fun CatalogGridScreenMobile(
                         }
                     }
 
+                    // Every title this catalog served is hidden, so there is
+                    // nothing to draw - but the branch below would say the
+                    // catalog HAS nothing, which is a different fact, and it
+                    // leaves the viewer with no way back from here (the same
+                    // gap Home's all-hidden card and the browse pages close).
+                    // Both halves are required: the served half is true on every
+                    // populated catalog, and the filtered half is true whenever
+                    // the hidden filter removed what was there.
+                    lazyItems.itemCount == 0 && catalogGridServed -> {
+                        item(key = "all_hidden", span = { GridItemSpan(maxLineSpan) }) {
+                            val context = LocalContext.current
+                            GridStatus(
+                                message = "Every title here is hidden.",
+                                action = "UNHIDE ALL",
+                                onAction = { HiddenTitles.unhideAll(context) }
+                            )
+                        }
+                    }
+
                     lazyItems.itemCount == 0 -> {
                         item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                             GridStatus(message = "Nothing to show here.")
@@ -326,7 +441,13 @@ fun CatalogGridScreenMobile(
                             landscape = landscape,
                             isWatched = isWatched,
                             isPartiallyWatched = isPartiallyWatched,
-                            onClick = { onItemClick(meta) },
+                            onClick = {
+                                // A title page is a DETOUR, not an exit: see
+                                // the dispose effect, which keeps the pager and
+                                // the viewer's place for the trip back.
+                                leftForDetail = true
+                                onItemClick(meta)
+                            },
                             onLongClick = { menuTarget = meta }
                         )
                     }
@@ -411,6 +532,10 @@ fun CatalogGridScreenMobile(
                             description = "Open this title's detail page"
                         ) {
                             menuTarget = null
+                            // Same detour the tile press records (see the
+                            // dispose effect): this is the other way into
+                            // Detail.
+                            leftForDetail = true
                             onItemClick(target)
                         },
                         PosterContextAction(

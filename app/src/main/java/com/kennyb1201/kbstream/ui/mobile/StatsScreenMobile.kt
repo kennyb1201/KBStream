@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,8 +35,11 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
+import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.settings.StatsViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -59,6 +63,10 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  * The table still says "finished", never "time watched", for the reason the TV
  * screen documents: one history row per episode is overwritten in place, so a
  * rewatch is not recoverable.
+ *
+ * The one control besides the back arrow is RETRY, and it only exists in the
+ * failure state (see below), where the screen used to have nothing to offer at
+ * all.
  */
 
 @Composable
@@ -69,6 +77,15 @@ fun StatsScreenMobile(
     BackHandler(onBack = onBack)
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // A fresh read on entry, and again whenever the active profile changes -
+    // the same trigger the TV page runs, for the same reason: the view model is
+    // activity-scoped, so without it the numbers froze at the one load this
+    // process made and a profile switch showed the previous profile's figures
+    // under the "this profile's history" subtitle (stats C1).
+    val activeProfileId = ProfileManager.activeProfile
+        .collectAsStateWithLifecycle().value?.id
+    LaunchedEffect(activeProfileId) { viewModel.load() }
 
     MobileTheme {
         LazyColumn(
@@ -103,6 +120,7 @@ fun StatsScreenMobile(
                 }
             }
 
+            val error = state.error
             if (state.loading) {
                 item(key = "loading") {
                     Text(
@@ -111,6 +129,26 @@ fun StatsScreenMobile(
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(top = 8.dp)
                     )
+                }
+            } else if (error != null) {
+                // The read threw. Before this branch the page sat on "Reading
+                // history…" forever with nothing but the back arrow to press
+                // (stats C6).
+                item(key = "error") {
+                    Text(
+                        text = error,
+                        color = KBDanger,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                item(key = "retry") {
+                    KBButton(
+                        label = "RETRY",
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        viewModel.load()
+                    }
                 }
             } else {
                 // ── Headline numbers ─────────────────────────────────────
@@ -152,13 +190,20 @@ fun StatsScreenMobile(
                     }
                 }
 
-                item(key = "streak") {
-                    StreakBadgeMobile(state.streakDays)
+                // Only when there is one: "0 day streak" on a fresh profile
+                // was a figure about nothing watched, under tiles already
+                // saying 0 (stats I1).
+                if (state.streakDays > 0) {
+                    item(key = "streak") {
+                        StreakBadgeMobile(state.streakDays)
+                    }
                 }
 
                 item(key = "top_shows_header") {
+                    // "Titles", not "shows": movies are finished titles and
+                    // rank here (stats C2).
                     Text(
-                        text = "TOP SHOWS",
+                        text = "TOP TITLES",
                         color = KBAccent,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
@@ -235,10 +280,13 @@ private fun StreakBadgeMobile(days: Int) {
     }
 }
 
-/** One top-show line: poster, name, finished runtime and episodes done. */
+/** One ranked line: poster, name, finished runtime and what was finished. */
 @Composable
 private fun TopShowRowMobile(show: TopShow) {
     val context = LocalContext.current
+    // Same labeling rule as the TV row: a movie that ranks here is a finished
+    // movie, not "1 episode finished" (stats C2).
+    val isMovie = show.type.equals("movie", ignoreCase = true)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -285,9 +333,10 @@ private fun TopShowRowMobile(show: TopShow) {
                     append(ViewingStats.formatFinishedRuntime(show.ms))
                     append("  \u00b7  ")
                     append(
-                        when (show.done) {
-                            0 -> "in progress"
-                            1 -> "1 episode finished"
+                        when {
+                            show.done == 0 -> "in progress"
+                            isMovie -> "movie finished"
+                            show.done == 1 -> "1 episode finished"
                             else -> "${show.done} episodes finished"
                         }
                     )

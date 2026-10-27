@@ -203,7 +203,7 @@ class OnboardingAndCatalogGridMobileContractTest {
         assertOrder(
             text,
             "OnboardingScreenMobile",
-            "OnboardingAccountPanelMobile()",
+            "OnboardingAccountPanelMobile(",
             "\"Add Add-ons\"",
             "\"Live TV\"",
             "\"Connect Simkl\"",
@@ -277,7 +277,11 @@ class OnboardingAndCatalogGridMobileContractTest {
 
         // Same ViewModel and data path as the TV grid.
         assertTrue(text.contains("viewModel: HomeViewModel = viewModel()"))
-        assertTrue(text.contains("viewModel.openCatalogInGrid(title, addonName)"))
+        assertTrue(
+            "the grid reopens its rail from the route's whole identity: the name " +
+                "pair alone cannot tell two same-named rails apart (grid S2)",
+            text.contains("viewModel.openCatalogInGrid(title, addonName, catalogId, type)")
+        )
         assertTrue(text.contains("viewModel.closeCatalogGrid()"))
         assertTrue(text.contains("viewModel.catalogGridHeader"))
         assertTrue(text.contains("viewModel.catalogGridPaging"))

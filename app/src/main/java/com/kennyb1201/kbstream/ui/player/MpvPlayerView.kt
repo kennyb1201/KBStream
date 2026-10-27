@@ -1095,17 +1095,25 @@ class MpvPlayerView @JvmOverloads constructor(
 
     /**
      * Applies a subtitle signature remembered for this title
-     * ("language|codec|0"). Falls back to the first track in the signature's
-     * language, so a track that is not in this episode's file still lands on a
-     * track in the language the viewer chose. False when neither matches,
-     * leaving mpv's own choice alone.
+     * ("language|codec|0"). Falls back to the signature's language when the
+     * exact track is not in this episode's file, so a pick survives an encode
+     * change. False when neither matches, leaving mpv's own choice alone.
+     *
+     * The language fallback is KIND-RANKED, not first-wins: the picker writes
+     * the track the viewer actually chose, and the next episode of the same
+     * show routinely carries several tracks in that language (SDH, forced,
+     * signs, a commentary). Taking the first one could hand a viewer who chose
+     * SDH a signs-only track while the button still read as their pick; the
+     * same [rankedSubtitleMatch] the automatic pass uses keeps the kind.
      */
     fun applyRememberedSubtitleTrack(signature: String): Boolean {
         if (!initialized || signature.isBlank()) return false
         val tracks = subtitleTracks()
         val language = signature.split('|').getOrNull(0).orEmpty()
         val match = tracks.firstOrNull { it.signature == signature }
-            ?: tracks.firstOrNull { LanguageMatch.matches(language, it.language) }
+            ?: rankedSubtitleMatch(
+                tracks.filter { LanguageMatch.matches(language, it.language) }
+            )
             ?: return false
         runCatching { MpvBackend.setPropertyInt("sid", match.id) }
         return true
@@ -1855,6 +1863,23 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (!initialized || released) return
         attachSurface()
+        // Nothing may load without a surface, and this path used to be the one
+        // way around that rule: [load] gates on [surfaceAttached], but
+        // [attachSurface] swallows its own failure, so a surface whose attach
+        // threw fell straight through to [startPendingLoad] and opened the file
+        // against a window mpv does not hold. The result is the failure the gate
+        // exists to prevent - audio playing over a black screen, with no error
+        // card, and a stall watchdog that never fires because the audio is still
+        // advancing `time-pos` (audit M-F2, 2026-10-27). A failed attach surfaces
+        // the engine card instead.
+        if (!surfaceAttached) {
+            Log.e(
+                TAG,
+                "surface created but the MPV surface could not be attached; not loading the file"
+            )
+            onEngineFailed?.invoke("The video layer could not be attached on this device.")
+            return
+        }
         // The two halves of the reference player's branch. Which one runs is
         // decided by whether this is the FIRST create ([surfaceCreatedOnce]),
         // not by whether a load is waiting: the surface is created during

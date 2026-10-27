@@ -86,10 +86,14 @@ object OnboardingPrefs {
             .getBoolean(KEY_COMPLETE, false)
 
     fun setComplete(context: Context, complete: Boolean) {
+        // commit(), not apply(): the flag is one-way and written exactly once
+        // per device, so the write costs nothing here - and apply() leaves a
+        // window where a process killed between the tap and the flush came back
+        // to a first-run screen the viewer had already finished (onboarding I2).
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_COMPLETE, complete)
-            .apply()
+            .commit()
     }
 }
 
@@ -117,9 +121,21 @@ object OnboardingPrefs {
  * optional, and the user can finish setup later from Settings. The scroll is
  * insurance for a larger system font scale rather than something anyone should
  * need — focus scrolls the focused control into view on its own.
+ *
+ * The account form's text is owned by the CALLER, not by this screen: the caller
+ * composes this screen only while Home is the current screen, so a `remember`
+ * here was discarded the moment a setup row handed off to Add-ons, Live TV or
+ * Simkl — type the credentials, tap a row to check something first, come back,
+ * and both fields were blank (onboarding C1). See MainActivity's onboarding
+ * branch for why the hoisted pair is a plain `remember` rather than a
+ * `rememberSaveable`.
  */
 @Composable
 fun OnboardingScreen(
+    email: String,
+    onEmailChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenGuide: () -> Unit,
@@ -192,6 +208,10 @@ fun OnboardingScreen(
                 // reachable only from Settings → Sync, so a new install on a
                 // second TV had no obvious way to get any of it.
                 OnboardingAccountPanel(
+                    email = email,
+                    onEmailChange = onEmailChange,
+                    password = password,
+                    onPasswordChange = onPasswordChange,
                     signedInFocusRequester = startBrowsingFocusRequester
                 )
             }
@@ -296,15 +316,23 @@ fun OnboardingScreen(
  * Signing in replaces this whole form with the "SIGNED IN" strip, which holds
  * no focusable node of its own, so the D-pad would be left with nowhere to be;
  * focus is re-aimed there the moment the form goes away.
+ *
+ * The typed credentials arrive from the caller (see [OnboardingScreen]), and
+ * `busy` stays here: it is derived from the auth state, which lives in
+ * SupabaseSync and outlives this panel either way.
  */
 @Composable
-private fun OnboardingAccountPanel(signedInFocusRequester: FocusRequester) {
+private fun OnboardingAccountPanel(
+    email: String,
+    onEmailChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    signedInFocusRequester: FocusRequester
+) {
     val context = LocalContext.current
     val authState by SupabaseSync.authState.collectAsStateWithLifecycle()
     val syncError by SupabaseSync.syncError.collectAsStateWithLifecycle()
 
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(authState) {
@@ -420,7 +448,7 @@ private fun OnboardingAccountPanel(signedInFocusRequester: FocusRequester) {
                 // out of view.
                 KBTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = onEmailChange,
                     placeholder = "Email",
                     keyboardType = KeyboardType.Email,
                     // Committing a field must not drop focus, or the next
@@ -438,7 +466,7 @@ private fun OnboardingAccountPanel(signedInFocusRequester: FocusRequester) {
                 )
                 KBTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = onPasswordChange,
                     placeholder = "Password (6+ characters)",
                     keyboardType = KeyboardType.Password,
                     visualTransformation = PasswordVisualTransformation(),

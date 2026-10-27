@@ -212,13 +212,18 @@ private fun ColumnScope.FolderStatus(
     // A failed load offers RETRY, like every other browse screen's card: the
     // folder is the one surface where a transient failure left the viewer with
     // nothing but Back, and leaving the folder loses their place in it.
-    onRetry: (() -> Unit)? = null
+    onRetry: (() -> Unit)? = null,
+    // What that action says. Retry is the common case; the all-hidden state
+    // below offers UNHIDE ALL, the same action Home's and the browse pages'
+    // cards offer for the same fact.
+    actionLabel: String = "RETRY"
 ) {
     KBStatusMessage(
         message = message,
         loading = loading,
         icon = icon,
         onRetry = onRetry,
+        actionLabel = actionLabel,
         modifier = Modifier
             .fillMaxWidth()
             .weight(1f)
@@ -289,7 +294,12 @@ private fun FolderItemCard(
     cardKey: String,
     focusRegistry: MutableMap<String, FocusRequester>,
     isReturnItem: Boolean = false,
-    returnFocusRequester: FocusRequester? = null
+    returnFocusRequester: FocusRequester? = null,
+    // The page's OWN first card: where an ordinary open puts the D-pad. One card
+    // per page carries it, and only while its rail is the first one drawn (see
+    // the screen's entry landing).
+    isEntryItem: Boolean = false,
+    entryFocusRequester: FocusRequester? = null
 ) {
     val isLandscape = showLandscapeCards
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
@@ -333,10 +343,18 @@ private fun FolderItemCard(
             val cardModifier = focusModifier
                 .focusRequester(cardFocusRequester)
                 .then(
-                    if (isReturnItem && returnFocusRequester != null) {
-                        Modifier.focusRequester(returnFocusRequester)
-                    } else {
-                        Modifier
+                    when {
+                        // The card a return out of Detail is coming back for takes
+                        // the page's return requester; an ordinary open asks the
+                        // page's own first card (they can never be the same card,
+                        // since a return is not an ordinary open).
+                        isReturnItem && returnFocusRequester != null ->
+                            Modifier.focusRequester(returnFocusRequester)
+
+                        isEntryItem && entryFocusRequester != null ->
+                            Modifier.focusRequester(entryFocusRequester)
+
+                        else -> Modifier
                     }
                 )
                 .offset(y = (-3).dp)
@@ -479,6 +497,36 @@ internal fun visibleFolderRails(
 }
 
 /**
+ * The rails one source selection draws: the selected source's own rail, or
+ * every rail for "All".
+ */
+internal fun folderSelectedRails(
+    rails: List<KBRail>,
+    selectedSourceId: String?
+): List<KBRail> =
+    if (selectedSourceId != null) rails.filter { it.sourceId == selectedSourceId } else rails
+
+/**
+ * True when this page served titles at all but hiding left nothing to draw.
+ *
+ * Both halves are required. Without the served half a folder that legitimately
+ * holds nothing would read as "everything here is hidden" - the trap the browse
+ * pages' own all-hidden branches document (see TagScreen). Without the visible
+ * half the ordinary populated folder would claim the same thing, because a
+ * selection with titles in it is non-empty whether or not they are all hidden.
+ * [visible] is the selection AFTER [visibleFolderRails] has dropped the hidden
+ * titles, and a rail the filter emptied is dropped with them - so an empty
+ * visible list over a non-empty selection means every title was hidden.
+ */
+internal fun folderAllHidden(
+    rails: List<KBRail>,
+    selectedSourceId: String?,
+    visible: List<KBRail>
+): Boolean =
+    visible.isEmpty() &&
+        folderSelectedRails(rails, selectedSourceId).any { it.items.isNotEmpty() }
+
+/**
  * The folder hero: delegates to Home's own HomeHero composable so a
  * FOLLOW_LAYOUT folder is a pixel-identical replica of the home hero —
  * same clearlogo, gradients, metadata line and inline trailer player.
@@ -562,6 +610,9 @@ private fun FolderRailPageHandler(
     // card press raises, so a return can put the rail back on screen (see
     // [BrowseReturnFocus]).
     railIndex: Int,
+    // Whether this is the first rail drawn on the page - its first card is where
+    // an ordinary open lands the D-pad.
+    isFirstRail: Boolean,
     railContext: RailCardContext,
     viewModel: KBFolderViewModel,
     onFocusItem: (KBContentItem) -> Unit
@@ -637,7 +688,9 @@ private fun FolderRailPageHandler(
                 cardKey = cardKey,
                 focusRegistry = railContext.focusRegistry,
                 isReturnItem = itemIndex == returnIndex,
-                returnFocusRequester = railContext.returnFocusRequester
+                returnFocusRequester = railContext.returnFocusRequester,
+                isEntryItem = isFirstRail && itemIndex == 0,
+                entryFocusRequester = railContext.entryFocusRequester
             )
         }
     }
@@ -680,7 +733,9 @@ private data class RailCardContext(
     val browseReturnKey: String,
     val focusRegistry: MutableMap<String, FocusRequester>,
     val returnTarget: BrowseReturnTarget?,
-    val returnFocusRequester: FocusRequester
+    val returnFocusRequester: FocusRequester,
+    // The page's own first card, where an ordinary open puts the D-pad.
+    val entryFocusRequester: FocusRequester
 )
 
 // ---------------------------------------------------------------------------
@@ -713,7 +768,12 @@ private fun FollowHomeLayout(
     // Re-runs this folder's load, for the error card's own RETRY (see
     // [FolderStatus]). Threaded from the screen because the grid layout has no
     // ViewModel of its own to ask.
-    onRetryFolder: () -> Unit
+    onRetryFolder: () -> Unit,
+    // Where an ordinary open lands the D-pad: this page's own first card. Every
+    // sibling browse page pins one (see TagScreen.focusFirstCard) - without it
+    // the folder's hero and its source chips are as reachable by the framework's
+    // own traversal as the first poster is.
+    entryFocusRequester: FocusRequester
 ) {
     val context = LocalContext.current
     // Both of these are SYNCED prefs, so the read is keyed on the sync revision:
@@ -742,7 +802,8 @@ private fun FollowHomeLayout(
         browseReturnKey = browseReturnKey,
         focusRegistry = focusRegistry,
         returnTarget = returnTarget,
-        returnFocusRequester = returnFocusRequester
+        returnFocusRequester = returnFocusRequester,
+        entryFocusRequester = entryFocusRequester
     )
 
     // Keyed on the folder id so navigating folder A -> folder B reseeds the
@@ -829,6 +890,18 @@ private fun FollowHomeLayout(
                 )
             state.error != null ->
                 FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
+            // Every title this page served is hidden, so there is nothing to
+            // draw - but the branch below would say the folder HAS nothing,
+            // which is a different fact, and it would leave the viewer with no
+            // way back from here (the same gap Home's all-hidden card and the
+            // browse pages' own branch close).
+            folderAllHidden(state.rails, selectedSourceId, visibleRails) ->
+                FolderStatus(
+                    "Every title here is hidden.",
+                    icon = KB_STATUS_ICON_EMPTY,
+                    onRetry = { HiddenTitles.unhideAll(context) },
+                    actionLabel = "UNHIDE ALL"
+                )
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -858,6 +931,9 @@ private fun FollowHomeLayout(
                                     // The rail item's own index on the page: title,
                                     // then rail, per rail above it.
                                     railIndex = railIndex * 2 + 1,
+                                    // The page's first rail: its first card is where an
+                                    // ordinary open lands the D-pad.
+                                    isFirstRail = railIndex == 0,
                                     railContext = railCardContext,
                                     viewModel = viewModel,
                                     onFocusItem = { heroItem = it }
@@ -907,7 +983,12 @@ private fun RowsLayout(
     // Re-runs this folder's load, for the error card's own RETRY (see
     // [FolderStatus]). Threaded from the screen because the grid layout has no
     // ViewModel of its own to ask.
-    onRetryFolder: () -> Unit
+    onRetryFolder: () -> Unit,
+    // Where an ordinary open lands the D-pad: this page's own first card. Every
+    // sibling browse page pins one (see TagScreen.focusFirstCard) - without it
+    // the folder's hero and its source chips are as reachable by the framework's
+    // own traversal as the first poster is.
+    entryFocusRequester: FocusRequester
 ) {
     val context = LocalContext.current
     // Both of these are SYNCED prefs, so the read is keyed on the sync revision:
@@ -962,6 +1043,18 @@ private fun RowsLayout(
                 )
             state.error != null ->
                 FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
+            // Every title this page served is hidden, so there is nothing to
+            // draw - but the branch below would say the folder HAS nothing,
+            // which is a different fact, and it would leave the viewer with no
+            // way back from here (the same gap Home's all-hidden card and the
+            // browse pages' own branch close).
+            folderAllHidden(state.rails, selectedSourceId, visibleRails) ->
+                FolderStatus(
+                    "Every title here is hidden.",
+                    icon = KB_STATUS_ICON_EMPTY,
+                    onRetry = { HiddenTitles.unhideAll(context) },
+                    actionLabel = "UNHIDE ALL"
+                )
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -1055,7 +1148,9 @@ private fun RowsLayout(
                                         cardKey = cardKey,
                                         focusRegistry = focusRegistry,
                                         isReturnItem = itemIndex == returnIndex,
-                                        returnFocusRequester = returnFocusRequester
+                                        returnFocusRequester = returnFocusRequester,
+                                        isEntryItem = railIndex == 0 && itemIndex == 0,
+                                        entryFocusRequester = entryFocusRequester
                                     )
                                 }
                             }
@@ -1095,7 +1190,12 @@ private fun GridLayout(
     // Re-runs this folder's load, for the error card's own RETRY (see
     // [FolderStatus]). Threaded from the screen because the grid layout has no
     // ViewModel of its own to ask.
-    onRetryFolder: () -> Unit
+    onRetryFolder: () -> Unit,
+    // Where an ordinary open lands the D-pad: this page's own first card. Every
+    // sibling browse page pins one (see TagScreen.focusFirstCard) - without it
+    // the folder's hero and its source chips are as reachable by the framework's
+    // own traversal as the first poster is.
+    entryFocusRequester: FocusRequester
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1106,7 +1206,11 @@ private fun GridLayout(
         // [visibleFolderRails]), so the long-press Hide takes the poster it was
         // pressed on off the grid.
         val hiddenTitleKeys = rememberHiddenTitleKeys()
-        val gridItems = remember(
+        // The VISIBLE rails first, and their flattened items from that: the
+        // all-hidden branch below needs the rails themselves (a selection whose
+        // every title is hidden flattens to an empty list exactly like a folder
+        // with nothing in it), and the grid needs the items.
+        val gridRails = remember(
             state.rails,
             selectedSourceId,
             hiddenTitleKeys,
@@ -1117,10 +1221,11 @@ private fun GridLayout(
             } else {
                 state.rails
             }
-            val seen = mutableSetOf<String>()
             visibleFolderRails(rails, hiddenTitleKeys, resolvedIds)
-                .flatMap { it.items }
-                .filter { seen.add(kbFolderCardKey(it)) }
+        }
+        val gridItems = remember(gridRails) {
+            val seen = mutableSetOf<String>()
+            gridRails.flatMap { it.items }.filter { seen.add(kbFolderCardKey(it)) }
         }
 
         // The poster/landscape choice is a SYNCED pref, so the grid's read goes
@@ -1172,6 +1277,16 @@ private fun GridLayout(
                 )
             state.error != null ->
                 FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
+            // Same fact as the rails' own all-hidden branch above: the grid
+            // would otherwise report the folder as empty when the viewer hid
+            // what it holds (see [folderAllHidden]).
+            folderAllHidden(state.rails, selectedSourceId, gridRails) ->
+                FolderStatus(
+                    "Every title here is hidden.",
+                    icon = KB_STATUS_ICON_EMPTY,
+                    onRetry = { HiddenTitles.unhideAll(context) },
+                    actionLabel = "UNHIDE ALL"
+                )
             gridItems.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -1205,6 +1320,9 @@ private fun GridLayout(
                         val cardRequester = remember(cardKey) { FocusRequester() }
                         focusRegistry[cardKey] = cardRequester
                         val isReturnItem = itemIndex == gridReturnIndex
+                        // The page's own first poster: where an ordinary open
+                        // lands the D-pad.
+                        val isEntryItem = itemIndex == 0
                         // The grid has no rail, so its record names the card and
                         // its place and nothing else (see [BrowseReturnFocus]).
                         val target = BrowseReturnTarget(
@@ -1244,10 +1362,14 @@ private fun GridLayout(
                                 modifier = Modifier
                                     .focusRequester(cardRequester)
                                     .then(
-                                        if (isReturnItem) {
-                                            Modifier.focusRequester(returnFocusRequester)
-                                        } else {
-                                            Modifier
+                                        when {
+                                            isReturnItem ->
+                                                Modifier.focusRequester(returnFocusRequester)
+
+                                            isEntryItem ->
+                                                Modifier.focusRequester(entryFocusRequester)
+
+                                            else -> Modifier
                                         }
                                     )
                             )
@@ -1295,7 +1417,12 @@ internal fun KBFolderBody(
     // Re-runs this folder's load, for the error card's own RETRY (see
     // [FolderStatus]). Threaded from the screen because the grid layout has no
     // ViewModel of its own to ask.
-    onRetryFolder: () -> Unit
+    onRetryFolder: () -> Unit,
+    // Where an ordinary open lands the D-pad: this page's own first card. Every
+    // sibling browse page pins one (see TagScreen.focusFirstCard) - without it
+    // the folder's hero and its source chips are as reachable by the framework's
+    // own traversal as the first poster is.
+    entryFocusRequester: FocusRequester
 ) {
     when (layoutMode) {
         KBLayoutModes.Mode.FOLLOW_LAYOUT ->
@@ -1303,7 +1430,7 @@ internal fun KBFolderBody(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, listState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem, onRetryFolder
+                onLongPressItem, onRetryFolder, entryFocusRequester
             )
 
         KBLayoutModes.Mode.ROWS ->
@@ -1311,7 +1438,7 @@ internal fun KBFolderBody(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, listState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem, onRetryFolder
+                onLongPressItem, onRetryFolder, entryFocusRequester
             )
 
         KBLayoutModes.Mode.GRID ->
@@ -1319,7 +1446,7 @@ internal fun KBFolderBody(
                 state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, gridState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem, onRetryFolder
+                onLongPressItem, onRetryFolder, entryFocusRequester
             )
     }
 }

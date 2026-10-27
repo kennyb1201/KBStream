@@ -81,7 +81,15 @@ fun KBFolderScreen(
     // this visit, whatever its manifest viewMode says. Back returns to the
     // folder's own layout first, then exits — same feel as Home's
     // "Open in Grid" returning to the rails.
-    var showAsGrid by remember(folderId) { mutableStateOf(false) }
+    //
+    // Seeded from the ViewModel, which outlives the trip into a title's Detail
+    // page: this composable does not, so a `remember` alone lost the override on
+    // the way back - the folder came back in its manifest layout, and the grid's
+    // own return record (a card and a position, no rail) had no rail layout that
+    // could put the D-pad back on it (see [KBFolderViewModel.setGridOverride]).
+    var showAsGrid by remember(folderId) {
+        mutableStateOf(viewModel.gridOverrideActive(folderId))
+    }
 
     // Everything a return out of Detail needs, owned HERE rather than in the
     // layout below: that trip disposes this whole composable and every scroll
@@ -96,6 +104,12 @@ fun KBFolderScreen(
     val browseListState = remember(folderId) { LazyListState() }
     val browseGridState = remember(folderId) { LazyGridState() }
     val returnFocusRequester = remember { FocusRequester() }
+    // Where an ordinary open puts the D-pad: the page's own first card. The
+    // folder used to place no entry focus at all, which left the first D-pad
+    // press to the framework's own traversal - with the hero and the source
+    // chips just as reachable as the first poster is. Every sibling browse page
+    // pins its own first card the same way (see TagScreen's focusFirstCard).
+    val entryFocusRequester = remember { FocusRequester() }
     var returnTarget by remember(folderId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
@@ -104,10 +118,11 @@ fun KBFolderScreen(
     // hands the D-pad back to the first card instead of holding it for ever
     // (see [BROWSE_RETURN_WAIT_MS]).
     var returnWaitStartMs by remember(folderId) { mutableStateOf(0L) }
-    // Whether the card this page came back for has been landed on. Set by the
+    // Whether this page's focus has been placed - on the card a return came back
+    // for, or on the page's own first card for an ordinary open. Set by the
     // landing itself, never before it: the rails stream in one at a time, and a
     // flag raised ahead of a request that never landed would leave the rest of
-    // the page's arrivals skipping the restore.
+    // the page's arrivals skipping the landing.
     var returnHandled by remember(folderId) { mutableStateOf(false) }
 
     // Where the open long-press menu hands the D-pad back. Every other surface
@@ -149,7 +164,14 @@ fun KBFolderScreen(
         landFocusOn(key?.let { cardFocusRequesters[it] })
     }
 
-    LaunchedEffect(folderId) {
+    val profileEpoch by viewModel.profileEpoch.collectAsStateWithLifecycle()
+
+    // Keyed on the switch epoch as well as the route: the picker always lands
+    // Home (so a switch disposes this page and this effect is an ordinary
+    // entry), but a switch that arrives while the page is open drops the
+    // folder - see [KBFolderViewModel.profileEpoch] - and this is what loads it
+    // again, against the incoming profile.
+    LaunchedEffect(folderId, profileEpoch) {
         viewModel.loadById(folderId)
     }
 
@@ -175,7 +197,17 @@ fun KBFolderScreen(
         val recorded = returnTarget
             ?: BrowseReturnFocus.consume(browseReturnKey)
                 .also { if (it != null) returnWaitStartMs = System.currentTimeMillis() }
-            ?: return@LaunchedEffect
+
+        // An ordinary open - no record waiting for this page - takes the page's
+        // own first card. A landing that missed leaves the flag false and the
+        // next rail that streams in asks again; a landing that succeeded leaves
+        // it true, so later arrivals never pull the D-pad back off the card the
+        // viewer has moved to.
+        if (recorded == null) {
+            returnHandled = landFocusOn(entryFocusRequester)
+            return@LaunchedEffect
+        }
+
         returnTarget = recorded
         when (
             browseReturnDecision(
@@ -216,11 +248,13 @@ fun KBFolderScreen(
                 if (returnHandled) returnTarget = null
             }
 
-            // This effect never placed an initial focus of its own, so the
-            // give-up path moves nothing rather than repeating an ordinary
-            // open's focus: a record whose rail never arrived leaves the D-pad
-            // where the folder put it.
-            BrowseReturnDecision.FIRST_CARD -> return@LaunchedEffect
+            // The recorded card could never be put back (its rail never
+            // arrived, or the landing budget ran out), so the page falls back to
+            // its own first card rather than leaving the D-pad wherever the
+            // framework dropped it.
+            BrowseReturnDecision.FIRST_CARD -> {
+                returnHandled = landFocusOn(entryFocusRequester)
+            }
         }
     }
 
@@ -251,6 +285,7 @@ fun KBFolderScreen(
             focusRegistry = cardFocusRequesters,
             returnTarget = returnTarget,
             returnFocusRequester = returnFocusRequester,
+            entryFocusRequester = entryFocusRequester,
             onOpenItem = { item, target ->
                 // Remember this card, so backing out of its Detail page reopens
                 // the folder ON it (see [BrowseReturnFocus]).
@@ -334,6 +369,9 @@ fun KBFolderScreen(
                     // on the card that was pressed.
                     closeMenu(menuCardKey)
                     showAsGrid = true
+                    // Recorded outside the composition, so the trip into a title's
+                    // Detail page comes back to the grid (see the declaration).
+                    viewModel.setGridOverride(folderId)
                 },
                 PosterContextAction(
                     label = "Go to Details",
@@ -390,6 +428,9 @@ fun KBFolderScreen(
         // folder's own layout, and only a second Back exits the folder.
         if (showAsGrid) {
             showAsGrid = false
+            // Cleared with it, so the folder is not still pinned to the grid on
+            // its next open (see [KBFolderViewModel.setGridOverride]).
+            viewModel.setGridOverride(null)
         } else {
             onBack()
         }

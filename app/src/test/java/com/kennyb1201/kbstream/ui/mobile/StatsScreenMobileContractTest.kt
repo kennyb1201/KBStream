@@ -112,7 +112,9 @@ class StatsScreenMobileContractTest {
             "\"Episodes finished\"",
             "\"Movies finished\"",
             "\"Finished runtime\"",
-            "\"TOP SHOWS\"",
+            // The header renamed with the ranking it describes: the list ranks
+            // every finished title, movies included (stats C2).
+            "\"TOP TITLES\"",
             "\"Nothing finished yet — the titles you complete \"",
             "\"1 day streak\""
         ).forEach { wording ->
@@ -137,10 +139,17 @@ class StatsScreenMobileContractTest {
             1,
             Regex("MobileBackButton\\(").findAll(mobile).count()
         )
+        // Exactly one word button, and it is the failure state's RETRY: a read
+        // that threw used to leave the page on "Reading history…" with nothing
+        // but the back arrow to press (stats C6).
         assertEquals(
-            "and no word button is left on the page",
-            0,
+            "the one word button on the page is RETRY",
+            1,
             Regex("KBButton\\(").findAll(mobile).count()
+        )
+        assertTrue(
+            "and it re-runs the read",
+            mobile.contains("label = \"RETRY\"") && mobile.contains("viewModel.load()")
         )
         assertFalse(
             "no stat plate may be a card/tap target that answers with nothing",

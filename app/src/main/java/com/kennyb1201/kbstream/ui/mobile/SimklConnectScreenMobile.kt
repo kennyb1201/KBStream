@@ -23,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -32,6 +34,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBQrCode
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
+import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.simkl.SimklViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -120,7 +123,17 @@ fun SimklConnectScreenMobile(
                         style = MaterialTheme.typography.bodyMedium
                     )
 
-                    if (uiState.isConnected) {
+                    if (!uiState.isConfigured) {
+                        // The branch Trakt's phone page already had: a build with
+                        // no client id says so instead of offering a code request
+                        // that can only fail (trackers I2).
+                        SimklStatusPanel(
+                            title = "Not available in this build",
+                            message = "This build has no Simkl client id, so Simkl cannot " +
+                                "be connected. Set SIMKL_CLIENT_ID for the build and " +
+                                "reinstall."
+                        )
+                    } else if (uiState.isConnected) {
                         SimklStatusPanel(
                             title = "Account connected",
                             message = uiState.accountName?.let { "Signed in as $it." }
@@ -184,6 +197,10 @@ fun SimklConnectScreenMobile(
                                 )
                             }
                         }
+                    } else if (uiState.requiresParentPin) {
+                        // The gate Trakt's phone page has always had (trackers
+                        // C1): a kids profile links no account without a parent.
+                        SimklParentPinGateMobile(vm = vm, onBack = onBack)
                     } else {
                         SimklStatusPanel(
                             title = "Device link required",
@@ -278,7 +295,9 @@ fun SimklConnectScreenMobile(
                             text = "This unlinks your Simkl account and clears every " +
                                 "resume position and watched marker stored on this " +
                                 "device, along with the launcher's Continue Watching " +
-                                "rows. It cannot be undone.",
+                                "rows. It cannot be undone. Simkl keeps this app in " +
+                                "your connected apps until you remove it at simkl.com " +
+                                "— the app cannot revoke its own access there.",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -308,6 +327,52 @@ fun SimklConnectScreenMobile(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SimklParentPinGateMobile(
+    vm: SimklViewModel,
+    onBack: () -> Unit
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var pin by remember { mutableStateOf("") }
+
+    SimklStatusPanel(
+        title = "Parent PIN required",
+        message = "Linking an account on a kids profile is a parent's action."
+    )
+    KBTextField(
+        value = pin,
+        onValueChange = {
+            pin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "••••",
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation()
+    )
+    if (uiState.pinError) {
+        Text(
+            text = "Wrong PIN — try again",
+            color = KBRust,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "UNLOCK",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { vm.submitParentPin(pin) }
+        )
+        KBButton(
+            label = "CANCEL",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                vm.cancelParentPin()
+                onBack()
+            }
+        )
     }
 }
 

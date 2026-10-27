@@ -22,6 +22,11 @@ data class TraktUiState(
      * budget-blocked read must not stop the screen saying "Connected to Trakt."
      */
     val watchedCounts: TraktWatchedCounts? = null,
+    /**
+     * True while the connected branch's manual REFRESH is reading the pair.
+     * The automatic entry read does not set it - it has no button to busy.
+     */
+    val isLoadingCounts: Boolean = false,
     val isLoading: Boolean = false,
     /** True while the poll loop is waiting for approval. */
     val isPolling: Boolean = false,

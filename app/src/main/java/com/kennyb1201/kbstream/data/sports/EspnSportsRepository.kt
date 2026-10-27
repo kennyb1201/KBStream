@@ -1040,13 +1040,27 @@ internal object EspnCacheRules {
 /**
  * The networks airing an event.
  *
- * ESPN puts them either on the event or on its first competition, depending on
- * the league, so both are read and de-duplicated in order.
+ * ESPN names them in more than one shape, and which shape a league uses is not
+ * something the payload announces, so every shape is read in turn and the
+ * names are de-duplicated in order:
+ *
+ *  - `broadcasts[].names[]`, on the event or on its first competition - which
+ *    of the two depends on the league, and both have always been read.
+ *  - `geoBroadcasts[].media.shortName` (then `.name`), the per-market listing
+ *    several leagues ship INSTEAD of `broadcasts`. Reading only the first
+ *    shape left `broadcastNames` empty for every game in such a league, which
+ *    killed the network tier there entirely - the card read "Not in your
+ *    playlist" while the payload named the network plainly (audit C7,
+ *    2026-10-23).
+ *  - a bare `broadcast` STRING on the event or competition, which the summary
+ *    endpoint's header carries. Read only when it really is a string:
+ *    `optString` stringifies anything else, and a stringified object is not a
+ *    network name.
  */
 private fun espnBroadcasts(event: JSONObject, competition: JSONObject?): List<String> =
     buildList {
-        listOfNotNull(event.optJSONArray("broadcasts"), competition?.optJSONArray("broadcasts"))
-            .forEach { array ->
+        listOfNotNull(event, competition).forEach { owner ->
+            owner.optJSONArray("broadcasts")?.let { array ->
                 for (i in 0 until array.length()) {
                     val names = array.optJSONObject(i)?.optJSONArray("names") ?: continue
                     for (j in 0 until names.length()) {
@@ -1054,6 +1068,18 @@ private fun espnBroadcasts(event: JSONObject, competition: JSONObject?): List<St
                     }
                 }
             }
+            owner.optJSONArray("geoBroadcasts")?.let { array ->
+                for (i in 0 until array.length()) {
+                    val media = array.optJSONObject(i)?.optJSONObject("media") ?: continue
+                    listOf("shortName", "name").forEach { key ->
+                        media.optString(key, "").trim().takeIf { it.isNotEmpty() }?.let(::add)
+                    }
+                }
+            }
+            if (owner.opt("broadcast") is String) {
+                owner.optString("broadcast", "").trim().takeIf { it.isNotEmpty() }?.let(::add)
+            }
+        }
     }.distinct()
 
 internal fun parseTournamentEventsOrNull(

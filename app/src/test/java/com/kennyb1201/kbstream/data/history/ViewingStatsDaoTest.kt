@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -305,5 +306,100 @@ class ViewingStatsDaoTest {
         assertEquals(listOf(300L, 200L, 100L), dao.completionTimes())
         // Two DISTINCT titles completed: show1 (twice) and show2.
         assertEquals(2, dao.finishedTitleCount())
+    }
+
+    // ── The stats deep dive (2026-10-26) ────────────────────────────────
+
+    /**
+     * One resolved flavor twin: `tt100` and `tmdb:100` are the same series.
+     * The key shape is the one [WatchHistoryDao.parentIdFlavors] reads, so the
+     * stats fold exactly the twins the episode checkmarks already fold.
+     */
+    private suspend fun cacheTwin() {
+        db.imdbResolutionDao().upsert(
+            ImdbResolutionEntity(
+                key = "series::100",
+                tmdbId = 100,
+                mediaType = "series",
+                imdbId = "tt100",
+                updatedAt = 1_700_000_000_000L
+            )
+        )
+    }
+
+    @Test
+    fun `a show finished under both id flavors is one title and one top row`() = runBlocking {
+        // The same series watched from a TMDB result and from its IMDB twin is
+        // two rows with two parent ids. Counting DISTINCT parentId counted it
+        // as two finished titles, and grouping by parentId gave it two top
+        // rows with its runtime split between them - enough to push it out of
+        // the top ten altogether (stats C3).
+        cacheTwin()
+        dao.upsertRaw(
+            row("a", "tt100", name = "Twin Show", durationMs = 2_400_000L, isCompleted = true)
+        )
+        dao.upsertRaw(
+            row("b", "tmdb:100", name = "Twin Show", durationMs = 1_800_000L, isCompleted = true)
+        )
+
+        assertEquals("one title, not two", 1, dao.finishedTitleCount())
+        val top = dao.topShows().single()
+        assertEquals("one row, canonicalised onto the tt id", "tt100", top.parentId)
+        assertEquals("with both flavors' runtime added up", 4_200_000L, top.ms)
+        assertEquals(2, top.done)
+    }
+
+    @Test
+    fun `a twin the cache does not know still counts as it always did`() = runBlocking {
+        // No cache row, so nothing in the app knows these two ids are one
+        // title. The stats must not fold on a guess.
+        dao.upsertRaw(row("a", "tt100", durationMs = 2_400_000L, isCompleted = true))
+        dao.upsertRaw(row("b", "tmdb:100", durationMs = 1_800_000L, isCompleted = true))
+
+        assertEquals(2, dao.finishedTitleCount())
+        assertEquals(2, dao.topShows().size)
+    }
+
+    @Test
+    fun `a top row's name and poster come from its newest row`() = runBlocking {
+        // These are not aggregates, and a bare column beside a GROUP BY let
+        // SQLite pick an arbitrary row of the group: a re-titled or
+        // re-postered title could show older metadata than it carries
+        // (stats I2).
+        dao.upsertRaw(
+            row("a", "show1", name = "Old Name", durationMs = 2_400_000L, isCompleted = true)
+                .copy(poster = "old.jpg", updatedAt = 1_000L)
+        )
+        dao.upsertRaw(
+            row("b", "show1", name = "New Name", positionMs = 600_000L)
+                .copy(poster = "new.jpg", updatedAt = 2_000L)
+        )
+
+        val top = dao.topShows().single()
+        assertEquals("New Name", top.name)
+        assertEquals("new.jpg", top.poster)
+        assertEquals("and the newest row's type travels with it", "series", top.type)
+        assertEquals(3_000_000L, top.ms)
+        assertEquals(1, top.done)
+    }
+
+    @Test
+    fun `a movie ranks with its own type so the list can name it`() = runBlocking {
+        // Movies are finished titles like any other - the tiles count them, and
+        // `top shows are ordered by runtime and capped` above pins that they
+        // rank in the list. Without a type on the projection every row had to
+        // be worded as episodes, which filed a finished film under
+        // "1 episode finished" (stats C2).
+        dao.upsertRaw(
+            row("m1", "movie1", type = "movie", name = "A Film", durationMs = 5_400_000L, isCompleted = true)
+        )
+        dao.upsertRaw(
+            row("s1", "show1", type = "series", name = "A Show", durationMs = 2_700_000L, isCompleted = true)
+        )
+
+        val byId = dao.topShows().associateBy { it.parentId }
+        assertEquals("movie", byId.getValue("movie1").type)
+        assertEquals("series", byId.getValue("show1").type)
+        assertEquals("the film still ranks on its runtime", listOf("movie1", "show1"), dao.topShows().map { it.parentId })
     }
 }

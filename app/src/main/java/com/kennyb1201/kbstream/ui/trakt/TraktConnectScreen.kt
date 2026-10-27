@@ -153,6 +153,11 @@ fun TraktConnectScreen(
                         message = "This build has no Trakt client id, so Trakt cannot be " +
                             "connected. Set TRAKT_CLIENT_ID for the build and reinstall."
                     )
+                    // The branch had no control at all, so on a D-pad the page
+                    // was a dead end with nothing to focus below the panel.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        KBButton(label = "BACK", onClick = onBack)
+                    }
                 } else if (uiState.isConnected) {
                     TraktStatusPanel(
                         title = "Account connected",
@@ -167,6 +172,15 @@ fun TraktConnectScreen(
                     uiState.errorMessage?.let { TraktErrorLine(it) }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Simkl's connected branch has always had this; Trakt's
+                        // had no way to re-ask for the totals after a read that
+                        // failed (the row just stays hidden), so the only retry
+                        // was leaving the page and coming back (trackers I1).
+                        KBButton(
+                            label = if (uiState.isLoadingCounts) "REFRESHING…" else "REFRESH",
+                            enabled = !uiState.isLoadingCounts,
+                            onClick = vm::refreshWatchedCountsNow
+                        )
                         KBButton(label = "DISCONNECT", danger = true) {
                             showDisconnectConfirm = true
                         }

@@ -190,10 +190,19 @@ internal object SportsChannelMatcher {
      * `LEAGUE:ABBR` -> the regional networks that carry the team.
      *
      * Data, not code: a league's RSN situation changes every year and this is
-     * the only part of the matcher that needs editing when it does. Kept small
-     * and US-league focused - it is the LAST resort behind a real EPG match and
-     * a real network name, so a missing entry costs nothing but a "not in your
-     * playlist" on a game that had no other signal.
+     * the only part of the matcher that needs editing when it does. It is the
+     * LAST resort behind a real EPG match and a real network name.
+     *
+     * The asymmetry is the point, and it is why this stays small: a MISSING
+     * entry costs nothing but a "not in your playlist" on a game that had no
+     * other signal, while a WRONG one offers a feed that is not carrying the
+     * game - so a team whose own regional network is not known here is
+     * deliberately absent rather than guessed. The NHL block was added whole
+     * (2026-10-27): the league had no entries at all, so every regional hockey
+     * game fell straight through to "not in your playlist" whenever the guide
+     * and the feed's own network names both missed, which for a regional
+     * hockey game on an IPTV lineup is the ordinary case (audit C12's remaining
+     * half - the league-blind key was the other half, already fixed).
      *
      * The league is in the key because an abbreviation is not unique across
      * them (see [rsnNetworks]): `SF` belongs to one team here and could be
@@ -236,11 +245,61 @@ internal object SportsChannelMatcher {
         "NBA:LAC" to listOf("FanDuel Sports Network SoCal"),
         "NBA:BKN" to listOf("YES Network"),
         "NBA:POR" to listOf("Root Sports Plus"),
+        // The rest of the league (2026-10-27): four teams had entries, so a
+        // regional NBA game outside those four markets had nothing behind the
+        // guide. Same rule as the NHL block below - the team's own network, or
+        // no entry.
+        "NBA:ATL" to listOf("FanDuel Sports Network Southeast"),
+        "NBA:BOS" to listOf("NBC Sports Boston"),
+        "NBA:CHA" to listOf("FanDuel Sports Network Southeast"),
+        "NBA:CHI" to listOf("Chicago Sports Network"),
+        "NBA:CLE" to listOf("FanDuel Sports Network Ohio"),
+        "NBA:DAL" to listOf("FanDuel Sports Network Southwest"),
+        "NBA:DEN" to listOf("Altitude"),
+        "NBA:DET" to listOf("FanDuel Sports Network Detroit"),
+        "NBA:GS" to listOf("NBC Sports Bay Area"),
+        "NBA:HOU" to listOf("Space City Home Network"),
+        "NBA:IND" to listOf("FanDuel Sports Network Indiana"),
+        "NBA:MEM" to listOf("FanDuel Sports Network Southeast"),
+        "NBA:MIA" to listOf("FanDuel Sports Network Sun"),
+        "NBA:MIL" to listOf("FanDuel Sports Network Wisconsin"),
+        "NBA:MIN" to listOf("FanDuel Sports Network North"),
+        "NBA:NYK" to listOf("MSG Network"),
+        "NBA:OKC" to listOf("FanDuel Sports Network Oklahoma"),
+        "NBA:ORL" to listOf("FanDuel Sports Network Florida"),
+        "NBA:PHI" to listOf("NBC Sports Philadelphia"),
+        "NBA:SA" to listOf("FanDuel Sports Network Southwest"),
+        "NBA:SAC" to listOf("NBC Sports California"),
+        "NBA:TOR" to listOf("Sportsnet"),
+        "NBA:WAS" to listOf("Monumental Sports Network"),
         // NFL
         "NFL:NYG" to listOf("MSG Network"),
         "NFL:NYJ" to listOf("MSG Network"),
         "NFL:NE" to listOf("NBC Sports Boston"),
         "NFL:CHI" to listOf("Chicago Sports Network"),
+        // NHL
+        "NHL:ANA" to listOf("FanDuel Sports Network SoCal"),
+        "NHL:BOS" to listOf("NESN"),
+        "NHL:BUF" to listOf("MSG Network"),
+        "NHL:CAR" to listOf("FanDuel Sports Network South"),
+        "NHL:CBJ" to listOf("FanDuel Sports Network Ohio"),
+        "NHL:CHI" to listOf("Chicago Sports Network"),
+        "NHL:COL" to listOf("Altitude"),
+        "NHL:DAL" to listOf("FanDuel Sports Network Southwest"),
+        "NHL:DET" to listOf("FanDuel Sports Network Detroit"),
+        "NHL:FLA" to listOf("FanDuel Sports Network Florida"),
+        "NHL:LA" to listOf("FanDuel Sports Network West"),
+        "NHL:MIN" to listOf("FanDuel Sports Network North"),
+        "NHL:NJ" to listOf("MSG Sportsnet"),
+        "NHL:NSH" to listOf("FanDuel Sports Network South"),
+        "NHL:NYI" to listOf("MSG Sportsnet"),
+        "NHL:NYR" to listOf("MSG Network"),
+        "NHL:PHI" to listOf("NBC Sports Philadelphia"),
+        "NHL:PIT" to listOf("SportsNet Pittsburgh"),
+        "NHL:SJ" to listOf("NBC Sports California"),
+        "NHL:STL" to listOf("FanDuel Sports Network Midwest"),
+        "NHL:TB" to listOf("FanDuel Sports Network Sun"),
+        "NHL:WSH" to listOf("Monumental Sports Network"),
     )
 
     /** The channel carrying [game], or null when no tier is confident. */

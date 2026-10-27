@@ -1576,6 +1576,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var zapLogo: ImageView? = null
     private var zapChannelLabel: TextView? = null
     private var zapChannelName: TextView? = null
+
+    /**
+     * The channel the visible zap banner is about, by GUIDE ID.
+     *
+     * The id, not the name on [zapChannelName]: a lineup can hold two entries
+     * with the same name (a duplicated local feed, the same network from two
+     * groups), and a slow EPG read that guarded on the name could repaint the
+     * banner with the OTHER entry's now/next (audit E-I7, 2026-10-27). Null
+     * until a zap has raised a banner.
+     */
+    private var zapChannelId: String? = null
     private var zapNowTitle: TextView? = null
     private var zapNowMeta: TextView? = null
     private var zapNowProgress: ProgressBar? = null
@@ -1951,6 +1962,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         renderZapChannelLabel()
         zapChannelName?.text = channel.name
+        zapChannelId = channel.channelId
         if (channel.logoUrl.isNullOrBlank()) {
             zapLogo?.setImageDrawable(null)
         } else {
@@ -1980,10 +1992,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             trimZapEpgCache()
             // Only apply if the banner is still showing THIS channel — a
             // slow DB read must never overwrite a newer zap. Both the
-            // playing URL and the channel name must match (names are not
-            // guaranteed unique across playlist groups).
+            // playing URL and the channel's ID must match: the ID is what the
+            // cache key above is built from, and names are NOT unique across
+            // playlist groups, so comparing the name here could apply one
+            // entry's now/next to the other's banner (audit E-I7, 2026-10-27).
             if (zapBanner?.visibility == View.VISIBLE &&
-                zapChannelName?.text?.toString() == channel.name &&
+                zapChannelId == channel.channelId &&
                 currentUrl == channel.streamUrl
             ) {
                 applyZapEpg(info)
@@ -5206,6 +5220,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         (PlayerTitlePrefs.get(this@NativePlayerActivity, titleKey)
                             ?: PlayerTitlePrefs.Prefs()).copy(aspectRatio = next)
                     )
+                    // The mode is otherwise only visible on the chrome button's
+                    // label, and a PINCH is the normal way to reach this - a
+                    // two-finger gesture that does not raise the chrome, so the
+                    // label stayed hidden and the pinch read as a gesture that
+                    // did nothing (audit U-F10, 2026-10-27). The MPV engine says
+                    // the same line on the same gesture; this is the parity.
+                    Toast.makeText(
+                        this@NativePlayerActivity,
+                        "Aspect: ${ASPECT_MODES[next]}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
 
                 override fun positionMs(): Long =
@@ -5503,7 +5528,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // software one); only the software retry itself is once-per-session.
         blackVideoSurfaceRetried = false
         // blackVideoWatchdogToken++ # delayed to allow native window recovery
-        autoSourceSwitchCount = 0
+        // The auto-switch budget is deliberately NOT reset here. This function
+        // runs again for every rebuild, and every source switch IS a rebuild
+        // (see switchToSource), so resetting it here made
+        // [MAX_AUTO_SOURCE_SWITCHES] unreachable: a fully dead list was walked
+        // source by source with a full retry ladder each instead of stopping
+        // after two switches and raising the card (audit S-F3, 2026-10-27). It
+        // is reset once per session instead - see probeThenCreatePlayer.
 
         // Shared with the MPV engine, which used to ask as `mpv/<version>` for
         // the same stream - see StreamUserAgent.
@@ -6053,7 +6084,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 setAudioAttributes(audioAttrs, true)
 
                 val audioUrl = currentAudioUrl
-                val initialMediaItem = mediaItemBuilder.build()
+                // The sidecar is built BEFORE the media source and travels on the
+                // item the VIDEO source is created from, so every path carries it
+                // - the separate-audio merge included. Built afterwards it was
+                // set on a refreshed item that only the no-separate-audio
+                // branches used, so a remembered or hand-picked subtitle file was
+                // silently dropped on exactly the adaptive titles that need it,
+                // with one `Log.w` and nothing on screen (audit E-F2,
+                // 2026-10-27).
+                val sidecar = externalSubtitleUri?.let { subtitleUri ->
+                    MediaItem.SubtitleConfiguration.Builder(subtitleUri)
+                        // Tagged so handleAssTrackSelection() never mistakes this
+                        // SSA sidecar for an embedded track (see SIDECAR_TRACK_ID).
+                        .setId(SIDECAR_TRACK_ID)
+                        .setMimeType(resolveSubtitleMimeType(subtitleUri))
+                        .setLanguage("und")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                }
+                val initialMediaItem = if (sidecar != null) {
+                    mediaItemBuilder.setSubtitleConfigurations(listOf(sidecar)).build()
+                } else {
+                    mediaItemBuilder.build()
+                }
                 val urlMimeType = resolveMimeType(currentUrl)
                 val isManifest = mimeType == MimeTypes.APPLICATION_M3U8 ||
                     mimeType == MimeTypes.APPLICATION_MPD ||
@@ -6081,34 +6134,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     setMediaSource(progressiveMediaSourceFactory.createMediaSource(initialMediaItem))
                 }
 
-                externalSubtitleUri?.let { subtitleUri ->
-                    val subtitle = MediaItem.SubtitleConfiguration.Builder(subtitleUri)
-                        // Tagged so handleAssTrackSelection() never mistakes this
-                        // SSA sidecar for an embedded track (see SIDECAR_TRACK_ID).
-                        .setId(SIDECAR_TRACK_ID)
-                        .setMimeType(resolveSubtitleMimeType(subtitleUri))
-                        .setLanguage("und")
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                    val currentItem = mediaItemBuilder
-                        .setSubtitleConfigurations(listOf(subtitle))
-                        .build()
-                    if (audioUrl.isNullOrBlank()) {
-                        if (isManifest) {
-                            setMediaItem(currentItem)
-                        } else {
-                            setMediaSource(progressiveMediaSourceFactory.createMediaSource(currentItem))
-                        }
-                        // The sidecar's track now exists in the timeline, so the
-                        // ENGINE renders it again: hand the subtitle area back
-                        // from the app-side renderer the auto-fetch path used
-                        // (see [sidecarRenderedByApp]) - two renderers for one
-                        // file would disagree about timing.
-                        sidecarRenderedByApp = false
-                    } else {
-                        Log.w(TAG, "External subtitles are not merged with a separate audio source")
-                    }
-                }
+                // The sidecar's track now exists in the timeline - merged audio
+                // or not - so the ENGINE renders it: hand the subtitle area back
+                // from the app-side renderer the auto-fetch path used (see
+                // [sidecarRenderedByApp]). Two renderers for one file would
+                // disagree about timing.
+                if (sidecar != null) sidecarRenderedByApp = false
 
                 if (!isLiveChannel && carryPositionMs > 0L) seekTo(carryPositionMs)
                 setPlaybackSpeed(playbackSpeed)
@@ -8565,6 +8596,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 .buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                 .build()
+            // LATCHED like every other terminal decision in this pass. The latch
+            // is what keeps the pass from running again on the next READY, and
+            // without it a rebuffer re-disabled the text track over whatever the
+            // viewer had just picked by hand: subtitles that survived until the
+            // first rebuffer and then vanished, with global mode Off (audit
+            // E-F1, 2026-10-27). The latch resets per player build, so a new
+            // source still gets its own pass.
+            changed = true
         } else if (
             !isLiveChannel &&
             (subtitleMode == SubtitleModeRules.FORCED || preferredSubtitleLang.isNotBlank())
@@ -8673,6 +8712,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         .buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         .build()
+                    // And latch it: this is a decision, not a pre-pass. A
+                    // rebuffer's READY must not re-run the pass and take a
+                    // manual pick down with it (audit E-F1, 2026-10-27).
+                    changed = true
                 }
 
                 SubtitleTrackRules.Choice.Off -> {
@@ -8682,6 +8725,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         .buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         .build()
+                    // Latched for the same reason as the two branches above.
+                    changed = true
                     // With a preferred language set, `Off` means the file
                     // carries no subtitle track at all - the stream "has no
                     // usable subs". Pull one from OpenSubtitles rather than
@@ -10205,6 +10250,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * What an empty picker says, per mode.
+     *
+     * The empty guard keeps the panel shut (a blank box with the D-pad trapped
+     * on its scrim is worse than no panel), but staying silent made every one of
+     * these a press that did nothing - see [showPicker] (audit U-F12,
+     * 2026-10-27). Copy is per mode because "no sources" and "no audio tracks"
+     * are different facts about the title, and the viewer can act on the second
+     * one but not the first.
+     */
+    private fun emptyPickerMessage(mode: PickerMode): String = when (mode) {
+        PickerMode.SOURCE -> "No other sources for this title"
+        PickerMode.AUDIO -> "This file has no audio tracks to choose from"
+        PickerMode.SUBTITLE -> "No subtitles in this file — use SEARCH in the subtitle row"
+        PickerMode.SPEED -> "No playback speeds available here"
+    }
+
+    /**
      * Restarts the shared bar's auto-hide countdown.
      *
      * This engine's own guards - no hiding while paused (live excepted, since a
@@ -10245,7 +10307,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         label = stream.displayLabel(),
                         isSelected = stream.url == currentUrl,
                         badges = stream.badges,
-                        onClick = { switchToSource(stream); dismissPicker() }
+                        onClick = {
+                            // A hash row has no direct URL, so switchToSource
+                            // answers `url ?: return` and the picker used to
+                            // close over a player that had not changed - a press
+                            // with no effect and no word about it (audit S-F2,
+                            // 2026-10-27). Resolving a debrid link belongs to
+                            // the picker that owns TorBox (the streams screen),
+                            // so this one says what the row needs and stays open
+                            // rather than dismissing into the same source.
+                            if (stream.url.isNullOrBlank()) {
+                                Toast.makeText(
+                                    this@NativePlayerActivity,
+                                    "This source needs TorBox — pick it from the streams list",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                switchToSource(stream)
+                                dismissPicker()
+                            }
+                        }
                     )
                 }
             }
@@ -10424,6 +10505,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                                 "which is unavailable here",
                                             Toast.LENGTH_SHORT
                                         ).show()
+                                        // And do what the AUTO path does on the
+                                        // same refusal: fetch a text track, which
+                                        // this engine CAN draw. Without it a
+                                        // refused picker handoff was the end of
+                                        // the road for the viewer, while the
+                                        // identical refusal at READY time fell
+                                        // back to a downloaded subtitle (audit
+                                        // E-F5, 2026-10-27). The fetch carries
+                                        // its own gates (mode, key, title, once a
+                                        // session).
+                                        maybeAutoFetchSubtitle()
                                     }
                                 } else {
                                     // Through the bridge for the same reason as
@@ -10464,8 +10556,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         // An empty list is a dead end, not a panel: nothing to pick means the
         // picker stays shut rather than opening on a blank box, with the D-pad
-        // left on a scrim it cannot leave (MPV's rule).
-        if (items.isEmpty()) return
+        // left on a scrim it cannot leave (MPV's rule). It SAYS so, though: the
+        // button that asked for it is visible and live, and a silent return read
+        // as a button that ignored the press (audit U-F12, 2026-10-27).
+        if (items.isEmpty()) {
+            Toast.makeText(this, emptyPickerMessage(mode), Toast.LENGTH_SHORT).show()
+            return
+        }
 
         pickerMode = mode
         isPickerShowing = true
@@ -12760,14 +12857,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (isCompleted && downloadId != null) {
                 val sessionOver = playbackEndReached || isFinishing
                 if (sessionOver) {
+                    // By the finished download's own id, not by the title key:
+                    // an episode's media key is the SHOW's, and deleting on it
+                    // took every other completed episode of that show with it
+                    // (audit C2, 2026-10-27). The manager looks the record up
+                    // itself and owns the toggle's own gate.
                     downloadId?.let { id ->
-                        DownloadsManager.playbackRecord(this@NativePlayerActivity, id)
-                            ?.let { record ->
-                                DownloadsManager.onTitleCompleted(
-                                    this@NativePlayerActivity,
-                                    listOf(record.mediaKey)
-                                )
-                            }
+                        DownloadsManager.onTitleCompleted(this@NativePlayerActivity, id)
                     }
                 }
             }
@@ -13603,6 +13699,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 played = sessionHasPlayed(),
                 completionFiled = completionFiled
             )
+            // Into the session trace: the exit save is the row Continue
+            // Watching (or the watched marker) reads next, and it was the one
+            // write the ring never recorded - a dump showed the handoff's
+            // `filed` line and then nothing about where the episode was left
+            // (audit S-I11, 2026-10-27).
+            PlaybackSessionTrace.note(
+                "exit save: s=${season?.toString() ?: "-"} e=${episode?.toString() ?: "-"} " +
+                    "completed=$completedOnExit reason=stop"
+            )
             saveProgress(reason = "stop", forceCompleted = completedOnExit)
             scrobbleSimkl("stop")
         }
@@ -13718,6 +13823,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         currentBadges = stream.badges
         currentBingeGroup = stream.bingeGroup
         resolveAddonIdentity(currentSourceLabel)
+        // Into the session trace: a source switch is one of the events a binge
+        // report has to explain ("the same episode played from a different
+        // provider"), and only the engine ring had it - the session ring carried
+        // the session line and the handoff's `filed` line and nothing between
+        // (audit S-I11, 2026-10-27).
+        PlaybackSessionTrace.note(
+            "source switch: s=${season?.toString() ?: "-"} e=${episode?.toString() ?: "-"} " +
+                "index=$currentSourceIndex/${sources.size} auto=$isAutoRecovery " +
+                "label=$currentSourceLabel"
+        )
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
         // A different source is a different question, so the rebuild budget
@@ -13956,16 +14071,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // remaining source whose addon is not dead this session, else plain
         // order (see SourceAddonSession.nextIndex). Both bounds above and below
         // are unchanged.
-        val nextIndex = SourceAddonSession.nextIndex(
-            addons = sourceAddons,
-            fromIndex = currentSourceIndex + 1,
-            dead = sessionDeadAddons
-        ) ?: return false
-        val nextStream = sources[nextIndex]
+        //
+        // Rows this engine cannot open are STEPPED PAST rather than handed to
+        // switchToSource. A hash row (P2P, no direct URL) is resolved by the
+        // picker and by nothing in here, so `switchToSource`'s own
+        // `stream.url ?: return` turned the walk into a silent no-op that still
+        // reported success: the callers below returned believing the session had
+        // moved, the "Trying next source…" banner sat over a dead player, and
+        // the error card and the MPV handoff were never reached (audit S-F1,
+        // 2026-10-27). Only a row this engine can actually open counts as the
+        // next source, and when there is none the walk answers false so the
+        // caller falls through to the card.
+        var fromIndex = currentSourceIndex + 1
+        var nextIndex: Int? = null
+        while (true) {
+            val candidate = SourceAddonSession.nextIndex(
+                addons = sourceAddons,
+                fromIndex = fromIndex,
+                dead = sessionDeadAddons
+            ) ?: break
+            if (!sources[candidate].url.isNullOrBlank()) {
+                nextIndex = candidate
+                break
+            }
+            Log.w(
+                "PLAYER_VIDEO",
+                "skipping source ${candidate} with no direct URL (hash row)"
+            )
+            fromIndex = candidate + 1
+        }
+        val index = nextIndex ?: return false
+        val nextStream = sources[index]
         autoSourceSwitchCount++
         Log.w(
             "PLAYER_VIDEO",
-            "Auto-switching to next source: ${nextStream.displayLabel()} (index=$nextIndex/${sources.size})"
+            "Auto-switching to next source: ${nextStream.displayLabel()} (index=$index/${sources.size})"
         )
         reconnectingContainer.visibility = View.VISIBLE
         hideBufferingSpinner()
@@ -13997,6 +14137,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * On any probe infrastructure failure the top-ranked source loads as today.
      */
     private fun probeThenCreatePlayer() {
+        // Session start, and the only place the auto-source-switch budget is
+        // reset: [MAX_AUTO_SOURCE_SWITCHES] bounds how many sources ONE session
+        // walks before it must raise the card or hand off, and this function is
+        // called exactly once per session - the initial build. Rebuilds
+        // (recreatePlayer, and therefore every switch) deliberately leave the
+        // count alone (audit S-F3, 2026-10-27).
+        autoSourceSwitchCount = 0
         // With fewer than two sources there is nothing to choose between, and
         // the probe only ever decides WHICH source to open.
         if (isLiveChannel || sources.size < 2) {

@@ -35,11 +35,18 @@ data class CatalogGridPage(
  * Pages whose items are all already known are treated as the end of the list —
  * addon catalogs repeat ids across offsets, and returning them again would put
  * duplicate keys in the grid.
+ *
+ * A catalog whose rail already reported the end is routed through here as well,
+ * with [moreAvailable] false: the seed is shown and the source stops. The caller
+ * used to route that case around this source (a static `PagingData.from`), which
+ * left this branch unreachable while a reader would reasonably believe it was
+ * the rule; there is one place for it now, and this is it (grid I2).
  */
 class CatalogGridPagingSource(
     private val seed: List<MetaPreview>,
     private val startOffset: Int,
     private val maxItems: Int = Int.MAX_VALUE,
+    /** False when the catalog is already exhausted: [seed] is all there is. */
     private val moreAvailable: Boolean = true,
     private val loadPage: suspend (skip: Int) -> CatalogGridPage
 ) : PagingSource<Int, MetaPreview>() {
@@ -60,8 +67,10 @@ class CatalogGridPagingSource(
 
         return try {
 
-            // A catalog the rail already exhausted has nothing left to page:
-            // show what the rail had and stop.
+            // A catalog whose rail already reported the end has nothing left
+            // to page: show what the rail had and stop. This is the only place
+            // that rule lives - the caller passes the flag rather than
+            // routing around the source.
             if (!moreAvailable) {
                 return LoadResult.Page(
                     data = seed.filter { seenIds.add(it.id) },

@@ -130,15 +130,23 @@ internal class TraktTokenStore(
     /**
      * Drops the session and leaves the sign-out tombstone for the sync blob.
      * Local watch data is not this store's to touch.
+     *
+     * Returns whether the tombstone was actually written, and THROWS when the
+     * store cannot be opened at all ([open]'s rebuild path is the only retry).
+     * Both halves matter to a disconnect: the caller used to have no way to tell
+     * a dropped session from a store it never reached, so it published
+     * "Disconnected" either way and the next entry read the surviving session
+     * back as Connected (see [TraktRepository.revokeAndClear]).
      */
-    fun markSignedOut() {
-        prefs?.edit()
-            ?.remove(KEY_ACCESS_TOKEN)
-            ?.remove(KEY_REFRESH_TOKEN)
-            ?.remove(KEY_EXPIRES_AT)
-            ?.remove(KEY_ACCOUNT_SLUG)
-            ?.putBoolean(KEY_SIGNED_OUT, true)
-            ?.apply()
+    fun markSignedOut(): Boolean {
+        val editor = prefs?.edit() ?: return false
+        editor.remove(KEY_ACCESS_TOKEN)
+            .remove(KEY_REFRESH_TOKEN)
+            .remove(KEY_EXPIRES_AT)
+            .remove(KEY_ACCOUNT_SLUG)
+            .putBoolean(KEY_SIGNED_OUT, true)
+            .apply()
+        return true
     }
 
     /** Retires a tombstone once a live session is present again. */

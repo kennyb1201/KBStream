@@ -154,7 +154,9 @@ internal fun downloadTargetFor(
  * every row probes its length - so a menu that only spoke when the manager
  * returned could sit silent for seconds and read as a press that did nothing.
  * The manager's own Toast still lands on completion (or on its refusal), so the
- * immediate notice is the acknowledgement and the second one is the outcome.
+ * immediate notice is the acknowledgement and the second one is the outcome -
+ * [retryDownload] is what speaks it on the retry side, for this menu and for the
+ * Downloads screen alike.
  */
 internal fun downloadPress(
     context: Context,
@@ -171,13 +173,29 @@ internal fun downloadPress(
     ).show()
     scope.launch {
         if (record?.state == DownloadState.FAILED) {
-            val result = DownloadsManager.retry(context.applicationContext, record.id)
-            if (result is DownloadEnqueueResult.Refused) {
-                Toast.makeText(context.applicationContext, result.reason, Toast.LENGTH_SHORT).show()
-            }
+            retryDownload(context, record)
         } else {
             startDownload(context, stream, target)
         }
+    }
+}
+
+/**
+ * Retries one download and says why when the retry is refused.
+ *
+ * The mirror of [startDownload] for the other press a download row offers, and
+ * it exists because the two surfaces that offer a Retry have to answer the same
+ * way: a retry re-resolves the row, so it can be refused for reasons the store
+ * cannot show - offline ("Connect to download"), an unresolvable hash row, no
+ * playable link, a record that is no longer listed - and a refusal that says
+ * nothing is exactly the silence this feature can least afford. Only a REFUSAL
+ * is announced: a retry that starts turns the row back into Queued, which the
+ * list already shows.
+ */
+internal suspend fun retryDownload(context: Context, record: DownloadRecord) {
+    val result = DownloadsManager.retry(context.applicationContext, record.id)
+    if (result is DownloadEnqueueResult.Refused) {
+        Toast.makeText(context.applicationContext, result.reason, Toast.LENGTH_SHORT).show()
     }
 }
 

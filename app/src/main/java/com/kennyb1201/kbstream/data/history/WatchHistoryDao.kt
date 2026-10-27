@@ -734,10 +734,31 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     // completion stamps fabricated streak days. The rows themselves are
     // untouched - badges, Continue Watching, resume and sync still read them.
 
-    /** Titles (shows or movies) with at least one completed ROW of real watch. */
+    /**
+     * Titles (shows or movies) with at least one completed ROW of real watch.
+     *
+     * Folded by id FLAVOR. The same show is stored under whichever id the
+     * screen that opened it had - `tmdb:<n>` for a TMDB result, its `tt…` twin
+     * once resolved - and `COUNT(DISTINCT parentId)` counted that as two: one
+     * show finished under both flavors read as two "Titles finished" (stats
+     * C3). The canonical id is the flavor rule the checkmark reads already use
+     * ([parentIdFlavors]): the `tt…` id when the row IS one, otherwise the twin
+     * the offline resolution cache knows, otherwise the row's own id - so a
+     * title whose twin was never resolved keeps counting exactly as it did, and
+     * the title count agrees with the episode checkmarks about what one show is.
+     */
     @Query(
-        "SELECT COUNT(DISTINCT parentId) FROM watch_history " +
-            "WHERE isCompleted = 1 AND markedWatched = 0"
+        """
+        SELECT COUNT(DISTINCT COALESCE(
+            CASE WHEN parentId LIKE 'tt%' THEN parentId END,
+            (SELECT rc.imdbId FROM imdb_resolution_cache rc
+              WHERE rc.key IN ('series::' || parentId, 'series::' || REPLACE(parentId, 'tmdb:', ''))
+                AND rc.imdbId LIKE 'tt%'
+              LIMIT 1),
+            parentId
+        )) FROM watch_history
+        WHERE isCompleted = 1 AND markedWatched = 0
+        """
     )
     suspend fun finishedTitleCount(): Int
 
@@ -780,7 +801,7 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     /**
      * Every completion timestamp, newest first. The streak is computed in
      * Kotlin from these (see ViewingStats.streakDays) rather than in SQL, so
-     * the UTC-day bucketing rule is pinned by a unit test.
+     * the day-bucketing rule is pinned by a unit test.
      */
     @Query(
         """
@@ -795,22 +816,58 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
      * The ten titles with the most runtime: finished duration for a completed
      * row, the saved position for one still in progress, so a show being watched
      * now still ranks rather than only completed ones.
+     *
+     * Grouped by the SAME folded id [finishedTitleCount] counts, for the same
+     * reason: a show finished under both id flavors was two rows here, its
+     * runtime split in half between them - enough to push it out of the top ten
+     * entirely (stats C3). The list therefore says one title per show, with the
+     * two flavors' runtime added together.
+     *
+     * [TopShow.type] travels with each row so the list can name what it ranked:
+     * movies are finished titles like any other (the headline tiles count them,
+     * and the DAO test pins that they rank here), so they have to be LABELLED
+     * rather than filed under the episodes' wording (stats C2). It is read from
+     * the title's newest row, as are `name` and `poster`: these are not
+     * aggregates, and a bare column in a GROUP BY lets SQLite pick an arbitrary
+     * row of the group, which showed a re-titled or re-postered show older
+     * metadata than it carries (stats I2).
      */
     @Query(
         """
-        SELECT parentId,
-               name,
-               poster,
+        SELECT COALESCE(
+                   CASE WHEN w.parentId LIKE 'tt%' THEN w.parentId END,
+                   (SELECT rc.imdbId FROM imdb_resolution_cache rc
+                     WHERE rc.key IN ('series::' || w.parentId, 'series::' || REPLACE(w.parentId, 'tmdb:', ''))
+                       AND rc.imdbId LIKE 'tt%'
+                     LIMIT 1),
+                   w.parentId
+               ) AS parentId,
+               (SELECT s.name FROM watch_history s
+                 WHERE s.parentId = w.parentId
+                 ORDER BY s.updatedAt DESC LIMIT 1) AS name,
+               (SELECT s.poster FROM watch_history s
+                 WHERE s.parentId = w.parentId
+                 ORDER BY s.updatedAt DESC LIMIT 1) AS poster,
+               (SELECT s.type FROM watch_history s
+                 WHERE s.parentId = w.parentId
+                 ORDER BY s.updatedAt DESC LIMIT 1) AS type,
                COALESCE(
                    SUM(
-                       CASE WHEN isCompleted = 1 AND markedWatched = 0 THEN durationMs
-                            ELSE positionMs END
+                       CASE WHEN w.isCompleted = 1 AND w.markedWatched = 0 THEN w.durationMs
+                            ELSE w.positionMs END
                    ),
                    0
                ) AS ms,
-               COUNT(CASE WHEN isCompleted = 1 AND markedWatched = 0 THEN 1 END) AS done
-        FROM watch_history
-        GROUP BY parentId
+               COUNT(CASE WHEN w.isCompleted = 1 AND w.markedWatched = 0 THEN 1 END) AS done
+        FROM watch_history w
+        GROUP BY COALESCE(
+            CASE WHEN w.parentId LIKE 'tt%' THEN w.parentId END,
+            (SELECT rc.imdbId FROM imdb_resolution_cache rc
+              WHERE rc.key IN ('series::' || w.parentId, 'series::' || REPLACE(w.parentId, 'tmdb:', ''))
+                AND rc.imdbId LIKE 'tt%'
+              LIMIT 1),
+            w.parentId
+        )
         ORDER BY ms DESC
         LIMIT 10
         """

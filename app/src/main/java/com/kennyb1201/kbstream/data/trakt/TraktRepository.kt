@@ -169,6 +169,23 @@ data class TraktPlaybackSession(
  *    so the guard cannot bite here, but it is the same guard the later phases
  *    need and starting without it is how MDBList's 40-attempt storm happened.
  */
+/**
+ * What a disconnect actually achieved.
+ *
+ * Three outcomes, because the screen used to print one message for all of them:
+ * the grant may have been revoked on Trakt's side ([REVOKED]), the local session
+ * may have been dropped without it - the rate guard or an unreachable Trakt
+ * ([SIGNED_OUT_ONLY]) - or the session may still be ON DISK because the
+ * encrypted store could not be written ([NOT_CLEARED]). A screen that says
+ * "Disconnected" for that last one is a screen that lies and then shows
+ * Connected again on the next entry.
+ */
+enum class TraktDisconnectOutcome {
+    REVOKED,
+    SIGNED_OUT_ONLY,
+    NOT_CLEARED
+}
+
 class TraktRepository private constructor(private val context: Context?) {
 
     companion object {
@@ -428,12 +445,21 @@ class TraktRepository private constructor(private val context: Context?) {
      * Revokes the grant when the network allows it, then drops ONLY the Trakt
      * session keys: history, resume rows, watched markers and the local library
      * are untouched, and stay exactly as they are after the disconnect.
+     *
+     * Returns what it managed to do, because the two halves fail independently:
+     * the revoke is skipped whenever the rate guard is spent or the build has no
+     * client id, and [TraktTokenStore.markSignedOut] throws when the encrypted
+     * store will not open - in which case the session is still on disk and the
+     * caller must NOT report a disconnect (see [TraktDisconnectOutcome]).
      */
-    suspend fun revokeAndClear() {
+    suspend fun revokeAndClear(): TraktDisconnectOutcome {
         val token = store.read()
         val revocable = token?.accessToken ?: token?.refreshToken
+        var revoked = false
         if (revocable != null && TraktConfig.isConfigured && guard.tryAcquire()) {
-            runCatchingCancellable {
+            // Best-effort by design: an unreachable Trakt must not stop the
+            // local sign-out, it only means the grant outlives it.
+            revoked = runCatchingCancellable {
                 api.revokeToken(
                     authorization = "Bearer $revocable",
                     body = TraktRevokeRequest(
@@ -441,15 +467,25 @@ class TraktRepository private constructor(private val context: Context?) {
                         clientId = TraktConfig.clientId
                     )
                 )
-            }
+            }.isSuccess
         }
         // Tombstone, not a bare clear: a deliberate disconnect is the only
         // thing that may end the session on another device, and a blank blob
         // is indistinguishable from "this profile never connected Trakt"
         // (see TraktAuthRules).
-        store.markSignedOut()
+        //
+        // Nothing is published when this does not take: a tombstone for a
+        // session that survived would sign the account out on every OTHER
+        // device while this one stayed connected.
+        val cleared = runCatchingCancellable { store.markSignedOut() }.getOrDefault(false)
+        if (!cleared) return TraktDisconnectOutcome.NOT_CLEARED
         invalidateWatchedSnapshot()
         publishAuthToSync()
+        return if (revoked) {
+            TraktDisconnectOutcome.REVOKED
+        } else {
+            TraktDisconnectOutcome.SIGNED_OUT_ONLY
+        }
     }
 
     /**

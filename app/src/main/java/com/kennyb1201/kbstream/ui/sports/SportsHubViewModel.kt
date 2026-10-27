@@ -399,16 +399,35 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private var lineupGeneration = 0
 
     /**
-     * The guide index built for [playlistChannels], kept for the ViewModel's
-     * lifetime.
+     * The guide index built for [playlistChannels] against the guide sources it
+     * was built from, kept for the ViewModel's lifetime.
      *
-     * It depends only on the lineup and the guide URLs, neither of which changes
-     * while the hub is open, so rebuilding it on every live tick was pure cost:
-     * one query per channel per guide source, over five figures of channels,
-     * repeated every 30 seconds for the tab that is in play. Held alongside the
-     * cached lineup and dropped with it when the lineup is re-read.
+     * Rebuilding it on every live tick was pure cost: one query per channel per
+     * guide source, over five figures of channels, repeated every 30 seconds for
+     * the tab that is in play. Held alongside the cached lineup and dropped with
+     * it when the lineup is re-read.
+     *
+     * The lineup alone is NOT its identity - see [guideIndexSourceKey]: this hub
+     * is activity-scoped, so Playlist Setup can edit Extra EPG and the Free TV
+     * migration can add lines while it lives on.
      */
     private var guideIndexCache: Map<String, IptvChannel>? = null
+
+    /**
+     * The guide-source set [guideIndexCache] was built against.
+     *
+     * The index is a playlist-channel -> guide-row mapping, so a source that
+     * joins the set after the first build is invisible to every pass that
+     * reuses it: a game carried only on that source's channels keeps reading
+     * "Not in your playlist" however many live ticks run. That is the residual
+     * of the guide-arrival fix (2026-10-27) - [observeGuideImports] bumps the
+     * generation and re-matches, but the mapping it re-matches against was
+     * still the one built before the new source existed. Compared as the whole
+     * set, so a renamed or reordered source costs a rebuild while a re-read of
+     * the same set does not, and dropped wherever the lineup is (see
+     * [retryLineup], [onProfileSwitched], [observeGuideImports]).
+     */
+    private var guideIndexSourceKey: String? = null
 
     /**
      * The card ids the last completed match pass ran against, and the lineup it
@@ -487,6 +506,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 passWasOpen = open
                 if (!finished) return@collect
                 guideGeneration++
+                // The mapping, and why an import is when it can change: a
+                // channel resolves to its guide row by asking the imported
+                // guide, so a channel that resolved to nothing while the guide
+                // was still importing resolves now. Dropped BEFORE the "is the
+                // hub in front of the viewer" test below, so a pass resumed
+                // after the player rebuilds it too.
+                guideIndexCache = null
+                guideIndexSourceKey = null
                 if (pollPaused || _sections.value.isEmpty()) return@collect
                 // Through refresh() rather than a bare resolveMatches pass: it
                 // owns the job, so any pass already in flight is cancelled
@@ -1270,21 +1297,30 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The guide index, built once per lineup and reused for the ViewModel's
-     * life.
+     * The guide index for this lineup and this profile's guide sources, built
+     * once and reused until either of them changes.
      *
-     * See [guideIndexCache]: the index is a pure function of the lineup and the
-     * guide URLs, both fixed while the hub is open, so the live tick (every 30
-     * seconds, same lineup) reuses the first build instead of walking five
-     * figures of channels again. An empty build is deliberately not cached - a
-     * lineup with no guide URL yet, or a read that failed, is worth retrying on
-     * the next pass - and [retryLineup] drops the cache with the lineup.
+     * See [guideIndexSourceKey] for why the sources are part of the identity
+     * rather than an assumption: the live tick (same lineup, same sources)
+     * reuses the first build instead of walking five figures of channels again,
+     * while a source added mid-session rebuilds it on the next pass instead of
+     * leaving the games only that source carries unmatchable. An empty build is
+     * deliberately not cached - a lineup with no guide URL yet, or a read that
+     * failed, is worth retrying on the next pass - and [retryLineup], the
+     * profile switch and a finished guide import each drop it.
      */
     private suspend fun cachedGuideIndex(channels: List<IptvChannel>): Map<String, IptvChannel> {
-        guideIndexCache?.let { return it }
-        val built = runCatchingCancellable { guideChannelIndex(channels) }
+        val epgUrls = allEpgUrls()
+        val sourceKey = epgUrls.joinToString("\n")
+        if (guideIndexSourceKey == sourceKey) {
+            guideIndexCache?.let { return it }
+        }
+        val built = runCatchingCancellable { guideChannelIndex(channels, epgUrls) }
             .getOrDefault(emptyMap())
-        if (built.isNotEmpty()) guideIndexCache = built
+        if (built.isNotEmpty()) {
+            guideIndexCache = built
+            guideIndexSourceKey = sourceKey
+        }
         return built
     }
 
@@ -1412,9 +1448,9 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun guideChannelIndex(
-        channels: List<IptvChannel>
+        channels: List<IptvChannel>,
+        epgUrls: List<String>,
     ): Map<String, IptvChannel> {
-        val epgUrls = allEpgUrls()
         if (epgUrls.isEmpty()) return emptyMap()
 
         // One query per channel per guide source, with the SAME candidates the

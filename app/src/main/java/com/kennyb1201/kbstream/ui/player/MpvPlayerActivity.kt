@@ -231,6 +231,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private var errorRetryButton: TextView? = null
     private var bufferingView: View? = null
+    private val showMpvBufferingRunnable =
+        Runnable { bufferingView?.visibility = View.VISIBLE }
+
+    /**
+     * Takes the spinner down and drops any pending show with it: a blip that
+     * ended inside the delay must not paint over the loading card, the error
+     * card, or the end of the file.
+     */
+    private fun hideMpvBuffering() {
+        handler.removeCallbacks(showMpvBufferingRunnable)
+        bufferingView?.visibility = View.GONE
+    }
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
     // The one shared overlay (player_chrome.xml).
@@ -486,6 +498,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 (mpvScrubTargetMs + ScrubAcceleration.stepFor(mpvScrubHeldMs) * mpvScrubDirection)
                     .coerceIn(0L, duration)
             view.seekTo(mpvScrubTargetMs)
+            showScrubReadout()
             mpvScrubHandler.postDelayed(this, ScrubAcceleration.TICK_MS)
         }
     }
@@ -1050,7 +1063,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onPictureReady = { armStallWatchdog() }
         view.onBufferingChanged = { buffering ->
-            bufferingView?.visibility = if (buffering) View.VISIBLE else View.GONE
+            // Posted, not assigned, for the reason the main player's spinner is
+            // (see NativePlayerActivity.bufferingSpinnerDelayMs): a sub-second
+            // blip - a seek, a track re-selection, one starved frame - would
+            // otherwise flash a spinner over a picture that is about to come
+            // back (audit U-F8, 2026-10-27). Hiding is immediate and cancels the
+            // pending show, so a blip that ends first paints nothing.
+            handler.removeCallbacks(showMpvBufferingRunnable)
+            if (buffering) {
+                handler.postDelayed(showMpvBufferingRunnable, MPV_BUFFERING_SPINNER_DELAY_MS)
+            } else {
+                bufferingView?.visibility = View.GONE
+            }
             onMpvBufferingChanged(buffering)
         }
         view.onEnded = { onPlaybackEnded() }
@@ -2064,10 +2088,38 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // landed; this is the one seek that makes the release exact.
         if (extended) {
             surface?.seekTo(mpvScrubTargetMs)
+            // ...and the readout is left up for a moment past the release: the
+            // landing position is the thing a hold is trying to find, and the
+            // overlay stays down (audit U-F2, 2026-10-27).
+            showScrubReadout()
         } else {
             // A tap keeps its old shape: it reveals the controls.
             showControls()
         }
+    }
+
+    /**
+     * The time readout an overlay-less hold-scrub draws, in the same bubble the
+     * touch drags use.
+     *
+     * The overlay deliberately stays down for the whole hold (see above), which
+     * left this the one scrub in the app with no feedback at all: no readout
+     * while holding, and nothing on release either, so the viewer could not tell
+     * where the ramp had landed until they pressed something (audit U-F2,
+     * 2026-10-27). ExoPlayer's hold keeps its seek bar's clock live; this draws
+     * the same fact where an overlay-less scrub can - re-labelled on every tick,
+     * so it tracks the ramp, and left up for [SCRUB_READOUT_HOLD_MS] after the
+     * release, which is the "where did I land" half of the same complaint.
+     */
+    private fun showScrubReadout() {
+        // A stream with no duration to scrub against never gets here (see
+        // beginMpvHoldScrub), so the denominator is real whenever this runs.
+        val duration = surface?.durationMs()?.takeIf { it > 0 } ?: return
+        val hint = ensureTouchHint()
+        hint.text = "${formatMillis(mpvScrubTargetMs)} / ${formatMillis(duration)}"
+        hint.visibility = View.VISIBLE
+        touchHintHandler.removeCallbacks(touchHintHider)
+        touchHintHandler.postDelayed(touchHintHider, SCRUB_READOUT_HOLD_MS)
     }
 
     // --- Chrome, matched to the main player's -----------------------------
@@ -2217,8 +2269,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             this,
             target,
             object : PlayerTouchGestures.Callbacks {
+                // Every panel that owns the screen answers no, as the main
+                // player's version of this has always done (audit U-F9,
+                // 2026-10-27). This used to name the settings panel alone, so a
+                // double-tap or a drag on the exposed video area still seeked
+                // and still set brightness under an open picker, an open INFO
+                // readout or the error card - panels the viewer is reading, not
+                // watching through.
                 override fun gesturesAllowed(): Boolean =
-                    settingsContainer?.visibility != View.VISIBLE
+                    settingsContainer?.visibility != View.VISIBLE &&
+                        pickerContainer?.visibility != View.VISIBLE &&
+                        !infoPanelVisible &&
+                        errorContainer?.visibility != View.VISIBLE
 
                 override fun toggleChrome() {
                     if (controlsVisible) setControlsVisible(View.GONE) else showControls()
@@ -2319,6 +2381,23 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         showToast("Aspect: ${ASPECT_MODES[next]}")
     }
 
+    /**
+     * What an empty picker says, per mode.
+     *
+     * The empty guard keeps the panel shut (see [showPicker]), but staying
+     * silent made every one of these a press that did nothing - the same fault
+     * the main player fixed (audit U-F12, 2026-10-27). Copy is per mode because
+     * "no sources" and "no audio tracks" are different facts about the title:
+     * one the viewer can act on, one they cannot. Word for word the main
+     * player's, so the two engines read the same way.
+     */
+    private fun emptyPickerMessage(mode: PickerMode): String = when (mode) {
+        PickerMode.SOURCE -> "No other sources for this title"
+        PickerMode.AUDIO -> "This file has no audio tracks to choose from"
+        PickerMode.SUBTITLE -> "No subtitles in this file \u2014 use SEARCH in the subtitle row"
+        PickerMode.SPEED -> "No playback speeds available here"
+    }
+
     // --- Picker: the main player's panel, driven by mpv ---------------------
 
     /**
@@ -2340,8 +2419,22 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                         isSelected = stream.url == currentUrl,
                         badges = stream.badges,
                         onClick = {
-                            switchToSource(stream)
-                            dismissPicker()
+                            // A hash row has no direct URL, so switchToSource
+                            // answers `url ?: return` and the picker used to
+                            // close over a player that had not changed - a press
+                            // with no effect and no word about it (audit S-F2,
+                            // 2026-10-27). Resolving a debrid link is the
+                            // streams picker's job, so this one says what the
+                            // row needs and stays open instead of dismissing
+                            // into the same source.
+                            if (stream.url.isNullOrBlank()) {
+                                showToast(
+                                    "This source needs TorBox \u2014 pick it from the streams list"
+                                )
+                            } else {
+                                switchToSource(stream)
+                                dismissPicker()
+                            }
                         }
                     )
                 }
@@ -2459,8 +2552,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
 
         // An empty list is a dead end, not a panel: nothing to pick means the
-        // picker stays shut rather than opening on a blank box.
-        if (items.isEmpty()) return
+        // picker stays shut rather than opening on a blank box. It SAYS so,
+        // though - the button that asked for it is visible and live, and a
+        // silent return read as a button that ignored the press (audit U-F12,
+        // 2026-10-27, the same fix the main player took).
+        if (items.isEmpty()) {
+            showToast(emptyPickerMessage(mode))
+            return
+        }
 
         // A side panel is up from here on, so `settingsOpen` carries that fact
         // (it is what the auto-hide and key rules already read - see the field)
@@ -2670,9 +2769,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * ExoPlayer vanished the moment the session fell over to this engine.
      * Called once the file is open ([onFileLoaded]), the first moment mpv can
      * accept a `sub-add`.
+     *
+     * OFF wins over the memory, and this is the only place that can enforce it:
+     * [applyRememberedTracks] runs first and clears subtitles, then this runs
+     * and re-selects the remembered sidecar, so a viewer who picked OFF for the
+     * show and had a sidecar attached earlier got the subtitle back on every
+     * reopen. The check runs before the restored latch, so turning subtitles
+     * back on in the same session still restores it. [chooseSubtitlesOff] is the
+     * second half: the OFF pick also erases the sidecar memory it would come
+     * back from, so a later session that clears OFF does not resurrect it.
      */
     private fun restoreRememberedSubtitle() {
         if (subtitleMemoryRestored) return
+        if (subtitlesOff) return
         subtitleMemoryRestored = true
         if (externalSubtitleUri != null) return
         val remembered = PlayerTrackMemory.rememberedSubtitle(this, subtitleMemoryKey())
@@ -3153,6 +3262,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // this stream, exactly as the launch path does.
         streamHeaders = stream.requestHeaders
         currentSourceLabel = stream.sourceLabel()
+        // Into the session trace: a source switch is one of the events a binge
+        // report has to explain ("the same episode played from a different
+        // provider"), and only this engine's own ring had it - the session ring
+        // carried the session line and the handoff's `filed` line and nothing
+        // between (audit S-I11, 2026-10-27).
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "source switch: s=${season?.toString() ?: "-"} e=${episode?.toString() ?: "-"} " +
+                "index=$currentSourceIndex/${sources.size} auto=$isAutoRecovery " +
+                "label=$currentSourceLabel"
+        )
         currentBadges = stream.badges
         // The switched source brings its OWN binge identity: left behind, the
         // next-episode handoff would carry the previous provider's group and
@@ -3586,6 +3705,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** The picker's OFF row: explicit per-show "no subtitles", remembered. */
     internal fun chooseSubtitlesOff() {
         subtitlesOff = true
+        // ...and the per-episode sidecar memory goes with the pick, so OFF is
+        // not undone by the restore on the next open of this episode (see
+        // restoreRememberedSubtitle for the ordering that used to defeat it).
+        PlayerTrackMemory.forget(this, subtitleMemoryKey())
         subtitleTrackSignature = ""
         persistTitlePreferences()
         surface?.clearSubtitles()
@@ -4736,10 +4859,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (!sessionHasPlayed()) {
             Log.w(TAG, "ignoring end-of-playback: this session never played")
             return
-        }
-        endedHandled = true
-        runOnUiThread {
-            bufferingView?.visibility = View.GONE
+        }            endedHandled = true
+            runOnUiThread {
+                hideMpvBuffering()
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
         }
@@ -4807,7 +4929,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun routeAfterCompletedEnd() {
         runOnUiThread {
-            bufferingView?.visibility = View.GONE
+            hideMpvBuffering()
             // A sleep timer armed to stop at the end of this episode is honored
             // here, where the episode really is over: no card, no auto-advance,
             // just out. The completion write already made is what the history
@@ -5432,7 +5554,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         loadingContainer?.visibility = View.VISIBLE
         loadingTitle?.text = itemTitle()
         loadingSubtitle?.text = subtitle
-        bufferingView?.visibility = View.GONE
+        hideMpvBuffering()
     }
 
     /**
@@ -5452,7 +5574,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private fun showError(message: String, hint: String) {
         loadingContainer?.visibility = View.GONE
-        bufferingView?.visibility = View.GONE
+        hideMpvBuffering()
         setControlsVisible(View.GONE)
         errorContainer?.visibility = View.VISIBLE
         errorText?.text = message
@@ -6192,7 +6314,32 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // Not when the end-of-episode card already filed this episode and
         // closed its tracker session ([fileEpisodeForHandoff]).
         if (!playerSwitchStarted && !nextEpisodeHandoffStarted) {
-            saveProgress(reason = "stop")
+            // The same verdict the Back path computes ([exitPlayer]): ending the
+            // session from the SYSTEM - Home, a call, the task switcher - while
+            // the end card is up at 90-95% must file a completion, not a resume
+            // point. Exo's onStop has armed this since the credits-tail rule was
+            // introduced; MPV's had only the 95% threshold inside saveProgress,
+            // so backgrounding there left the episode part-watched and a
+            // Continue Watching card with the last few percent on it (audit
+            // S-F7, 2026-10-27).
+            val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
+            val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)
+            val completedOnExit = shouldRecordCompletion(
+                playbackEnded = endedHandled,
+                endPanelsShown = endPanelsShown,
+                positionMs = pos,
+                durationMs = dur,
+                played = sessionHasPlayed(),
+                completionFiled = completionFiled
+            )
+            // Into the session trace: the exit save is the row Continue
+            // Watching reads next, and it was the one write the ring never
+            // recorded (audit S-I11, 2026-10-27).
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "exit save: s=${season?.toString() ?: "-"} e=${episode?.toString() ?: "-"} " +
+                    "completed=$completedOnExit reason=stop"
+            )
+            saveProgress(reason = "stop", forceCompleted = completedOnExit)
             scrobble("stop")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) abandonAudioFocus()
@@ -6548,6 +6695,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         private const val COMPLETION_THRESHOLD_RATIO = 0.95f
         private const val MIN_RESUME_POSITION_MS = 10_000L
         private const val SEEK_STEP_MS = 10_000L
+
+        /**
+         * How long a hold-scrub's readout stays up after the release, and the
+         * delay before a buffering blip is allowed to paint a spinner. Both are
+         * the main player's numbers, so the two engines feel the same.
+         */
+        private const val SCRUB_READOUT_HOLD_MS = 900L
+        private const val MPV_BUFFERING_SPINNER_DELAY_MS = 400L
 
         /**
          * How often the stall watchdog looks. Same cadence as the main player's

@@ -433,11 +433,14 @@ object DownloadsManager {
         refresh(app, persist = false)
     }
 
-    /** Bytes the completed downloads on this phone hold. Partials never count (spec §7). */
+    /**
+     * Bytes the completed downloads on this phone hold. Partials never count
+     * (spec §7). See [completedDownloadBytes] for what a row contributes - a
+     * completed adaptive download has no length to sum, so its own bytes are
+     * what count.
+     */
     fun totalBytes(context: Context): Long =
-        DownloadsStore.records(context.applicationContext)
-            .filter { it.state.isComplete }
-            .sumOf { it.totalBytes.coerceAtLeast(0L) }
+        completedDownloadBytes(DownloadsStore.records(context.applicationContext))
 
     /**
      * Whether a download exists for one of [mediaKeys] at the given episode - the
@@ -470,15 +473,17 @@ object DownloadsManager {
      * Called once a completion has been FILED - not during playback - so the
      * viewer finishes the episode and the download goes afterwards. Off by
      * default, and a no-op when it is off or when nothing matches.
+     *
+     * Scoped by the finished record's OWN id ([finishedDownloadIds]), never by
+     * its title key: on a series episode that key is the show's, so the old
+     * title-keyed match deleted every completed episode of the show the viewer
+     * had (audit C2, 2026-10-27).
      */
-    fun onTitleCompleted(context: Context, mediaKeys: Collection<String>) {
+    fun onTitleCompleted(context: Context, downloadId: String) {
         val app = context.applicationContext
         if (!DownloadsStore.getDeleteAfterFinish(app)) return
-        val keys = mediaKeys.filter { it.isNotBlank() }.toSet()
-        if (keys.isEmpty()) return
-        DownloadsStore.records(app)
-            .filter { it.state.isComplete && it.mediaKey in keys }
-            .forEach { delete(app, it.id) }
+        finishedDownloadIds(DownloadsStore.records(app), downloadId)
+            .forEach { delete(app, it) }
     }
 
     /**

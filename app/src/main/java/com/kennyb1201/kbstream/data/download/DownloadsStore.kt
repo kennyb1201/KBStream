@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.download
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -45,8 +46,17 @@ object DownloadsStore {
     const val PREFS_NAME = "kbstream_downloads"
 
     internal const val KEY_RECORDS = "records_json"
+
+    /**
+     * Where the first blob this build could not read is kept, before a write
+     * replaces it. See [preserveUnreadableBlob].
+     */
+    internal const val KEY_RECORDS_UNREADABLE = "records_json_unreadable"
+
     internal const val KEY_DOWNLOAD_OVER_CELLULAR = "download_over_cellular"
     internal const val KEY_DELETE_AFTER_FINISH = "delete_after_finish"
+
+    private const val TAG = "DOWNLOADS"
 
     private val json = Json {
         // A field a future build stops writing must not make an existing file
@@ -84,9 +94,70 @@ object DownloadsStore {
 
     private fun read(prefs: SharedPreferences): List<DownloadRecord> {
         val raw = prefs.getString(KEY_RECORDS, null) ?: return emptyList()
-        val decoded = runCatching { json.decodeFromString(serializer, raw) }
-            .getOrElse { return emptyList() }
-        return decoded.sortedByDescending { it.addedAt }
+        runCatching { json.decodeFromString(serializer, raw) }
+            .onSuccess { decoded -> return decoded.sortedByDescending { it.addedAt } }
+        // The blob did not decode as a whole list. It used to become the same
+        // empty list a fresh install has - and because EVERY download event
+        // persists a merge (see [DownloadsManager.refresh]), the next pause,
+        // completion or delete wrote that emptiness back, so one unreadable blob
+        // meant the whole queue was gone for good (audit C1, 2026-10-27). What
+        // it decodes to IN PIECES is now what it reads as: a blob truncated
+        // mid-write - the shape `apply()` racing a process death leaves - loses
+        // its tail instead of everything.
+        val salvaged = salvageRecords(raw)
+        Log.w(
+            TAG,
+            "download records blob could not be read as a list; salvaged ${salvaged.size}"
+        )
+        return salvaged.sortedByDescending { it.addedAt }
+    }
+
+    /**
+     * Every record that still decodes out of a blob the LIST decoder rejected.
+     *
+     * Each top-level `{...}` group is offered to the record decoder on its own,
+     * so a blob whose tail was cut off - or whose one bad record has a value no
+     * build understands - gives up only what is actually unreadable. The brace
+     * walk respects strings and escapes, because a record's own text (a title, a
+     * description) contains both braces and quotes.
+     */
+    internal fun salvageRecords(raw: String): List<DownloadRecord> {
+        val out = ArrayList<DownloadRecord>()
+        var depth = 0
+        var start = -1
+        var inString = false
+        var escaped = false
+        raw.forEachIndexed { index, character ->
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    character == '\\' -> escaped = true
+                    character == '"' -> inString = false
+                }
+                return@forEachIndexed
+            }
+            when (character) {
+                '"' -> inString = true
+                '{' -> {
+                    if (depth == 0) start = index
+                    depth++
+                }
+
+                '}' -> {
+                    if (depth > 0) depth--
+                    if (depth == 0 && start >= 0) {
+                        runCatching {
+                            json.decodeFromString(
+                                DownloadRecord.serializer(),
+                                raw.substring(start, index + 1)
+                            )
+                        }.getOrNull()?.let(out::add)
+                        start = -1
+                    }
+                }
+            }
+        }
+        return out
     }
 
     /** Writes one record, replacing the record with the same id when there is one. */
@@ -100,12 +171,43 @@ object DownloadsStore {
         putAll(context, next)
     }
 
+    /**
+     * Replaces the stored records, keeping an unreadable blob first.
+     *
+     * The refusal shape the add-on list and the built-catalog store use - keep
+     * the blob, refuse every write - is deliberately NOT what this store does,
+     * because the two features fail in opposite directions: a builder that
+     * cannot save can TELL the viewer the catalog is not there, while a
+     * downloads store that refuses to write cannot list a new download either,
+     * so the feature would be dead until the viewer cleared app data. The raw
+     * blob is preserved instead ([KEY_RECORDS_UNREADABLE]) and the store carries
+     * on with what it could salvage, so nothing is thrown away silently and
+     * nothing stops working.
+     */
     fun putAll(context: Context, records: List<DownloadRecord>) {
+        val target = prefs(context)
+        preserveUnreadableBlob(target)
         runCatching {
-            prefs(context).edit()
+            target.edit()
                 .putString(KEY_RECORDS, json.encodeToString(serializer, records))
                 .apply()
         }
+    }
+
+    /**
+     * Keeps the FIRST blob this build could not read, before a write replaces it.
+     *
+     * One copy, and only the first: a later unreadable blob is the same data as
+     * far as a repair is concerned, and overwriting the kept copy with it would
+     * be the same silent loss one step removed.
+     */
+    private fun preserveUnreadableBlob(prefs: SharedPreferences) {
+        val raw = prefs.getString(KEY_RECORDS, null)
+        if (raw.isNullOrBlank()) return
+        if (runCatching { json.decodeFromString(serializer, raw) }.isSuccess) return
+        if (prefs.getString(KEY_RECORDS_UNREADABLE, null) != null) return
+        runCatching { prefs.edit().putString(KEY_RECORDS_UNREADABLE, raw).apply() }
+            .onFailure { Log.w(TAG, "could not keep the unreadable records blob: ${it.message}") }
     }
 
     /** Drops one record. A deleted download leaves no tombstone, see [DownloadState.DELETED]. */

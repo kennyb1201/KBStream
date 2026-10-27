@@ -30,6 +30,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -42,6 +44,7 @@ import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBQrCode
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.mobile.SimklConnectScreenMobile
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -139,7 +142,21 @@ fun SimklConnectScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                if (uiState.isConnected) {
+                if (!uiState.isConfigured) {
+                    // Trakt's page has always had this branch; Simkl's missing
+                    // client id surfaced only as the code request's thrown error
+                    // (trackers I2).
+                    SimklStatusPanel(
+                        title = "Not available in this build",
+                        message = "This build has no Simkl client id, so Simkl cannot be " +
+                            "connected. Set SIMKL_CLIENT_ID for the build and reinstall."
+                    )
+                    // A control for the D-pad: without one this branch is a dead
+                    // end with nothing to focus below the panel.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        KBButton(label = "BACK", onClick = onBack)
+                    }
+                } else if (uiState.isConnected) {
                     SimklStatusPanel(
                         title = "Account connected",
                         message = uiState.accountName?.let {
@@ -192,6 +209,12 @@ fun SimklConnectScreen(
                             )
                         }
                     }
+                } else if (uiState.requiresParentPin) {
+                    // The gate Trakt's page has always had (trackers C1): a kids
+                    // profile links no account without a parent. It sits here
+                    // rather than replacing the linking branch, so CANCEL is
+                    // followed by the ordinary not-connected page.
+                    SimklParentPinGate(vm = vm, onBack = onBack)
                 } else {
                     SimklStatusPanel(
                         title = "Device link required",
@@ -297,6 +320,54 @@ fun SimklConnectScreen(
 }
 
 /**
+ * A kids profile may not link an account without the parent PIN.
+ *
+ * The same field the lock veil uses (digits only, four of them), because that is
+ * the credential this app already asked parents to set - and the same gate
+ * Trakt's page draws, so both trackers state one rule (trackers C1).
+ */
+@Composable
+private fun SimklParentPinGate(
+    vm: SimklViewModel,
+    onBack: () -> Unit
+) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var pin by remember { mutableStateOf("") }
+    val pinField = remember { FocusRequester() }
+    LaunchedEffect(Unit) { landFocusOn(pinField) }
+
+    SimklStatusPanel(
+        title = "Parent PIN required",
+        message = "Linking an account on a kids profile is a parent's action."
+    )
+    KBTextField(
+        value = pin,
+        onValueChange = {
+            pin = it.filter(Char::isDigit).take(4)
+            vm.clearPinError()
+        },
+        placeholder = "••••",
+        focusRequester = pinField,
+        keyboardType = KeyboardType.NumberPassword,
+        visualTransformation = PasswordVisualTransformation(),
+        keepFocusOnDone = true
+    )
+    if (uiState.pinError) {
+        SimklErrorLine("Wrong PIN — try again")
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        KBButton(
+            label = "UNLOCK",
+            onClick = { vm.submitParentPin(pin) }
+        )
+        KBButton(label = "CANCEL", onClick = {
+            vm.cancelParentPin()
+            onBack()
+        })
+    }
+}
+
+/**
  * The DISCONNECT gate.
  *
  * Wording names the wipe, not just the unlink, because that is what the button
@@ -318,7 +389,9 @@ private fun DisconnectConfirmDialog(
                 text = "This unlinks your Simkl account and clears every resume " +
                     "position and watched marker stored on this device, along " +
                     "with the launcher's Continue Watching rows. It cannot be " +
-                    "undone.",
+                    "undone. Simkl keeps this app in your connected apps until " +
+                    "you remove it at simkl.com — the app cannot revoke its own " +
+                    "access there.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )

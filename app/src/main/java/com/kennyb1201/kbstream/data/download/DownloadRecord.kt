@@ -156,6 +156,25 @@ data class DownloadRecord(
 }
 
 /**
+ * What the completed downloads here hold, as the Downloads header and the
+ * Settings row report it.
+ *
+ * Partials never count (spec §7) - their bytes are on the disk for now, and
+ * counting them would make the figure disagree with what deleting a row gives
+ * back. A completed row counts the LARGER of its known length and the bytes
+ * actually on disk, because an adaptive row's length is never established:
+ * Media3 has no `contentLength` for an HLS download, so the record holds
+ * [DownloadSpace.UNKNOWN_LENGTH] and the only real figure is the bytes the
+ * downloader counted. Summing the length alone made a completed HLS download
+ * contribute zero to a total its own row displays in full (audit C4,
+ * 2026-10-27) - the header, the Settings row and the rows above it all
+ * disagreeing with each other.
+ */
+internal fun completedDownloadBytes(records: List<DownloadRecord>): Long =
+    records.filter { it.state.isComplete }
+        .sumOf { maxOf(it.totalBytes, it.bytesDownloaded).coerceAtLeast(0L) }
+
+/**
  * Bytes as a person reads them.
  *
  * Decimal units (1000), not binary (1024): this number is only ever compared

@@ -210,8 +210,17 @@ class PlayerChrome(
     private val hideRunnable = Runnable {
         // A panel that owns the screen answers no here, and the bar stays up
         // until whatever raised the panel lowers it again - see
-        // PlayerChromeHost.chromeMayAutoHide.
-        if (!host.chromeMayAutoHide()) return@Runnable
+        // PlayerChromeHost.chromeMayAutoHide. The countdown REPOSTS rather than
+        // dying: it used to run once, so a panel that outlived it (Settings open
+        // for more than the auto-hide delay, which is ordinary) left the overlay
+        // sitting over the picture until the next button press, because nothing
+        // re-armed the timer when the panel closed - the panel dismissals only
+        // hand focus back (audit U-F1, 2026-10-27). Reposted, the bar drops on
+        // the first beat after whatever is holding it down lets go.
+        if (!host.chromeMayAutoHide()) {
+            handler.postDelayed(this, autoHideMs)
+            return@Runnable
+        }
         // An engine with its own teardown takes the bar down itself.
         if (!host.onChromeAutoHide()) hide()
     }

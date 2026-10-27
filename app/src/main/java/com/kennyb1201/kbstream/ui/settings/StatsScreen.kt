@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,15 +18,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.tv.material3.Border
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -34,9 +42,11 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -54,7 +64,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * previous value and exact watch time is not recoverable. What the table does
  * support is honest - the duration of every completed row, the saved position
  * of the rows still open, a count of completions by type, and the streak of
- * consecutive UTC days with a completion. All read-only: nothing here writes.
+ * consecutive days with a completion (the viewer's own days, see
+ * [ViewingStats.streakDays]). All read-only: nothing here writes.
  */
 @Composable
 fun StatsScreen(
@@ -75,6 +86,16 @@ fun StatsScreen(
     BackHandler(onBack = onBack)
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // A fresh read on entry, and again whenever the active profile changes.
+    // StatsViewModel is activity-scoped (a plain viewModel()), so its numbers
+    // used to be whatever its single process-lifetime load produced: a screen
+    // reopened after another episode was finished never showed it, and after a
+    // profile switch it showed the PREVIOUS profile's numbers under the "this
+    // profile's history" subtitle (stats C1).
+    val activeProfileId = ProfileManager.activeProfile
+        .collectAsStateWithLifecycle().value?.id
+    LaunchedEffect(activeProfileId) { viewModel.load() }
 
     Column(
         modifier = Modifier
@@ -105,6 +126,21 @@ fun StatsScreen(
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
+            return@Column
+        }
+
+        // A read that threw used to leave the screen here for good, with
+        // nothing to press but BACK - the coroutine died with the loading flag
+        // still set (stats C6). Name the failure and offer the one press that
+        // can clear it.
+        state.error?.let { message ->
+            Text(
+                text = message,
+                color = KBDanger,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            KBButton(label = "RETRY", onClick = { viewModel.load() })
             return@Column
         }
 
@@ -143,13 +179,21 @@ fun StatsScreen(
         Spacer(modifier = Modifier.height(14.dp))
 
         // ── Streak ───────────────────────────────────────────────────────────
-        StreakBadge(state.streakDays)
+        // Drawn only when there IS one: "0 day streak" on a fresh profile read
+        // as a figure about nothing watched, under a tile row already saying 0
+        // (stats I1).
+        if (state.streakDays > 0) {
+            StreakBadge(state.streakDays)
+            Spacer(modifier = Modifier.height(20.dp))
+        }
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // ── Top shows ────────────────────────────────────────────────────────
+        // ── Top titles ───────────────────────────────────────────────────────
+        // "Titles", not "shows": the ranking is every finished title, movies
+        // included - the tiles count movies separately, and the empty message
+        // below promises "the titles you complete will rank here", so a header
+        // calling them all shows contradicted both (stats C2).
         Text(
-            text = "TOP SHOWS",
+            text = "TOP TITLES",
             color = KBAccent,
             style = MaterialTheme.typography.labelMedium
         )
@@ -242,17 +286,42 @@ private fun StreakBadge(days: Int) {
     }
 }
 
-/** One top-show line: poster, name, finished runtime and episodes done. */
+/**
+ * One ranked line: poster, name, finished runtime and what was finished.
+ *
+ * Unlike the plates above it, this row IS focusable. A readout that never takes
+ * focus is right for four tiles, but this list is a LazyColumn: with no
+ * focusable node below BACK the D-pad could not reach a row past the fold, so
+ * the list never scrolled and the bottom of a ten-row ranking was both
+ * invisible and unreachable (stats C4). Focus scrolls the list to the row; OK
+ * does nothing, because there is nothing here to open.
+ */
 @Composable
 private fun TopShowRow(show: TopShow) {
-    // Same non-focusable plate as [StatTile]: the row is a readout, so it takes
-    // no focus and skips no D-pad stop.
+    var focused by remember { mutableStateOf(false) }
+    // A movie is a finished title like any other and ranks here, so it has to
+    // be named as one: every row used to be worded as episodes, which filed a
+    // film under "1 episode finished" (stats C2).
+    val isMovie = show.type.equals("movie", ignoreCase = true)
     Surface(
         shape = KBShapeCard,
         colors = SurfaceDefaults.colors(
-            containerColor = KBSurface,
+            containerColor = if (focused) KBSurfaceRaised else KBSurface,
             contentColor = KBTextHi
-        )
+        ),
+        // Always 2dp wide, transparent until focused: swapping the border in and
+        // out with focus would resize every row as the D-pad moved down the
+        // list.
+        border = Border(
+            border = BorderStroke(
+                width = 2.dp,
+                color = KBAccent.copy(alpha = if (focused) 1f else 0f)
+            ),
+            shape = KBShapeCard
+        ),
+        modifier = Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -298,9 +367,10 @@ private fun TopShowRow(show: TopShow) {
                         append(ViewingStats.formatFinishedRuntime(show.ms))
                         append("  \u00b7  ")
                         append(
-                            when (show.done) {
-                                0 -> "in progress"
-                                1 -> "1 episode finished"
+                            when {
+                                show.done == 0 -> "in progress"
+                                isMovie -> "movie finished"
+                                show.done == 1 -> "1 episode finished"
                                 else -> "${show.done} episodes finished"
                             }
                         )

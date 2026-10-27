@@ -144,6 +144,19 @@ fun TraktConnectScreenMobile(
                             uiState.errorMessage?.let { TraktErrorLine(it) }
 
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                // Same REFRESH the TV page and Simkl's phone page
+                                // carry: a failed totals read left the row hidden
+                                // with no way to ask again (trackers I1).
+                                KBButton(
+                                    label = if (uiState.isLoadingCounts) {
+                                        "REFRESHING…"
+                                    } else {
+                                        "REFRESH"
+                                    },
+                                    enabled = !uiState.isLoadingCounts,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = vm::refreshWatchedCountsNow
+                                )
                                 KBButton(
                                     label = "DISCONNECT",
                                     danger = true,

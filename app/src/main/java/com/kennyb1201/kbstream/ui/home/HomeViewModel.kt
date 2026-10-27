@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.paging.cachedIn
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -64,10 +65,13 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlin.math.round
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
@@ -3322,10 +3326,21 @@ Log.d(
 
     // ---- Catalog grid ("Open in Grid" from a rail's long-press menu) ----
 
-    /** Header for the open catalog grid: the page title row. */
+    /**
+     * Header for the open catalog grid: the page title row, plus the rail
+     * identity the grid was opened from.
+     *
+     * The identity is what makes a re-open a no-op instead of a reload. A route
+     * names a catalog by (title, addonName) - and, since the grid's S2 fix, by
+     * the rail's catalog id and type - while a rail's real identity is
+     * [catalogRailKey] of its add-on, catalog id and type. Comparing the
+     * identity asks the question both the no-op and the remembered scroll
+     * position need answered: is this grid already showing THAT rail.
+     */
     data class CatalogGridHeader(
         val title: String,
-        val addonName: String
+        val addonName: String,
+        val identity: String
     )
 
     private val _catalogGridHeader =
@@ -3346,29 +3361,90 @@ Log.d(
         _catalogGridPaging.asStateFlow()
 
     /**
-     * Route-based variant: reopens the grid for a catalog identified by its
-     * Home rail title + addon name (survives process restoration). No-op if
-     * that catalog is already open.
+     * The open grid's own scope, holding the cached pager.
+     *
+     * `cachedIn` is what lets the pages survive the screen being disposed for a
+     * Detail page (grid C1): a plain Pager flow re-collects from its first key,
+     * which is the "Back from a title re-pages the whole grid" half of that
+     * report. A cache lives until the scope it was handed ends, so it gets one
+     * of its own - a child of [viewModelScope], cancelled by [closeCatalogGrid]
+     * - rather than the ViewModel's own scope, where the last grid's pages
+     * would stay cached for the rest of the process.
      */
-    fun openCatalogInGrid(title: String, addonName: String) {
+    private var catalogGridScope: CoroutineScope? = null
 
-        val current =
-            _catalogGridHeader.value
+    /**
+     * Whether the open grid's pager holds any title at all, filtered or not.
+     *
+     * The grid draws a FILTERED stream (hidden titles leave it as it reads), so
+     * a catalog whose every title is hidden arrives at the same empty branch as
+     * a catalog that genuinely holds nothing - and that branch says the catalog
+     * has nothing, which is a different fact and leaves the viewer with no way
+     * back (grid C2). This is the raw half of that guard, the way the browse
+     * pages' `sectionsRaw` is theirs. Reported from the pages the source
+     * actually served (post kids/upcoming filtering, pre hidden filtering), so
+     * a catalog emptied by those filters is not mislabelled as hidden.
+     */
+    private val _catalogGridServedItems =
+        MutableStateFlow(false)
 
-        if (
-            current != null &&
-            current.title == title &&
-            current.addonName == addonName
-        ) {
-            return
-        }
+    val catalogGridServedItems: StateFlow<Boolean> =
+        _catalogGridServedItems.asStateFlow()
+
+    // Where the viewer was in the open grid, and which grid that was.
+    //
+    // A tile press pushes a Detail page, which disposes the screen and takes
+    // its scroll state with it (grid C1). The index is remembered here so the
+    // return lands on the tile the viewer left rather than the top of a grid
+    // that has to page itself in again - keyed by identity, so one catalog's
+    // position can never be restored onto another, and cleared with the pager,
+    // because an index only means something while the pager it describes is
+    // alive.
+    private var catalogGridScrollIdentity: String? = null
+
+    private var catalogGridScrollIndex = 0
+
+    /**
+     * Route-based variant: reopens the grid for a Home rail (survives process
+     * restoration). No-op when that rail's grid is already open.
+     *
+     * The rail is found by its real identity when the route carries one - the
+     * add-on, catalog id and type the `Screen.CatalogGrid` route now records -
+     * and by the name pair otherwise, which is the fallback for state saved by an
+     * older build (or a catalog whose id its add-on never named). Two rails
+     * that share a catalog NAME under one add-on used to be indistinguishable
+     * here, so the second one's grid could open the first one's catalog (grid
+     * S2).
+     */
+    fun openCatalogInGrid(
+        title: String,
+        addonName: String,
+        catalogId: String? = null,
+        type: String? = null
+    ) {
 
         val rail =
-            _rails.value.firstOrNull { rail ->
-                rail.catalogName == title &&
-                    rail.addonName == addonName
+            if (catalogId != null && type != null) {
+                val wanted =
+                    catalogRailKey(addonName, catalogId, type)
+                _rails.value.firstOrNull { rail ->
+                    railKeyOf(rail) == wanted
+                }
+            } else {
+                _rails.value.firstOrNull { rail ->
+                    rail.catalogName == title &&
+                        rail.addonName == addonName
+                }
             }
                 ?: return
+
+        // Already showing this rail: keep what is loaded. The effect that calls
+        // this re-runs on every entry, including the return from a Detail page,
+        // and that trip is exactly what the loaded pages (and the viewer's
+        // place in them) have to survive.
+        if (_catalogGridHeader.value?.identity == railKeyOf(rail)) {
+            return
+        }
 
         openCatalogInGrid(rail)
     }
@@ -3398,15 +3474,36 @@ Log.d(
         _catalogGridHeader.value =
             CatalogGridHeader(
                 title = rail.catalogName,
-                addonName = rail.addonName
+                addonName = rail.addonName,
+                identity = railKey
             )
 
+        // A fresh grid starts with no remembered position, and with the raw
+        // half of the hidden-everything guard taken from the batch the rail
+        // already holds: a catalog that served nothing at all must not read as
+        // one whose titles are all hidden (grid C2).
+        catalogGridScrollIdentity = null
+        catalogGridScrollIndex = 0
+        _catalogGridServedItems.value =
+            rail.items.isNotEmpty()
+
+        // The pages of the grid being replaced go with the scope that was
+        // caching them (see catalogGridScope).
+        catalogGridScope?.cancel()
+        val gridScope =
+            CoroutineScope(
+                viewModelScope.coroutineContext +
+                    SupervisorJob(viewModelScope.coroutineContext[Job])
+            )
+        catalogGridScope = gridScope
+
         _catalogGridPaging.value =
-            if (info == null || railKey in exhaustedRails) {
+            if (info == null) {
                 // Rail came from a code path without pagination info
-                // (Continue Watching), or the source already reported the end:
-                // show what the rail had and page no further.
+                // (Continue Watching): show what the rail had and page no
+                // further - there is no source to ask.
                 flowOf(PagingData.from(rail.items))
+                    .cachedIn(gridScope)
             } else {
                 Pager(
                     config = PagingConfig(
@@ -3425,11 +3522,16 @@ Log.d(
                         seed = rail.items,
                         startOffset = startOffset,
                         maxItems = MAX_RAIL_ITEMS,
+                        // An exhausted catalog pages no further. That rule
+                        // lives in the source (it shows the seed and stops), so
+                        // the rail is routed THROUGH it rather than around it
+                        // (grid I2).
+                        moreAvailable = railKey !in exhaustedRails,
                         loadPage = { skip ->
                             fetchGridPage(info, skip)
                         }
                     )
-                }.flow
+                }.flow.cachedIn(gridScope)
             }
     }
 
@@ -3437,6 +3539,50 @@ Log.d(
 
         _catalogGridPaging.value = null
         _catalogGridHeader.value = null
+        _catalogGridServedItems.value = false
+        catalogGridScrollIdentity = null
+        catalogGridScrollIndex = 0
+        catalogGridScope?.cancel()
+        catalogGridScope = null
+    }
+
+    /**
+     * Remembers where the viewer was in the open grid.
+     *
+     * Called as the grid is left for a title page (see the grids' dispose
+     * effects) - the one departure that has to come back to the same place. A
+     * write with no grid open is ignored: the route has already dropped the
+     * pager by then, and an index for a pager that no longer exists would
+     * otherwise be restored onto a fresh one.
+     */
+    fun rememberCatalogGridScroll(index: Int) {
+
+        val current =
+            _catalogGridHeader.value
+                ?: return
+
+        catalogGridScrollIdentity = current.identity
+        catalogGridScrollIndex = index
+    }
+
+    /**
+     * The tile the viewer was on when they last left the open grid for a title
+     * page, or 0 when there is nothing to restore.
+     *
+     * Only ever answers for the grid that is open now: a position remembered
+     * for a different catalog is not this grid's to restore.
+     */
+    fun catalogGridReturnIndex(): Int {
+
+        val current =
+            _catalogGridHeader.value
+                ?: return 0
+
+        return if (current.identity == catalogGridScrollIdentity) {
+            catalogGridScrollIndex
+        } else {
+            0
+        }
     }
 
     /**
@@ -3473,6 +3619,14 @@ Log.d(
             } else {
                 tmdbRepository.kidsFilterMetas(metas)
             }
+
+        if (filtered.isNotEmpty()) {
+            // The pager holds titles: whether the GRID draws any is then the
+            // hidden filter's answer, not the catalog's (grid C2). Recorded
+            // from the served page rather than the raw add-on one, so a page
+            // the kids or upcoming filters emptied does not count as content.
+            _catalogGridServedItems.value = true
+        }
 
         return CatalogGridPage(
             items = filtered,

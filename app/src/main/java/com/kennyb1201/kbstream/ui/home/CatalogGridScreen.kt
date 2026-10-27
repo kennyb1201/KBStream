@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,8 +70,31 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+
+/**
+ * How long the open effect waits between attempts while the rail it needs is
+ * still being built.
+ */
+private const val CATALOG_GRID_OPEN_POLL_MS = 100L
+
+/**
+ * How long the open effect keeps trying after the rail list stops changing
+ * before it concludes the catalog is really gone.
+ */
+private const val CATALOG_GRID_OPEN_SETTLE_MS = 2_000L
+
+/**
+ * Hard ceiling on the open wait, so a build that never settles cannot strand the
+ * viewer on a skeleton forever. Well past the measured worst case (a slow add-on
+ * at evening peak answers in seconds, not tens of seconds).
+ */
+private const val CATALOG_GRID_OPEN_MAX_MS = 30_000L
+
+/** Polls allowed while the restored tile is indexed by the re-collected pager. */
+private const val CATALOG_GRID_RESTORE_STEPS = 20
 
 /**
  * Full-catalog poster grid ("Open in Grid" on a Home rail's long-press
@@ -85,6 +110,13 @@ import kotlinx.coroutines.flow.map
 fun CatalogGridScreen(
     title: String,
     addonName: String,
+    // The rail's real identity, carried by the route: two rails that share a
+    // catalog name under one add-on cannot be told apart by the name pair, so
+    // the second one's grid could open the first one's catalog (grid S2). Null
+    // on a route restored from a build that predates these, which falls back to
+    // the name pair.
+    catalogId: String? = null,
+    type: String? = null,
     viewModel: HomeViewModel =
         viewModel(),
     onItemClick: (MetaPreview) -> Unit,
@@ -92,6 +124,16 @@ fun CatalogGridScreen(
 ) {
     val header by viewModel.catalogGridHeader.collectAsStateWithLifecycle()
     val paging by viewModel.catalogGridPaging.collectAsStateWithLifecycle()
+
+    // The raw half of the hidden-everything guard below: whether the pager holds
+    // any title at all, whatever the filter then does with them.
+    val catalogGridServed by
+        viewModel.catalogGridServedItems.collectAsStateWithLifecycle()
+
+    // A tile press leaves for a title page - a DETOUR, not an exit (see the
+    // dispose effect below). Recorded by both ways into Detail, so the grid
+    // keeps its loaded pages and the viewer's place for the trip back.
+    var leftForDetail by remember { mutableStateOf(false) }
 
     // Hidden titles leave the grid the same way they leave the rails. The
     // filter rides the paging stream, so hiding a title that is already on
@@ -163,10 +205,9 @@ fun CatalogGridScreen(
     }
 
     // Fresh screen instance (or restored route): (re)open the catalog from
-    // its identity. No-op when the grid is already showing this catalog —
-    // preserves loaded pages across recompositions. The DisposableEffect
-    // clears the shared ViewModel state when the screen leaves composition
-    // so a stale grid never leaks into later Home sessions.
+    // its identity. No-op when this grid is already showing that rail — which
+    // is what preserves the loaded pages, and the viewer's place in them,
+    // across a trip to a Detail page.
     //
     // The pop-back-to-Home decision lives HERE, not in the null-branch
     // below: a fresh open always composes one frame with an unseeded grid
@@ -174,23 +215,43 @@ fun CatalogGridScreen(
     // frame still fires after the open effect has successfully seeded the
     // grid — the grid flashed for one frame and dumped the user back on
     // Home with focus dropped on Continue Watching.
-    LaunchedEffect(title, addonName) {
-        // On a cold process restore the rails may still be loading, so
-        // retry briefly before concluding the catalog is really gone.
-        repeat(50) {
-            viewModel.openCatalogInGrid(title, addonName)
+    LaunchedEffect(title, addonName, catalogId, type) {
+        // The wait is on the RAILS, not on a clock. On a cold process restore
+        // (or after a profile switch) the rails are still being built, and the
+        // fixed five seconds this used to allow was shorter than a slow add-on
+        // can take — so a grid whose catalog does exist backed out to Home
+        // anyway (grid S1). The loop now keeps trying while a build is running
+        // or while the rail list is still landing, and only gives up once the
+        // list has been still for CATALOG_GRID_OPEN_SETTLE_MS without this
+        // catalog in it — or at the CATALOG_GRID_OPEN_MAX_MS ceiling, so a
+        // build that never settles cannot strand the viewer on a skeleton.
+        var elapsedMs = 0L
+        var settledMs = 0L
+        var lastRailCount = -1
+        while (
+            elapsedMs < CATALOG_GRID_OPEN_MAX_MS &&
+            settledMs < CATALOG_GRID_OPEN_SETTLE_MS
+        ) {
+            viewModel.openCatalogInGrid(title, addonName, catalogId, type)
             if (viewModel.catalogGridHeader.value != null) {
                 return@LaunchedEffect
             }
-            delay(100L)
-        }
-        onBack()
-    }
+            delay(CATALOG_GRID_OPEN_POLL_MS)
+            elapsedMs += CATALOG_GRID_OPEN_POLL_MS
 
-    DisposableEffect(title, addonName) {
-        onDispose {
-            viewModel.closeCatalogGrid()
+            val railCount = viewModel.rails.value.size
+            if (viewModel.isLoading.value || railCount != lastRailCount) {
+                // Still building, or rails are arriving while we watch: this
+                // catalog may yet appear, so the grace clock restarts.
+                settledMs = 0L
+            } else {
+                settledMs += CATALOG_GRID_OPEN_POLL_MS
+            }
+            lastRailCount = railCount
         }
+        // The rails settled without this catalog: it is really gone from this
+        // profile's Home.
+        onBack()
     }
 
     val openHeader = header
@@ -220,7 +281,93 @@ fun CatalogGridScreen(
     // the grid came back at the top. Created here it belongs to the screen for
     // as long as the screen is composed, which is what the grid's own scroll is
     // supposed to survive.
-    val gridState = rememberLazyGridState()
+    //
+    // Keyed by the catalog, the way the phone's grid has been: unkeyed, an
+    // open catalog replaced in the same composition slot restored the previous
+    // one's offset instead of starting at the top (grid I1 - mobile fixed this
+    // exact failure and this is the TV half of it).
+    val gridState = key(title, addonName) { rememberLazyGridState() }
+
+    // Leaving the grid: a trip to a title page keeps its pager and its place,
+    // any other way out drops them.
+    //
+    // Keyed on Unit on purpose: what this effect answers is "is this screen
+    // leaving", and a route-keyed effect would also run for the grid being
+    // REPLACED in the same composition slot - where the close belongs to the
+    // outgoing grid and the open belongs to the incoming one, not the other way
+    // round. A fresh open already resets the state it needs to (see
+    // openCatalogInGrid).
+    DisposableEffect(Unit) {
+        onDispose {
+            if (leftForDetail) {
+                // Detail is a detour. The pager and its pages stay alive (the
+                // re-open above is a no-op for the same rail), so all this
+                // owes the return is the tile the viewer was on.
+                viewModel.rememberCatalogGridScroll(gridState.firstVisibleItemIndex)
+            } else {
+                // Any other departure is final: the shared state goes with it,
+                // so a grid opened later starts fresh instead of resuming a
+                // catalog the viewer has left.
+                viewModel.closeCatalogGrid()
+            }
+        }
+    }
+
+    // Back from a title page: put the viewer back on the tile they pressed.
+    // Only the index survives the trip (the composition that held the scroll
+    // state was disposed), so it is applied once the pager has indexed those
+    // pages again - which, with them cached, is the first pass in practice.
+    var returnRestored by remember { mutableStateOf(false) }
+    var scrollSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(title, addonName, lazyItems) {
+        if (returnRestored) return@LaunchedEffect
+        returnRestored = true
+        val restored = viewModel.catalogGridReturnIndex()
+        val restoredItems = lazyItems
+        if (restored > 0 && restoredItems != null) {
+            var waits = 0
+            while (
+                restoredItems.itemCount <= restored &&
+                waits < CATALOG_GRID_RESTORE_STEPS
+            ) {
+                delay(CATALOG_GRID_OPEN_POLL_MS)
+                waits++
+            }
+            if (restoredItems.itemCount > restored) {
+                gridState.scrollToItem(restored)
+            }
+        }
+        // The entry anchor below waits on this: it aims at the tile at the top
+        // of the VIEWPORT, so it must not run before the viewport has been put
+        // back where the viewer left it.
+        scrollSettled = true
+    }
+
+    // The D-pad's entry anchor.
+    //
+    // This screen's only focusable nodes are its tiles, and nothing asked for
+    // one on entry, so the first press began a focus search from whatever node
+    // happened to hold focus - which, on a screen that just replaced another, is
+    // not guaranteed to be a tile (grid S3). Aimed at the tile at the top of the
+    // VIEWPORT rather than at tile 0, because a return from a title page
+    // restores a deep scroll position and the tile the viewer is looking at is
+    // the one that should take the focus. One-shot, and released the moment
+    // focus lands anywhere inside the grid (see the root below), so a page
+    // arriving later cannot pull the viewer off the tile they moved to.
+    var entryFocusPlaced by remember { mutableStateOf(false) }
+    LaunchedEffect(openHeader, lazyItems?.itemCount, scrollSettled) {
+        if (entryFocusPlaced || !scrollSettled) return@LaunchedEffect
+        val items = lazyItems ?: return@LaunchedEffect
+        if (items.itemCount == 0) return@LaunchedEffect
+        // A frame first, so the landing below reads the position the restore
+        // effect above asked for rather than the one it replaced.
+        awaitFrame()
+        val topKey =
+            items.peek(gridState.firstVisibleItemIndex)
+                ?.let { meta -> "${meta.type}:${meta.id}" }
+                ?: return@LaunchedEffect
+        entryFocusPlaced = landFocusOn(cardFocusRequesters[topKey])
+    }
 
     if (openHeader == null || lazyItems == null) {
         // Grid not seeded yet. On a fresh open the effect above seeds it
@@ -261,6 +408,9 @@ fun CatalogGridScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
+            // Focus landing anywhere inside the grid retires the entry grab
+            // above: the viewer's own move always wins.
+            .onFocusChanged { if (it.hasFocus) entryFocusPlaced = true }
     ) {
         KBPageTitle(
             text = openHeader.title,
@@ -300,6 +450,23 @@ fun CatalogGridScreen(
                 KBStatusMessage(
                     message = "Error: ${refreshState.error.message}",
                     onRetry = { lazyItems.retry() }
+                )
+            }
+
+            // Every title this catalog served is hidden, so there is nothing
+            // to draw - but the branch below would say the catalog HAS nothing,
+            // which is a different fact, and it leaves the viewer with no way
+            // back from here (the same gap Home's all-hidden card and the
+            // browse pages close). Both halves are required: the served half is
+            // true on every populated catalog, and the filtered half is true
+            // whenever the hidden filter removed what was there.
+            lazyItems.itemCount == 0 && catalogGridServed -> {
+                val context = LocalContext.current
+                KBStatusMessage(
+                    icon = KB_STATUS_ICON_EMPTY,
+                    message = "Every title here is hidden.",
+                    onRetry = { HiddenTitles.unhideAll(context) },
+                    actionLabel = "UNHIDE ALL"
                 )
             }
 
@@ -394,6 +561,11 @@ fun CatalogGridScreen(
                                     viewModel.watchedKey(meta.id, meta.type) in
                                         partialWatchedKeys,
                                 onClick = {
+                                    // A title page is a DETOUR, not an exit:
+                                    // recorded for the dispose effect below,
+                                    // which keeps the pager and the viewer's
+                                    // place for the trip back.
+                                    leftForDetail = true
                                     onItemClick(meta)
                                 },
                                 onLongClick = {
@@ -549,6 +721,9 @@ fun CatalogGridScreen(
                     description = "Open this title's detail page"
                 ) {
                     menuTarget = null
+                    // Same detour the tile press records (see the dispose
+                    // effect): this is the other way into Detail.
+                    leftForDetail = true
                     onItemClick(target)
                 },
                 PosterContextAction(

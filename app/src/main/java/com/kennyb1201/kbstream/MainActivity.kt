@@ -363,6 +363,18 @@ sealed class Screen {
     data class CatalogGrid(
         val title: String,
         val addonName: String,
+        /**
+         * The rail's own catalog id and type, so the grid re-finds THAT rail
+         * instead of the first one whose catalog name matches. A rail's real
+         * identity is (addonName, catalogId, type) - see HomeViewModel's
+         * railKeyOf - while the name pair the route used to carry is not
+         * unique (a duplicated rail, or a built catalog named like an add-on
+         * one), and every re-open, restore and Detail round trip looks the
+         * rail up again (grid S2). Null on state restored from a build that
+         * predates these, and on a rail whose add-on never named its catalog.
+         */
+        val catalogId: String? = null,
+        val type: String? = null,
         val returnTo: Screen = Home
     ) : Screen()
 
@@ -1287,6 +1299,25 @@ fun AppRoot(
         mutableStateOf(OnboardingPrefs.isComplete(context))
     }
 
+    // What the viewer has typed into the onboarding account form but not yet
+    // sent. Hoisted ABOVE the onboarding branch below for one reason: that
+    // branch composes the welcome screen only while Home is the current screen,
+    // so tapping any setup hand-off (Add-ons, Live TV, Simkl) disposed the
+    // panel - and, with it, the fields the panel itself `remember`ed. Typing a
+    // password, tapping "Add Add-ons" to check something first and coming back
+    // meant retyping both (onboarding C1). Both form factors read and write
+    // these two.
+    //
+    // Plain `remember`, deliberately not `rememberSaveable`: that would write a
+    // typed password into the activity's saved state, which the system persists
+    // to disk when a backgrounded process is killed - the one place this app
+    // keeps no secret. Nothing is lost by it: MainActivity declares orientation
+    // in its manifest configChanges, so a rotation does not re-create it, and
+    // the hand-off round trip this state exists for never leaves this
+    // composition.
+    var onboardingEmail by remember { mutableStateOf("") }
+    var onboardingPassword by remember { mutableStateOf("") }
+
     // ----------------------------------------------------------------- launch
     // splash (see LaunchSplash / launchSplashVisible)
     //
@@ -2005,6 +2036,10 @@ fun AppRoot(
         }
         if (!FormFactor.isTv) {
             OnboardingScreenMobile(
+                email = onboardingEmail,
+                onEmailChange = { onboardingEmail = it },
+                password = onboardingPassword,
+                onPasswordChange = { onboardingPassword = it },
                 onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
                 onOpenGuide = { screen = Screen.Guide },
@@ -2013,6 +2048,10 @@ fun AppRoot(
             return
         }
         OnboardingScreen(
+            email = onboardingEmail,
+            onEmailChange = { onboardingEmail = it },
+            password = onboardingPassword,
+            onPasswordChange = { onboardingPassword = it },
             onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
             onOpenGuide = { screen = Screen.Guide },
@@ -2327,6 +2366,13 @@ fun AppRoot(
                     screen = Screen.CatalogGrid(
                         title = rail.catalogName,
                         addonName = rail.addonName,
+                        // The rail's real identity travels with the route (see
+                        // Screen.CatalogGrid): two rails sharing a catalog name
+                        // under one add-on cannot be told apart by the name
+                        // pair, and the grid re-finds its rail on every
+                        // re-open, restore and profile switch.
+                        catalogId = rail.catalogId,
+                        type = rail.type,
                         returnTo = Screen.Home
                     )
                 },
@@ -2440,6 +2486,8 @@ fun AppRoot(
                 CatalogGridScreenMobile(
                     title = current.title,
                     addonName = current.addonName,
+                    catalogId = current.catalogId,
+                    type = current.type,
                     onItemClick = openGridItem,
                     onBack = closeGrid
                 )
@@ -2447,6 +2495,8 @@ fun AppRoot(
                 CatalogGridScreen(
                     title = current.title,
                     addonName = current.addonName,
+                    catalogId = current.catalogId,
+                    type = current.type,
                     onItemClick = openGridItem,
                     onBack = closeGrid
                 )
@@ -3473,7 +3523,21 @@ fun AppRoot(
                                     ),
                                     season = current.season,
                                     episode = current.episode,
-                                    resumePositionMs = current.startPositionMs,
+                                    // Deliberately NOT current.startPositionMs:
+                                    // that is where this session STARTED, and the
+                                    // session never updates it (audit S-F6,
+                                    // 2026-10-27). Carrying it back meant the
+                                    // next source picked from this very list
+                                    // resumed at the launch point - resume at
+                                    // 10:00, watch to 30:00, Back, pick another
+                                    // source, and it played from 10:00 again.
+                                    // Zero hands the choice to PlaybackResume,
+                                    // which reads the history row the exit has
+                                    // just saved (the player saves before this
+                                    // result is delivered), and an episode that
+                                    // COMPLETED has no resume row at all - which
+                                    // is also the right answer here.
+                                    resumePositionMs = 0L,
                                     totalEpisodesInSeason = current.totalEpisodesInSeason,
                                     runtimeMinutes = current.runtimeMinutes
                                 ),

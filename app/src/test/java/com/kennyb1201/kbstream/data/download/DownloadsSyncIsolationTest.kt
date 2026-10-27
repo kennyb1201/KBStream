@@ -29,6 +29,10 @@ class DownloadsSyncIsolationTest {
         val synced = PrefsPayloadBuilder.SYNCED_PREF_KEYS
         listOf(
             DownloadsStore.KEY_RECORDS,
+            // The kept copy of a blob this build could not read (audit C1) is
+            // download state like any other - and it is the one that would carry
+            // a title list to the account if it ever slipped onto this list.
+            DownloadsStore.KEY_RECORDS_UNREADABLE,
             DownloadsStore.KEY_DOWNLOAD_OVER_CELLULAR,
             DownloadsStore.KEY_DELETE_AFTER_FINISH
         ).forEach { key ->
@@ -59,6 +63,7 @@ class DownloadsSyncIsolationTest {
         // make the store's own reads pick up an exported value.
         listOf(
             DownloadsStore.KEY_RECORDS,
+            DownloadsStore.KEY_RECORDS_UNREADABLE,
             DownloadsStore.KEY_DOWNLOAD_OVER_CELLULAR,
             DownloadsStore.KEY_DELETE_AFTER_FINISH
         ).forEach { key ->

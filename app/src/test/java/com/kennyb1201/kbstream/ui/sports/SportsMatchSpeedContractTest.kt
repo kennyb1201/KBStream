@@ -256,7 +256,22 @@ class SportsMatchSpeedContractTest {
         )
         assertTrue(
             "the guide index stays cached for the ViewModel's life - it was the second stage the spec named",
-            model.contains("private suspend fun cachedGuideIndex(channels: List<IptvChannel>): Map<String, IptvChannel> { guideIndexCache?.let { return it }")
+            model.contains("private suspend fun cachedGuideIndex(channels: List<IptvChannel>): Map<String, IptvChannel> { val epgUrls = allEpgUrls()")
+        )
+        // The cache's identity, widened deliberately: the hub is activity-scoped,
+        // so a guide source can be added while it is open (Playlist Setup's Extra
+        // EPG, the Free TV migration), and a channel a NEW source is the only one
+        // to cover has to become matchable without a restart. See
+        // SportsHubDeepDiveContractTest for the behaviour.
+        assertTrue(
+            "the cache is reusable only for the source set it was built from",
+            model.contains("val sourceKey = epgUrls.joinToString(\"\\n\")") &&
+                model.contains("if (guideIndexSourceKey == sourceKey) { guideIndexCache?.let { return it } }") &&
+                model.contains("guideIndexSourceKey = sourceKey")
+        )
+        assertFalse(
+            "the unconditional reuse that ignored the source set is what it replaced",
+            model.contains("{ guideIndexCache?.let { return it } val built = runCatchingCancellable { guideChannelIndex(channels) }")
         )
     }
 

@@ -253,6 +253,99 @@ class EspnSportsRepositoryTest {
         assertNull(game.away.logoUrl)
     }
 
+    @Test
+    fun `a game whose networks live only in geoBroadcasts still names them`() {
+        // A number of leagues ship the per-market geo listing INSTEAD of
+        // `broadcasts`. Reading only the first shape left the network tier dead
+        // for every game in them - the card said "Not in your playlist" while
+        // the payload named the network plainly (audit C7, 2026-10-23).
+        val geo = """
+            {
+              "events": [
+                {
+                  "id": "501",
+                  "name": "Utah Jazz at Denver Nuggets",
+                  "date": "2023-11-15T02:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "9:00 PM ET" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {
+                          "homeAway": "away",
+                          "team": { "abbreviation": "UTAH", "displayName": "Utah Jazz" }
+                        },
+                        {
+                          "homeAway": "home",
+                          "team": { "abbreviation": "DEN", "displayName": "Denver Nuggets" }
+                        }
+                      ],
+                      "geoBroadcasts": [
+                        {
+                          "type": { "id": "1", "shortName": "TV" },
+                          "market": { "id": "1", "type": "Home" },
+                          "media": { "shortName": "Altitude", "name": "Altitude Sports" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val game = parseScoreboard(geo, "basketball/nba").single()
+
+        // Short name first, then the long one: both are the same network, and
+        // the matcher reads them as the alternatives they are.
+        assertEquals(listOf("Altitude", "Altitude Sports"), game.broadcastNames)
+    }
+
+    @Test
+    fun `a bare broadcast string is read, and a broadcast object is not mistaken for one`() {
+        // The summary endpoint's header carries `broadcast` as a plain STRING.
+        // Some shapes carry an OBJECT under the same key, and optString answers
+        // the stringified object for it - not a network name, and not something
+        // the matcher should ever be handed.
+        val stringShape = """
+            {
+              "events": [
+                {
+                  "id": "601",
+                  "name": "Boston Celtics at New York Knicks",
+                  "date": "2023-11-15T02:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "7:30 PM ET" } },
+                  "broadcast": "ABC",
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {
+                          "homeAway": "away",
+                          "team": { "abbreviation": "BOS", "displayName": "Boston Celtics" }
+                        },
+                        {
+                          "homeAway": "home",
+                          "team": { "abbreviation": "NY", "displayName": "New York Knicks" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+        val objectShape = stringShape
+            .replace("\"broadcast\": \"ABC\"", "\"broadcast\": { \"shortName\": \"ABC\" }")
+
+        assertEquals(
+            listOf("ABC"),
+            parseScoreboard(stringShape, "basketball/nba").single().broadcastNames
+        )
+        assertTrue(
+            "an object under `broadcast` names no network",
+            parseScoreboard(objectShape, "basketball/nba").single().broadcastNames.isEmpty()
+        )
+    }
+
     // ── The AP Top 25 ranking (college sports) ─────────────────────
 
     @Test

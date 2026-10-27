@@ -83,9 +83,19 @@ import com.kennyb1201.kbstream.ui.theme.MobileTheme
  * Settings → Sync, and the panel still swaps itself for the "signed in" strip -
  * the TV's re-aiming of focus has no touch twin, because there is no focus to
  * lose.
+ *
+ * The account form's text arrives from the caller, exactly as on the TV page:
+ * the caller composes this screen only while Home is the current screen, so
+ * fields `remember`ed here were gone the moment a setup row opened Add-ons,
+ * Live TV or Simkl (onboarding C1). See MainActivity's onboarding branch for
+ * why the hoisted pair is a plain `remember`.
  */
 @Composable
 fun OnboardingScreenMobile(
+    email: String,
+    onEmailChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenGuide: () -> Unit,
@@ -128,7 +138,12 @@ fun OnboardingScreenMobile(
                     )
                 }
 
-                OnboardingAccountPanelMobile()
+                OnboardingAccountPanelMobile(
+                    email = email,
+                    onEmailChange = onEmailChange,
+                    password = password,
+                    onPasswordChange = onPasswordChange
+                )
 
                 // The three source hand-offs, in the same order as the TV page:
                 // the account is the one step that can arrive already finished,
@@ -200,16 +215,22 @@ fun OnboardingScreenMobile(
  * Same calls and same 6-character-password rule as the TV panel and Settings →
  * Sync, so the three cannot drift. What is dropped is the TV panel's focus
  * choreography: nothing here has to re-aim a D-pad when the form is replaced by
- * the signed-in strip, so the panel just reads the auth state and swaps.
+ * the signed-in strip, so the panel just reads the auth state and swaps. The
+ * typed credentials come from the caller, so a round trip through a hand-off
+ * keeps them (see [OnboardingScreenMobile]); `busy` is derived from the auth
+ * state and stays here.
  */
 @Composable
-private fun OnboardingAccountPanelMobile() {
+private fun OnboardingAccountPanelMobile(
+    email: String,
+    onEmailChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit
+) {
     val context = LocalContext.current
     val authState by SupabaseSync.authState.collectAsStateWithLifecycle()
     val syncError by SupabaseSync.syncError.collectAsStateWithLifecycle()
 
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(authState) {
@@ -292,14 +313,14 @@ private fun OnboardingAccountPanelMobile() {
 
             KBTextField(
                 value = email,
-                onValueChange = { email = it },
+                onValueChange = onEmailChange,
                 placeholder = "Email",
                 keyboardType = KeyboardType.Email,
                 modifier = Modifier.fillMaxWidth()
             )
             KBTextField(
                 value = password,
-                onValueChange = { password = it },
+                onValueChange = onPasswordChange,
                 placeholder = "Password (6+ characters)",
                 keyboardType = KeyboardType.Password,
                 visualTransformation = PasswordVisualTransformation(),

@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBFilters
 import com.kennyb1201.kbstream.data.kb.KBRail
 import com.kennyb1201.kbstream.data.kb.kbMostVotedSort
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
@@ -64,6 +65,10 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     private val watchedStatusRepository = WatchedStatusRepository(application)
     private val repository =
         com.kennyb1201.kbstream.data.kb.KBRepository.getInstance(application)
+
+    init {
+        observeProfileSwitches()
+    }
 
     data class UiState(
         val folder: KBFolder? = null,
@@ -475,6 +480,45 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         "${type.lowercase()}::$tmdbId"
 
     /**
+     * Whether "Open in Grid" forced this folder into its GRID layout for the
+     * visit, held as the folder it was raised for (null = the manifest's own
+     * layout wins).
+     *
+     * Visit-level display state, but NOT the screen's own `remember`: a tile
+     * press opens a title's Detail page, which disposes this screen entirely,
+     * so the override was gone on the way back - the folder came back in the
+     * layout its manifest asks for, and the grid's own return record (which
+     * names a card and a position and no rail) then had no rail layout that
+     * could honour it. This ViewModel outlives the trip, so the override does
+     * too, and the screen reads it on its FIRST frame - which is what keeps a
+     * return from drawing the rails layout and then flipping to the grid.
+     */
+    private var gridOverrideFolderId: String? = null
+
+    /**
+     * Bumped on every profile switch.
+     *
+     * The drop itself is handled here (see [observeProfileSwitches]), but the
+     * page may or may not be composed when a switch lands: the picker always
+     * lands Home, so the folder screen is disposed and its own entry effect is
+     * what reloads the folder - while a switch driven from elsewhere (a synced
+     * profile list that no longer holds the active one) can arrive with the page
+     * still open. The screens key their load effect on this, so that case
+     * re-resolves the folder against the incoming profile immediately instead of
+     * leaving the page on an emptied state nothing reloads.
+     */
+    private val _profileEpoch = MutableStateFlow(0)
+    val profileEpoch: StateFlow<Int> = _profileEpoch.asStateFlow()
+
+    /** "Open in Grid" for [folderId]; null restores the manifest's layout. */
+    fun setGridOverride(folderId: String?) {
+        gridOverrideFolderId = folderId
+    }
+
+    /** Whether the grid override is on for the folder the screen is showing. */
+    fun gridOverrideActive(folderId: String): Boolean = gridOverrideFolderId == folderId
+
+    /**
      * Route entry: resolve the folder by id (survives process-death restore
      * where only the folder id is persisted), then load it.
      */
@@ -833,7 +877,19 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Long-press "Go to Details": resolve TMDB id -> imdb id, then navigate. */
+    /**
+     * A tile press (and the menu's "Go to Details"): resolve the card's TMDB id
+     * to an IMDb id where there is one, then open its Detail page.
+     *
+     * The page opens even when the resolution comes back empty. The Detail route
+     * resolves a TMDB id itself, so a title TMDB has no IMDb id for - or one
+     * whose resolution failed offline, or one the folder's capped `.take(300)`
+     * pass never reached - still has a page to open; navigating only on a
+     * non-blank IMDb id swallowed the press instead, which is the sibling browse
+     * pages' rule (see TagViewModel.resolveAndNavigate). An add-on rail's card
+     * has no TMDB id to fall back to, but its own id is already a route id when
+     * it is a `tmdb:` one or a bare number, and the route reads both.
+     */
     fun resolveAndNavigate(
         item: KBContentItem,
         onNavigateDetail: (String, String) -> Unit
@@ -847,8 +903,14 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                     }.getOrNull()
             } ?: item.id.takeIf { it.startsWith("tt") }
 
-            if (!imdbId.isNullOrBlank()) {
-                onNavigateDetail(normalized, imdbId)
+            val routeId = imdbId?.takeIf { it.isNotBlank() }
+                ?: item.tmdbId?.let { WatchedStatusKeys.tmdbKeyId(it) }
+                ?: item.id.takeIf { id ->
+                    id.startsWith("tmdb:") || id.all(Char::isDigit)
+                }
+
+            if (routeId != null) {
+                onNavigateDetail(normalized, routeId)
             }
         }
     }
@@ -873,6 +935,18 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * The id a menu watch action keys its write under.
+     *
+     * The resolved IMDb id when there is one; otherwise the title's own
+     * `tmdb:<n>` flavor, which the badges consult too (see [WatchedStatusKeys]).
+     * Returning null there made the toggle a silent no-op on a row the viewer had
+     * just pressed - the same fallback the sibling browse pages' marks write, so
+     * a title whose resolution never ran or answered nothing still takes the
+     * mark it was asked for. An add-on card with neither an IMDb id nor a TMDB
+     * id has no key the badges know, and stays a no-op rather than writing a mark
+     * nothing can read back.
+     */
     private suspend fun resolveForWatchAction(
         item: KBContentItem,
         normalizedType: String
@@ -887,7 +961,8 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                         _resolvedIds.value + (lookupKey(tmdbId, normalizedType) to resolved)
                 }
         } ?: item.id.takeIf { it.startsWith("tt") }
-        return imdbId
+        return imdbId?.takeIf { it.isNotBlank() }
+            ?: item.tmdbId?.let { WatchedStatusKeys.tmdbKeyId(it) }
     }
 
     private fun normalizeType(raw: String?): String? =
@@ -896,6 +971,77 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             "tv", "series" -> "series"
             else -> null
         }
+
+    /**
+     * Profile-switch isolation.
+     *
+     * Everything this page draws is built from the ACTIVE profile: its imported
+     * KB collection URLs, its installed add-ons, its connected Trakt account,
+     * its kids ceiling, and its own watch-history file (which is what the badges
+     * read). This ViewModel is activity-scoped, so it survives the switch - and
+     * [loadById] answers immediately for a folder it already holds, so reopening
+     * the same folder id showed the profile being LEFT: its rails and its paging
+     * pointers, with badges that no longer had a preload behind them (Home's own
+     * reload clears the watched cache, and nothing on this page refilled it).
+     *
+     * Dropping the folder is what makes the next entry reload it: the screen's
+     * own `LaunchedEffect(folderId)` runs on every fresh composition, and the
+     * picker always lands Home (see MainActivity), so the folder screen is
+     * disposed by the time a switch lands. The rails are then fetched against
+     * the profile the viewer is about to look at, instead of one they have not
+     * opened - and that load runs the badge preload again, which is the half
+     * that had no trigger at all here.
+     */
+    private fun observeProfileSwitches() {
+        viewModelScope.launch {
+            var first = true
+            var lastProfileId: String? = null
+            ProfileManager.activeProfile.collect { profile ->
+                if (first) {
+                    // Skip the initial emission: whatever state this ViewModel
+                    // holds was built under the profile active at creation.
+                    first = false
+                    lastProfileId = profile?.id
+                    return@collect
+                }
+                // Editing a profile - rename, avatar, PIN, kids ceiling -
+                // re-emits the active profile with the SAME id; only a
+                // genuinely different profile is a switch.
+                if (profile?.id == lastProfileId) return@collect
+                lastProfileId = profile?.id
+                dropForProfileSwitch()
+            }
+        }
+    }
+
+    /** Drops everything this ViewModel built from the profile being left. */
+    private fun dropForProfileSwitch() {
+        loadJob?.cancel()
+        // Bumped FIRST: a rail still streaming from the profile we just left is
+        // stale and must not publish into the cleared state below.
+        loadGeneration += 1
+        heroResolveJob?.cancel()
+        tmdbRailSources.clear()
+        currentFolderId = null
+        gridOverrideFolderId = null
+        _profileEpoch.value = _profileEpoch.value + 1
+        _selectedSourceId.value = null
+        _resolvedIds.value = emptyMap()
+        _landscapeArt.value = emptyMap()
+        lastLandscapeWanted = null
+        _heroPreview.value = null
+        _heroMeta.value = null
+        _heroTmdbDetail.value = null
+        _heroBackdropUrl.value = null
+        _heroLogoUrl.value = null
+        _heroTrailerKey.value = null
+        // No folder held: the next entry resolves it by id against the incoming
+        // profile - reporting "Couldn't find this collection." when that profile
+        // does not import it - and loads its rails and badges from its own
+        // configuration. Nothing is loaded here, because the viewer is on Home
+        // by the time this runs.
+        _state.value = UiState()
+    }
 
     companion object {
         private const val PAGE_SIZE = 20

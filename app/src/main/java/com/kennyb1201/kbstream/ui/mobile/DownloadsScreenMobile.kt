@@ -99,12 +99,15 @@ fun DownloadsScreenMobile(onBack: () -> Unit) {
                             onDelete = { DownloadsManager.delete(context, record.id) },
                             onRetry = {
                                 // Retry re-resolves the row rather than replaying
-                                // a dead URL (spec §7), so it is a suspend call
-                                // and the message is the same one a fresh press
-                                // gets.
-                                scope.launch {
-                                    DownloadsManager.retry(context, record.id)
-                                }
+                                // a dead URL (spec §7), so it is a suspend call -
+                                // and a refused one has to say WHY. This pressed
+                                // the manager directly and dropped the result, so
+                                // a retry on a plane (offline), on an
+                                // unresolvable row, or on a record that had gone
+                                // did nothing at all while the same press in the
+                                // streams menu spoke (audit C3, 2026-10-27).
+                                // [retryDownload] is that shared answer.
+                                scope.launch { retryDownload(context, record) }
                             }
                         )
                     }

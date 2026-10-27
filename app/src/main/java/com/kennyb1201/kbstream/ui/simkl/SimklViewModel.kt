@@ -1,12 +1,15 @@
 package com.kennyb1201.kbstream.ui.simkl
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
@@ -21,6 +24,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app.applicationContext
     private val repository = SimklRepository.getInstance(appContext)
     private val watchedStatusRepository = WatchedStatusRepository(appContext)
+    private val guard = KidsTimeGuard
 
     // Resolved PER ACCESS against the ACTIVE profile's scoped DB: the old
     // captured dao bound to the legacy unscoped database, so disconnect()
@@ -32,6 +36,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _uiState = MutableStateFlow(
         SimklUiState(
+            isConfigured = repository.isConfigured(),
             isConnected = repository.hasToken(),
             statusMessage = if (repository.hasToken()) "Connected to Simkl." else null
         )
@@ -84,6 +89,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     codeJob = null
                     val connected = repository.hasToken()
                     _uiState.value = SimklUiState(
+                        isConfigured = repository.isConfigured(),
                         isConnected = connected,
                         statusMessage = if (connected) "Connected to Simkl." else null
                     )
@@ -121,10 +127,83 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Requests a code, after the parent gate.
+     *
+     * Linking an account is a parent-gated act on BOTH trackers (trackers C1):
+     * Trakt's startConnect has always required the parent PIN on a kids
+     * profile, while Simkl's link was ungated - so a kids profile could hook the
+     * household's Simkl account up unaided and sync its watching into it. The
+     * rule lives here rather than on the screens, so TV, mobile and any later
+     * caller inherit it (Trakt's lives in its own ViewModel for the same
+     * reason).
+     *
+     * Unlinking stays asymmetric on purpose, and the asymmetry is the policy:
+     * Simkl's DISCONNECT is hidden on a kids profile because it destroys the
+     * local watch corpus, while Trakt's only drops the session and is put back
+     * by anyone who can pass this gate again.
+     */
     fun generateCode() {
         pollJob?.cancel()
         codeJob?.cancel()
 
+        // Checked here rather than only on the screen, the way Trakt's
+        // startConnect does it: a build with no client id cannot request a code,
+        // and its failure should be a sentence rather than the request's own
+        // thrown error (trackers I2). Checked before the PIN - no PIN fixes a
+        // build that was shipped without a client id.
+        if (!repository.isConfigured()) {
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                errorMessage = NOT_CONFIGURED,
+                statusMessage = null
+            )
+            return
+        }
+
+        if (ProfileManager.activeProfile.value?.kidsMaxAge != null) {
+            if (!guard.hasParentPin()) {
+                _uiState.value = _uiState.value.copy(
+                    requiresParentPin = false,
+                    pinError = false,
+                    errorMessage = "A parent needs to set a parent PIN before Simkl can be " +
+                        "connected on a kids profile."
+                )
+                return
+            }
+            _uiState.value = _uiState.value.copy(
+                requiresParentPin = true,
+                pinError = false,
+                errorMessage = null
+            )
+            return
+        }
+
+        beginCodeRequest()
+    }
+
+    /** The parent PIN entry on a kids profile. */
+    fun submitParentPin(pin: String) {
+        if (!guard.verifyParentPin(pin)) {
+            _uiState.value = _uiState.value.copy(pinError = true)
+            return
+        }
+        _uiState.value = _uiState.value.copy(requiresParentPin = false, pinError = false)
+        beginCodeRequest()
+    }
+
+    fun cancelParentPin() {
+        _uiState.value = _uiState.value.copy(requiresParentPin = false, pinError = false)
+    }
+
+    /** A keystroke in the PIN field retires the wrong-PIN line. */
+    fun clearPinError() {
+        if (_uiState.value.pinError) {
+            _uiState.value = _uiState.value.copy(pinError = false)
+        }
+    }
+
+    private fun beginCodeRequest() {
         codeJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
@@ -157,17 +236,43 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Polls until the code is approved, the code expires, or the poll cannot be
+     * asked.
+     *
+     * Two answers the first version could not give (trackers C4): a THROWN poll
+     * is not a pending one - a viewer whose network drops used to read "Waiting
+     * for authorization…" for the full ten minutes with nothing saying the poll
+     * was never reaching Simkl - and the code's own lifetime is honoured, so a
+     * code the server said expires in two minutes reports an expiry instead of
+     * the generic timeout ten minutes later. Expiry is measured on the monotonic
+     * clock, as Trakt's loop does: a wall-clock jump must not read as one.
+     */
     private fun startPolling() {
         val userCode = _uiState.value.userCode ?: return
         val interval = _uiState.value.intervalSeconds.coerceAtLeast(3)
+        val expiresInSeconds = _uiState.value.expiresIn ?: 0
 
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
+            val issuedAtMs = SystemClock.elapsedRealtime()
+            var consecutiveFailures = 0
+
             repeat(120) {
                 delay(interval * 1000L)
 
+                if (expiresInSeconds > 0 &&
+                    (SystemClock.elapsedRealtime() - issuedAtMs) / 1_000L >= expiresInSeconds
+                ) {
+                    fail("That code expired. Generate a new one.")
+                    return@launch
+                }
+
                 runCatchingCancellable { repository.checkPin(userCode) }
                     .onSuccess { token ->
+                        // A poll that answered - even "not yet" - is a reached
+                        // Simkl, so the failure run ends here.
+                        consecutiveFailures = 0
                         if (!token.accessToken.isNullOrBlank()) {
                             repository.forceClearWatchedActivitySync()
                             watchedStatusRepository.clearRemoteSyncCheckpoint()
@@ -191,19 +296,29 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     .onFailure {
+                        consecutiveFailures++
+                        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                            fail("Could not reach Simkl. Try again.")
+                            return@launch
+                        }
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            statusMessage = "Waiting for authorization…"
+                            statusMessage = "Could not reach Simkl — retrying…"
                         )
                     }
             }
 
-            _uiState.value = _uiState.value.copy(
-                isLoading = false,
-                errorMessage = "Authorization timed out. Please generate a new code.",
-                statusMessage = null
-            )
+            fail("Authorization timed out. Please generate a new code.")
         }
+    }
+
+    /** One shape for every way the poll can end without a token. */
+    private fun fail(message: String) {
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            errorMessage = message,
+            statusMessage = null
+        )
     }
 
     fun loadContinueWatching() {
@@ -287,30 +402,64 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Unlinks: wipes the local watch corpus and drops the token, by design.
+     *
+     * The token clear rides inside the wipe ([clearAllWatchState] →
+     * `clearLocalWatchState(clearSimklAuth = true)`), so a throw in that block
+     * can leave the session on disk - and the screen published "Disconnected"
+     * whatever happened. Re-reading the token is what separates the two
+     * outcomes (trackers C2). The grant on Simkl's own side is a different
+     * matter, and the confirm dialog names it: this app has no revoke to call
+     * (trackers C3).
+     */
     fun disconnect() {
         pollJob?.cancel()
         codeJob?.cancel()
         codeJob = null
 
         viewModelScope.launch {
-            try {
+            val wipe = runCatchingCancellable {
                 historyDao.clearAll()
                 watchedStatusRepository.clearAllWatchState()
                 TvLauncherPublisher.sync(
                     appContext,
                     emptyList()
                 )
+            }
+            val stillConnected = repository.hasToken()
 
-                _uiState.value = SimklUiState(
+            _uiState.value = when {
+                stillConnected -> SimklUiState(
+                    isConfigured = repository.isConfigured(),
+                    isConnected = true,
+                    errorMessage = "Could not sign out on this device — Simkl is still " +
+                        "connected here. Try again."
+                )
+                wipe.isFailure -> SimklUiState(
+                    isConfigured = repository.isConfigured(),
+                    isConnected = false,
+                    errorMessage = "Disconnected, but clearing watch data failed: " +
+                        wipe.exceptionOrNull()?.message
+                )
+                else -> SimklUiState(
+                    isConfigured = repository.isConfigured(),
                     isConnected = false,
                     statusMessage = "Disconnected and cleared local watch markers."
                 )
-            } catch (error: Exception) {
-                _uiState.value = SimklUiState(
-                    isConnected = false,
-                    errorMessage = "Disconnected, but clearing watch data failed: ${error.message}"
-                )
             }
         }
+    }
+
+    private companion object {
+        /**
+         * Three unreachable polls in a row end the attempt. A poll that throws
+         * is not the answer "not yet", and ten minutes of "Waiting…" over a
+         * network that is down tells the viewer nothing (trackers C4).
+         */
+        const val MAX_CONSECUTIVE_FAILURES = 3
+
+        /** What a code request reports in a build with no client id (trackers I2). */
+        const val NOT_CONFIGURED = "This build has no Simkl client id, so Simkl cannot connect."
     }
 }

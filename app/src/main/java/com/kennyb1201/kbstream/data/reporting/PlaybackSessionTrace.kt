@@ -24,8 +24,18 @@ package com.kennyb1201.kbstream.data.reporting
  */
 internal object PlaybackSessionTrace {
 
-    /** Lines kept: a binge is a handful of sessions, and this is a ring. */
-    private const val MAX_LINES = 12
+    /**
+     * Lines kept: a binge is a handful of sessions, and this is a ring
+     * (audit S-I11, 2026-10-27).
+     *
+     * 24, not 12. The ring is shared with the per-session event notes the
+     * players add to it (a source switch, a tracker skip, a writer refusal, an
+     * exit save), so a three-episode binge could write more than a dozen lines
+     * and evict episode 1 - the exact chain the trace exists to show. The cap is
+     * only ever a safety net against unbounded growth; a report is a few
+     * hundred lines anyway.
+     */
+    private const val MAX_LINES = 24
 
     private val lock = Any()
 

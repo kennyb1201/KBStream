@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.kb.KBContentItem
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
@@ -63,6 +65,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.kb.KBFolderViewModel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.kb.folderAllHidden
 import com.kennyb1201.kbstream.ui.kb.kbFolderCardKey
 import com.kennyb1201.kbstream.ui.kb.visibleFolderRails
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -148,6 +151,9 @@ fun KBFolderScreenMobile(
 
     var menuTarget by remember { mutableStateOf<KBContentItem?>(null) }
     var titleLogoFailed by remember { mutableStateOf(false) }
+    // The unhide action of the all-hidden state below writes the profile's
+    // hidden-title blob, which is context-side.
+    val context = LocalContext.current
 
     // `key` scopes the saveable scroll record to this folder: a rotation keeps
     // the viewer's place, a different folder opens at the top.
@@ -157,7 +163,13 @@ fun KBFolderScreenMobile(
         mutableStateOf<BrowseReturnTarget?>(null)
     }
 
-    LaunchedEffect(folderId) {
+    val profileEpoch by viewModel.profileEpoch.collectAsStateWithLifecycle()
+
+    // Same two keys as the TV page: a profile switch that lands while this page
+    // is open drops the folder in the ViewModel (see [KBFolderViewModel]), and
+    // this is what loads it again under the incoming profile - where the
+    // route-change key alone would sit on the emptied state.
+    LaunchedEffect(folderId, profileEpoch) {
         viewModel.loadById(folderId)
     }
 
@@ -277,6 +289,20 @@ fun KBFolderScreenMobile(
                         modifier = Modifier.weight(1f),
                         centeredVertically = true
                     )
+
+                    // Every title this collection served is hidden, so there is
+                    // nothing to draw - but the branch below would say the
+                    // collection HAS nothing, which is a different fact, and it
+                    // leaves the viewer with no way back from here (the same gap
+                    // the TV layouts' own all-hidden branch closes).
+                    folderAllHidden(state.rails, selectedSourceId, visibleRails) ->
+                        MobileStatus(
+                            message = "Every title here is hidden.",
+                            actionLabel = "UNHIDE ALL",
+                            onAction = { HiddenTitles.unhideAll(context) },
+                            modifier = Modifier.weight(1f),
+                            centeredVertically = true
+                        )
 
                     items.isEmpty() -> MobileStatus(
                         message = "Nothing to show here yet.",

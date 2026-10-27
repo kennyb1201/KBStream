@@ -168,5 +168,24 @@ internal fun isPlayable(stored: DownloadRecord, live: LiveDownload?): Boolean =
         live != null &&
         live.state == LiveDownloadState.COMPLETED
 
+/**
+ * The downloads a finished play may delete: exactly the one that finished.
+ *
+ * "Delete after finishing" is a per-DOWNLOAD promise - the switch's own words
+ * are "remove a download once you have watched what it holds" - so the rule is
+ * the finished record's id and nothing else. It matched on the record's
+ * [DownloadRecord.mediaKey] instead, and on a series episode that key is the
+ * SHOW's: one finished episode deleted every completed episode of that show,
+ * silently, with no confirmation and nothing said afterwards (audit C2,
+ * 2026-10-27). The state is still required: a retried row that is no longer
+ * whole is not something a completion may take away.
+ */
+internal fun finishedDownloadIds(
+    records: List<DownloadRecord>,
+    finishedId: String
+): List<String> = records
+    .filter { it.id == finishedId && it.state.isComplete }
+    .map { it.id }
+
 /** The waiting line a queued-for-Wi-Fi row shows under its state. */
 internal const val WAITING_FOR_WIFI = "Waiting for Wi-Fi"

@@ -16,8 +16,19 @@ package com.kennyb1201.kbstream.ui.player
  */
 internal object MpvErrorReason {
 
-    /** How many of mpv's error lines are kept while looking for the cause. */
-    const val MAX_KEPT = 4
+    /**
+     * How many of mpv's error lines are kept while looking for the cause.
+     *
+     * Eight, not four (audit M-I8, 2026-10-27). lavf's reconnect wrapper is what
+     * made four too few: one failed open emits its own retry notes (and libmpv
+     * "Reconnecting" lines) between the cause and FFmpeg's generic "Failed to
+     * open", so a `max_retries=5` burst could push the one line that names the
+     * cause - a 403, a refused connection - out of the ring before `END_FILE`
+     * classified it, and the notice fell back to the generic sentence this
+     * object exists to look past. The ring is a tail of a few log lines, so the
+     * wider window costs nothing.
+     */
+    const val MAX_KEPT = 8
 
     /**
      * Phrases that name a CAUSE.

@@ -235,6 +235,11 @@ internal fun encodeScreen(
         is Screen.CatalogGrid -> {
             put("title", screen.title)
             put("addonName", screen.addonName)
+            // The rail's identity, when the route carries one: absent keys
+            // decode back to null, which is the name-pair lookup an older
+            // saved state (or a nameless catalog) needs.
+            screen.catalogId?.let { put("catalogId", it) }
+            screen.type?.let { put("type", it) }
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
@@ -369,6 +374,8 @@ internal fun decodeScreen(
             "catalogGrid" -> Screen.CatalogGrid(
                 title = json.optString("title"),
                 addonName = json.optString("addonName"),
+                catalogId = json.optNullableString("catalogId"),
+                type = json.optNullableString("type"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "profilePicker" -> Screen.ProfilePicker(

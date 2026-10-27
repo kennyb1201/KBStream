@@ -386,7 +386,17 @@ fun SportsHubScreen(
     // the viewer off the card they are reading.
     val selectedTabFocus = remember { FocusRequester() }
     var entryFocusPlaced by remember { mutableStateOf(false) }
-    LaunchedEffect(leagues, selectedPath) {
+    // Re-armed by the tab row when it puts the selection on screen (see
+    // LeagueTabRow): a LazyRow composes only its viewport, so a RESTORED
+    // selection deep in a long row was not there as the claim below ran - the
+    // fixed frame window expired with nothing to focus, and nothing ran again
+    // for that selection, so the first D-pad press went to the list instead
+    // (audit C10, 2026-10-23). Counting the placement and re-keying the claim
+    // on it is the re-run; the ordinary case is untouched, because a selection
+    // that is already composed claims focus on the first pass, as it always
+    // did.
+    var entryFocusPlacements by remember { mutableStateOf(0) }
+    LaunchedEffect(leagues, selectedPath, entryFocusPlacements) {
         if (entryFocusPlaced || leagues.isEmpty()) return@LaunchedEffect
         if (initialDetailGameId != null || initialDetailTournamentId != null) {
             entryFocusPlaced = true
@@ -619,6 +629,7 @@ fun SportsHubScreen(
                 leagues = tabs,
                 selectedPath = selectedPath,
                 selectedFocusRequester = selectedTabFocus,
+                onSelectionPlaced = { entryFocusPlacements++ },
                 onSelect = { path ->
                     // A tab is a slate of its own, and one list state is shared
                     // by all of them: without this, switching NFL to NHL opened
@@ -978,6 +989,7 @@ private fun LeagueTabRow(
     selectedPath: String?,
     onSelect: (String) -> Unit,
     selectedFocusRequester: FocusRequester? = null,
+    onSelectionPlaced: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val state = rememberLazyListState()
@@ -992,6 +1004,13 @@ private fun LeagueTabRow(
     val selectedIndex = leagues.indexOfFirst { it.path == selectedPath }
     LaunchedEffect(selectedIndex, leagues.size) {
         if (selectedIndex >= 0) state.scrollToItem(selectedIndex)
+        // The selection is on screen now (or there is none to show), so say so:
+        // the screen re-arms its entry claim on this and retries its frames
+        // again (see SportsHubScreen). Being told a frame before the tab
+        // actually composes is harmless - the claim retries - while never being
+        // told is what left a deep restored selection focusable only by a
+        // D-pad press that scrolled the list instead.
+        onSelectionPlaced()
     }
 
     LazyRow(

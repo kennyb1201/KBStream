@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.trakt.TraktConfig
 import com.kennyb1201.kbstream.data.trakt.TraktDeviceFlowRules
+import com.kennyb1201.kbstream.data.trakt.TraktDisconnectOutcome
 import com.kennyb1201.kbstream.data.trakt.TraktFlowEvidence
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -397,17 +398,83 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
      *
      * The local watch history, resume rows and watched markers are the viewer's
      * own data and are untouched - see TraktRepository.revokeAndClear.
+     *
+     * What it did is reported from the repository's own outcome rather than
+     * assumed: a cleared store that could not be written leaves the session on
+     * disk, and publishing "Disconnected" regardless was a screen that lied and
+     * then showed Connected again on the next entry (trackers C2). The revoke is
+     * best-effort, so a guard-blocked or unreachable one says "signed out on this
+     * device" instead of claiming the grant is gone (trackers C5).
      */
     fun disconnect() {
         stopPolling()
         countsJob?.cancel()
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            runCatchingCancellable { repository.revokeAndClear() }
+            val outcome = runCatchingCancellable { repository.revokeAndClear() }
+                .getOrDefault(TraktDisconnectOutcome.NOT_CLEARED)
+
+            if (outcome == TraktDisconnectOutcome.NOT_CLEARED) {
+                _uiState.value = TraktUiState(
+                    isConfigured = repository.isConfigured(),
+                    // Still connected, because it still is: the store would not
+                    // take the clear, so the session is exactly where it was.
+                    isConnected = true,
+                    accountSlug = runCatching { repository.accountSlug() }.getOrNull(),
+                    errorMessage = "Could not sign out on this device — Trakt is " +
+                        "still connected here. Try again."
+                )
+                return@launch
+            }
+
             _uiState.value = TraktUiState(
                 isConfigured = repository.isConfigured(),
                 isConnected = false,
-                statusMessage = "Disconnected from Trakt. Your watch history is untouched."
+                statusMessage = when (outcome) {
+                    TraktDisconnectOutcome.REVOKED ->
+                        "Disconnected from Trakt. Your watch history is untouched."
+                    else ->
+                        "Signed out on this device — your watch history is untouched. " +
+                            "Trakt still lists this app; remove it at trakt.tv/settings " +
+                            "to revoke it there."
+                }
+            )
+        }
+    }
+
+    /**
+     * The connected branch's REFRESH: the manual twin of the entry read.
+     *
+     * [refreshWatchedCounts] above stays silent on failure by design - it runs
+     * unprompted on entry and on a profile switch, where an error line about a
+     * read the viewer never asked for would be noise, and hiding the row keeps
+     * the documented "a tracker failure is not nothing watched" rule. A press,
+     * though, has to answer: this reports the failure and keeps the totals that
+     * were already on screen rather than blanking them (trackers I1).
+     */
+    fun refreshWatchedCountsNow() {
+        countsJob?.cancel()
+        if (!repository.hasToken()) {
+            _uiState.value = _uiState.value.copy(watchedCounts = null)
+            return
+        }
+        countsJob = viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isLoadingCounts = true,
+                errorMessage = null,
+                statusMessage = "Refreshing Trakt totals…"
+            )
+            val counts = runCatchingCancellable { repository.watchedCounts() }.getOrNull()
+            val previous = _uiState.value.watchedCounts
+            _uiState.value = _uiState.value.copy(
+                isLoadingCounts = false,
+                watchedCounts = counts ?: previous,
+                statusMessage = if (counts != null) "Trakt totals refreshed." else null,
+                errorMessage = if (counts == null) {
+                    "Could not read your Trakt totals. Try again."
+                } else {
+                    null
+                }
             )
         }
     }
