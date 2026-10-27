@@ -287,21 +287,29 @@ class AddonRepository private constructor() {
      * zero loads the first page; use the current item count to request the
      * following page. The request is cached and duplicate in-flight calls for
      * the same page share one HTTP request.
+     *
+     * [forceRefresh] drops the cached page first, so the caller is answered
+     * from the add-on rather than from a snapshot. The search screen's
+     * ignored-query probe needs that: it compares a live `search=` page against
+     * this one, and a rank list that has rotated since the snapshot was written
+     * would otherwise read as a page that honoured the query.
      */
     suspend fun getCatalog(
         baseUrl: String,
         type: String,
         catalogId: String,
-        skip: Int = 0
+        skip: Int = 0,
+        forceRefresh: Boolean = false
     ): List<MetaPreview> = PerfTrace.timedSuspend("addon.catalog") {
-        getCatalogInternal(baseUrl, type, catalogId, skip)
+        getCatalogInternal(baseUrl, type, catalogId, skip, forceRefresh)
     }
 
     private suspend fun getCatalogInternal(
         baseUrl: String,
         type: String,
         catalogId: String,
-        skip: Int = 0
+        skip: Int = 0,
+        forceRefresh: Boolean = false
     ): List<MetaPreview> {
         val base =
             normalizeBaseUrl(
@@ -335,6 +343,15 @@ class AddonRepository private constructor() {
             cleanupExpiredCatalogCacheLocked(
                 now
             )
+
+            if (forceRefresh) {
+                // Both the in-memory page and the disk snapshot it may have
+                // just been seeded from are stale by definition here; dropping
+                // the entry sends the caller down the fetch-and-wait path
+                // below (or behind an already-in-flight refresh, which is
+                // live).
+                catalogCache.remove(cacheKey)
+            }
 
             val cached =
                 catalogCache[cacheKey]

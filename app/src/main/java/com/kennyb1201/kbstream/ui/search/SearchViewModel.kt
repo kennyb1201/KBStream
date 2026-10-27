@@ -1319,14 +1319,25 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Heuristic for catalogs that answer every request with their browse
-     * list (Top-10/ranking lists): if a catalog's "search" response equals
-     * its unfiltered response, the query was ignored and the rail is noise.
-     * Cached per catalog so the probe runs at most once per session.
+     * Verdicts for the ignored-query guard below, keyed per catalog, so the
+     * probe runs at most once per session.
+     *
+     * The guard asks whether a catalog answers every request with its own
+     * browse list (Top-10/ranking lists): if a catalog's "search" response is
+     * just the head of its unfiltered response, the query was ignored and the
+     * rail is noise (the comparison itself is [catalogEchoesItsBrowseList]).
+     *
+     * Two things keep a cached verdict honest. The unfiltered page is fetched
+     * live, because the search page it is compared against is a live call and
+     * a rank list that rotated since a snapshot was written would read as a
+     * page that honoured the query. And only a real answer is cached: a
+     * dropped request is not evidence that the query was honoured, and
+     * caching that would show the rail for the rest of the session.
      */
     private val ignoredQueryCache =
         mutableMapOf<String, Boolean>()
 
+    /** True when [catalog] answered the current query with its own browse list. */
     private suspend fun catalogIgnoredQuery(
         baseUrl: String,
         catalog: ManifestCatalog,
@@ -1344,12 +1355,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             repository.getCatalog(
                 baseUrl = baseUrl,
                 type = catalog.type,
-                catalogId = catalog.id
+                catalogId = catalog.id,
+                // Live, like the search page above it. A stale snapshot of a
+                // ranking that has since rotated differs by an entry and
+                // looks like a page that honoured the query - which is how a
+                // Top Ten rail kept publishing under the generic label.
+                forceRefresh = true
             )
         }.getOrNull()
-        val ignored = unfiltered != null &&
-            unfiltered.map { "${it.type}:${it.id}" } ==
-            hits.map { "${it.type}:${it.id}" }
+        // No answer is no verdict: return unignored now and re-probe on the
+        // next search rather than pinning the rail on for the session off one
+        // dropped request.
+        if (unfiltered == null) return false
+        val ignored = catalogEchoesItsBrowseList(unfiltered, hits)
         synchronized(ignoredQueryCache) {
             ignoredQueryCache[key] = ignored
         }
