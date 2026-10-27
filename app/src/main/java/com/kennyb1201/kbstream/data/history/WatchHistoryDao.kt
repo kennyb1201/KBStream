@@ -417,6 +417,47 @@ interface WatchHistoryDao {
     )
     fun observeRecent(): Flow<List<WatchHistoryEntity>>
 
+    /**
+     * The profile's most recent COMPLETIONS, one row per parent, newest first -
+     * the seeds of Home's "Top Picks for You" row.
+     *
+     * A seed is a title the viewer FINISHED, never one they started: a
+     * half-watched title's neighbourhood is the title itself, which the viewer
+     * has not finished judging, so it is not a taste signal yet (the same rule
+     * the blend's completed-only watched mode applies to candidates). Movies and
+     * shows mix exactly as watched - the row is the profile's taste, not a type
+     * shelf - so this is the union the series-only [getCompletedSeriesRows] is
+     * not, keyed on [WatchHistoryEntity.parentId] so an episode's completion
+     * names its SHOW once rather than the show once per episode.
+     *
+     * Only rows that carry a completion stamp can rank here (a completion whose
+     * stamp is missing has nothing to be "most recent" by, and the streak reads
+     * the same way - see [completionTimes]). Live channels are excluded: they
+     * have no TMDB neighbourhood to recommend from.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE isCompleted = 1
+          AND lower(type) != 'channel'
+          AND id IN (
+              -- One row per parent, by the latest completion stamp. Selecting
+              -- the id (rather than matching completedAt itself, as the
+              -- continue-watching snapshot once did) picks exactly one row per
+              -- group when two completions land in the same millisecond.
+              SELECT id
+              FROM watch_history
+              WHERE isCompleted = 1
+                AND completedAt IS NOT NULL
+              GROUP BY parentId
+              HAVING completedAt = MAX(completedAt)
+          )
+        ORDER BY completedAt DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecentCompletedSeeds(limit: Int): List<WatchHistoryEntity>
+
     @Query(
     """
     SELECT * FROM watch_history

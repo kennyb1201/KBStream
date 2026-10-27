@@ -39,6 +39,7 @@ class KBHomeBuiltinRailTest {
         KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null) + existingDefaults
 
     private val continueWatching = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
+    private val topPicks = KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
     private val upcoming = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
     private val topMovies = KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY
     private val topShows = KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY
@@ -53,28 +54,31 @@ class KBHomeBuiltinRailTest {
     fun `the built-in keys are stable, prefixed and distinct`() {
         assertEquals("builtin:", KB_BUILTIN_KEY_PREFIX)
         assertEquals("builtin:continue_watching", continueWatching)
+        assertEquals("builtin:top_picks_for_you", topPicks)
         assertEquals("builtin:upcoming_schedule", upcoming)
         assertTrue(KBHomeOrderPrefs.isBuiltinKey(continueWatching))
+        assertTrue(KBHomeOrderPrefs.isBuiltinKey(topPicks))
         assertTrue(KBHomeOrderPrefs.isBuiltinKey(upcoming))
         // A collection and a catalog key must not be mistaken for one.
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("kb:c"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("addon:a"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey(null))
-        // Continue Watching leads, and the two Top Today rows follow Upcoming:
-        // that is the layout being preserved, and it is the whole list for a
-        // profile that draws no profile-specific rails. The Top Today rows are
-        // built-ins now too (they used to be addon rails whose position the
-        // loader FIXED, which is why the manager could never list them).
+        // Continue Watching leads, the personalized row sits directly behind
+        // it, and the two Top Today rows follow Upcoming: that is the layout
+        // being preserved, and it is the whole list for a profile that draws no
+        // profile-specific rails. The Top Today rows are built-ins now too
+        // (they used to be addon rails whose position the loader FIXED, which
+        // is why the manager could never list them).
         assertEquals(
-            listOf(continueWatching, upcoming, topMovies, topShows),
+            listOf(continueWatching, topPicks, upcoming, topMovies, topShows),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
         )
         // The registry leads with that same list - every profile starts with
-        // these four - and then names the rails each PROFILE kind adds, so an
+        // these five - and then names the rails each PROFILE kind adds, so an
         // arrangement can still place a key written under another profile.
         assertEquals(
-            listOf(continueWatching, upcoming, topMovies, topShows),
-            KBHomeOrderPrefs.BUILTIN_KEYS.take(4)
+            listOf(continueWatching, topPicks, upcoming, topMovies, topShows),
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(5)
         )
         assertEquals(
             listOf(
@@ -105,7 +109,7 @@ class KBHomeBuiltinRailTest {
         )
         assertEquals(
             KBHomeOrderPrefs.KIDS_BUILTIN_KEYS + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
-            KBHomeOrderPrefs.BUILTIN_KEYS.drop(4)
+            KBHomeOrderPrefs.BUILTIN_KEYS.drop(5)
         )
         assertEquals(
             "a key must appear in the registry exactly once",
@@ -167,8 +171,9 @@ class KBHomeBuiltinRailTest {
 
         assertEquals(
             listOf(
-                upcoming,
+                topPicks,
                 continueWatching,
+                upcoming,
                 topMovies,
                 topShows,
                 "browse:1",
@@ -192,6 +197,7 @@ class KBHomeBuiltinRailTest {
         assertEquals(
             listOf(
                 continueWatching,
+                topPicks,
                 upcoming,
                 kidsMovies,
                 kidsShows,
@@ -206,11 +212,11 @@ class KBHomeBuiltinRailTest {
         // guest rails after the Top Today rows, and Kids Mode wins over it -
         // exactly as Home's rail load decides which batch to fetch.
         assertEquals(
-            KBHomeOrderPrefs.BUILTIN_KEYS.take(4),
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(5),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
         )
         assertEquals(
-            KBHomeOrderPrefs.BUILTIN_KEYS.take(4) + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(5) + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null, isGuest = true)
         )
         assertEquals(
@@ -242,7 +248,7 @@ class KBHomeBuiltinRailTest {
         ) + existingDefaults
 
         assertEquals(
-            listOf(continueWatching, upcoming, topMovies, topShows) +
+            listOf(continueWatching, topPicks, upcoming, topMovies, topShows) +
                 KBHomeOrderPrefs.GUEST_BUILTIN_KEYS +
                 existingDefaults,
             mergedHomeRailKeys(KBHomeOrder(), guestDefaults)
@@ -274,6 +280,7 @@ class KBHomeBuiltinRailTest {
         assertEquals(
             listOf(
                 continueWatching,
+                topPicks,
                 upcoming,
                 kidsMovies,
                 kidsShows,
@@ -455,5 +462,39 @@ class KBHomeBuiltinRailTest {
         assertFalse(continueWatching in visible)
         assertTrue(continueWatching in mergedHomeRailKeys(hidden, defaults))
         assertEquals("addon:a", visible.first())
+    }
+
+    @Test
+    fun `the personalized row is the second built-in, named, and in every profile's list`() {
+        // The position constants are INDEXES into the default order, so
+        // inserting a key silently re-points every one after it unless they are
+        // re-indexed in the same edit. This is that case: each constant has to
+        // still name the rail it is named for.
+        assertEquals("builtin:top_picks_for_you", topPicks)
+        assertEquals("builtin:upcoming_schedule", upcoming)
+        assertEquals("builtin:top_movies_today", topMovies)
+        assertEquals("builtin:top_shows_today", topShows)
+        assertEquals(
+            listOf(continueWatching, topPicks),
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(2)
+        )
+        assertEquals(
+            "Top Picks for You",
+            KBHomeOrderPrefs.builtinDefaultTitle(topPicks)
+        )
+
+        // The gate on the row is CONTENT, not the profile kind: the ordinary,
+        // kids and guest lists all name it, and an empty pick list suppresses
+        // it at render time (see the screens' builtinWithContent).
+        listOf(
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null),
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7),
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null, isGuest = true)
+        ).forEach { profileKeys ->
+            assertTrue(
+                "$profileKeys must name the personalized row",
+                topPicks in profileKeys
+            )
+        }
     }
 }

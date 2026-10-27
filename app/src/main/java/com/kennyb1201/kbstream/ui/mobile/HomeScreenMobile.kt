@@ -54,7 +54,9 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.chipKey
+import com.kennyb1201.kbstream.data.tmdb.BlendPick
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBFolder
@@ -310,12 +312,19 @@ fun HomeScreenMobile(
         // it, so one setting produced two different Homes (the TV behaviour is
         // the intended one).
         val upcomingVisible = upcoming.isNotEmpty()
-        val builtinWithContent = remember(upNext.isNotEmpty(), upcomingVisible) {
-            buildSet {
-                if (upNext.isNotEmpty()) add(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING)
-                if (upcomingVisible) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)
+        // The personalized row's picks (see HomeViewModel's Top Picks build).
+        // Empty means no header and no rail on the phone either.
+        val topPicks by viewModel.topPicks.collectAsStateWithLifecycle()
+        val builtinWithContent =
+            remember(upNext.isNotEmpty(), upcomingVisible, topPicks.isNotEmpty()) {
+                buildSet {
+                    if (upNext.isNotEmpty()) add(KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING)
+                    if (upcomingVisible) add(KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE)
+                    if (topPicks.isNotEmpty()) {
+                        add(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU)
+                    }
+                }
             }
-        }
         val homeEntries = remember(rails, kbState, builtinWithContent) {
             KBHomeSlots.buildMergedEntries(context, rails, kbState, builtinWithContent)
         }
@@ -338,6 +347,11 @@ fun HomeScreenMobile(
             renames = kbState.arrangement.renames,
             key = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
             fallback = "Upcoming"
+        )
+        val topPicksTitle = mobileBuiltinRailTitle(
+            renames = kbState.arrangement.renames,
+            key = KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+            fallback = "Top Picks for You"
         )
 
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -469,6 +483,88 @@ fun HomeScreenMobile(
                                                         onClick = {
                                                             onItemClick(episode.detail())
                                                         }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU -> {
+                                if (topPicks.isNotEmpty()) {
+                                    item(key = "topPicks", contentType = "section") {
+                                        MobileSection(title = topPicksTitle) {
+                                            LazyRow(
+                                                contentPadding =
+                                                    PaddingValues(horizontal = 16.dp),
+                                                horizontalArrangement =
+                                                    Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                items(
+                                                    topPicks,
+                                                    // Deduped where the row is
+                                                    // built (see
+                                                    // mergeTopPicksSeeds).
+                                                    key = { pick ->
+                                                        "${pick.type}:${pick.tmdbId}"
+                                                    },
+                                                    contentType = { "top-picks-card" }
+                                                ) { pick ->
+                                                    val meta =
+                                                        mobileBlendPickPreview(pick)
+                                                    val watched =
+                                                        viewModel.watchedKey(
+                                                            meta.id,
+                                                            meta.type
+                                                        ) in watchedKeys
+                                                    val partiallyWatched = !watched &&
+                                                        viewModel.watchedKey(
+                                                            meta.id,
+                                                            meta.type
+                                                        ) in partialWatchedKeys
+                                                    // The same poster tile the
+                                                    // catalog rails draw: this
+                                                    // row is a group of titles,
+                                                    // not a second card shape.
+                                                    PosterCard(
+                                                        posterUrl =
+                                                            imageOverridePosterUrl(
+                                                                paths = overridePaths,
+                                                                rawId = meta.id,
+                                                                fallbackUrl = meta.poster
+                                                            ),
+                                                        contentDescription = meta.name,
+                                                        isWatched = watched,
+                                                        isPartiallyWatched =
+                                                            partiallyWatched,
+                                                        onClick = {
+                                                            armHeroSource(
+                                                                meta.type,
+                                                                meta.id
+                                                            )
+                                                            onItemClick(meta)
+                                                        },
+                                                        // No owning Rail: this row
+                                                        // is not a catalog, so the
+                                                        // menu offers its own
+                                                        // actions and no "Open in
+                                                        // Grid".
+                                                        onLongClick = {
+                                                            menuTarget =
+                                                                RailMenuTarget(meta)
+                                                        },
+                                                        modifier = Modifier
+                                                            .heroSourceOnPress(
+                                                                meta.type,
+                                                                meta.id
+                                                            )
+                                                            .width(
+                                                                railPosterSize.width
+                                                            )
+                                                            .height(
+                                                                railPosterSize.height
+                                                            )
                                                     )
                                                 }
                                             }
@@ -892,33 +988,43 @@ fun HomeScreenMobile(
                 PosterContextMenu(
                     title = target.meta.name,
                     subtitle = target.meta.releaseInfo,
-                    actions = listOf(
-                        PosterContextAction(
-                            label = "Open in Grid",
-                            description = "Browse this whole catalog as a poster grid"
-                        ) {
-                            menuTarget = null
-                            onOpenCatalogGrid(target.rail)
-                        },
-                        PosterContextAction(
-                            label = "Go to Details",
-                            description = "Open this title's detail page"
-                        ) {
-                            menuTarget = null
-                            onItemClick(target.meta)
-                        },
-                        PosterContextAction(
-                            label = watchedMenuLabel(isWatched, target.meta.type),
-                            description = watchedMenuDescription(isWatched, target.meta.type)
-                        ) {
-                            menuTarget = null
-                            if (isWatched) {
-                                viewModel.markUnwatched(target.meta)
-                            } else {
-                                viewModel.markAsWatched(target.meta)
-                            }
+                    // "Open in Grid" exists only when there is a catalog to open:
+                    // a Top Picks card has none (see [RailMenuTarget.rail]).
+                    actions = buildList {
+                        target.rail?.let { rail ->
+                            add(
+                                PosterContextAction(
+                                    label = "Open in Grid",
+                                    description = "Browse this whole catalog as a poster grid"
+                                ) {
+                                    menuTarget = null
+                                    onOpenCatalogGrid(rail)
+                                }
+                            )
                         }
-                    ),
+                        add(
+                            PosterContextAction(
+                                label = "Go to Details",
+                                description = "Open this title's detail page"
+                            ) {
+                                menuTarget = null
+                                onItemClick(target.meta)
+                            }
+                        )
+                        add(
+                            PosterContextAction(
+                                label = watchedMenuLabel(isWatched, target.meta.type),
+                                description = watchedMenuDescription(isWatched, target.meta.type)
+                            ) {
+                                menuTarget = null
+                                if (isWatched) {
+                                    viewModel.markUnwatched(target.meta)
+                                } else {
+                                    viewModel.markAsWatched(target.meta)
+                                }
+                            }
+                        )
+                    },
                     hideTarget = hideTarget(
                         target.meta.name,
                         target.meta.type,
@@ -1211,7 +1317,29 @@ private fun BrowseShortcutCard(
 /** One rail card and the rail it belongs to, for the long-press menu. */
 private data class RailMenuTarget(
     val meta: MetaPreview,
-    val rail: Rail
+    /**
+     * The catalog this card came from, when it came from one.
+     *
+     * Null for a card on a row the app built itself (Home's "Top Picks for
+     * You"), which has no catalog behind it to browse - the menu drops "Open in
+     * Grid" there rather than offering a grid that could not load.
+     */
+    val rail: Rail? = null
+)
+
+/**
+ * One blended pick as the card model the phone navigates with. `tmdb:<id>` is
+ * the id spelling every app-built TMDB row uses, so the detail route, the
+ * watch badges and the hero resolve a Top Picks card like any other.
+ */
+private fun mobileBlendPickPreview(pick: BlendPick): MetaPreview = MetaPreview(
+    id = "tmdb:${pick.tmdbId}",
+    type = pick.type,
+    name = pick.name,
+    poster = pick.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+    background = pick.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+    description = pick.overview,
+    tmdbRating = pick.voteAverage
 )
 
 /**

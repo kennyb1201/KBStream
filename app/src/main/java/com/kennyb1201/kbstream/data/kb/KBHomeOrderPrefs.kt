@@ -432,7 +432,7 @@ object KBHomeOrderPrefs {
 
     /**
      * The rows EVERY profile draws, in their default order: Continue Watching,
-     * Upcoming, then the two Top Today feed rows.
+     * Top Picks for You, Upcoming, then the two Top Today feed rows.
      *
      * This is the head of Home on every profile - a kids profile is the one
      * exception, and what it swaps is the two Top Today rows (see
@@ -440,6 +440,7 @@ object KBHomeOrderPrefs {
      */
     private val BASE_BUILTIN_KEYS: List<String> = listOf(
         builtinKey("continue_watching"),
+        builtinKey(TOP_PICKS_FOR_YOU_KEY_ID),
         builtinKey("upcoming_schedule"),
         builtinKey(TOP_TODAY_MOVIES_KEY_ID),
         builtinKey(TOP_TODAY_SHOWS_KEY_ID)
@@ -488,9 +489,27 @@ object KBHomeOrderPrefs {
     )
 
     val BUILTIN_CONTINUE_WATCHING: String = BASE_BUILTIN_KEYS[0]
-    val BUILTIN_UPCOMING_SCHEDULE: String = BASE_BUILTIN_KEYS[1]
-    val BUILTIN_TOP_MOVIES_TODAY: String = BASE_BUILTIN_KEYS[2]
-    val BUILTIN_TOP_SHOWS_TODAY: String = BASE_BUILTIN_KEYS[3]
+
+    /**
+     * The personalized row: the profile's most recent completions, blended into
+     * a recommendation rail (see HomeViewModel's Top Picks build).
+     *
+     * It takes the slot directly after Continue Watching on purpose. Continue
+     * Watching leads because it is the resume rail - a personal row above it
+     * would bury the one row that carries something already in progress - and
+     * the personal pick belongs on the first screenful for a viewer who came to
+     * Home with nothing to resume, ahead of the time-based schedule and the
+     * generic Top Today feed rows. The viewer can still move it anywhere
+     * through the home manager like any other built-in.
+     *
+     * Its content gate is its own: the key is emitted only while the profile's
+     * Top Picks list is non-empty (see HomeScreen's `builtinWithContent`), so a
+     * profile with no completions draws no header and no empty rail.
+     */
+    val BUILTIN_TOP_PICKS_FOR_YOU: String = BASE_BUILTIN_KEYS[1]
+    val BUILTIN_UPCOMING_SCHEDULE: String = BASE_BUILTIN_KEYS[2]
+    val BUILTIN_TOP_MOVIES_TODAY: String = BASE_BUILTIN_KEYS[3]
+    val BUILTIN_TOP_SHOWS_TODAY: String = BASE_BUILTIN_KEYS[4]
     val BUILTIN_TOP_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[0]
     val BUILTIN_TOP_KIDS_SHOWS: String = KIDS_BUILTIN_KEYS[1]
     val BUILTIN_NEW_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[2]
@@ -547,6 +566,10 @@ object KBHomeOrderPrefs {
      * or a hide written under the other profile is honoured again.
      */
     fun builtinKeysFor(kidsMaxAge: Int?, isGuest: Boolean = false): List<String> = when {
+        // The personalized row is in every list: the gate on it is CONTENT, not
+        // the profile kind (an empty list suppresses it, see HomeScreen's
+        // `builtinWithContent`). Only the two Top Today feed rows are swapped
+        // out for a kids profile's ceiling-filtered set.
         kidsMaxAge != null ->
             BASE_BUILTIN_KEYS.filterNot {
                 it == BUILTIN_TOP_MOVIES_TODAY || it == BUILTIN_TOP_SHOWS_TODAY
@@ -570,6 +593,7 @@ object KBHomeOrderPrefs {
      */
     fun builtinDefaultTitle(key: String): String? = when (key) {
         BUILTIN_CONTINUE_WATCHING -> "Continue Watching"
+        BUILTIN_TOP_PICKS_FOR_YOU -> "Top Picks for You"
         BUILTIN_UPCOMING_SCHEDULE -> "Upcoming"
         BUILTIN_TOP_MOVIES_TODAY -> "Top Movies Today"
         BUILTIN_TOP_SHOWS_TODAY -> "Top Shows Today"
@@ -661,6 +685,15 @@ object KBHomeOrderPrefs {
     /** Catalog ids of the two pinned "Top Today" feed rows (see `loadPinnedTopTodayRails`). */
     private const val TOP_TODAY_MOVIES_KEY_ID = "top_movies_today"
     private const val TOP_TODAY_SHOWS_KEY_ID = "top_shows_today"
+
+    /**
+     * Key id of the personalized "Top Picks for You" row.
+     *
+     * Not a catalog id: nothing fetches this row. It is built by Home's own
+     * Top Picks pass (see HomeViewModel) from the profile's recent completions,
+     * so the key only ever names a slot in the arrangement.
+     */
+    private const val TOP_PICKS_FOR_YOU_KEY_ID = "top_picks_for_you"
 
     /** Catalog ids of the two standing kids rails (see `loadPinnedKidsRails`). */
     private const val TOP_KIDS_MOVIES_KEY_ID = "top_kids_movies"

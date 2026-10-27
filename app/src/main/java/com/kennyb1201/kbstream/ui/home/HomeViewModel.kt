@@ -21,6 +21,8 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
@@ -38,7 +40,12 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
+import com.kennyb1201.kbstream.data.tmdb.BlendParams
+import com.kennyb1201.kbstream.data.tmdb.BlendPick
+import com.kennyb1201.kbstream.data.tmdb.BlendWatchedMode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.buildRecommendationBlend
+import com.kennyb1201.kbstream.data.tmdb.mergeTopPicksSeeds
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.LocalSeriesProgress
@@ -66,6 +73,7 @@ import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlin.math.round
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -568,6 +576,247 @@ class HomeViewModel(
                 }
         }
     }
+
+    /**
+     * Home's personalized row: "Top Picks for You" (see [buildTopPicks]).
+     *
+     * Empty until the first build lands, and empty again after a failed one -
+     * the row is DRAWN only while this list is non-empty (see the screens'
+     * `builtinWithContent`), so an empty list means no header and no rail
+     * rather than a placeholder or an error card. Home never blocks on it: it
+     * is built beside the rails, never awaited by them.
+     */
+    private val _topPicks =
+        MutableStateFlow<List<BlendPick>>(emptyList())
+
+    // Internal, like the pick type itself: the blend's models are this module's
+    // own, and both Home surfaces read this flow from inside it.
+    internal val topPicks: StateFlow<List<BlendPick>> =
+        _topPicks.asStateFlow()
+
+    /**
+     * Bumped by a profile switch and by every new build; a build from before it
+     * must not publish. The list belongs to the profile it was built for, and a
+     * build that started for the profile just left would otherwise land on top
+     * of the cleared state (the same discipline [upcomingBuildEpoch] applies).
+     */
+    private var topPicksBuildEpoch = 0L
+
+    private var topPicksJob: Job? = null
+
+    /**
+     * Rebuilds "Top Picks for You" for the active profile, off the main thread
+     * and off Home's critical path.
+     *
+     * Bumped and cancelled per call so a profile switch or a manual refresh
+     * supersedes the build in flight rather than queueing behind it. A failed
+     * build publishes nothing (the row simply hides); a later successful one
+     * republishes.
+     */
+    fun refreshTopPicks() {
+        topPicksBuildEpoch += 1
+        val epoch = topPicksBuildEpoch
+        topPicksJob?.cancel()
+        topPicksJob = viewModelScope.launch {
+            val picks = runCatchingCancellable { buildTopPicks() }
+                .getOrDefault(emptyList())
+            if (epoch == topPicksBuildEpoch) {
+                _topPicks.value = picks
+            }
+        }
+    }
+
+    /**
+     * One build of the Top Picks row: seeds, one blend per seed, one merge.
+     *
+     * The seeds are this profile's most recent COMPLETIONS (the DAO query is
+     * profile-scoped, so no other profile's history can seed this row), the
+     * blends run concurrently, and the merge is the shared
+     * [mergeTopPicksSeeds] - round-robin by seed, deduped across seeds, capped
+     * per seed and in total. The two profile-wide filters the other TMDB rails
+     * use are applied ONCE to the merged list, exactly as Detail's More Like
+     * This applies them to its blend: the kids ceiling and the digital-release
+     * filter, never a per-tier copy of either.
+     */
+    private suspend fun buildTopPicks(): List<BlendPick> {
+        val app = getApplication<Application>()
+        val repo = tmdbRepository
+
+        val rows = runCatchingCancellable {
+            WatchHistoryDatabase.getInstanceScoped(app)
+                .watchHistoryDao()
+                .getRecentCompletedSeeds(TOP_PICKS_SEED_SCAN)
+        }.getOrNull().orEmpty()
+        if (rows.isEmpty()) return emptyList()
+
+        val taste = runCatchingCancellable { TasteSignals.snapshot(app) }
+            .getOrDefault(TasteSignals.Snapshot())
+        val seeds = pickTopPicksSeeds(rows, taste, repo)
+        if (seeds.isEmpty()) return emptyList()
+
+        val perSeed = coroutineScope {
+            seeds.map { seed ->
+                async(Dispatchers.IO) {
+                    runCatchingCancellable { picksForSeed(app, seed, repo, taste) }
+                        .getOrDefault(emptyList())
+                }
+            }.awaitAll()
+        }
+        if (perSeed.all { it.isEmpty() }) return emptyList()
+
+        var picks = mergeTopPicksSeeds(
+            perSeed = perSeed,
+            perSeedCap = TOP_PICKS_PER_SEED,
+            rowCap = TOP_PICKS_ROW_CAP
+        )
+        if (picks.isEmpty()) return emptyList()
+
+        if (repo.kidsMaxAge() != null) {
+            picks = runCatchingCancellable {
+                repo.kidsFilter(picks) { pick -> pick.tmdbId to pick.type }
+            }.getOrDefault(picks)
+        }
+        if (repo.isDigitalFilterEnabled()) {
+            picks = runCatchingCancellable {
+                repo.filterByHomeAvailability(picks) { pick -> pick.tmdbId to pick.type }
+            }.getOrDefault(picks)
+        }
+        return picks
+    }
+
+    /**
+     * The seeds, in the order the row reads them: the viewer's LIKED titles
+     * first (most recently liked first), then the rest by completion recency.
+     *
+     * A title the viewer thumbed down is never a seed: the neighbourhood of
+     * something they disliked is exactly what the row must not recommend. A
+     * completion that cannot be resolved to a TMDB id is skipped and the next
+     * one takes its place, so one unresolvable row can never empty the rail.
+     */
+    private suspend fun pickTopPicksSeeds(
+        rows: List<WatchHistoryEntity>,
+        taste: TasteSignals.Snapshot,
+        repo: TmdbRepository
+    ): List<TopPicksSeed> {
+        val chosen = ArrayList<TopPicksSeed>(TOP_PICKS_SEEDS)
+        for (row in rows) {
+            if (chosen.size >= TOP_PICKS_SEEDS) break
+            val mediaType = seedMediaType(row.type)
+            val tmdbId = seedTmdbId(row.parentId, mediaType, repo) ?: continue
+            // Only the id flavors the history row can prove are asked about:
+            // the resolved IMDB id is looked up only when the profile HAS
+            // signals, so a viewer who never pressed a thumb pays nothing.
+            val imdbId = if (taste.isEmpty) {
+                null
+            } else {
+                runCatchingCancellable { repo.resolveImdbId(tmdbId, mediaType) }.getOrNull()
+            }
+            if (taste.isDisliked(
+                    mediaType = mediaType,
+                    title = row.name,
+                    year = null,
+                    tmdbId = tmdbId,
+                    imdbId = imdbId
+                )
+            ) {
+                continue
+            }
+            chosen += TopPicksSeed(
+                tmdbId = tmdbId,
+                mediaType = mediaType,
+                name = row.name,
+                completedAt = row.completedAt ?: 0L,
+                likedAt = likedAt(taste, mediaType, row.name, tmdbId, imdbId)
+            )
+        }
+        return chosen.sortedWith(
+            compareByDescending<TopPicksSeed> { it.likedAt > 0L }
+                .thenByDescending { it.likedAt }
+                .thenByDescending { it.completedAt }
+        )
+    }
+
+    /** One seed's own blend: no franchise tier (the Collections rail owns the saga). */
+    private suspend fun picksForSeed(
+        app: Application,
+        seed: TopPicksSeed,
+        repo: TmdbRepository,
+        taste: TasteSignals.Snapshot
+    ): List<BlendPick> {
+        val detail = repo.getDetailByTmdbId(seed.tmdbId, seed.mediaType) ?: return emptyList()
+        return buildRecommendationBlend(
+            BlendParams(
+                context = app,
+                repo = repo,
+                detail = detail,
+                mediaType = seed.mediaType,
+                seedName = seed.name.ifBlank { detail.title ?: detail.name.orEmpty() },
+                pickCount = TOP_PICKS_PER_SEED,
+                // The Collections rail sits above this row and already carries
+                // the viewer's sagas, so a franchise tier here would repeat the
+                // synopses of titles Home is already showing.
+                includeFranchise = false,
+                // Completions only: a title the viewer has merely STARTED stays
+                // in the row (badged), because they are still watching it.
+                watchedMode = BlendWatchedMode.DROP_COMPLETED,
+                dropHidden = true,
+                taste = taste
+            )
+        )
+    }
+
+    /**
+     * The TMDB id a history row's parent names: the two id flavors the app
+     * stores, or a resolve for the `tt...` form.
+     */
+    private suspend fun seedTmdbId(
+        parentId: String,
+        mediaType: String,
+        repo: TmdbRepository
+    ): Int? {
+        val id = parentId.trim()
+        if (id.isEmpty()) return null
+        if (id.startsWith("tt")) return repo.resolveTmdbId(id, mediaType)
+        return id.removePrefix("tmdb:").toIntOrNull()?.takeIf { it > 0 }
+    }
+
+    /** The history row's type, as the recommendation engine spells it. */
+    private fun seedMediaType(type: String): String = when (type.lowercase()) {
+        "series", "show", "tv" -> "series"
+        else -> "movie"
+    }
+
+    /**
+     * When this seed was LIKED, or 0 when it carries no like - the seed order's
+     * first key (see [pickTopPicksSeeds]).
+     */
+    private fun likedAt(
+        taste: TasteSignals.Snapshot,
+        mediaType: String,
+        title: String?,
+        tmdbId: Int,
+        imdbId: String?
+    ): Long {
+        if (taste.liked.isEmpty()) return 0L
+        val keys = TasteSignals.matchKeys(
+            mediaType = mediaType,
+            ids = listOfNotNull("tmdb:$tmdbId", imdbId),
+            title = title,
+            year = null
+        )
+        if (keys.isEmpty() || keys.none { it in taste.liked }) return 0L
+        return taste.likedTitles
+            .filter { entry -> entry.keys.any { it in keys } }
+            .maxOfOrNull { it.updatedAt } ?: 0L
+    }
+
+    private data class TopPicksSeed(
+        val tmdbId: Int,
+        val mediaType: String,
+        val name: String,
+        val completedAt: Long,
+        val likedAt: Long
+    )
 
     private val _isLoading =
         MutableStateFlow(true)
@@ -1294,6 +1543,15 @@ Log.d(
                     // Upcoming, then it corrects itself".
                     _upcomingSchedule.value = emptyList()
 
+                    // And the personalized row, which is built from the
+                    // outgoing profile's completions: bump its epoch so a build
+                    // already running cannot publish, cancel it, and empty the
+                    // list so no card of the old profile's taste stays drawn
+                    // while the new profile's build runs.
+                    topPicksBuildEpoch += 1
+                    topPicksJob?.cancel()
+                    _topPicks.value = emptyList()
+
                     // Same for the caught-up Upcoming cards: they come from
                     // the account-wide Simkl feed and are only kids-filtered
                     // for the profile that built them, so nothing built for
@@ -1335,6 +1593,8 @@ Log.d(
 
                     rebuildRailsForActiveProfile()
                     refreshUpNext()
+                    // The incoming profile's own completions, blended afresh.
+                    refreshTopPicks()
                 }
         }
     }
@@ -3169,6 +3429,11 @@ Log.d(
             loadRailsInternal(
                 forceRefresh = true
             )
+
+            // Pull-to-refresh rebuilds the personal row too: the completions it
+            // seeds from are exactly what a viewer finishing something expects
+            // to see reflected here.
+            refreshTopPicks()
 
             PerfTrace.record(
                 "home.refreshAll",
@@ -9442,6 +9707,11 @@ private suspend fun calculateEpisodesRemaining(
 
         observeUpcomingSchedule()
 
+        // The personalized row, built beside the rails rather than inside
+        // them: Home's first paint, hero and every other rail never wait for
+        // it (see refreshTopPicks).
+        refreshTopPicks()
+
         // A finished title leaves the rail only when the tracker feeds are
         // read again after the completion has been pushed (see
         // ContinueWatchingRefreshBus). Home's ON_RESUME refresh can beat that
@@ -9746,6 +10016,20 @@ private suspend fun calculateEpisodesRemaining(
          */
         private const val UPCOMING_REBUILD_DEBOUNCE_MS =
             300L
+
+        /** How many completed titles the Top Picks row is built from. */
+        private const val TOP_PICKS_SEEDS = 3
+
+        /**
+         * How far down the completion list the seed pass may look. Deeper than
+         * the seed count on purpose: an unresolvable or disliked completion is
+         * skipped rather than emptying a seed slot.
+         */
+        private const val TOP_PICKS_SEED_SCAN = 12
+
+        /** Picks per seed, and cards in the row (see mergeTopPicksSeeds). */
+        private const val TOP_PICKS_PER_SEED = 6
+        private const val TOP_PICKS_ROW_CAP = 18
 
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
             50

@@ -120,6 +120,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.BlendPick
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
@@ -2760,6 +2761,136 @@ private fun HomeHeroHost(
     }
 }
 
+/** Card key prefix for the Top Picks row (see [HomeViewModel.lastFocusedRailItemKey]). */
+private const val TOP_PICKS_CARD_KEY_PREFIX = "top-picks|"
+
+/**
+ * One blended pick as the card model the rest of Home navigates with.
+ *
+ * `tmdb:<id>` is the id spelling every app-built TMDB row uses (see
+ * `TmdbCollectionPart.toMetaPreview`), so the Detail route, the badges and the
+ * hero resolve a Top Picks card exactly as they resolve a catalog card.
+ */
+private fun blendPickPreview(pick: BlendPick): MetaPreview =
+    MetaPreview(
+        id = "tmdb:${pick.tmdbId}",
+        type = pick.type,
+        name = pick.name,
+        poster = pick.posterPath?.let { TmdbRepository.POSTER_BASE + it },
+        background = pick.backdropPath?.let { TmdbRepository.BACKDROP_BASE + it },
+        description = pick.overview,
+        tmdbRating = pick.voteAverage
+    )
+
+/**
+ * "Top Picks for You": the profile's recent completions, blended into one
+ * recommendation row (see HomeViewModel's Top Picks build).
+ *
+ * A poster rail like any catalog rail - the same [PosterCard], the same watch
+ * badges, the same long-press menu, the same focus registration and the same
+ * bring-into-view spec - because a viewer should not be able to tell that this
+ * row was assembled by the app rather than served by an add-on. What it does
+ * NOT share is the pagination machinery: there is no catalog behind it to page,
+ * so the row is exactly the picks Home built.
+ *
+ * It is a composable of its own rather than inline in [drawBuiltinRail] for the
+ * same reason the other two built-in rows are: the branch that picks the rail
+ * is about POSITION (see the arrangement), and the row is about content.
+ */
+// LocalBringIntoViewSpec is still experimental; the enclosing rail column opts
+// in the same way (see BuiltinContinueWatchingRail).
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun BuiltinTopPicksRail(
+    picks: List<BlendPick>,
+    title: String,
+    bringIntoViewSpec: BringIntoViewSpec,
+    onTitleHeight: (Int) -> Unit,
+    /**
+     * Every card's own [FocusRequester], keyed by the key its focus reports -
+     * registered as the cards COMPOSE and dropped as they leave, so Home's
+     * return-from-Detail restore can ask for the card the viewer left on (the
+     * same map the catalog rails fill).
+     */
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
+    onFocusedCard: (key: String, requester: FocusRequester) -> Unit,
+    isWatched: (MetaPreview) -> Boolean,
+    isPartiallyWatched: (MetaPreview) -> Boolean,
+    onSelectHero: (MetaPreview) -> Unit,
+    onOpen: (MetaPreview) -> Unit,
+    onLongPress: (MetaPreview, FocusRequester) -> Unit,
+    // Non-null only when this rail is the one Home draws first (see
+    // [homeTopRailUpHook]); a personal row the viewer has moved to the top of
+    // Home takes the top-bar hook like any other rail.
+    onUpPressed: ((FocusRequester) -> Unit)? = null
+) {
+    Column(
+        modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+    ) {
+        SectionTitle(title, onHeight = onTitleHeight)
+
+        CompositionLocalProvider(
+            LocalBringIntoViewSpec provides bringIntoViewSpec
+        ) {
+            LazyRow(
+                contentPadding = PaddingValues(
+                    start = RailHorizontalStartPadding,
+                    end = TvSafeAreaHorizontal,
+                    top = 10.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                itemsIndexed(
+                    items = picks,
+                    // Deduped across seeds where the row is built (see
+                    // mergeTopPicksSeeds), so a title cannot repeat here.
+                    key = { _, pick -> "${pick.type}:${pick.tmdbId}" },
+                    contentType = { _, _ -> "top-picks-card" }
+                ) { index, pick ->
+                    val meta = blendPickPreview(pick)
+                    val requester = remember { FocusRequester() }
+                    val cardKey = TOP_PICKS_CARD_KEY_PREFIX + "${pick.type}:${pick.tmdbId}"
+                    DisposableEffect(requester, cardKey) {
+                        cardFocusRequesters[cardKey] = requester
+                        onDispose { cardFocusRequesters.remove(cardKey) }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .width(HomePosterWidth)
+                            .height(HomePosterHeight + PosterFocusHeadroom)
+                            .padding(end = HomeRailGap),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        PosterCard(
+                            posterUrl = meta.poster,
+                            contentDescription = meta.name,
+                            isWatched = isWatched(meta),
+                            isPartiallyWatched = isPartiallyWatched(meta),
+                            onClick = { onOpen(meta) },
+                            onLongClick = { onLongPress(meta, requester) },
+                            modifier = Modifier
+                                .heroSourceElement(meta.type, meta.id)
+                                .homeRailHeadLeftEdgeStop(index == 0)
+                                .focusRequester(requester)
+                                .width(HomePosterWidth)
+                                .height(HomePosterHeight)
+                                .onFocusChanged { focusState ->
+                                    if (focusState.isFocused) {
+                                        onFocusedCard(cardKey, requester)
+                                        onSelectHero(meta)
+                                    }
+                                }
+                                .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * Continue Watching, as a rail whose POSITION the home manager owns.
  *
@@ -3961,6 +4092,11 @@ fun HomeScreen(
             )
         }
     }
+    // The personalized row's own picks (see HomeViewModel's Top Picks build).
+    // Not filtered by the hidden-titles pass above on purpose: a hidden title
+    // is already dropped where the row is built (the blend's `dropHidden`),
+    // and filtering a second time here would only re-derive the same answer.
+    val topPicks by viewModel.topPicks.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     // Held as State objects rather than values: HomeHeroHost below performs the
@@ -3985,7 +4121,7 @@ fun HomeScreen(
     // carries no content of its own - the composables below render it - so the
     // merge is told, exactly as the inline version tested `upNext.isNotEmpty()`
     // and `upcomingSchedule.isNotEmpty()` before drawing each one.
-    val builtinWithContent = remember(upNext, upcomingSchedule) {
+    val builtinWithContent = remember(upNext, upcomingSchedule, topPicks) {
         buildSet {
             if (upNext.isNotEmpty()) {
                 add(
@@ -3997,6 +4133,15 @@ fun HomeScreen(
                 add(
                     com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
                         .BUILTIN_UPCOMING_SCHEDULE
+                )
+            }
+            // The personalized row is drawn only while it has picks: an empty
+            // list means no header and no rail (never a bare heading), which is
+            // also what a slow or failed build leaves behind.
+            if (topPicks.isNotEmpty()) {
+                add(
+                    com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .BUILTIN_TOP_PICKS_FOR_YOU
                 )
             }
         }
@@ -4881,6 +5026,40 @@ fun HomeScreen(
                     landOnHeadSignal = upcomingLandOnHeadSignal,
                     onUpPressed = upHook,
                     onOpenCalendar = onOpenCalendar
+                )
+            } else if (
+                key ==
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .BUILTIN_TOP_PICKS_FOR_YOU
+            ) {
+                BuiltinTopPicksRail(
+                    picks = topPicks,
+                    title = title,
+                    bringIntoViewSpec = railCardsBringIntoViewSpec,
+                    onTitleHeight = { railTitleHeightPx = it.toFloat() },
+                    cardFocusRequesters = railFocusRequesters,
+                    onFocusedCard = { cardKey, requester ->
+                        focusedCardRequester = requester
+                        viewModel.lastFocusedRailItemKey = cardKey
+                    },
+                    isWatched = { meta ->
+                        viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                    },
+                    isPartiallyWatched = { meta ->
+                        viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
+                    },
+                    onSelectHero = { meta -> selectHero(meta) },
+                    onOpen = { meta -> onItemClick(meta) },
+                    onLongPress = { meta, requester ->
+                        // Same contract the other poster rails have: remember
+                        // the tile that opened the menu, so dismissing it hands
+                        // focus back to that exact tile. No owning Rail is
+                        // handed over - this row is not a catalog, so the menu
+                        // offers its own actions and no "Open in Grid".
+                        lastPosterFocusRequester = requester
+                        posterMenu = PosterMenuTarget(meta)
+                    },
+                    onUpPressed = upHook
                 )
             }
             // No catch-all: a built-in key this build does not know draws

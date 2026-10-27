@@ -25,6 +25,13 @@ class BuiltinRailExhaustiveContractTest {
             slice.contains("BUILTIN_UPCOMING_SCHEDULE")
         )
         assertTrue(
+            "the personalized row must be matched explicitly too - it is the " +
+                "built-in most likely to be forgotten, because the surface whose " +
+                "branch is missing draws nothing at all rather than failing",
+            slice.contains("BUILTIN_TOP_PICKS_FOR_YOU") &&
+                slice.contains("BuiltinTopPicksRail(")
+        )
+        assertTrue(
             "the Upcoming rail must sit behind an explicit key test, not a catch-all",
             slice.contains("} else if (")
         )
