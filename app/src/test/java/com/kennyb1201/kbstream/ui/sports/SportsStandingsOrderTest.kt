@@ -125,7 +125,7 @@ class SportsStandingsOrderTest {
             ),
         )
 
-        val sorted = SportsStandingsOrder.sorted(groups, pointsTable = false)
+        val sorted = SportsStandingsOrder.sortedGroups(groups, pointsTable = false)
 
         assertEquals(
             listOf("Southeastern Conference", "Atlantic"),

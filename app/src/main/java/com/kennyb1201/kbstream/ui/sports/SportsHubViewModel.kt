@@ -731,7 +731,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // arrives worst-first and the NFL's does not (see
             // SportsStandingsOrder). Sorted here, once, so the TV table and the
             // phone table are the same table.
-            val table = SportsStandingsOrder.sorted(
+            val table = SportsStandingsOrder.sortedGroups(
                 groups = groups,
                 pointsTable = SportsLeagues.byPath(path)?.pointsTable == true
             )

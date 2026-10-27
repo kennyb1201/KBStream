@@ -28,8 +28,18 @@ import com.kennyb1201.kbstream.data.sports.StandingGroup
  */
 internal object SportsStandingsOrder {
 
-    /** [groups] with every group's rows in rank order, the groups themselves untouched. */
-    fun sorted(groups: List<StandingGroup>, pointsTable: Boolean): List<StandingGroup> =
+    /**
+     * [groups] with every group's rows in rank order, the groups themselves
+     * untouched.
+     *
+     * Named apart from the row sort below on purpose: `List<StandingGroup>` and
+     * `List<StandingEntry>` erase to the same JVM signature, so two `sorted`
+     * overloads clash at compile time ("Platform declaration clash ...
+     * sorted(Ljava/util/List;Z)"). The compiler caught it on the first CI run
+     * of the release that added this file; the names keep the two call shapes
+     * distinguishable to a reader as well.
+     */
+    fun sortedGroups(groups: List<StandingGroup>, pointsTable: Boolean): List<StandingGroup> =
         groups.map { group -> group.copy(entries = sorted(group.entries, pointsTable)) }
 
     /**

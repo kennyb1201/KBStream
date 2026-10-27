@@ -316,7 +316,7 @@ class SportsHubStandingsContractTest {
         assertTrue(
             "the held table is ranked by the shared rule, on the league's own figure",
             model.contains(
-                "val table = SportsStandingsOrder.sorted( groups = groups, " +
+                "val table = SportsStandingsOrder.sortedGroups( groups = groups, " +
                     "pointsTable = SportsLeagues.byPath(path)?.pointsTable == true )"
             )
         )
