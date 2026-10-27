@@ -96,7 +96,11 @@ class CompletionFiledWiringContractTest {
             path = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
             sticky = "val sessionCompleted = forceCompleted || endedHandled || completionFiled",
             claims = "if (completed) completionFiled = true",
-            passes = 2
+            // Three exits, not two: the end-of-episode card, the playback-ended
+            // path, and the backgrounding exit save the player audit added
+            // (S-F7). Each asks the same question and must be told the flag, so
+            // the count is the number of questionnaires the engine has.
+            passes = 3
         ),
         Engine(
             path = "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt",

@@ -54,10 +54,11 @@ class OnboardingDeepDiveContractTest {
     private fun mainActivity(): String =
         source("com/kennyb1201/kbstream/MainActivity.kt")
 
-    private fun onboardingTv(): String = source("ui/onboarding/OnboardingScreen.kt")
+    private fun onboardingTv(): String =
+        source("com/kennyb1201/kbstream/ui/onboarding/OnboardingScreen.kt")
 
     private fun onboardingMobile(): String =
-        source("ui/mobile/OnboardingScreenMobile.kt")
+        source("com/kennyb1201/kbstream/ui/mobile/OnboardingScreenMobile.kt")
 
     @Test
     fun `the typed credentials are remembered above the branch that disposes the screen`() {

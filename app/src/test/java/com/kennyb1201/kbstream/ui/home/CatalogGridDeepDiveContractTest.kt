@@ -34,6 +34,13 @@ import org.junit.Test
  */
 class CatalogGridDeepDiveContractTest {
 
+    // Declared FIRST, and that is not style: these are property initialisers, so
+    // the fields below call [stripped] while this object is still being
+    // constructed - and a `by lazy` declared after them is still null at that
+    // point, which is an NPE in the constructor of every test in the class
+    // (`Cannot invoke "kotlin.Lazy.getValue()" because "<local1>" is null`).
+    private val sourceRoot: File by lazy { findSourceRoot() }
+
     private val tv = stripped(GRID_TV)
     private val phone = stripped(GRID_MOBILE)
     private val viewModel = stripped(HOME_VM)
@@ -375,8 +382,6 @@ class CatalogGridDeepDiveContractTest {
         assertTrue("anchor missing after '$from': $to", end > start)
         return text.substring(start, end)
     }
-
-    private val sourceRoot: File by lazy { findSourceRoot() }
 
     private fun findSourceRoot(): File {
         val prefixes = listOf("", "app/")

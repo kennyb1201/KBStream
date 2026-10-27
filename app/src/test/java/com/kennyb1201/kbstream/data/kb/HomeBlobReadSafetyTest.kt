@@ -88,6 +88,13 @@ class HomeBlobReadSafetyTest {
     @Test
     fun `reset is the deliberate way out of an unreadable home order`() {
         homeOrder.edit().putString("home_order_json", corruptOrder).commit()
+        // A read is what archives the evidence copy, so the reset has something
+        // to leave alone; without it this asserted a copy nothing had written.
+        assertTrue(KBHomeOrderPrefs.get(context).order.isEmpty())
+        assertEquals(
+            corruptOrder,
+            homeOrder.getString("home_order_json_corrupt", null)
+        )
 
         KBHomeOrderPrefs.reset(context)
 

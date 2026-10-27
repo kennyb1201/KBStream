@@ -213,7 +213,10 @@ class EntryFocusBatchContractTest {
         val showPicker = player.indexOf("private fun showPicker(mode: PickerMode) {")
         assertTrue("the picker is still there", showPicker >= 0)
         val items = player.indexOf("val items = when (mode) {", showPicker)
-        val guard = player.indexOf("if (items.isEmpty()) return", items)
+        // The guard is a block, not a bare return: an empty list now SAYS why the
+        // panel did not open (a press that did nothing read as a dead button),
+        // and still returns before anything becomes visible.
+        val guard = player.indexOf("if (items.isEmpty()) {", items)
         val visible = player.indexOf("pickerContainer.visibility = View.VISIBLE", guard)
         assertTrue("the visible list is built first", items > showPicker)
         assertTrue(

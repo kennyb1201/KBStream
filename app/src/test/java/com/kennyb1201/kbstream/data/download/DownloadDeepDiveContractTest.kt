@@ -108,7 +108,16 @@ class DownloadDeepDiveContractTest {
     @Test
     fun `one unreadable record does not take the readable ones with it`() {
         DownloadsStore.putAll(context, listOf(record("a", addedAt = 1), record("b", addedAt = 2)))
-        writeRaw(rawBlob().replace("\"state\":\"DOWNLOADED\",\"percent\"", "\"state\":\"NONSENSE\",\"percent\""))
+        // ONE record is broken, and it is the SECOND one: replacing the state
+        // everywhere made both records unreadable, so the case proved the
+        // opposite of what it says (and its expectation was wrong, not the
+        // salvage).
+        val whole = rawBlob()
+        val second = whole.indexOf("{\"id\":\"b\"")
+        val broken = whole.substring(0, second) +
+            whole.substring(second)
+                .replaceFirst("\"state\":\"DOWNLOADED\"", "\"state\":\"NONSENSE\"")
+        writeRaw(broken)
 
         assertEquals(
             "a value no build understands costs that record, not the queue",
@@ -237,11 +246,11 @@ class DownloadDeepDiveContractTest {
 
     @Test
     fun `the screen's retry speaks, and the finish path is scoped to one download`() {
-        val store = flat("data/download/DownloadsStore.kt")
-        val manager = flat("data/download/DownloadsManager.kt")
-        val screen = flat("ui/mobile/DownloadsScreenMobile.kt")
-        val actions = flat("ui/mobile/DownloadActions.kt")
-        val player = flat("ui/player/NativePlayerActivity.kt")
+        val store = flat("com/kennyb1201/kbstream/data/download/DownloadsStore.kt")
+        val manager = flat("com/kennyb1201/kbstream/data/download/DownloadsManager.kt")
+        val screen = flat("com/kennyb1201/kbstream/ui/mobile/DownloadsScreenMobile.kt")
+        val actions = flat("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
+        val player = flat("com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt")
 
         assertFalse(
             "a decode failure no longer reads as \"you never downloaded anything\"",

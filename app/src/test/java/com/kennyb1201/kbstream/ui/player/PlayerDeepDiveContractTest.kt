@@ -282,7 +282,10 @@ class PlayerDeepDiveContractTest {
 
     @Test
     fun `a panel that outlives the auto-hide countdown does not strand the overlay`() {
-        val hide = functionBody(chrome, "private val hideRunnable = Runnable {")
+        // An object expression, not a SAM lambda: the countdown reposts ITSELF,
+        // and inside a lambda `this` is the chrome - which is why the repost did
+        // not compile until the shape changed.
+        val hide = functionBody(chrome, "private val hideRunnable = object : Runnable {")
         assertTrue(
             "the countdown must answer 'not now' by COMING BACK, not by dying",
             hide.contains("handler.postDelayed(this, autoHideMs)")
