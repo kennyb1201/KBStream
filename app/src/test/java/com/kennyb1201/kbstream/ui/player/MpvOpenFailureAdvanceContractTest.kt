@@ -66,7 +66,9 @@ class MpvOpenFailureAdvanceContractTest {
      * failed this pin for a reason that had nothing to do with what it pins.
      */
     private val errorHandler: String by lazy {
-        val start = activity.indexOf("view.onPlaybackError = {")
+        // The assignment now carries a lambda label (playbackError@), so the
+        // anchor stops at the `=` rather than at the brace.
+        val start = activity.indexOf("view.onPlaybackError =")
         assertTrue("MpvPlayerActivity must handle the view's playback error", start >= 0)
         val rest = activity.substring(start)
         val end = Regex("\\n {8}}").find(rest)?.range?.first ?: rest.length

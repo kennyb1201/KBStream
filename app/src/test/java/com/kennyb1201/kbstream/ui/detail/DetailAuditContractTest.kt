@@ -535,9 +535,16 @@ class DetailAuditContractTest {
             "no rating is exported as its own field: the entries travel whole",
             payload.contains("ratingsByKey")
         )
+        // The check is on the store's own names, not on the word: the auto-play
+        // wait copy describes "a taste that has no natural steps" (Streams C1),
+        // so a bare `contains("taste")` now fails on prose.
+        val prefs = normalized(source(APP_PREFS))
         assertFalse(
             "and there is no taste preference to switch them off with",
-            normalized(source(APP_PREFS)).lowercase().contains("taste")
+            prefs.contains("taste_signals") ||
+                prefs.contains("TasteSignals") ||
+                prefs.contains("KEY_TASTE") ||
+                prefs.contains("getTaste")
         )
     }
 

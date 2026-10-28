@@ -92,16 +92,22 @@ class StreamsRankWiringContractTest {
         val fetch = functionBody(viewModel, "private suspend fun fetch(")
 
         val reorder = fetch.indexOf("SourceAddonPreference.ordered(")
-        val collapse = fetch.indexOf("StreamDedup.collapse(preferredStreams)")
+        // The binge continuation sits between them now (audit S-F5): the picker
+        // shows the same continued provider auto-play would take, and it is
+        // applied to the REORDERED list, so its promotion has the final word
+        // before the collapse picks a survivor.
+        val binge = fetch.indexOf("BingeGroupResolver.orderedForNextEpisode(")
+        val collapse = fetch.indexOf("StreamDedup.collapse(bingeOrdered)")
         val badges = fetch.indexOf("StreamBadgeEngine.apply(")
 
         assertTrue("the addon reorder must still be applied", reorder >= 0)
+        assertTrue("the binge continuation must still be applied", binge >= 0)
         assertTrue("the collapse must still be applied", collapse >= 0)
         assertTrue("the badges must still be attached", badges >= 0)
         assertTrue(
-            "the collapse must run AFTER the reorder, so the surviving row is " +
-                "the one the viewer would have picked from",
-            collapse > reorder
+            "the collapse must run AFTER the reorder and the binge promotion, so the " +
+                "surviving row is the one the viewer would have picked from",
+            collapse > reorder && collapse > binge
         )
         assertTrue(
             "and BEFORE the badges, so the surviving row keeps its badges",

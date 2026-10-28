@@ -54,8 +54,10 @@ class StreamsIdentityContractTest {
             resolve.indexOf("noteRequest(") < resolve.indexOf("val resolved = fetch(")
         )
         assertTrue(
-            "the picker's load keeps recording its own request",
-            load.contains("noteRequest(contentType, streamId, runtimeMinutes)")
+            "the picker's load keeps recording its own request, binge context included",
+            load.contains(
+                "noteRequest(contentType, streamId, runtimeMinutes, bingeGroup, bingeAddonName)"
+            )
         )
         assertEquals(
             "one stamping site only: a second `lastRequest =` assignment is the second answer " +
@@ -78,11 +80,18 @@ class StreamsIdentityContractTest {
                 "fun refresh(contentType: String, streamId: String, runtimeMinutes: Int? = null)"
             )
         )
+        // The target must never come from the record; the only sanctioned read of
+        // it is the binge context, and only for the SAME title (Streams C1).
+        val refresh = slice(viewModel, "fun refresh(contentType", "private fun noteRequest(")
         assertFalse(
-            "and the record is no longer what a refresh re-asks - replaying it is exactly how " +
-                "another title's sources were served",
-            slice(viewModel, "fun refresh(contentType", "private fun noteRequest(")
-                .contains("lastRequest")
+            "the title a refresh asks for must not be replayed from the record - that is " +
+                "exactly how another title's sources were served",
+            refresh.contains("lastRequest?.contentType") ||
+                refresh.contains("lastRequest?.streamId")
+        )
+        assertTrue(
+            "the record is read only for the binge context of the same target",
+            refresh.contains("?.takeIf { it.contentType == contentType && it.streamId == streamId }")
         )
 
         listOf("the TV picker" to screen, "the phone picker" to mobileScreen).forEach { (label, src) ->

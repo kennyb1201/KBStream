@@ -141,8 +141,10 @@ class FrameRateDiagnosticsRowContractTest {
         assertFalse(
             "and read on every composition rather than remembered once (audit AFR C8): the " +
                 "row can stay on screen across a sink or input change, and a remembered read " +
-                "answered 'does this TV offer 24 Hz?' about the display it was composed on",
-            body.contains("remember(context)")
+                "answered 'does this TV offer 24 Hz?' about the display it was composed on. " +
+                "The row's own comment names the old form, so the check is on the value, not " +
+                "on the word",
+            body.contains("val livePanel = remember")
         )
     }
 

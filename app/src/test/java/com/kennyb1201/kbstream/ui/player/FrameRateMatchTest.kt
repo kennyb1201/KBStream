@@ -60,7 +60,9 @@ class FrameRateMatchTest {
         // track thirty minutes in. It is anchored at the source's first offer,
         // so the rebuild does not buy a fresh window.
         assertEquals(
-            1_800_000L,
+            "the age is measured from that first offer, so it is the 1798 s since," +
+                " not the 1800 s since the source opened",
+            1_798_000L,
             FrameRateMatch.engageAgeMs(
                 nowMs = 1_800_000L,
                 openedAtMs = 0L,

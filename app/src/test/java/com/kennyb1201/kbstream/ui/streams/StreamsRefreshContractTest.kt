@@ -155,8 +155,17 @@ class StreamsRefreshContractTest {
         assertTrue(
             "and the button re-runs that request rather than reading a cache - or a target " +
                 "the ViewModel remembered",
-            refresh.contains("load(contentType, streamId, runtimeMinutes)") &&
-                !refresh.contains("lastRequest")
+            refresh.contains("load(") &&
+                refresh.contains("contentType = contentType") &&
+                refresh.contains("streamId = streamId") &&
+                !refresh.contains("lastRequest?.contentType") &&
+                !refresh.contains("lastRequest?.streamId")
+        )
+        assertTrue(
+            "the only thing it takes from the record is the binge context, and only when " +
+                "the record is for this same title (Streams C1)",
+            refresh.contains("?.takeIf { it.contentType == contentType && it.streamId == streamId }") &&
+                refresh.contains("bingeGroup = sameTarget?.bingeGroup")
         )
         assertTrue(
             "a second load supersedes the first, so a repeated press cannot interleave two " +
