@@ -1000,7 +1000,7 @@ object MdbListClient {
                             kind = "scrobble",
                             tracker = "mdblist",
                             ok = false,
-                            detail = "HTTP ${response.code()}"
+                            detail = "HTTP ${response.code}"
                         )
                     } else {
                         // The body is logged too: "did the request even get
