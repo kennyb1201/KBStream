@@ -167,6 +167,11 @@ fun AddonsScreenMobile(
     var selectedUrl by remember { mutableStateOf<String?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var addUrl by remember { mutableStateOf("") }
+    // The TV screen's fix, mirrored: the sheet stays up until the add ANSWERS,
+    // so its own loading state and the error a refused manifest produces are
+    // seen instead of a sheet that vanished on the press.
+    var addPending by remember { mutableStateOf(false) }
+    var addSawLoading by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<InstalledAddon?>(null) }
     var renameText by remember { mutableStateOf("") }
     var removeTarget by remember { mutableStateOf<InstalledAddon?>(null) }
@@ -430,19 +435,34 @@ fun AddonsScreenMobile(
                 onUrlChange = { addUrl = it },
                 onDismiss = {
                     showAddDialog = false
+                    addPending = false
+                    addSawLoading = false
                     addUrl = ""
                 },
                 onAdd = {
                     viewModel.addAddon(addUrl)
-                    showAddDialog = false
-                    addUrl = ""
+                    addPending = true
                 },
                 onAddPreset = { presetUrl ->
                     viewModel.addAddon(presetUrl)
-                    showAddDialog = false
-                    addUrl = ""
+                    addPending = true
                 }
             )
+        }
+
+        // Closes on the RESULT: sooner hid the progress and the refusal, and a
+        // failure keeps the URL in the field for a correction.
+        LaunchedEffect(isLoading) {
+            if (!addPending) return@LaunchedEffect
+            if (isLoading) {
+                addSawLoading = true
+                return@LaunchedEffect
+            }
+            if (!addSawLoading) return@LaunchedEffect
+            addSawLoading = false
+            addPending = false
+            showAddDialog = false
+            if (error == null) addUrl = ""
         }
 
         renameTarget?.let { addon ->

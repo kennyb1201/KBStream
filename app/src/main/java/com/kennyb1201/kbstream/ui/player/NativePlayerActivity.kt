@@ -7329,6 +7329,38 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             val pulse = android.view.animation.AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)
             splashClearLogo.startAnimation(pulse)
         }
+        // The art is on screen, so the name that stood in for it goes - and only
+        // then: this is also the timed fallback for a splash with NO art, where
+        // the name is the only thing on screen.
+        if (splashClearLogo.drawable != null) splashItemName?.visibility = View.GONE
+    }
+
+    /**
+     * The splash's name text, for a splash that has no art to show YET.
+     *
+     * `showSplash()` used to draw the backdrop and nothing else, and the name
+     * slot was only ever filled by the one-shot title-graphic policy - which
+     * runs before the splash is put back up for a source switch. So every
+     * switch that had to fetch its logo again showed a bare backdrop with no
+     * title on it, for as long as that fetch took.
+     *
+     * The name is shown only while the logo slot is empty, and it is taken down
+     * again the moment art lands: by [startPulseAnimation] (which runs on the
+     * load, and on the layout pass that finds a drawable) and by a couple of
+     * posted re-checks for the path where neither fires.
+     */
+    private fun showSplashTitleFallback() {
+        if (itemName.isBlank() || splashClearLogo.drawable != null) return
+        val title = splashItemName
+            ?: findViewById<TextView>(R.id.splash_item_name)?.also { splashItemName = it }
+            ?: return
+        if (title.text?.toString() != itemName) title.text = itemName
+        title.visibility = View.VISIBLE
+        for (delayMs in longArrayOf(400L, 1200L)) {
+            splashClearLogo.postDelayed({
+                if (splashClearLogo.drawable != null) splashItemName?.visibility = View.GONE
+            }, delayMs)
+        }
     }
 
     private fun showSplash() {
@@ -7357,6 +7389,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // Fallback: also start animation after a short delay in case layout listener doesn't fire
             splashClearLogo.postDelayed({ startPulseAnimation() }, 500)
         }
+        showSplashTitleFallback()
     }
 
     private fun hideSplash() {

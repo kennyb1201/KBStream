@@ -109,6 +109,17 @@ import kotlinx.coroutines.android.awaitFrame
 // which is the trade a uniform-cell grid makes for laziness.
 private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
 
+// The gap BETWEEN cells, as opposed to the inset at the grid's edge.
+//
+// It is bigger than KBFocusChipInset on purpose. The edge inset only has to
+// cover ONE focused chip's overhang into its own clip; a shared gap has to
+// cover the overhang of the chip on each side of it, and two neighbours can be
+// focused at different times rather than at once, so the room has to fit the
+// limit case: 3% of a 216dp cell (6.5dp) of focus growth plus the 8dp
+// KBFocusGlowSmall glow drawn outside the chip = 14.5dp. 16dp clears it and is
+// still visibly looser than the 8dp this grid had before the focus cue.
+private val SUBMENU_CHIP_GAP = 16.dp
+
 // The grid is a lazy scroll container sitting inside the screen's LazyColumn,
 // so its height must be definite: an unbounded (infinite) height would make
 // Compose refuse to measure it. Tall enough to read as the submenu's own
@@ -814,17 +825,17 @@ private fun SubmenuChipGrid(
         // KBFocusGlowSmall glow OUTSIDE its own bounds, so a neighbour glued
         // 8dp away was painted over by both: the focused pill's border ran into
         // the next pill's, which is the "clipped tile" the grid was reported
-        // for. KBFocusChipInset is the number the chip rows use for exactly
-        // this room, so the grid uses it too instead of a literal that predates
-        // the focus cue.
+        // for. KBFocusChipInset is the number the chip rows use for the room at
+        // an EDGE, and the shared gap between cells needs more than that: the
+        // two neighbours' overhangs both land in it (see SUBMENU_CHIP_GAP).
         contentPadding = PaddingValues(
-            top = KBFocusChipInset,
-            bottom = KBFocusChipInset,
+            top = SUBMENU_CHIP_GAP,
+            bottom = SUBMENU_CHIP_GAP,
             start = SEARCH_RAIL_EDGE_PADDING,
             end = SEARCH_RAIL_EDGE_PADDING
         ),
-        horizontalArrangement = Arrangement.spacedBy(KBFocusChipInset),
-        verticalArrangement = Arrangement.spacedBy(KBFocusChipInset),
+        horizontalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_GAP),
+        verticalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_GAP),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = SUBMENU_CHIP_MAX_HEIGHT)
