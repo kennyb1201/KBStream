@@ -489,7 +489,7 @@ class DetailAuditContractTest {
             "a thumb anywhere else is a surface no spec put one on",
             listOf(
                 "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
-                "com/kennyb1201/kbstream/ui/detail/DetailScreenMobile.kt",
+                "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt",
                 "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt",
                 "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
             ),
