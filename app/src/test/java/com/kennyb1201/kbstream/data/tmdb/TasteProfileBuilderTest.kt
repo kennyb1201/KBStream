@@ -471,6 +471,14 @@ class TasteProfileBuilderTest {
     private fun profileOf(vararg evidence: TasteEvidenceTitle): TasteProfile =
         buildTasteProfile(evidence.toList())
 
+    /**
+     * The same profile from evidence a case assembled as a LIST - the cap and
+     * ranking cases build their titles with a `map` or a `buildList`, which is
+     * one argument rather than one per title.
+     */
+    private fun profileOf(evidence: List<TasteEvidenceTitle>): TasteProfile =
+        buildTasteProfile(evidence)
+
     /** A profile with exactly one strong-or-weak entry per asked-for dimension. */
     private fun profileWith(
         directorScore: Int = 0,

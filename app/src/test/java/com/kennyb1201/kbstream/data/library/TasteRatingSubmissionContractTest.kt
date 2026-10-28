@@ -64,7 +64,7 @@ class TasteRatingSubmissionContractTest {
     }
 
     @Test
-    fun `MDBList gains nothing: it has no rating-write surface`() {
+    fun `MDBList gains nothing, having no rating-write surface`() {
         val mdb = source(MDBLIST)
         assertFalse("no ratings write is added to MDBList", mdb.contains("sync/ratings"))
         assertFalse(mdb.contains("addRatings"))
