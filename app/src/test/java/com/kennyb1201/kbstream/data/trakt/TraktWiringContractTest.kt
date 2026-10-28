@@ -11,9 +11,11 @@ import org.junit.Test
  *
  * Two of them are the plan's invariants rather than features:
  *
- *  - **A disconnect is Trakt-only.** Simkl's unlink wipes the local watch corpus
- *    (audit m10); Trakt's must not, so the repository is checked for the data
- *    layer it would need to do that and found without it.
+ *  - **A disconnect never wipes local data.** Simkl's unlink used to clear the
+ *    local watch corpus (audit m10) and that was a regression, removed in the
+ *    playback spec's C4/D1: BOTH trackers now drop only the link and their
+ *    tracker-side caches. The repository is still checked for the data layer a
+ *    wipe would need, and found without it.
  *  - **The token store is its own file.** Diagnostics and the sync readers
  *    address these stores by name, so a shared name would make a Trakt token
  *    read as a Simkl session.

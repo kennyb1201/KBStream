@@ -63,21 +63,22 @@ class KBHomeBuiltinRailTest {
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("kb:c"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("addon:a"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey(null))
-        // Continue Watching leads, the personalized row sits directly behind
-        // it, and the two Top Today rows follow Upcoming: that is the layout
-        // being preserved, and it is the whole list for a profile that draws no
-        // profile-specific rails. The Top Today rows are built-ins now too
-        // (they used to be addon rails whose position the loader FIXED, which
-        // is why the manager could never list them).
+        // Continue Watching leads, Upcoming follows it, the personalized row
+        // sits directly under the schedule, and the two Top Today rows close
+        // the block: that is the layout being preserved, and it is the whole
+        // list for a profile that draws no profile-specific rails. The Top
+        // Today rows are built-ins now too (they used to be addon rails whose
+        // position the loader FIXED, which is why the manager could never list
+        // them).
         assertEquals(
-            listOf(continueWatching, topPicks, upcoming, topMovies, topShows),
+            listOf(continueWatching, upcoming, topPicks, topMovies, topShows),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
         )
         // The registry leads with that same list - every profile starts with
         // these five - and then names the rails each PROFILE kind adds, so an
         // arrangement can still place a key written under another profile.
         assertEquals(
-            listOf(continueWatching, topPicks, upcoming, topMovies, topShows),
+            listOf(continueWatching, upcoming, topPicks, topMovies, topShows),
             KBHomeOrderPrefs.BUILTIN_KEYS.take(5)
         )
         assertEquals(
@@ -171,9 +172,9 @@ class KBHomeBuiltinRailTest {
 
         assertEquals(
             listOf(
-                topPicks,
-                continueWatching,
                 upcoming,
+                continueWatching,
+                topPicks,
                 topMovies,
                 topShows,
                 "browse:1",
@@ -197,8 +198,8 @@ class KBHomeBuiltinRailTest {
         assertEquals(
             listOf(
                 continueWatching,
-                topPicks,
                 upcoming,
+                topPicks,
                 kidsMovies,
                 kidsShows,
                 newKidsMovies,
@@ -248,7 +249,7 @@ class KBHomeBuiltinRailTest {
         ) + existingDefaults
 
         assertEquals(
-            listOf(continueWatching, topPicks, upcoming, topMovies, topShows) +
+            listOf(continueWatching, upcoming, topPicks, topMovies, topShows) +
                 KBHomeOrderPrefs.GUEST_BUILTIN_KEYS +
                 existingDefaults,
             mergedHomeRailKeys(KBHomeOrder(), guestDefaults)
@@ -280,8 +281,8 @@ class KBHomeBuiltinRailTest {
         assertEquals(
             listOf(
                 continueWatching,
-                topPicks,
                 upcoming,
+                topPicks,
                 kidsMovies,
                 kidsShows,
                 newKidsMovies,
@@ -465,7 +466,7 @@ class KBHomeBuiltinRailTest {
     }
 
     @Test
-    fun `the personalized row is the second built-in, named, and in every profile's list`() {
+    fun `the personalized row is the third built-in, under Upcoming, and in every profile's list`() {
         // The position constants are INDEXES into the default order, so
         // inserting a key silently re-points every one after it unless they are
         // re-indexed in the same edit. This is that case: each constant has to
@@ -474,9 +475,12 @@ class KBHomeBuiltinRailTest {
         assertEquals("builtin:upcoming_schedule", upcoming)
         assertEquals("builtin:top_movies_today", topMovies)
         assertEquals("builtin:top_shows_today", topShows)
+        // Under the schedule, not between it and the resume row (field
+        // 2026-10-28: the row shipped one slot too high and every arrangement
+        // that predated it pushed it somewhere else entirely).
         assertEquals(
-            listOf(continueWatching, topPicks),
-            KBHomeOrderPrefs.BUILTIN_KEYS.take(2)
+            listOf(continueWatching, upcoming, topPicks),
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(3)
         )
         assertEquals(
             "Top Picks for You",

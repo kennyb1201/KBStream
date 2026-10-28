@@ -108,14 +108,10 @@ internal fun HomeManagerDialogMobile(
     val hiddenRows = rows.filter { it.isHidden }
     val allCatalogsVisible = configurations.all { it.catalog.showOnHome }
 
-    // The import block starts open only on a first run, so a new user is not
-    // hunting for it; once a profile is imported the arrangement owns the space.
-    var importExpanded by remember {
-        mutableStateOf(
-            collectionsState.profileUrls.isEmpty() &&
-                collectionsState.collections.isEmpty()
-        )
-    }
+    // Collapsed on open, every time, first run included - the same rule as the
+    // TV dialog: the arrangement owns the space and the URL field is one press
+    // away behind IMPORT (field 2026-10-28).
+    var importExpanded by remember { mutableStateOf(false) }
     var pendingRemoveUrl by remember { mutableStateOf<String?>(null) }
 
     fun move(row: HomeRailManagerRow, delta: Int) {

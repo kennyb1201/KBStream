@@ -64,7 +64,9 @@ import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
+import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -121,6 +123,18 @@ fun StreamsScreen(
     tmdbId: Int? = null,
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean = false,
+    /**
+     * The binge identity this picker continues from: the group/add-on of the
+     * stream that just finished, when it was opened by an advance (spec C19).
+     * Null is "no context", and the list keeps the ranker's order.
+     */
+    bingeGroup: String? = null,
+    bingeAddonName: String? = null,
+    /**
+     * The show this picker belongs to, for recalling the binge identity a COLD
+     * start has no handoff for (see [BingeGroupMemory]). Null skips the recall.
+     */
+    parentId: String? = null,
     onStreamSelected: (
         selected: Stream,
         allSources: List<Stream>,
@@ -151,6 +165,9 @@ fun StreamsScreen(
             tmdbId = tmdbId,
             clearLogoUrl = clearLogoUrl,
             suppressAutoSelect = suppressAutoSelect,
+            bingeGroup = bingeGroup,
+            bingeAddonName = bingeAddonName,
+            parentId = parentId,
             onStreamSelected = onStreamSelected,
             viewModel = viewModel
         )
@@ -225,14 +242,35 @@ fun StreamsScreen(
      * re-applied to the remainder - a pick made once against the whole list
      * cannot answer "what is next" (see AutoplayWalk).
      */
+    /*
+     * The binge identity this picker continues from (spec C19): handed over by
+     * an advance, or recalled for this show on a cold start - the same resolution
+     * the background resolve does, through the same constructor, so a binge
+     * cannot be continued on one path and abandoned on the other.
+     */
+    val bingeIdentity = remember(loadedKey, bingeGroup, bingeAddonName, parentId) {
+        AutoplayPick.binge(
+            memory = parentId?.let { BingeGroupMemory.recall(context, it) },
+            handedGroup = bingeGroup,
+            handedAddon = bingeAddonName
+        )
+    }
+
+    // The add-on behind each row, by identity: the parallel array can be shorter
+    // than the list, and a row served by two add-ons must read as the one this
+    // surface shows.
+    fun addonOfStream(stream: Stream): String? =
+        sourceAddons.getOrNull(streams.indexOfFirst { it === stream })
+
     fun autoplayPickFrom(remaining: List<Stream>): Stream? =
-        AutoPlayQuality.cappedPick(
-            pick = EpisodeMatch.autoplayPick(remaining, season, episode, runtimeMinutes),
-            candidates = remaining,
+        AutoplayPick.pick(
+            context = context,
+            remaining = remaining,
             season = season,
             episode = episode,
             runtimeMinutes = runtimeMinutes,
-            cap = AppPreferences.getEffectiveAutoPlayQuality(context)
+            binge = bingeIdentity,
+            addonOf = { stream -> addonOfStream(stream) }
         )
 
     /*
@@ -250,11 +288,20 @@ fun StreamsScreen(
                 resolve = { TorBoxResolve.playableStream(context, it) }
             )
             StreamRankReport.noteAutoPlay(
-                start?.let { picked ->
+                (start?.let { picked ->
                     "started · ${StreamRanker.labelOf(picked.stream)}" +
                         if (picked.resolved) " (prepared from its hash)" else ""
                 } ?: "none - the picker is showing instead " +
-                    "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+                    "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})") +
+                    // The same four facts the background resolve records (spec
+                    // I19): the ceiling, whether every add-on answered, and which
+                    // ones did not.
+                    " · cap=${
+                        AppPreferences.getEffectiveAutoPlayQuality(context).takeIf { it > 0 }
+                            ?.let { "${it}p" } ?: "none"
+                    }" +
+                    (if (addonFailures.isEmpty()) ""
+                    else " · failed=${addonFailures.joinToString(",")}")
             )
             // Auto-play carries no tab: it is not a tab selection at all, so the
             // player's manual advance must stay merged if the viewer reaches

@@ -640,6 +640,14 @@ object ProfileManager {
         // BEFORE the blob is published (see [recordDeletion]).
         recordDeletion(context, profileId)
         pushProfilesBlob(context, updated)
+        // A deleted profile owns nothing any more. Leaving its claims in the
+        // ownership map would keep hiding those titles from the profiles that
+        // DO own them - and a deleted profile can never come back to justify it
+        // (spec §5.3).
+        runCatching {
+            com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                .removeProfile(context, profileId)
+        }
 
         // Offline downloads: the records live in a preference namespace the wipe
         // below clears, so the removal that has to READ them runs first. It is a

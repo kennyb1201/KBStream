@@ -87,6 +87,10 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             emptySet()
         } else {
             val siblingOwned = siblingOwnedMarkerIdsFor(personDetail, resolvedMap)
+            // An explicit mark on THIS profile wins the filter below (see
+            // [explicitWatchedKeys]): the viewer said so here, and name+type
+            // ownership is also what a title carries once a sibling watches it.
+            val explicitWatched = explicitWatchedKeys()
             drawnCredits(personDetail)
                 .flatMap { credit ->
                     val mediaType = normalizeMediaType(credit.mediaType) ?: return@flatMap emptyList()
@@ -105,7 +109,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 // [siblingOwnedMarkerIdsFor]). Back to a SET after the filter:
                 // filterNot on a Set answers a List, and this flow is typed
                 // StateFlow<Set<String>> (the v0.9.74 build failure).
-                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .filterNot { key ->
+                    keyOwnedByAnotherProfile(key, siblingOwned) && key !in explicitWatched
+                }
                 .toSet()
         }
     }.stateIn(
@@ -128,6 +134,10 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             emptySet()
         } else {
             val siblingOwned = siblingOwnedMarkerIdsFor(personDetail, resolvedMap)
+            // An explicit mark on THIS profile wins the filter below (see
+            // [explicitWatchedKeys]): the viewer said so here, and name+type
+            // ownership is also what a title carries once a sibling watches it.
+            val explicitWatched = explicitWatchedKeys()
             drawnCredits(personDetail)
                 .flatMap { credit ->
                     val mediaType = normalizeMediaType(credit.mediaType) ?: return@flatMap emptyList()
@@ -141,7 +151,9 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 .toSet()
                 // Same sibling-ownership filter as the checkmark set above,
                 // and the same return to a Set before the subtraction.
-                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .filterNot { key ->
+                    keyOwnedByAnotherProfile(key, siblingOwned) && key !in explicitWatched
+                }
                 .toSet() - watchedKeys.value
         }
     }.stateIn(
@@ -336,6 +348,24 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
     /** True when [key] (`type::id`) names a title another profile owns. */
     private fun keyOwnedByAnotherProfile(key: String, siblingOwned: Set<String>): Boolean =
         siblingOwned.any { id -> key.endsWith("::$id") }
+
+    /**
+     * The keys an EXPLICIT mark on the ACTIVE profile wins the ownership filter
+     * with (see [WatchedStatusRepository.explicitWatchedOverrideKeys]).
+     *
+     * Ownership is keyed by name+type, so a title the kids profile has watched
+     * is "owned elsewhere" even after the viewer marks it here - and their own
+     * mark was stripped off this page along with the tracker leak the filter is
+     * meant to stop. A mark made here outranks the filter; tracker-derived state
+     * still does not.
+     *
+     * Read live per publish, never cached in a field: an unmark resumes
+     * filtering by itself, and a profile switch re-scopes the set.
+     */
+    private suspend fun explicitWatchedKeys(): Set<String> =
+        runCatchingCancellable {
+            watchedStatusRepository.explicitWatchedOverrideKeys()
+        }.getOrDefault(emptySet())
 
     /**
      * Resolves the IMDb ids behind this page's credit badges and preloads them.

@@ -59,9 +59,14 @@ internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
  * Entries whose row is drawn on the phone only (settings reorg §8.7).
  *
  * The TV Detail page does not read the episode-layout key, so the TV page draws
- * no such row - and must not offer it in search either.
+ * no such row - and must not offer it in search either. The cellular data saver
+ * is the same shape for a different reason: a television has no metered
+ * connection to save, so the switch is the phone's alone.
  */
-internal val MOBILE_ONLY_SEARCH_KEYS: Set<String> = setOf("interface.episode-layout")
+internal val MOBILE_ONLY_SEARCH_KEYS: Set<String> = setOf(
+    "interface.episode-layout",
+    "playback.cellular-data-saver"
+)
 
 /**
  * One searchable settings row.
@@ -181,8 +186,12 @@ internal object SettingsSearchIndex {
         SettingSearchEntry(
             "integrations.torbox-add-missing",
             SettingsPane.INTEGRATIONS,
-            "Add missing torrents on play",
-            "torbox debrid resolve instant cached hash torrent add cloud quota instant playback"
+            // Cached only (spec S2/D7): the name says what the API does, not
+            // what "add missing" promised. The old name stays in the keywords so
+            // a viewer searching for the word they remember still finds it.
+            "Add cached torrents to TorBox on play",
+            "torbox debrid resolve instant cached hash torrent add missing cloud quota " +
+                "instant playback"
         ),
         SettingSearchEntry(
             "integrations.badges-above",
@@ -369,15 +378,6 @@ internal object SettingsSearchIndex {
             "Mute Hero Trailers",
             "hero trailer mute muted silent audio"
         ),
-        // The new kill switch (settings reorg §13.1, U1): the key had a getter,
-        // a setter and no UI anywhere, so "PO" and "webview" are the words a
-        // viewer with broken trailers would actually type.
-        SettingSearchEntry(
-            "interface.youtube-po-tokens",
-            SettingsPane.INTERFACE,
-            "YouTube PO Tokens",
-            "po token youtube trailer mint webview"
-        ),
         SettingSearchEntry(
             "interface.24h-clock",
             SettingsPane.INTERFACE,
@@ -438,10 +438,13 @@ internal object SettingsSearchIndex {
             "Hide Unreleased Titles",
             "hide unreleased upcoming not yet aired"
         ),
+        // The phone's row verbatim (see MOBILE_ONLY_SEARCH_KEYS): the TV pane
+        // draws no data-saver row, so this label has to match the one screen that
+        // does.
         SettingSearchEntry(
             "playback.cellular-data-saver",
             SettingsPane.PLAYBACK,
-            "Cellular Data Saver",
+            "Cellular data saver",
             "cellular data saver metered mobile network data plan"
         ),
         SettingSearchEntry(

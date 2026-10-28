@@ -187,7 +187,7 @@ class StreamsDeepDiveContractTest {
     fun `a tab list is prepared by All's rules, so its head is not a demoted row`() {
         val groups = slice(
             viewModel,
-            "_addonGroups.value = results",
+            "val addonGroupList = results",
             ".filter { it.streams.isNotEmpty() }"
         )
         assertTrue(

@@ -86,6 +86,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             emptySet()
         } else {
             val siblingOwned = siblingOwnedMarkerIdsFor(sections, resolvedMap)
+            // An explicit mark on THIS profile wins the filter below (see
+            // [explicitWatchedKeys]): the viewer said so here, and name+type
+            // ownership is also what a title carries once a sibling watches it.
+            val explicitWatched = explicitWatchedKeys()
             sections.flatMap { it.items }
                 .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
@@ -107,7 +111,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 // here, however the marker resolved - the same filter Home's
                 // and the actor page's sets publish through, which these were
                 // missing (see [siblingOwnedMarkerIdsFor]).
-                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .filterNot { key ->
+                    keyOwnedByAnotherProfile(key, siblingOwned) && key !in explicitWatched
+                }
                 .toSet()
         }
     }.stateIn(
@@ -130,6 +136,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             emptySet()
         } else {
             val siblingOwned = siblingOwnedMarkerIdsFor(sections, resolvedMap)
+            // An explicit mark on THIS profile wins the filter below (see
+            // [explicitWatchedKeys]): the viewer said so here, and name+type
+            // ownership is also what a title carries once a sibling watches it.
+            val explicitWatched = explicitWatchedKeys()
             sections.flatMap { it.items }
                 .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
@@ -144,7 +154,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 .toSet()
                 // Same ownership filter as the checkmark set above, and the same
                 // return to a Set before the subtraction.
-                .filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }
+                .filterNot { key ->
+                    keyOwnedByAnotherProfile(key, siblingOwned) && key !in explicitWatched
+                }
                 .toSet() - watchedKeys.value
         }
     }.stateIn(
@@ -294,6 +306,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     /** True when [key] (`type::id`) names a title another profile owns. */
     private fun keyOwnedByAnotherProfile(key: String, siblingOwned: Set<String>): Boolean =
         siblingOwned.any { id -> key.endsWith("::$id") }
+
+    /**
+     * The keys an EXPLICIT mark on the ACTIVE profile wins the ownership filter
+     * with (see [WatchedStatusRepository.explicitWatchedOverrideKeys]).
+     *
+     * Ownership is keyed by name+type, so a title the kids profile has watched
+     * is "owned elsewhere" even after the viewer marks it here - and their own
+     * mark was stripped off this page along with the tracker leak the filter is
+     * meant to stop. A mark made here outranks the filter; tracker-derived state
+     * still does not.
+     *
+     * Read live per publish, never cached in a field: an unmark resumes
+     * filtering by itself, and a profile switch re-scopes the set.
+     */
+    private suspend fun explicitWatchedKeys(): Set<String> =
+        runCatchingCancellable {
+            watchedStatusRepository.explicitWatchedOverrideKeys()
+        }.getOrDefault(emptySet())
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"

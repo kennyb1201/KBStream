@@ -174,13 +174,21 @@ class DetailAuditContractTest {
         val src = normalized(viewModel)
         assertTrue(src.contains("private fun detailOwnedByAnotherProfile()"))
         assertTrue(
-            "the title's episode ticks are withheld from a profile that does not own it",
+            "the TRACKER-derived episode ticks are still withheld from a profile " +
+                "that does not own the title",
             src.contains("if (detailOwnedByAnotherProfile()) {") &&
-                src.contains("_watchedEpisodeKeys.value = emptySet()")
+                src.contains("simklCompletedEpisodes = emptySet()")
         )
         assertTrue(
-            "and the poster rows filter per poster title",
-            src.contains("filterNot { item -> item.tmdbId in ownedElsewhere }")
+            "while this profile's own rows publish - a per-episode mark made here " +
+                "is local history and belongs to this profile",
+            src.contains("_completedEpisodeIds.value = completedEntries.map { it.id }.toSet()")
+        )
+        assertTrue(
+            "and the poster rows filter per poster title, narrowing the owned set " +
+                "by what this profile marked explicitly first",
+            src.contains("val withheldElsewhere =") &&
+                count(src, "filterNot { item -> item.tmdbId in withheldElsewhere }") == 2
         )
     }
 

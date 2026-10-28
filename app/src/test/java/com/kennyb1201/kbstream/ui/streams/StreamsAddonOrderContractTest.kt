@@ -78,9 +78,12 @@ class StreamsAddonOrderContractTest {
         )
         assertTrue(
             "the rest of the pipeline keeps reading that one list - the merged sources, the " +
-                "debug lines and the per-add-on slices all come from `results`",
-            fetch.contains("results.forEach { result ->") &&
-                fetch.contains("_addonGroups.value = results")
+                "debug lines and the per-add-on slices all come from `results`",                fetch.contains("results.forEach { result ->") &&
+                // The slices are built into a local and published under the
+                // request-ticket guard (spec C8); the CONTENT of the list is the
+                // same one the merged sources read.
+                fetch.contains("val addonGroupList = results") &&
+                fetch.contains("_addonGroups.value = addonGroupList")
         )
         assertTrue(
             "the per-add-on slices stay filtered to the add-ons that actually answered",

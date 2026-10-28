@@ -4,15 +4,12 @@ import android.app.Application
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.kennyb1201.kbstream.data.history.WatchHistoryDao
-import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
 import com.kennyb1201.kbstream.data.library.TasteRatingTracker
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
-import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -27,14 +24,6 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = SimklRepository.getInstance(appContext)
     private val watchedStatusRepository = WatchedStatusRepository(appContext)
     private val guard = KidsTimeGuard
-
-    // Resolved PER ACCESS against the ACTIVE profile's scoped DB: the old
-    // captured dao bound to the legacy unscoped database, so disconnect()
-    // wiped legacy rows while the profile's real watch history survived.
-    private val historyDao: WatchHistoryDao
-        get() = WatchHistoryDatabase
-            .getInstanceScoped(appContext)
-            .watchHistoryDao()
 
     private val _uiState = MutableStateFlow(
         SimklUiState(
@@ -413,15 +402,29 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Unlinks: wipes the local watch corpus and drops the token, by design.
+     * Unlinks the account: the Simkl link and the tracker-side snapshots go;
+     * nothing the viewer did locally does.
      *
-     * The token clear rides inside the wipe ([clearAllWatchState] →
-     * `clearLocalWatchState(clearSimklAuth = true)`), so a throw in that block
-     * can leave the session on disk - and the screen published "Disconnected"
-     * whatever happened. Re-reading the token is what separates the two
-     * outcomes (trackers C2). The grant on Simkl's own side is a different
-     * matter, and the confirm dialog names it: this app has no revoke to call
-     * (trackers C3).
+     * This used to also clear the profile's local history table, "by design" -
+     * and that was a REGRESSION of the invariant the Trakt integration
+     * documents and this app relies on (playback spec C4/D1, 2026-10-28): a
+     * disconnect is not a data wipe. It emptied every resume and history row in
+     * the active profile with no tombstone, so the next pull put them back
+     * (destructive locally, non-durable) - and Continue Watching was gone in
+     * between. See [TraktViewModel.disconnect], which never did this.
+     *
+     * [WatchedStatusRepository.clearAllWatchState] is the only clear a
+     * disconnect runs, and what it clears is TRACKER state: the Simkl link
+     * itself ([clearLocalWatchState] → `simklRepository.clearAuth()`), the
+     * cached Simkl/MDBList/Trakt snapshots and the resolved badge cache - all of
+     * which refill from their own sources. Local history, resume rows, watched
+     * markers and title ownership survive, on TV and on mobile alike.
+     *
+     * The token clear rides inside that call, so a throw in it can leave the
+     * session on disk - and the screen used to publish "Disconnected" whatever
+     * happened. Re-reading the token is what separates the two outcomes
+     * (trackers C2). The grant on Simkl's own side is a different matter, and
+     * the confirm dialog names it: this app has no revoke to call (trackers C3).
      */
     fun disconnect() {
         pollJob?.cancel()
@@ -429,13 +432,8 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
         codeJob = null
 
         viewModelScope.launch {
-            val wipe = runCatchingCancellable {
-                historyDao.clearAll()
+            val cleared = runCatchingCancellable {
                 watchedStatusRepository.clearAllWatchState()
-                TvLauncherPublisher.sync(
-                    appContext,
-                    emptyList()
-                )
             }
             val stillConnected = repository.hasToken()
 
@@ -457,16 +455,18 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                     errorMessage = "Could not sign out on this device — Simkl is still " +
                         "connected here. Try again."
                 )
-                wipe.isFailure -> SimklUiState(
+                cleared.isFailure -> SimklUiState(
                     isConfigured = repository.isConfigured(),
                     isConnected = false,
-                    errorMessage = "Disconnected, but clearing watch data failed: " +
-                        wipe.exceptionOrNull()?.message
+                    errorMessage = "Disconnected, but dropping the Simkl session failed: " +
+                        cleared.exceptionOrNull()?.message
                 )
                 else -> SimklUiState(
                     isConfigured = repository.isConfigured(),
                     isConnected = false,
-                    statusMessage = "Disconnected and cleared local watch markers."
+                    // Says the quiet part out loud, because the old copy promised
+                    // the opposite: nothing local was deleted.
+                    statusMessage = "Disconnected. Your watch history stays on this device."
                 )
             }
         }

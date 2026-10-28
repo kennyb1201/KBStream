@@ -130,9 +130,10 @@ class SearchDeepDiveContractTest {
         val vm = viewModel()
         assertEquals(
             "the checkmark AND the eye read the same account-scoped cache the " +
-                "ownership filter exists for",
+                "ownership filter exists for - with the one exception an explicit " +
+                "mark on this profile earns (see ExplicitMarkBeatsOwnershipContractTest)",
             2,
-            occurrences(vm, ".filterNot { key -> keyOwnedByAnotherProfile(key) }")
+            occurrences(vm, "keyOwnedByAnotherProfile(key) && key !in explicitWatched")
         )
         assertTrue(
             "the ownership answers come from the published results, by title",
@@ -141,9 +142,15 @@ class SearchDeepDiveContractTest {
                 vm.contains("titleOwnedByAnotherProfile(")
         )
         assertEquals(
-            "and a live sibling write is filtered too, as Home's collector does",
+            "and a live sibling write is filtered too, as Home's collector does - " +
+                "inside each branch, so an explicitly marked key is still added",
             2,
-            occurrences(vm, "if (keyOwnedByAnotherProfile(update.key))")
+            occurrences(vm, "keyOwnedByAnotherProfile(update.key) &&")
+        )
+        assertEquals(
+            "both branches carry the exemption",
+            2,
+            occurrences(vm, "update.key !in explicitWatched")
         )
         assertTrue(
             "ownership is recomputed whenever a wave publishes (titles, add-ons, " +

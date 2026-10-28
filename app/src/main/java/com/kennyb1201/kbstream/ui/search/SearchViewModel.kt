@@ -344,6 +344,24 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         siblingOwnedMarkerIds.any { id -> key.endsWith("::$id") }
 
     /**
+     * The keys an EXPLICIT mark on the ACTIVE profile wins the ownership filter
+     * with (see [WatchedStatusRepository.explicitWatchedOverrideKeys]).
+     *
+     * A mark the viewer made on this profile outranks the sibling-ownership
+     * filter - its evidence is name+type ownership, which an explicitly marked
+     * title also carries once a sibling has watched it. Tracker-derived state
+     * keeps being filtered, which is the leak this filter exists for.
+     *
+     * Read live per publish and never cached in a field: an unmark stops
+     * exempting the title on the next publish, and a profile switch re-scopes it
+     * by construction (the prefs handle is per profile).
+     */
+    private suspend fun explicitWatchedKeys(): Set<String> =
+        runCatchingCancellable {
+            watchedStatusRepository.explicitWatchedOverrideKeys()
+        }.getOrDefault(emptySet())
+
+    /**
      * Rebuilds [siblingOwnedMarkerIds] from EVERY result currently published:
      * the TMDB titles rails and the add-on rails share one badge cache, so a
      * wave that recomputed from its own half alone would drop the other
@@ -600,12 +618,23 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // does, so a title finished on the kids profile could wear
                 // Profile 1's checkmark. Dropping only on POSITIVE ownership
                 // is the shared rule (see [keyOwnedByAnotherProfile]).
+                //
+                // An EXPLICIT mark on this profile is the one thing that
+                // survives: the viewer said so here, and the filter's evidence
+                // (name+type ownership) is also what a title carries once a
+                // sibling watches it.
+                val explicitWatched =
+                    explicitWatchedKeys()
                 _watchedKeys.value = (_watchedKeys.value + watched)
-                    .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                    .filterNot { key ->
+                        keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                    }
                     .toSet()
                 _partialWatchedKeys.value =
                     ((_partialWatchedKeys.value + partial) - watched)
-                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .filterNot { key ->
+                            keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                        }
                         .toSet()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1958,12 +1987,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
         WatchStateBus.updates
             .onEach { update ->
+                // Re-read per event: this event may be the mark that puts the
+                // key in the set, or the unmark that takes it out.
+                val explicitWatched =
+                    explicitWatchedKeys()
+
                 val current = _watchedKeys.value.toMutableSet()
                 if (update.isWatched) {
                     // A live write from a sibling's session must not put a
                     // badge back on a title this profile does not own (see
-                    // siblingOwnedMarkerIds).
-                    if (keyOwnedByAnotherProfile(update.key)) {
+                    // siblingOwnedMarkerIds) - unless this profile marked it
+                    // explicitly, which outranks the filter.
+                    if (
+                        keyOwnedByAnotherProfile(update.key) &&
+                        update.key !in explicitWatched
+                    ) {
                         current.remove(update.key)
                     } else {
                         current.add(update.key)
@@ -1980,7 +2018,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // marker preload.
                 val partial = _partialWatchedKeys.value.toMutableSet()
                 if (update.isPartiallyWatched) {
-                    if (keyOwnedByAnotherProfile(update.key)) {
+                    if (
+                        keyOwnedByAnotherProfile(update.key) &&
+                        update.key !in explicitWatched
+                    ) {
                         partial.remove(update.key)
                     } else {
                         partial.add(update.key)

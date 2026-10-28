@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -72,10 +73,10 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
-import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
@@ -513,8 +514,10 @@ private data class PendingPlay(
     ): Screen.Player {
         // A DRM stream cannot play on MPV (the engine's own handoff excludes
         // those too), so it must not inherit the anime route's engine choice.
+        // Only this title's verdict is dropped: the DRM pick says nothing about
+        // whatever else this session resolved.
         if (stream.drm?.licenseUrl != null) {
-            PlayerEngine.clearLaunchAnime()
+            PlayerEngine.clearLaunchAnime(parentId)
         }
 
         return Screen.Player(
@@ -564,9 +567,22 @@ private data class PendingPlay(
         )
     }
 
+    /**
+     * The picker fallback for a launch that resolved nothing playable.
+     *
+     * The binge identity rides the FALLBACK too (spec C19): a picker opened
+     * from a next-episode advance must order its rows by the same provider the
+     * binge has been continuing with, exactly as the background resolve would
+     * have. Dropping it here was the one autoplay-adjacent path that lost the
+     * context - the viewer got rank order for the episode that had just
+     * handed off a provider.
+     */
     fun toStreamsScreen(): Screen.Streams {
         return Screen.Streams(
-            target = target,
+            target = target.copy(
+                bingeGroup = target.bingeGroup ?: bingeGroup,
+                bingeAddonName = target.bingeAddonName ?: addonName
+            ),
             parentId = parentId,
             returnTo = returnTo,
             parentType = parentType,
@@ -1567,6 +1583,20 @@ fun AppRoot(
             )
             if (replay != null) {
                 Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
+                // The cache is not the resolve FOR THE BINGE MEMORY either: a
+                // replayed session used to leave `currentBingeGroup` null,
+                // because the only remember() call sat on the resolve branch -
+                // so the episode after a replay lost the binge identity the
+                // resolve would have stored (spec C9b).
+                val replayedAddon = cached.addons
+                    .getOrNull(cached.sources.indexOfFirst { it === replay })
+                    ?: cached.addons.firstOrNull()
+                BingeGroupMemory.remember(
+                    context,
+                    pending.parentId,
+                    replay.bingeGroup,
+                    replayedAddon
+                )
                 pendingAutoPlay = null
                 // The names the resolve recorded travel with the cached rows,
                 // so a replay hands the player the same picture rather than an
@@ -1623,7 +1653,11 @@ fun AppRoot(
         // read here rather than discovered later: a truncated list must not be
         // remembered as this target's played links (see the cache write below),
         // or a replay would keep replaying one add-on's rows.
-        val completeAnswer = resolved.complete
+        // A failed add-on is a HOLE in the answer even when every add-on that
+        // did answer has spoken: the picker says so above the rows, so the cache
+        // must agree (spec C18). `complete` alone is the collection loop's own
+        // word for "nobody was still fetching", not for "everybody answered".
+        val completeAnswer = resolved.complete && resolved.failedAddons.isEmpty()
         val ordered =
             if (pending.bingeGroup.isNullOrBlank() &&
                 pending.addonName.isNullOrBlank() &&
@@ -1664,45 +1698,82 @@ fun AppRoot(
         val bingeGroupWanted = pending.bingeGroup ?: continuedFrom?.bingeGroup
         val addonWanted = pending.addonName ?: continuedFrom?.addonName
         val addonOf = addonLookup(resolved.streams, resolved.addons)
-        val preferBinge: (Stream) -> Boolean = { stream ->
-            (bingeGroupWanted != null && stream.bingeGroup == bingeGroupWanted) ||
-                (addonWanted != null && addonOf(stream) == addonWanted)
-        }
+        // ONE pick constructor for every surface (spec C19): the episode rules,
+        // the binge tie-break and the ceiling are built here the same way the
+        // pickers build them, so auto-play cannot decide differently depending
+        // on which screen opened the episode.
+        val bingeWanted = AutoplayPick.Binge(bingeGroupWanted, addonWanted)
         val autoplayPick: (List<Stream>) -> Stream? = { remaining ->
-            AutoPlayQuality.cappedPick(
-                pick = EpisodeMatch.autoplayPick(
-                    remaining,
-                    pending.target.season,
-                    pending.target.episode,
-                    pending.target.runtimeMinutes,
-                    preferBinge = preferBinge
-                ),
-                candidates = remaining,
+            AutoplayPick.pick(
+                context = context,
+                remaining = remaining,
                 season = pending.target.season,
                 episode = pending.target.episode,
                 runtimeMinutes = pending.target.runtimeMinutes,
-                cap = AppPreferences.getEffectiveAutoPlayQuality(context)
+                binge = bingeWanted,
+                addonOf = addonOf
             )
         }
+        // One TOTAL budget for the walk (spec C20): the per-call timeouts stay
+        // as they are on each request, and this bounds their sum, so the worst
+        // case is a picker rather than minutes of "Finding sources…".
+        val walkStartedAt = System.currentTimeMillis()
         val start = AutoplayWalk.start(
             candidates = ordered,
             pick = autoplayPick,
             resolve = { TorBoxResolve.playableStream(context, it) }
         )
+        val walkSpentMs = System.currentTimeMillis() - walkStartedAt
         // Recorded, not inferred from the head of the list: this is the
         // episode-handoff path a wrong episode is reported from, and the rank
         // block cannot say whether auto-play started anything at all (see
         // StreamRankReport.noteAutoPlay).
         com.kennyb1201.kbstream.data.reporting.StreamRankReport.noteAutoPlay(
-            start?.let { picked ->
+            (start?.let { picked ->
                 "started · ${StreamRanker.labelOf(picked.stream)}" +
                     if (picked.resolved) " (prepared from its hash)" else "" +
                         if (completeAnswer) "" else " · from a TRUNCATED answer"
             } ?: "none - the picker is showing instead " +
                 "(episode length ${
                     pending.target.runtimeMinutes?.let { "$it min" } ?: "unknown"
-                })"
+                })") +
+                // The four facts a "wrong pick on a slow evening" report needs
+                // (spec I19): the ceiling that applied, how long the walk had,
+                // how long it spent, whether the add-ons all answered, and which
+                // ones did not.
+                " · cap=${
+                    AppPreferences.getEffectiveAutoPlayQuality(context).takeIf { it > 0 }
+                        ?.let { "${it}p" } ?: "none"
+                }" +
+                " · walk=${walkSpentMs}ms/${AutoplayWalk.DEFAULT_BUDGET_MS}ms" +
+                " · complete=$completeAnswer" +
+                (if (resolved.failedAddons.isEmpty()) ""
+                else " · failed=${resolved.failedAddons.joinToString(",")}")
         )
+        // ...and in the session ring, which is what COPY DIAGNOSTICS reads
+        // first: the rank block describes the LIST, this says what was actually
+        // started from it (spec I15).
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "autoplay: " +
+                (start?.let { picked ->
+                    "started ${StreamRanker.labelOf(picked.stream)}" +
+                        if (picked.resolved) " (prepared)" else ""
+                } ?: "none - picker")
+        )
+        // A truncated answer is a PARTIAL sources list, and the viewer is about
+        // to see it in the player (spec C27). One marker, here, rather than a
+        // second one in the picker: this is the path that skips the picker.
+        if (start != null && !completeAnswer) {
+            Toast.makeText(
+                context,
+                if (resolved.failedAddons.isEmpty()) {
+                    "Some sources did not answer - this list is partial"
+                } else {
+                    "Some sources did not answer (${resolved.failedAddons.joinToString(", ")})"
+                },
+                Toast.LENGTH_SHORT
+            ).show()
+        }
         pendingAutoPlay = null
         screen = if (start != null) {
             // The list handed to the player is the walked one: the prepared
@@ -3193,6 +3264,12 @@ fun AppRoot(
                     ?: current.clearLogoUrl,
                 suppressAutoSelect =
                     streamKey in autoPlayedStreamKeys,
+                // The binge identity this picker continues, and the show it can
+                // recall one for: the picker's own auto-select has to order by
+                // the same provider the background resolve would have (C19).
+                bingeGroup = current.target.bingeGroup,
+                bingeAddonName = current.target.bingeAddonName,
+                parentId = current.parentId,
 
                 onStreamSelected = {
                         stream,
@@ -3703,10 +3780,19 @@ fun AppRoot(
                     PlayerEngine.prefersExternal(context) && current.drmLicenseUrl == null ->
                         ExternalPlayerActivity::class.java
 
-                    // The parent id is handed over so the anime verdict
-                    // published for THIS title is the only one this launch may
-                    // consume (see PlayerEngine.LaunchAnime).
-                    PlayerEngine.prefersMpv(context, parentId = current.parentId) ->
+                    // The launch's own title is handed over so the anime verdict
+                    // is the one for THIS title: the engine decision resolves it
+                    // when this session has not already filed one (see
+                    // PlayerEngine.prefersMpvForLaunch), which is what makes the
+                    // setting hold on a source picked from a picker that has
+                    // been open a while. A DRM stream never goes to MPV, so it
+                    // never asks.
+                    current.drmLicenseUrl == null &&
+                        PlayerEngine.prefersMpvForLaunch(
+                            context = context,
+                            parentId = current.parentId,
+                            parentType = current.parentType
+                        ) ->
                         MpvPlayerActivity::class.java
 
                     else -> NativePlayerActivity::class.java

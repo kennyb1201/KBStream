@@ -100,6 +100,17 @@ internal class SimklRatingGuard(
     fun isBlocked(): Boolean = blockedForMs() > 0L
 
     /**
+     * Just the 429 park, without the spacing window.
+     *
+     * The playback/history legs use this one: a scrobble or a completion is an
+     * event, not a burst, so suppressing it inside the ratings leg's two-second
+     * spacing would drop events the viewer actually produced - while a 429's
+     * park is exactly the instruction to stop sending.
+     */
+    @Synchronized
+    fun parkedForMs(): Long = (blockedUntilMs - clock()).coerceAtLeast(0L)
+
+    /**
      * How long the leg is held back for: the longer of a 429's park and the
      * spacing window, in milliseconds, 0 when a call may go now.
      *
@@ -133,6 +144,42 @@ private val simklRatingGuard = SimklRatingGuard()
 
 /** How long the Simkl ratings leg is held back for; 0 when a call may go now. */
 internal fun simklRatingPauseMs(): Long = simklRatingGuard.blockedForMs()
+
+/**
+ * The PLAYBACK/history leg's own guard.
+ *
+ * Process-wide for the same reason as the ratings one, and separate from it on
+ * purpose: a 429 on /scrobble or /sync/history says nothing about the ratings
+ * limit, and parking the thumbs for a playback 429 (or the reverse) would hold
+ * back a leg that is not being limited.
+ */
+private val simklPlaybackGuard = SimklRatingGuard()
+
+/** Milliseconds the playback/history leg is parked by a 429; 0 = may send now. */
+internal fun simklPlaybackParkMs(): Long = simklPlaybackGuard.parkedForMs()
+
+/**
+ * Applies the ratings leg's 429 rule to a playback/history response: park for
+ * `Retry-After` (a minute when the header is absent), log the park, and answer
+ * true so the caller returns its ordinary `false` - but with the park recorded
+ * and the next write suppressed.
+ *
+ * Before this, a 429 on a scrobble or a completion history write was logged as
+ * a generic failure and the very next event re-sent immediately, producing the
+ * bare repeated 429s the ratings leg was taught to avoid (spec C14).
+ */
+internal fun noteSimklPlaybackRateLimit(code: Int, retryAfterHeader: String?): Boolean {
+    if (code != 429) return false
+    val seconds = retryAfterHeader?.trim()?.toLongOrNull()
+    simklPlaybackGuard.noteRetryAfter(seconds)
+    Log.w(
+        TAG,
+        "playback write parked: 429 retry-after=" +
+            (seconds?.toString() ?: SimklRatingGuard.DEFAULT_RETRY_AFTER_SECONDS.toString()) +
+            "s"
+    )
+    return true
+}
 
 /**
  * One title's rating, written to or removed from Simkl.

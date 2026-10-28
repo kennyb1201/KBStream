@@ -496,12 +496,6 @@ fun SettingsScreen(
     var useStreamRanker by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUseStreamRanker(context))
     }
-    // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on the
-    // profile only, like the decoder toggles above and below, so another
-    // device's display push never re-reads a ceiling it does not share.
-    var dataSaver by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getCellularDataSaver(context))
-    }
     var maxAutoPlayQuality by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
@@ -545,11 +539,6 @@ fun SettingsScreen(
     }
     var heroTrailerDelay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerDelayMs(context))
-    }
-    // Device-local (`youtube_po_token_enabled`, EXCLUDED), so this seeds on the
-    // profile, not on the synced revision (settings reorg §13.1).
-    var youtubePoTokens by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getYouTubePoTokenEnabled(context))
     }
     var use24hClock by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUse24HourClock(context))
@@ -1738,19 +1727,21 @@ fun SettingsScreen(
 
                 // ── TORBOX: ADD A MISSING TORRENT ON PLAY ──────────────
                 // Off by default, and the one switch here that lets the app
-                // WRITE to the viewer's TorBox account: pressing a source that
-                // is only a torrent hash adds that torrent when the cloud does
-                // not hold it, then plays its CDN file. Switched off, only
-                // torrents already in the account are played and every other
-                // hash row keeps doing nothing (see TorBoxResolve).
+                // WRITE to the viewer's TorBox account, and CACHED ONLY (spec
+                // S2/D7): TorBox Instant serves only torrents its cache already
+                // holds, so this switch registers one of THOSE in the account
+                // and plays it. Nothing that is not already cached is ever
+                // added - the toggle used to be named for a power the API does
+                // not have (see TorBoxResolve).
                 Spacer(modifier = Modifier.height(12.dp))
                 ToggleRow(
-                    label = "Add missing torrents on play",
-                    description = "A source that is only a torrent hash can be played through " +
-                        "TorBox when your account already holds that torrent. With this on, " +
-                        "pressing one the cloud does not have yet adds it there first, then " +
-                        "plays it - it will appear in your TorBox library, and TorBox may " +
-                        "count it against your download quota. Off, nothing is ever added.",
+                    label = "Add cached torrents to TorBox on play",
+                    description = "TorBox Instant only plays torrents its cache already holds. " +
+                        "With this on, pressing such a source registers it in your TorBox " +
+                        "account first - it will appear in your library, and TorBox may count " +
+                        "it against your download quota - then plays it. Off, only torrents " +
+                        "already in your account play. Nothing that is not already cached is " +
+                        "ever added.",
                     checked = torboxResolveCreate,
                     onToggle = {
                         torboxResolveCreate = it
@@ -2484,25 +2475,6 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // The data saver narrows the ceiling above while the connection
-                // is metered, and holds back the self-update download. It does
-                // not touch the picker or a hand-picked source.
-                ToggleRow(
-                    label = "Cellular Data Saver",
-                    // TV has no Downloads, so the downloads clause is the phone's
-                    // alone (settings reorg §4.5, D3): this is the metered cap and
-                    // nothing else.
-                    description = "On a metered connection, auto-play stays at 1080p or lower " +
-                        "and app updates wait.",
-                    checked = dataSaver,
-                    onToggle = {
-                        dataSaver = it
-                        AppPreferences.setCellularDataSaver(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
                 ToggleRow(
                     label = "Next Episode Popup",
                     description = "Show the Up Next card as an episode's credits roll: the next episode, its still, and the countdown to it. Off ends the episode with no card \u2014 and, because that card is where Auto-play Next counts down and where the still-there prompt asks, with no auto-advance either.",
@@ -3006,24 +2978,6 @@ fun SettingsScreen(
                     onToggle = {
                         heroTrailerMuted = it
                         AppPreferences.setHeroTrailerMuted(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // The only user-visible trailer control in Settings is this
-                // section, so the PO-token kill switch lives at its end (settings
-                // reorg §13.1, U1). Device-local and EXCLUDED: some Fire OS images
-                // ship no usable WebView, so one box's answer must never switch
-                // another's minter off. The reader is per call, so the flip takes
-                // effect without a restart - which is what the line below says.
-                ToggleRow(
-                    label = "YouTube PO Tokens",
-                    description = "Allow the app to mint YouTube tokens for trailer playback. Turning this off may break trailers on some videos; it takes effect immediately, no restart needed.",
-                    checked = youtubePoTokens,
-                    onToggle = {
-                        youtubePoTokens = it
-                        AppPreferences.setYouTubePoTokenEnabled(context, it)
                     }
                 )
 

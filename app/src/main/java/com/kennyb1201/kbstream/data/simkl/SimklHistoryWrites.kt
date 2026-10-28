@@ -60,7 +60,20 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "pushWatchedMovie failed code=${response.code()} body=$errorText")
+            // A 429 is an instruction: park this leg for its Retry-After (a
+            // minute by default) so the next event is held back instead of
+            // earning the same bare 429, and say which happened in the log
+            // (spec C14). The caller still sees a plain false - the completion
+            // latch releases on it and retries in-session.
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "pushWatchedMovie " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // A fresh watched write invalidates the completed-movie
             // snapshot and the Continue Watching feed so watched markers
@@ -135,7 +148,15 @@ suspend fun SimklRepository.pushWatchedShowImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "pushWatchedShow failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "pushWatchedShow " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
@@ -206,7 +227,15 @@ suspend fun SimklRepository.removeWatchedMovieImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "removeWatchedMovie failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "removeWatchedMovie " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // Drop every watched snapshot - memory and disk - so a later
             // preload re-fetches fresh remote state instead of resurrecting
@@ -266,7 +295,15 @@ suspend fun SimklRepository.removeWatchedShowImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "removeWatchedShow failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "removeWatchedShow " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             invalidateWatchedSnapshots()
 
@@ -330,7 +367,15 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "pushWatchedEpisode failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "pushWatchedEpisode " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // A fresh watched write invalidates the cached show library
             // and the Continue Watching feed so episode-watched filters
@@ -421,7 +466,15 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "pushWatchedSeason failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "pushWatchedSeason " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // Drop the in-memory show snapshot so the next detail load
             // re-fetches fresh per-episode state from Simkl instead of
@@ -514,7 +567,15 @@ suspend fun SimklRepository.removeWatchedSeasonImpl(
             } catch (e: Exception) {
                 "unreadable: ${e.message}"
             }
-            Log.e("SIMKL_REPO", "removeWatchedSeason failed code=${response.code()} body=$errorText")
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
+            Log.e(
+                "SIMKL_REPO",
+                "removeWatchedSeason " + (if (rateLimited) "rate-limited " else "failed ") +
+                    "code=${response.code()} body=$errorText"
+            )
         } else {
             // Drop the in-memory show snapshot so the next detail load
             // re-fetches fresh per-episode state from Simkl instead of

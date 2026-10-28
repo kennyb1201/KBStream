@@ -91,7 +91,7 @@ class TorBoxOwnershipReviewTest {
             "watched on THIS profile: it stays, and it must never reach the queue " +
                 "either - its owner is recorded",
             torboxRowLeakedFromAnotherProfile(
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-1"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-1")),
                 entry = row("Bluey", LibraryOrigin.TORBOX_SYNC),
                 cloudTitles = setOf("bluey"),
                 siblingTitles = setOf("bluey"),
@@ -114,9 +114,9 @@ class TorBoxOwnershipReviewTest {
         val queued = torboxUnattributableRows(
             ownerByTitleKey = mapOf(
                 // Watched on this profile - the veto's, never a question.
-                "title:series:encanto" to "profile-1",
+                "title:series:encanto" to setOf("profile-1"),
                 // Watched on another profile - arm A's, not a question either.
-                "title:series:zootopia" to "profile-3"
+                "title:series:zootopia" to setOf("profile-3")
             ),
             entries = entries,
             cloudTitles = setOf("bluey", "moana", "encanto", "zootopia"),

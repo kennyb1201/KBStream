@@ -517,22 +517,24 @@ internal object TorBoxLibrarySync {
  * honest place for a question only the viewer can answer.
  */
 internal fun torboxRowLeakedFromAnotherProfile(
-    ownerByTitleKey: Map<String, String>,
+    ownerByTitleKey: Map<String, Set<String>>,
     entry: LibraryItem,
     cloudTitles: Set<String>,
     siblingTitles: Set<String>,
     liveProfileId: String
 ): Boolean {
     val identity = titleIdentityName(entry.title) ?: return false
-    val owner = titleProfileKey(entry.mediaType, entry.title)?.let { ownerByTitleKey[it] }
+    val owners = titleProfileKey(entry.mediaType, entry.title)?.let { ownerByTitleKey[it] }
+        ?.takeIf { it.isNotEmpty() }
 
     // The veto: this profile's own title, by the one evidence that is positive.
-    if (owner != null && owner == liveProfileId) return false
+    // Multi-owner: watched by this profile as well, so it is ours too.
+    if (owners != null && liveProfileId in owners) return false
 
     val inCloud = identity in cloudTitles
     val marked = entry.origin == LibraryOrigin.TORBOX_SYNC
 
-    if (owner != null && owner != liveProfileId) {
+    if (owners != null) {
         return marked || inCloud
     }
 
@@ -558,14 +560,15 @@ internal fun torboxRowLeakedFromAnotherProfile(
  * A's business, and this profile's own are the veto's.
  */
 internal fun torboxUnattributableRows(
-    ownerByTitleKey: Map<String, String>,
+    ownerByTitleKey: Map<String, Set<String>>,
     entries: List<LibraryItem>,
     cloudTitles: Set<String>,
     siblingTitles: Set<String>,
     liveProfileId: String
 ): List<LibraryItem> = entries.filter { entry ->
     val identity = titleIdentityName(entry.title) ?: return@filter false
-    val owner = titleProfileKey(entry.mediaType, entry.title)?.let { ownerByTitleKey[it] }
-    if (owner != null) return@filter false
+    // An EMPTY owner set is the same answer as no entry: nobody here owns it.
+    val owners = titleProfileKey(entry.mediaType, entry.title)?.let { ownerByTitleKey[it] }
+    if (!owners.isNullOrEmpty()) return@filter false
     identity in cloudTitles && identity !in siblingTitles
 }

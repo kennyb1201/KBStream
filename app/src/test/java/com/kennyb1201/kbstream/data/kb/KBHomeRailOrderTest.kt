@@ -165,8 +165,8 @@ class KBHomeRailOrderTest {
         assertEquals(
             listOf(
                 KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
-                KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
                 KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+                KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
                 KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY,
                 KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY,
                 "browse:1",

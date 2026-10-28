@@ -1350,7 +1350,20 @@ object PrefsPayloadApplier {
         if (blob.isBlank()) return
         val prefs = profilePrefs(context, "kbstream_kb_home_order", profileId)
         val remoteUpdated = payloadUpdatedAt(payload)
-        if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
+        if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) {
+            // The ORDER belongs to the newer copy and is dropped whole - but a
+            // rail's NAME is one label on one row, and losing it because the
+            // order lost a race is the "I renamed it and the other device never
+            // saw the name" report (see KBHomeOrderPrefs.mergeRenames). Only for
+            // the active profile: that helper writes the store the ACTIVE profile
+            // resolves to, and a sibling profile's row is applied when it is next
+            // switched to.
+            if (profileId == ProfileStorage.activeProfileId(context)) {
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .mergeRenames(context, blob)
+            }
+            return
+        }
 
         val local = prefs.getString("home_order_json", null).orEmpty()
         if (blob == local) return

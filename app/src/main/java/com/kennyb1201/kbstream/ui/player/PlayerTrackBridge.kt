@@ -585,7 +585,13 @@ internal object PlayerTrackBridge {
     internal data class TrackIdentity(
         val language: String?,
         val codecs: String,
-        val channels: Int
+        val channels: Int,
+        /**
+         * The track's own title, when the container gives one. Only the
+         * subtitle fallback reads it (see the kind-ranked tier in
+         * [resolveSignature]); audio identity never does.
+         */
+        val title: String? = null
     )
 
     /**
@@ -645,7 +651,15 @@ internal object PlayerTrackBridge {
     internal fun resolveSignature(
         signature: String,
         tracks: List<TrackIdentity>,
-        allowIdentity: Boolean = true
+        allowIdentity: Boolean = true,
+        /**
+         * Text tracks only: before the blind seat guess, take the most complete
+         * KIND in the stored language (SDH > regular > forced > commentary/MT),
+         * which is MPV's ranked-subtitle rule on this engine's side of the
+         * bridge. A subtitle pick is about a LANGUAGE and a KIND - the seat is
+         * only ever the last resort for a pick whose language says nothing.
+         */
+        rankFallbackByKind: Boolean = false
     ): Int? {
         // 1. Exact. Deliberately independent of parsing: a signature whose
         //    channel count is not a number still names a track by its tag.
@@ -670,6 +684,13 @@ internal object PlayerTrackBridge {
                     tracks[position].channels
                 ) == identity
             }
+        }
+        if (identityMatches.size > 1) {
+            // Not a miss - a TIE. The pick named a codec two tracks of this
+            // file both carry, so the seat is what decides, and a report that
+            // says only "re-applied" cannot tell this from a clean match. Same
+            // shape as the miss line, so one reading covers both.
+            noteAudioMemoryTie(signature, identityMatches.size, tracks)
         }
         if (identityMatches.isNotEmpty()) {
             // Twins: the seat still decides, but only while it is one of the
@@ -696,7 +717,23 @@ internal object PlayerTrackBridge {
             }
         }
 
-        // 4. Position.
+        // 4. Kind-ranked fallback (text only): the pick's own language is here,
+        //    but neither its layout nor its codec survived this encode. A
+        //    subtitle memory stores no channels (0), so the loose tier can never
+        //    fire for one - which is why the seat used to be the only answer,
+        //    landing the viewer on a forced / signs track on a reshuffled file.
+        //    Take the most complete kind in the stored language instead.
+        if (rankFallbackByKind) {
+            val sameLanguage = tracks.indices.filter { position ->
+                LanguageMatch.matches(stored.language, tracks[position].language)
+            }
+            val best = sameLanguage.minByOrNull { position ->
+                subtitleKindRank(tracks[position].title)
+            }
+            if (best != null) return best
+        }
+
+        // 5. Position.
         val position = stored.index
         if (position != null && stored.trackCount == tracks.size && position in tracks.indices) {
             val candidate = tracks[position]
@@ -717,7 +754,11 @@ internal object PlayerTrackBridge {
         val position = resolveSignature(
             signature = signature,
             tracks = refs.map { identityOf(it) },
-            allowIdentity = type == C.TRACK_TYPE_AUDIO
+            allowIdentity = type == C.TRACK_TYPE_AUDIO,
+            // Subtitles only: the fallback before the seat guess is the most
+            // complete kind in the stored language, not whichever track the
+            // seat happens to be now (see the kind-ranked tier).
+            rankFallbackByKind = type == C.TRACK_TYPE_TEXT
         ) ?: return null
         return refs[position]
     }
@@ -726,8 +767,12 @@ internal object PlayerTrackBridge {
         val format = ref.group.getTrackFormat(ref.index)
         return TrackIdentity(
             language = format.language,
-            codecs = format.codecs.orEmpty().lowercase(),
-            channels = format.channelCount
+            // Same fallback the written signature uses: an empty `codecs` is
+            // the Matroska norm, not "the track has no codec".
+            codecs = format.codecs?.takeIf { it.isNotBlank() }
+                ?: format.sampleMimeType.orEmpty(),
+            channels = format.channelCount,
+            title = format.label
         )
     }
 
@@ -749,6 +794,25 @@ internal object PlayerTrackBridge {
             index = parts.getOrNull(3)?.toIntOrNull()?.takeIf { it >= 0 },
             trackCount = parts.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 }
         )
+    }
+
+    /**
+     * How complete a subtitle track's KIND is, most complete first.
+     *
+     * 0 SDH, 1 an ordinary full translation, 2 forced / signs, 3 commentary or a
+     * machine translation. The same order [SubtitleTrackRules.choose] arms
+     * subtitles in and MPV's `rankedSubtitleMatch` applies, so the fallback here
+     * cannot disagree with the initial selection about a file carrying several
+     * tracks in one language.
+     */
+    internal fun subtitleKindRank(title: String?): Int {
+        val kinds = SubtitleKindRules.of(title)
+        return when {
+            SubtitleKindRules.SDH in kinds -> 0
+            SubtitleKindRules.FORCED in kinds -> 2
+            SubtitleKindRules.COMMENTARY in kinds || SubtitleKindRules.MT in kinds -> 3
+            else -> 1
+        }
     }
 
     /**
@@ -795,6 +859,36 @@ internal object PlayerTrackBridge {
     }
 
     /**
+     * The sentence a TIE writes: the identity tier matched more than one track,
+     * so the remembered seat is what chose. Same shape as the miss line, and
+     * written to the same places, because the question a report asks is the same
+     * one - "why did it pick THAT track?" - and "it matched twice" is a
+     * different answer from "it matched nothing".
+     */
+    internal fun audioMemoryTieLine(
+        signature: String,
+        matches: Int,
+        tracks: List<TrackIdentity>
+    ): String {
+        val file = tracks.joinToString(", ") { track ->
+            signatureOf(track.language, track.codecs, track.channels)
+        }
+        return "track-memory: audio tie stored=$signature matches=$matches " +
+            "file=[${file.ifBlank { "none" }}]"
+    }
+
+    private fun noteAudioMemoryTie(
+        signature: String,
+        matches: Int,
+        tracks: List<TrackIdentity>
+    ) {
+        // Trace only, no logcat: this fires on the resolution path, which the
+        // signature tests call directly, and the trace is where a playback
+        // report is read from anyway.
+        PlaybackSessionTrace.note(audioMemoryTieLine(signature, matches, tracks))
+    }
+
+    /**
      * Stable-ish identity of a track, stored per show. Language, codec and
      * channel count — not an index, because the same show on another source (or
      * the next episode) orders its tracks differently.
@@ -808,7 +902,13 @@ internal object PlayerTrackBridge {
     fun signatureOf(format: Format, index: Int? = null, trackCount: Int? = null): String =
         signatureOf(
             language = format.language,
-            codecs = format.codecs,
+            // media3's Matroska/FFmpeg paths leave `codecs` empty for
+            // essentially every audio track, which collapsed the identity of
+            // every untagged track in a file to one signature and silently
+            // re-selected the wrong language on the next episode. The sample
+            // MIME type is what the label has always fallen back to (see
+            // [audioTrackLabel]); the signature now does the same.
+            codecs = format.codecs?.takeIf { it.isNotBlank() } ?: format.sampleMimeType,
             channelCount = format.channelCount,
             index = index,
             trackCount = trackCount
@@ -825,7 +925,10 @@ internal object PlayerTrackBridge {
     ): String {
         val parts = mutableListOf(
             language.orEmpty().lowercase(),
-            codecs.orEmpty().lowercase(),
+            // One vocabulary for both engines: libmpv's `ac3` and media3's
+            // `audio/ac3` are the same track, and a pick made on one engine has
+            // to identity-match it on the other (see [signatureCodecOf]).
+            signatureCodecOf(codecs),
             if (channelCount > 0) channelCount.toString() else "0"
         )
         // Both parts or neither: a position with no track count cannot be

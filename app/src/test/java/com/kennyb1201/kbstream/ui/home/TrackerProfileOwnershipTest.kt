@@ -59,7 +59,7 @@ class TrackerProfileOwnershipTest {
         assertTrue(
             trackerCardOwnedByAnotherProfile(
                 item = item("simkl:22773"),
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-3"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-3")),
                 activeProfileId = "profile-1"
             )
         )
@@ -70,7 +70,7 @@ class TrackerProfileOwnershipTest {
         assertFalse(
             trackerCardOwnedByAnotherProfile(
                 item = item("simkl:22773"),
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-1"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-1")),
                 activeProfileId = "profile-1"
             )
         )
@@ -97,7 +97,7 @@ class TrackerProfileOwnershipTest {
         assertFalse(
             trackerCardOwnedByAnotherProfile(
                 item = item("history:tt123:2:5"),
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-3"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-3")),
                 activeProfileId = "profile-1"
             )
         )
@@ -109,14 +109,14 @@ class TrackerProfileOwnershipTest {
         assertFalse(
             trackerCardOwnedByAnotherProfile(
                 item = item("simkl:22773"),
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-3"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-3")),
                 activeProfileId = null
             )
         )
         assertFalse(
             trackerCardOwnedByAnotherProfile(
                 item = item("simkl:22773"),
-                ownerByTitleKey = mapOf("title:series:bluey" to "profile-3"),
+                ownerByTitleKey = mapOf("title:series:bluey" to setOf("profile-3")),
                 activeProfileId = "  "
             )
         )
@@ -153,6 +153,41 @@ class TrackerProfileOwnershipTest {
         assertEquals("series", titleProfileMediaType("show"))
         assertEquals("unknown", titleProfileMediaType("anime"))
         assertEquals("unknown", titleProfileMediaType(null))
+    }
+
+    // ── multi-owner (spec C10/D4, §5.4) ─────────────────────────────────
+
+    @Test
+    fun `a title two profiles watched keeps its card on both`() {
+        // The household case: the same cartoon is watched on the kids profile
+        // AND on profile 1. Single-owner made that a fight - whoever was
+        // recorded last took the card away from the other.
+        val owners = mapOf("title:series:bluey" to setOf("profile-1", "kids"))
+
+        assertFalse(
+            "profile 1 watched it too, so it is not somebody else's",
+            trackerCardOwnedByAnotherProfile(item("simkl:22773"), owners, "profile-1")
+        )
+        assertFalse(
+            "and the kids profile keeps its own card",
+            trackerCardOwnedByAnotherProfile(item("simkl:22773"), owners, "kids")
+        )
+        assertTrue(
+            "a profile that has never watched it still does not get the card",
+            trackerCardOwnedByAnotherProfile(item("simkl:22773"), owners, "profile-2")
+        )
+    }
+
+    @Test
+    fun `an empty owner set suppresses nothing`() {
+        // What a purge leaves behind for a title nobody here owns any more.
+        assertFalse(
+            trackerCardOwnedByAnotherProfile(
+                item = item("simkl:22773"),
+                ownerByTitleKey = mapOf("title:series:bluey" to emptySet()),
+                activeProfileId = "profile-1"
+            )
+        )
     }
 
     // ── the subtitle ────────────────────────────────────────────────────

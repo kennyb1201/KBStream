@@ -410,8 +410,9 @@ object KBHomeOrderPrefs {
      * The order here IS the default position: an arrangement that never
      * mentions these keys falls them back here (see [mergedHomeRailKeys]), which
      * is what keeps the default Home - Continue Watching first, then Upcoming,
-     * then the Top Today rows, then the profile's own rails - exactly what it
-     * drew before for a viewer who never opens the home manager.
+     * then Top Picks for You, then the Top Today rows, then the profile's own
+     * rails - exactly what it drew before for a viewer who never opens the home
+     * manager.
      *
      * The Top Today rows are built-ins too. They used to be a family of their
      * own - addon catalogs whose position the loader FIXED above everything -
@@ -432,7 +433,7 @@ object KBHomeOrderPrefs {
 
     /**
      * The rows EVERY profile draws, in their default order: Continue Watching,
-     * Top Picks for You, Upcoming, then the two Top Today feed rows.
+     * Upcoming, Top Picks for You, then the two Top Today feed rows.
      *
      * This is the head of Home on every profile - a kids profile is the one
      * exception, and what it swaps is the two Top Today rows (see
@@ -440,8 +441,8 @@ object KBHomeOrderPrefs {
      */
     private val BASE_BUILTIN_KEYS: List<String> = listOf(
         builtinKey("continue_watching"),
-        builtinKey(TOP_PICKS_FOR_YOU_KEY_ID),
         builtinKey("upcoming_schedule"),
+        builtinKey(TOP_PICKS_FOR_YOU_KEY_ID),
         builtinKey(TOP_TODAY_MOVIES_KEY_ID),
         builtinKey(TOP_TODAY_SHOWS_KEY_ID)
     )
@@ -494,20 +495,19 @@ object KBHomeOrderPrefs {
      * The personalized row: the profile's most recent completions, blended into
      * a recommendation rail (see HomeViewModel's Top Picks build).
      *
-     * It takes the slot directly after Continue Watching on purpose. Continue
-     * Watching leads because it is the resume rail - a personal row above it
-     * would bury the one row that carries something already in progress - and
-     * the personal pick belongs on the first screenful for a viewer who came to
-     * Home with nothing to resume, ahead of the time-based schedule and the
-     * generic Top Today feed rows. The viewer can still move it anywhere
-     * through the home manager like any other built-in.
+     * It takes the slot directly after Upcoming on purpose. Continue Watching
+     * still leads because it is the resume rail, and Upcoming comes next
+     * because it is the time-based row a viewer checks for tonight; the personal
+     * picks belong UNDER that schedule, not between it and the resume row where
+     * this row first shipped. The viewer can still move it anywhere through the
+     * home manager, and rename it, like any other built-in.
      *
      * Its content gate is its own: the key is emitted only while the profile's
      * Top Picks list is non-empty (see HomeScreen's `builtinWithContent`), so a
      * profile with no completions draws no header and no empty rail.
      */
-    val BUILTIN_TOP_PICKS_FOR_YOU: String = BASE_BUILTIN_KEYS[1]
-    val BUILTIN_UPCOMING_SCHEDULE: String = BASE_BUILTIN_KEYS[2]
+    val BUILTIN_UPCOMING_SCHEDULE: String = BASE_BUILTIN_KEYS[1]
+    val BUILTIN_TOP_PICKS_FOR_YOU: String = BASE_BUILTIN_KEYS[2]
     val BUILTIN_TOP_MOVIES_TODAY: String = BASE_BUILTIN_KEYS[3]
     val BUILTIN_TOP_SHOWS_TODAY: String = BASE_BUILTIN_KEYS[4]
     val BUILTIN_TOP_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[0]
@@ -874,39 +874,68 @@ object KBHomeOrderPrefs {
         store.edit().putString(KEY_BLOB_CORRUPT, raw).apply()
     }
 
+    /**
+     * A VIEWER edit: writes the arrangement, stamps it as changed just now, and
+     * publishes it.
+     *
+     * Everything here is what the pull's last-write-wins guard reads, so anything
+     * that is not the viewer arranging rails has to go through [writeBlob]
+     * instead - see [remapAddonKeys].
+     */
     fun save(context: Context, value: KBHomeOrder) {
-        // Refuse to replace a blob this build could not read (see
-        // [archiveUnreadable]): `get()` has just served the default arrangement,
-        // so this write would replace the viewer's whole Home order with that
-        // default plus one edit, and the arrangement would never come back even
-        // on a build that can read the old blob. Nothing is lost by refusing -
-        // this session's arrangement is the default either way - and
-        // [reset] is the deliberate way out. The cloud adoption path
-        // (PrefsPayloadApplier.applyHomeOrder) writes the blob wholesale, so a
-        // valid arrangement from another device still restores it.
+        if (!writeBlob(context, value, stampAsEdit = true)) return
+        publish(context)
+    }
+
+    /**
+     * Writes the blob, refusing over a blob this build cannot read.
+     *
+     * Refusing is the whole point of the guard: `get()` has just served the
+     * default arrangement, so a write here would replace the viewer's whole Home
+     * order with that default plus one edit, and the arrangement would never come
+     * back even on a build that can read the old blob. Nothing is lost by
+     * refusing - this session's arrangement is the default either way - and
+     * [reset] is the deliberate way out. The cloud adoption path
+     * (PrefsPayloadApplier.applyHomeOrder) writes the blob wholesale, so a valid
+     * arrangement from another device still restores it.
+     *
+     * [stampAsEdit] is the difference between "the viewer changed this" and
+     * "this device's own bookkeeping changed it": only the former may move
+     * [SYNCED_AT_KEY], which is both the pull's staleness guard and the stamp the
+     * push publishes.
+     */
+    private fun writeBlob(
+        context: Context,
+        value: KBHomeOrder,
+        stampAsEdit: Boolean
+    ): Boolean {
         if (isBlobUnreadable(context)) {
             Log.w(
                 TAG,
-                "save refused: the stored home order is unreadable on this build, " +
+                "write refused: the stored home order is unreadable on this build, " +
                     "and it is the only copy of the arrangement"
             )
-            return
+            return false
         }
-        // Write the local blob FIRST. buildHomeOrder() below reads this same
-        // pref, so enqueuing before the write pushed the PREVIOUS arrangement
-        // to the cloud — and because it stamped it "now", the next pull
-        // judged that stale copy newer than what the user had just set and
-        // reverted the edit (every reorder looked like it did not stick).
+        // Write the local blob FIRST. buildHomeOrder() reads this same pref, so
+        // enqueuing before the write pushed the PREVIOUS arrangement to the cloud
+        // — and because it stamped it "now", the next pull judged that stale copy
+        // newer than what the user had just set and reverted the edit (every
+        // reorder looked like it did not stick).
         //
-        // SYNCED_AT_KEY is stamped too, so the pull's "is the remote older
-        // than my last sync?" guard treats this edit as already synced and an
-        // older sibling-device copy can never clobber it - and so the pushed
-        // blob carries THIS edit's time rather than the push's.
-        prefs(context).edit()
+        // SYNCED_AT_KEY is stamped too, so the pull's "is the remote older than
+        // my last sync?" guard treats this edit as already synced and an older
+        // sibling-device copy can never clobber it - and so the pushed blob
+        // carries THIS edit's time rather than the push's.
+        val editor = prefs(context).edit()
             .putString(KEY_BLOB, adapter.toJson(value) ?: "{}")
-            .putLong(SYNCED_AT_KEY, System.currentTimeMillis())
-            .apply()
+        if (stampAsEdit) editor.putLong(SYNCED_AT_KEY, System.currentTimeMillis())
+        editor.apply()
+        return true
+    }
 
+    /** Publishes whatever this device's blob currently says (see [save]). */
+    private fun publish(context: Context) {
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -920,12 +949,52 @@ object KBHomeOrderPrefs {
      * Rewrites arrangement keys after a manifest refresh replaced catalogs (see
      * [remapAddonOrderKeys]). Called from the addon merge, the one place that
      * sees both the old and the new catalog ids.
+     *
+     * This is NOT a viewer edit, and it must not masquerade as one. A dynamic
+     * addon (BingeCat) swaps catalog ids as its content changes, so a plain
+     * manifest refresh can rewrite this device's arrangement keys on its own -
+     * and through [save] that refresh used to stamp [SYNCED_AT_KEY] as "now" and
+     * publish. The effect on a two-device account was exactly "my move/rename
+     * did not sync": the refreshing device's stamp jumped ahead of the sibling's
+     * real edit, so it rejected that edit as older than its own, and then pushed
+     * its (unchanged, pre-edit) copy stamped fresh - reverting the arrangement
+     * account-wide. The rewrite keeps the edit time it already had and publishes
+     * under it (see [writeBlob] and [publish]), so content converges without
+     * winning a race it never entered.
      */
     fun remapAddonKeys(context: Context, remap: Map<String, String>) {
         if (remap.isEmpty()) return
         val current = get(context)
         val updated = remapAddonOrderKeys(current, remap)
-        if (updated != current) save(context, updated)
+        if (updated != current && writeBlob(context, updated, stampAsEdit = false)) {
+            publish(context)
+        }
+    }
+
+    /**
+     * Adds any rename a PULLED arrangement carries that this device does not
+     * already have, and reports whether it added one.
+     *
+     * The arrangement is one coherent thing, so a pulled copy that lost the
+     * last-write-wins race is discarded whole - but a rail's NAME is not part of
+     * that coherence: it is one label the viewer set on one row, and losing it
+     * because the ORDER lost a race is the "I renamed it and the other device
+     * never saw the name" report. This is the one field that converges across a
+     * lost race, and only in the harmless direction: a name already stored here
+     * is never overwritten, and the local edit time is left exactly as it was,
+     * so nothing here can claim a newer edit than this device made.
+     */
+    fun mergeRenames(context: Context, remoteBlob: String): Boolean {
+        val remote = runCatching { adapter.fromJson(remoteBlob) }.getOrNull() ?: return false
+        if (remote.renames.isEmpty()) return false
+        val current = get(context)
+        val missing = remote.renames.filterKeys { key -> key !in current.renames }
+        if (missing.isEmpty()) return false
+        return writeBlob(
+            context,
+            current.copy(renames = current.renames + missing),
+            stampAsEdit = false
+        )
     }
 
     /**

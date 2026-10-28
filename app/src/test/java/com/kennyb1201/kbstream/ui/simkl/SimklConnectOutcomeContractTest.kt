@@ -164,7 +164,7 @@ class SimklConnectOutcomeContractTest {
     @Test
     fun `a disconnect that left the session on disk is not reported as a disconnect`() {
         assertTrue(
-            "the token has to be re-read after the wipe: the token clear rides " +
+            "the token has to be re-read after the clear: the token clear rides " +
                 "inside clearAllWatchState(), so a throw there left it on disk " +
                 "behind a screen that said Disconnected (trackers C2)",
             viewModel.contains("val stillConnected = repository.hasToken()") &&
@@ -173,10 +173,33 @@ class SimklConnectOutcomeContractTest {
                 viewModel.contains("Could not sign out on this device")
         )
         assertTrue(
-            "and the wipe's own failure keeps its sentence instead of being " +
-                "folded into the sign-out one",
-            viewModel.contains("wipe.isFailure -> SimklUiState(") &&
-                viewModel.contains("Disconnected, but clearing watch data failed: ")
+            "and the tracker-state clear's own failure keeps its sentence instead " +
+                "of being folded into the sign-out one",
+            viewModel.contains("cleared.isFailure -> SimklUiState(") &&
+                viewModel.contains("Disconnected, but dropping the Simkl session failed: ")
+        )
+    }
+
+    @Test
+    fun `a disconnect never wipes local watch data`() {
+        // Playback spec C4/D1: this was a REGRESSION. The unlink cleared the
+        // profile's whole history table with no tombstone (so the next pull put
+        // it back), and the viewer's resume positions and Continue Watching were
+        // gone in between.
+        val disconnect = viewModel
+            .substringAfter("fun disconnect()")
+            .substringBefore("private companion object")
+        assertFalse(
+            "no history wipe on this path: $disconnect",
+            disconnect.contains("historyDao.clearAll()")
+        )
+        assertTrue(
+            "the only clear is the tracker-side one, and it runs through the guard",
+            disconnect.contains("watchedStatusRepository.clearAllWatchState()")
+        )
+        assertTrue(
+            "and the screen says local history stays",
+            viewModel.contains("Your watch history stays on this device")
         )
     }
 

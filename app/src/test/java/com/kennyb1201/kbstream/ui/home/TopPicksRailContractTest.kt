@@ -191,6 +191,62 @@ class TopPicksRailContractTest {
         )
     }
 
+    @Test
+    fun `the row follows the Home card shape and wears the watched markers`() {
+        // Field 2026-10-28: three things every other rail on Home does and this
+        // one did not. It drew portrait tiles whatever the landscape/portrait
+        // switch said, and its cards carried neither the eye nor the checkmark,
+        // because the marker preload only ever walked add-on rails - and the
+        // picks are not a Rail, so none of their ids was ever resolved.
+        assertTrue(
+            "the row must be handed the Home card shape",
+            home.contains("landscapeCards = landscapeCards,")
+        )
+        assertTrue(
+            "and draw the landscape card when that switch is on, as a catalog rail does",
+            home.contains("if (landscapeCards) {") &&
+                home.contains("private fun BuiltinTopPicksRail(")
+        )
+        assertTrue(
+            "every card is told whether it is finished and whether it was started",
+            home.contains("isWatched = isWatched(meta),") &&
+                home.contains("isPartiallyWatched = isPartiallyWatched(meta),")
+        )
+        // Both markers are read off the watched sets, so the picks have to be in
+        // the preload that fills them; otherwise the two flags above are always
+        // false and the row looks untouched however much of it was watched.
+        assertTrue(
+            "the marker preload must carry the picks, not only the add-on rails",
+            viewModel.contains("\"tmdb:\${pick.tmdbId}\" to mediaType")
+        )
+        assertTrue(
+            "and a finished build must ask for their markers again",
+            viewModel.contains("refreshWatchedStatus(_rails.value)")
+        )
+    }
+
+    @Test
+    fun `the row covers films and shows, and fills more than a screen`() {
+        // The seed list is coverage-first: the newest title of EACH type is
+        // claimed before recency fills the rest, because a series'
+        // neighbourhood is series and a film's is films. Without it, one binge
+        // week turned the whole row into shows (field 2026-10-28).
+        assertTrue(
+            "the seed pass must cover both media types before it fills by recency",
+            viewModel.contains("SEED_MEDIA_TYPES.forEach { type ->")
+        )
+        assertTrue(
+            "and it must be able to see past a binge run of one show",
+            viewModel.contains("TOP_PICKS_SEED_SCAN = 40")
+        )
+        // The row the viewer actually sees: five seeds at eight picks each,
+        // forty max, instead of the 3x6/18 that barely filled a screen and a
+        // half.
+        assertTrue("five seeds", viewModel.contains("TOP_PICKS_SEEDS = 5"))
+        assertTrue("eight picks per seed", viewModel.contains("TOP_PICKS_PER_SEED = 8"))
+        assertTrue("and a forty-card row", viewModel.contains("TOP_PICKS_ROW_CAP = 40"))
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)

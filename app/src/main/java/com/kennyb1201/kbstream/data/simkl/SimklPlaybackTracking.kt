@@ -410,6 +410,20 @@ suspend fun SimklRepository.scrobbleImpl(
         return false
     }
 
+    // A 429 on an earlier write parked this leg (see
+    // noteSimklPlaybackRateLimit). Sending while parked only earns another
+    // bare 429 - the ratings leg's rule, now applied to playback (spec C14).
+    // The caller gets a plain false, which is what a failed scrobble already
+    // means: the next event tries again.
+    val parkedMs = simklPlaybackParkMs()
+    if (parkedMs > 0L) {
+        Log.i(
+            "SIMKL_REPO",
+            "scrobble/$action skipped: parked for ${parkedMs}ms after a 429"
+        )
+        return false
+    }
+
     val isMovie =
         parentType.lowercase() == "movie"
 
@@ -512,6 +526,14 @@ suspend fun SimklRepository.scrobbleImpl(
         }
 
         if (!response.isSuccessful) {
+            // A 429 is an instruction, not a plain failure: park the leg for
+            // its Retry-After (default a minute) and say so in the log, so the
+            // next playback write is held back instead of earning the same
+            // 429 again within the same second (spec C14).
+            val rateLimited = noteSimklPlaybackRateLimit(
+                response.code(),
+                response.headers()["Retry-After"]
+            )
             val errorText =
                 try {
                     response
@@ -524,11 +546,25 @@ suspend fun SimklRepository.scrobbleImpl(
 
             Log.e(
                 "SIMKL_REPO",
-                "scrobble/$action failed " +
+                "scrobble/$action " +
+                    (if (rateLimited) "rate-limited " else "failed ") +
                     "code=${response.code()} " +
                     "body=$errorText"
             )
+            // The diagnostics report's tracker-health line (spec C11): the last
+            // outcome of this leg, with a status and nothing else.
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                kind = "scrobble",
+                tracker = "simkl",
+                ok = false,
+                detail = "HTTP ${response.code()}"
+            )
         } else {
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                kind = "scrobble",
+                tracker = "simkl",
+                ok = true
+            )
             Log.i(
                 "SIMKL_REPO",
                 "scrobble/$action ok " +

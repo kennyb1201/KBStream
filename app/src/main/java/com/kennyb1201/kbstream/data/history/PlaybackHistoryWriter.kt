@@ -3,7 +3,9 @@ package com.kennyb1201.kbstream.data.history
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
+import com.kennyb1201.kbstream.data.reporting.TrackerHealth
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -164,6 +166,21 @@ internal object PlaybackHistoryWriter {
                 }
             }.onFailure { e ->
                 Log.w(TAG, "could not write watch history for ${entry.id}", e)
+                // A lost history write is the quietest failure in the app: the
+                // episode plays on, and the missing resume point or completion
+                // turns up days later. It reaches the diagnostics report and the
+                // retained error list from here now (spec C11).
+                TrackerHealth.note(
+                    kind = "history",
+                    tracker = "local",
+                    ok = false,
+                    detail = e.javaClass.simpleName
+                )
+                CrashReporter.recordNonFatal(e, mapOf("where" to "history-write"))
+            }.also { result ->
+                if (result.isSuccess) {
+                    TrackerHealth.note(kind = "history", tracker = "local", ok = true)
+                }
             }.isSuccess
 
             // The launcher republish is NOT part of that verdict. It mirrors a

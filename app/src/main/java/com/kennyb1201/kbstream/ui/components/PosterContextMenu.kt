@@ -141,14 +141,21 @@ data class PosterContextAction(
  * this rank gives every menu the same section order, stable within a section so
  * a caller's own rows keep their relative sequence:
  *
- *  0. Open / navigate - "Go to Details", "Open in Grid", "Add to Home"
- *  1. Playback - "Play Manually", "Play from Beginning", "Resume"
- *  2. Library - "Add to Library" / "In Library ✓", "Add to list…"
- *  3. Taste - "Like this title" / "Liked ✓", "Dislike this title" / "Disliked ✓"
- *  4. Reminders - "Remind me when it airs"
- *  5. Watched - any "Mark …" row
+ *  0. Watched - any "Mark …" row, FIRST in every menu that has one
+ *  1. Open / navigate - "Go to Details", "Open in Grid", "Add to Home"
+ *  2. Playback - "Play Manually", "Play from Beginning", "Resume"
+ *  3. Library - "Add to Library" / "In Library ✓", "Add to list…"
+ *  4. Taste - "Like this title" / "Liked ✓", "Dislike this title" / "Disliked ✓"
+ *  5. Reminders - "Remind me when it airs"
  *  6. Anything else the caller adds
  *  7. Destructive last - "Hide", "Remove"
+ *
+ * The watched row leads because it is the action a long press is most often
+ * opened to do - "this one is watched already" - and it used to sit sixth, past
+ * rows that navigate away from the title. It keeps the top of the list, and the
+ * first row is where focus lands, so one press of Select does the thing the
+ * viewer reached for; destructive rows stay last (below) so nothing that removes
+ * content is ever a stray Down press from where the menu opens.
  *
  * Taste sits directly under the library rows because both are the viewer's own
  * verdict on the title (keep it / rate it) rather than something the app does
@@ -158,22 +165,24 @@ data class PosterContextAction(
  * their rows independently - still order them the same way.
  */
 internal fun contextMenuSectionRank(action: PosterContextAction): Int = when {
+    // Checked before the label so "Hide"/"Remove" can never be hoisted by a
+    // prefix match: the one row that takes the title off the screen stays last.
     action.isDestructive -> 7
+    action.label.startsWith("Mark") -> 0
     action.label == "Add to Home" ||
         action.label.startsWith("Go to") ||
-        action.label.startsWith("Open") -> 0
-    action.label.startsWith("Play") || action.label.startsWith("Resume") -> 1
+        action.label.startsWith("Open") -> 1
+    action.label.startsWith("Play") || action.label.startsWith("Resume") -> 2
     action.label.startsWith("Add to Library") ||
         action.label.startsWith("In Library") ||
         action.label.startsWith("Add to list") ||
         action.label.startsWith("Remove from Library") ||
         action.label.startsWith("Add to My List") ||
-        action.label.startsWith("Remove from My List") -> 2
+        action.label.startsWith("Remove from My List") -> 3
     action.label.startsWith("Like") ||
         action.label.startsWith("Dislike") ||
-        action.label.startsWith("Rate") -> 3
-    action.label.startsWith("Remind") -> 4
-    action.label.startsWith("Mark") -> 5
+        action.label.startsWith("Rate") -> 4
+    action.label.startsWith("Remind") -> 5
     else -> 6
 }
 

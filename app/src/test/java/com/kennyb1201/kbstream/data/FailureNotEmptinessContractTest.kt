@@ -97,7 +97,11 @@ class FailureNotEmptinessContractTest {
             "and every write is refused while it is unreadable (sweep 7 3.11): the " +
                 "saved value would be the default arrangement plus one edit",
             prefs.contains("if (isBlobUnreadable(context)) {") &&
-                prefs.contains("save refused: the stored home order is unreadable") &&
+                // "write", not "save": the refusal now lives in the one writer
+                // every path goes through (an arrangement edit, an addon-id
+                // remap, a pulled rename merge), so the log has to cover all
+                // three rather than naming the edit path alone.
+                prefs.contains("write refused: the stored home order is unreadable") &&
                 prefs.contains("fun isBlobUnreadable(context: Context): Boolean")
         )
     }

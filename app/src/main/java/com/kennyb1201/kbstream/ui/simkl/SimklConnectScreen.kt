@@ -192,15 +192,12 @@ fun SimklConnectScreen(
                         // The destructive one carries the danger tint: it was
                         // drawn in the same bright label as REFRESH, so the row
                         // that unlinks the account looked like the row that
-                        // refreshes it. It also asks first now: `disconnect()`
-                        // does not merely unlink the account — it clears every
-                        // local resume position, watched marker and completed
-                        // marker (and the TV launcher's rows with them), which
-                        // is the entire local watch corpus. One tap with no
-                        // confirmation, under a label that reads like an
-                        // unlink, was the app's most destructive button. Its
-                        // sibling "Clear Continue Watching" in Settings has
-                        // always confirmed; this now matches it.
+                        // refreshes it. It also asks first: unlink drops the
+                        // account's tracker state and the app has no revoke to
+                        // call (Simkl keeps the grant until the viewer removes
+                        // it on simkl.com), so the confirmation is where that is
+                        // said. Local watch data is NOT part of it any more
+                        // (playback spec C4/D1: disconnect never wipes).
                         if (!kidsProfile) {
                             KBButton(
                                 label = "DISCONNECT",
@@ -386,12 +383,15 @@ private fun DisconnectConfirmDialog(
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         KBDialogPanel(title = "Disconnect from Simkl?") {
             Text(
-                text = "This unlinks your Simkl account and clears every resume " +
-                    "position and watched marker stored on this device, along " +
-                    "with the launcher's Continue Watching rows. It cannot be " +
-                    "undone. Simkl keeps this app in your connected apps until " +
-                    "you remove it at simkl.com — the app cannot revoke its own " +
-                    "access there.",
+                // No local-data consequence any more, because there is none:
+                // disconnect unlinks the account and drops its tracker state,
+                // and this device's history, resume rows, markers and Continue
+                // Watching stay (playback spec C4/D1). The copy used to promise
+                // a wipe it no longer performs.
+                text = "This unlinks your Simkl account on this device. Your watch " +
+                    "history, resume positions and Continue Watching stay here. " +
+                    "Simkl keeps this app in your connected apps until you remove " +
+                    "it at simkl.com — the app cannot revoke its own access there.",
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )

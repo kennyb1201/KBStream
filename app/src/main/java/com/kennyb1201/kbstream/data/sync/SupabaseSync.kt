@@ -843,12 +843,22 @@ object SupabaseSync {
      * Legacy unscoped rows name no profile and are skipped: they predate the
      * profile system, and guessing one would be worse than leaving the title
      * unattributed.
+     *
+     * MULTI-OWNER + RECENCY (spec C10, D4): every row ADDS its profile to the
+     * title's owner set, keyed by that row's own `updatedAt`, so two profiles
+     * watching one show keep it on both rails. Pull order decides nothing any
+     * more - it used to decide EVERYTHING, because the single-owner map took
+     * the last row in the batch, and the batch arrives key-ascending (so the
+     * lexicographically-greatest profile id won, not the newest activity).
+     *
+     * A TOMBSTONE row is a removal event, not a skip: a profile that deleted its
+     * history for the title no longer owns it (spec §5.3).
      */
     private fun recordHistoryTitleOwners(rows: List<SyncRowDto>) {
         if (rows.isEmpty()) return
 
         val context = appContextRef?.get() ?: return
-        val owners = LinkedHashMap<String, String>()
+        val owners = LinkedHashMap<String, Map<String, Long>>()
 
         for (row in rows) {
             val storedId = row.itemId ?: continue
@@ -860,7 +870,18 @@ object SupabaseSync {
                 title = remote.str("name")
             ) ?: continue
 
-            owners[key] = profileId
+            if (HistoryTombstoneRules.isTombstone(remote)) {
+                com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                    .removeOwner(context, key, profileId)
+                continue
+            }
+
+            val atMs = remote.lng("updatedAt") ?: 0L
+            val existing = owners[key]
+            val stored = existing?.get(profileId)
+            if (existing == null || stored == null || atMs > stored) {
+                owners[key] = (existing ?: LinkedHashMap()) + (profileId to atMs)
+            }
         }
 
         com.kennyb1201.kbstream.data.history.TitleProfileOwnership
@@ -2964,6 +2985,19 @@ object SupabaseSync {
                     db.watchHistoryDao().deleteById(id)
                     if (live) WatchedStatusRepository.invalidateAllCaches()
                 }
+                // A tombstone is a REMOVAL event for ownership too: the profile
+                // that scoped this row no longer claims the title, so the
+                // realtime channel must purge it exactly as the pull does
+                // (spec §5.3). Before, realtime recorded no owners at all.
+                SyncKeys.scopeOf(storedId)?.let { scopedProfile ->
+                    com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                        .removeOwner(
+                            context = context,
+                            type = remote.str("type"),
+                            title = remote.str("name"),
+                            profileId = scopedProfile
+                        )
+                }
                 return@withOwningProfileDb
             }
 
@@ -3021,6 +3055,20 @@ object SupabaseSync {
                         markedWatched = remote.markedWatchedRow()
                     )
                 )
+                // Attribute the title to the profile that scoped this row, on
+                // the same recency rule the pull uses: realtime used to record
+                // no owners at all, so a title discovered on this channel was
+                // attributed only on the next full pull (spec C10/D4).
+                SyncKeys.scopeOf(storedId)?.let { scopedProfile ->
+                    com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                        .record(
+                            context = context,
+                            type = remote.str("type"),
+                            title = remote.str("name"),
+                            profileId = scopedProfile,
+                            atMs = remoteUpdated
+                        )
+                }
                 if (live) WatchedStatusRepository.invalidateAllCaches()
             }
         }

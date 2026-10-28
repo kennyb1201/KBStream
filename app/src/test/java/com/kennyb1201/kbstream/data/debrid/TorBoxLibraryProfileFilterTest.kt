@@ -53,7 +53,7 @@ class TorBoxLibraryProfileFilterTest {
 
     @Test
     fun `a title owned by another profile is dropped, everything else is kept`() {
-        val owners = mapOf("title:series:bluey" to "profile-3")
+        val owners = mapOf("title:series:bluey" to setOf("profile-3"))
 
         assertTrue(
             titleOwnedByAnotherProfile(owners, "series", "Bluey", "profile-1")
@@ -358,7 +358,7 @@ class TorBoxLibraryProfileFilterTest {
 
     @Test
     fun `the veto protects this profile's own rows from both arms`() {
-        val owners = mapOf("title:series:bluey" to "profile-1")
+        val owners = mapOf("title:series:bluey" to setOf("profile-1"))
 
         assertFalse(
             "watched here: this profile's, whatever the cloud and the siblings say",
@@ -384,7 +384,7 @@ class TorBoxLibraryProfileFilterTest {
 
     @Test
     fun `arm A still takes a marked or cloud-matched row owned elsewhere, without siblings`() {
-        val owners = mapOf("title:series:bluey" to "profile-3")
+        val owners = mapOf("title:series:bluey" to setOf("profile-3"))
 
         assertTrue(
             "a marked row is the sync's own write under the wrong profile",
@@ -423,7 +423,7 @@ class TorBoxLibraryProfileFilterTest {
     fun `a nameless row is never removed`() {
         assertFalse(
             torboxRowLeakedFromAnotherProfile(
-                ownerByTitleKey = mapOf("title:series:" to "profile-3"),
+                ownerByTitleKey = mapOf("title:series:" to setOf("profile-3")),
                 entry = row("   "),
                 cloudTitles = setOf("bluey"),
                 siblingTitles = setOf("bluey"),

@@ -175,6 +175,11 @@ object BackupManager {
                 db.watchedStatusDao().upsertAll(chunk)
             }
         }
+        // A restore REPLACES the history the ownership map was derived from, so
+        // the map's claims are stale evidence (a title the backup does not hold
+        // may be recorded as this profile's). Drop it; the next pull and the
+        // next Home pass rebuild it from the restored rows (spec §5.3).
+        com.kennyb1201.kbstream.data.history.TitleProfileOwnership.clear(context)
 
         // The restore is a LOCAL write only; push it to the account so the
         // restored rows reach the cloud and the other devices, instead of

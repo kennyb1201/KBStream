@@ -244,6 +244,48 @@ internal fun dvLabelFromCodec(codec: String?): String? {
 }
 
 /**
+ * The canonical codec token a remembered-track signature carries.
+ *
+ * The two engines name the same codec differently: libmpv's `track-list/codec`
+ * says `ac3`, `eac3`, `mp3`, `truehd`, `dts`, while media3 says `ac-3`,
+ * `ec-3`, `mp4a.40.2`, `audio/ac3`, `audio/eac3`, `audio/mpeg`, `audio/true-hd`
+ * — and, on the Matroska/FFmpeg paths, nothing at all (the signature falls back
+ * to the sample MIME type, see [PlayerTrackBridge.signatureOf]). A pick made on
+ * one engine has to exact/identity-match the same track on the other, so both
+ * sides are signed in ONE vocabulary rather than in whichever spelling the
+ * container happened to use.
+ *
+ * Deliberately separate from [normalizeCodec], which produces the label shown to
+ * the viewer and answers "—" for anything it does not recognize: a signature
+ * must never be built from a display string, and an unknown codec must stay
+ * distinguishable from every other unknown codec.
+ *
+ * Unknown input is returned lowercased and trimmed, so two tracks only collide
+ * when the container really did spell them the same.
+ */
+internal fun signatureCodecOf(codec: String?): String {
+    val raw = codec?.trim()?.lowercase().orEmpty()
+    if (raw.isEmpty()) return ""
+    return when {
+        raw.contains("eac3") || raw.contains("ec-3") || raw.contains("e-ac3") -> "eac3"
+        raw.contains("ac-3") || raw.contains("ac3") || raw == "dolby digital" -> "ac3"
+        raw.contains("truehd") || raw.contains("true-hd") || raw.contains("mlp") -> "truehd"
+        raw.contains("dtshd") || raw.contains("dts-hd") -> "dtshd"
+        raw.contains("dts") -> "dts"
+        raw.startsWith("mp4a") || raw.contains("aac") || raw.contains("mp4a-latm") -> "aac"
+        raw.contains("mpeg") && !raw.contains("mpeg-h") -> "mp3"
+        raw.startsWith("mp3") || raw == "mpga" -> "mp3"
+        raw.contains("opus") -> "opus"
+        raw.contains("vorbis") -> "vorbis"
+        raw.contains("flac") -> "flac"
+        raw.contains("alac") -> "alac"
+        raw.contains("pcm") || raw.contains("lpcm") -> "pcm"
+        raw.contains("mpeg-h") || raw.contains("mha") -> "mpegh"
+        else -> raw
+    }
+}
+
+/**
  * Normalize raw codec string into a friendly label:
  * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
  * "vp09.00" → "VP9", "av01" → "AV1".

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Auto-play's walk down the ranked list, through the debrid resolver when it has
@@ -37,6 +38,18 @@ object AutoplayWalk {
     const val MAX_RESOLVE_ATTEMPTS = 3
 
     /**
+     * One TOTAL time budget for a walk (spec C20).
+     *
+     * Each attempt keeps the per-call timeouts it always had; this bounds their
+     * SUM, which is what the viewer actually waits through. Three resolves are
+     * three round trips at best, and an evening of a slow debrid host made
+     * "Finding sources…" run for minutes with Back as the only way out. Twenty
+     * seconds is generous for three calls and still leaves the picker as the
+     * worst case.
+     */
+    const val DEFAULT_BUDGET_MS = 20_000L
+
+    /**
      * What to start.
      *
      * [sources] is [candidates] with the prepared stream substituted in place of
@@ -66,10 +79,15 @@ object AutoplayWalk {
         candidates: List<Stream>,
         pick: (remaining: List<Stream>) -> Stream?,
         resolve: suspend (Stream) -> Stream?,
-        maxAttempts: Int = MAX_RESOLVE_ATTEMPTS
+        maxAttempts: Int = MAX_RESOLVE_ATTEMPTS,
+        budgetMs: Long = DEFAULT_BUDGET_MS
     ): Start? {
         var remaining = candidates
         var attempts = 0
+        // Wall clock rather than a timer coroutine: the budget has to describe
+        // the wait the VIEWER is paying, and each attempt can spend an arbitrary
+        // slice of it.
+        val deadline = System.currentTimeMillis() + budgetMs
         // The rows the walk abandoned, by identity - a failed hash and a hash the
         // spent budget skipped both count. [sourcesFor] leaves them out of the
         // list the player is handed.
@@ -84,17 +102,22 @@ object AutoplayWalk {
             if (!candidate.url.isNullOrBlank()) {
                 return Start(candidate, sourcesFor(null, candidate), resolved = false)
             }
-            // The resolve budget is spent, but the LIST is not: skip this hash
-            // and ask again, so a url-bearing row anywhere behind it still
-            // starts. Returning null here was how a hash-heavy list whose first
-            // three hashes had failed abandoned the free rows after them.
-            if (attempts >= maxAttempts) {
+            // The resolve budget (attempts OR time) is spent, but the LIST is
+            // not: skip this hash and ask again, so a url-bearing row anywhere
+            // behind it still starts. Returning null here was how a hash-heavy
+            // list whose first three hashes had failed abandoned the free rows
+            // after them.
+            val leftMs = deadline - System.currentTimeMillis()
+            if (attempts >= maxAttempts || leftMs <= 0L) {
                 abandoned += candidate
                 remaining = remaining.without(candidate) ?: return null
                 continue
             }
             attempts++
-            val prepared = resolve(candidate)
+            // The attempt is bounded by what is LEFT of the budget, and a timeout
+            // cancels the resolve (which cancels its HTTP call - see
+            // Call.awaitResponse), so a hung host cannot outlive the budget.
+            val prepared = withTimeoutOrNull(leftMs) { resolve(candidate) }
             if (prepared != null) {
                 return Start(
                     stream = prepared,

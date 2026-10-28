@@ -222,6 +222,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private var fetchGeneration = 0
 
     /**
+     * True while [ticket] is still the picker's current request.
+     *
+     * [fetch] runs off the UI and every publication it makes is a repaint of the
+     * picker that asked for it, so each one has to be conditional on the request
+     * still being the current one: a newer load (another title) or a profile
+     * switch (both tickets bumped, see [resetForProfileChange]) makes the older
+     * answer unrepresentable rather than merely late.
+     */
+    private fun isCurrentRequest(ticket: Int): Boolean =
+        ticket == stateGeneration && ticket == fetchGeneration
+
+    /**
      * Owns the published state, and nothing else.
      *
      * [load] (the picker) and [resolve] (auto-play) publish to the SAME
@@ -461,7 +473,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         val generation = ticket
         // A new target's groups replace the last one's as soon as this fetch
         // starts, so a background resolve cannot leave stale tabs behind.
-        _addonGroups.value = emptyList()
+        //
+        // Gated like every other publication of this list (see [isCurrentRequest]):
+        // a fetch that is no longer the picker's current request - the viewer
+        // moved to another title, or a profile switch bumped both tickets - must
+        // not clear the tabs the CURRENT request is drawing (spec C8).
+        if (isCurrentRequest(generation)) {
+            _addonGroups.value = emptyList()
+        }
         if (contentType == "channel") {
             val directStream = Stream(
                 name = "Live TV",
@@ -477,10 +496,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         }
 
         // The engine this request will play on is chosen later, by the player
-        // screen the caller opens, from a Context alone: publish the anime
-        // verdict for that decision here, while the request's id and media
-        // type are both in hand (see PlayerEngine.publishLaunchAnime). Live
-        // channels took the branch above - there is no title to ask about.
+        // screen the caller opens: publish the anime verdict for that decision
+        // here, while the request's id and media type are both in hand, so the
+        // launch does not have to resolve it itself (see
+        // PlayerEngine.publishLaunchAnime - a warm-up, not the launch's only
+        // source). Live channels took the branch above - there is no title to
+        // ask about.
         PlayerEngine.publishLaunchAnime(
             context = getApplication(),
             streamId = streamId,
@@ -745,7 +766,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // whose links are dead for this title) and an add-on returning the same
         // torrent twice showed it twice in its tab but once in All. Empty
         // groups are dropped - a tab with nothing under it is not a tab.
-        _addonGroups.value = results
+        // Same ticket guard as the streams themselves: this write used to be the
+        // one publication of the resolve that nothing checked, so a resolve that
+        // finished after a profile switch repainted the cleared picker with the
+        // pre-switch title's tabs (spec C8).
+        val addonGroupList = results
             .filterIsInstance<AddonLoadResult.Success>()
             .map { result ->
                 // This add-on's own identity, not the merged map's: two add-ons
@@ -780,6 +805,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
             .filter { it.streams.isNotEmpty() }
+
+        // Same ticket guard as the streams themselves - see [isCurrentRequest].
+        if (isCurrentRequest(generation)) {
+            _addonGroups.value = addonGroupList
+        }
+
         val rankedMsg = if (useRanker) "ranked total = ${markedStreams.size}" else "unranked total = ${markedStreams.size}"
         val topMsg = "top stream = ${markedStreams.firstOrNull()?.let(::describeStream) ?: "none"}"
 

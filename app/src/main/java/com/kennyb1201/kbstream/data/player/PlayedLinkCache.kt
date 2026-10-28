@@ -157,7 +157,15 @@ internal object PlayedLinkCache {
         // pairs so the two lists cannot drift: a row with no URL is dropped
         // from both, which is what keeps a shorter list aligned.
         val pairs = entry.sources.mapNotNull { cached ->
-            cached.toStream()?.let { stream -> stream to cached.addon }
+            // Hash-only (P2P) rows are the reason this flag exists: a torrent
+            // row can carry an infohash and no URL at all, and the strict
+            // conversion below dropped it from the replay - so a replayed
+            // session fed the player a shorter list than the resolve had, and
+            // the row the viewer switched to last time was simply gone. The
+            // row is kept for the SOURCES list, where the debrid resolver can
+            // turn the hash into a link; the PLAYED row stays strict, because
+            // there is nothing to start without a URL (spec C9).
+            cached.toStream(allowHashOnly = true)?.let { stream -> stream to cached.addon }
         }
         return CachedPlay(played, pairs.map { it.first }, pairs.map { it.second })
     }
@@ -208,9 +216,12 @@ internal object PlayedLinkCache {
         addon = addon
     )
 
-    /** Null for a cached row with no URL — nothing to hand the player. */
-    private fun CachedStream.toStream(): Stream? {
-        if (url.isBlank()) return null
+    /**
+     * Null for a cached row with nothing to play: no URL, and - unless
+     * [allowHashOnly] - no infohash either.
+     */
+    private fun CachedStream.toStream(allowHashOnly: Boolean = false): Stream? {
+        if (url.isBlank() && !(allowHashOnly && !infoHash.isNullOrBlank())) return null
         return Stream(
             name = name,
             title = title,

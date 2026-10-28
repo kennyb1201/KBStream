@@ -165,16 +165,12 @@ internal fun CatalogManagerDialog(
     // retry on the next state change instead of dropping focus to the top.
     var pendingFocusAttempts by remember { mutableStateOf(0) }
 
-    // The import block starts open ONLY on a first run (nothing imported yet)
-    // so a new user is not hunting for it. Once a profile is imported it
-    // collapses to one button and the arrangement — the reason this dialog
-    // exists — owns the space.
-    var importExpanded by remember {
-        mutableStateOf(
-            collectionsState.profileUrls.isEmpty() &&
-                collectionsState.collections.isEmpty()
-        )
-    }
+    // The import block is COLLAPSED on open, every time, first run included:
+    // the arrangement — the reason this dialog exists — owns the space, and the
+    // URL field is one press away behind IMPORT COLLECTIONS (field 2026-10-28).
+    // It used to open itself on a first run, which put a text field and a paste
+    // chip at the top of a manager nobody had imported anything into yet.
+    var importExpanded by remember { mutableStateOf(false) }
 
     // One flat list: addon catalog rows first-class alongside collection
     // rows, arranged by the merged home order the ViewModel owns.

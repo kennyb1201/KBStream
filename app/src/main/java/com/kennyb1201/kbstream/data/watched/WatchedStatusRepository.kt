@@ -1676,6 +1676,56 @@ class WatchedStatusRepository(
     }
 
     /**
+     * The ACTIVE profile's explicit marks, twin-expanded - the set the badge
+     * resolver ORs into its own answer (see [resolveWithMergedRemoteSets]),
+     * exposed so a surface applying the sibling-ownership filter can tell "this
+     * profile marked it" apart from "account-wide tracker state says so".
+     *
+     * The filter exists to stop another profile's tracker state leaking into
+     * this one; it must never swallow a mark the viewer made here. A title whose
+     * watched state is only a Simkl/MDBList/Trakt completion (or a sibling's
+     * history row) has no key in this set and stays filtered exactly as before.
+     *
+     * Scoped by construction: the prefs handle is resolved per profile on every
+     * call, so a profile switch changes the answer with no state to reset.
+     * Deliberately reads the LIVE set rather than caching, which is what makes an
+     * unmark stop exempting the title on the very next publish. The twin is
+     * expanded offline from the resolution table (same memo as the resolver), so
+     * no caller can put a network round-trip on a publish path.
+     */
+    suspend fun explicitWatchedOverrideKeys(): Set<String> =
+        expandOverrideTwins(localWatchedOverrideKeys())
+
+    /**
+     * The same explicit marks, reduced to their TITLE ids - the second half of
+     * the exemption, and the half that makes it work on every rail.
+     *
+     * A watched key is `"<type>::<id>"`, and the type is whatever the surface
+     * that drew the tile called the title: a TMDB rail says `series`, an add-on
+     * catalog can say `anime` (or nothing at all, which keys as `"::id"`), and
+     * the ownership rule that this exempts works on NAME, so it treats all of
+     * them as one title. A key-only exemption therefore missed the case the
+     * field report describes: a title marked from one rail (`series::tt123`)
+     * and re-drawn on another (`anime::tt123`) was "explicitly marked" by the
+     * first key and a stranger by the second - so the sibling filter stripped it
+     * on every rail but the one it was marked from. Reported as "it happens on
+     * any rail for certain titles, not just top 10".
+     *
+     * So the id alone is the evidence (twin-expanded, same memo, same offline
+     * guarantee as [explicitWatchedOverrideKeys]). Ids are far less ambiguous
+     * than keys: an id marks ONE title, while the type spelling is a per-rail
+     * label. Tracker-derived state still has no id in here - nothing but an
+     * explicit mark writes this store - so the kids-leak filter is untouched.
+     */
+    suspend fun explicitWatchedOverrideIds(): Set<String> =
+        expandOverrideTwins(localWatchedOverrideKeys())
+            .asSequence()
+            .mapNotNull { key ->
+                key.substringAfter("::", "").trim().takeIf { it.isNotEmpty() }
+            }
+            .toSet()
+
+    /**
      * How long a resolved row may answer for a key before it is recomputed.
      *
      * A POSITIVE row (watched, or started-but-unfinished) is the expensive

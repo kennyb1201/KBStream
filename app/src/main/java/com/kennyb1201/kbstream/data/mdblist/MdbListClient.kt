@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.addon.AppContextHolder
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonAdapter
@@ -847,11 +848,24 @@ object MdbListClient {
      * Re-posts [action] = "start" after a failure, on a scope the player
      * cannot cancel. Stops as soon as one attempt succeeds, or when the
      * session ends ([cancelStartRetry]) / the key is gone.
+     *
+     * Both the key and the profile it belongs to are CAPTURED HERE, not
+     * re-read at retry time. The retry outlives the player's job by design, so
+     * a profile switch in the meantime used to make it post this session's
+     * start to the NEWLY active profile's key - the same mid-session leak the
+     * scrobble legs close with PlaybackHistoryWriter.sessionStillActive,
+     * except here it is a delayed write with no player left to check. A
+     * switch is therefore a cancellation trigger: the captured profile no
+     * longer being active ends the retry, because the session it belongs to
+     * has been left behind and the new profile would be posting a stranger's
+     * start.
      */
     private suspend fun scheduleStartRetry(
         context: Context,
         target: ScrobbleTarget,
-        progress: Double
+        progress: Double,
+        apiKey: String,
+        profileId: String?
     ) {
         val appContext = context.applicationContext
         // NonCancellable: this runs on the FAILURE path, which is reached
@@ -864,7 +878,14 @@ object MdbListClient {
                 val job = sessionScope.launch {
                     for (delayMs in START_RETRY_DELAYS_MS) {
                         delay(delayMs)
-                        val apiKey = apiKey(appContext)
+                        // The session profile left: this retry belongs to a
+                        // playback that is no longer the active profile's.
+                        if (ProfileStorage.activeProfileId(appContext) != profileId) {
+                            Log.i(TAG, "scrobble/start retry dropped: profile switched")
+                            return@launch
+                        }
+                        // Captured at schedule time (see above) - never the
+                        // newly active profile's key.
                         if (apiKey.isBlank()) return@launch
                         val body = scrobbleBody(
                             target.isMovie, target.imdbId, target.tmdbId,
@@ -973,6 +994,14 @@ object MdbListClient {
                                 "body=$body resp=" +
                                 response.body?.string().orEmpty().take(200)
                         )
+                        // Diagnostics: the last outcome of this leg, with the
+                        // status and nothing else (spec C11).
+                        com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                            kind = "scrobble",
+                            tracker = "mdblist",
+                            ok = false,
+                            detail = "HTTP ${response.code()}"
+                        )
                     } else {
                         // The body is logged too: "did the request even get
                         // sent, and with which ids" is the first question
@@ -981,6 +1010,11 @@ object MdbListClient {
                         // from release builds — exactly the build a
                         // "scrobbling doesn't show up" report comes from.
                         Log.i(TAG, "scrobble/$action ok body=$body")
+                        com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                            kind = "scrobble",
+                            tracker = "mdblist",
+                            ok = true
+                        )
                         // Only "stop"/"clear" can change the watched state;
                         // start/pause just move the playhead. Invalidating the
                         // snapshot on every one of them re-downloaded the
@@ -1028,7 +1062,12 @@ object MdbListClient {
             scheduleStartRetry(
                 context = context,
                 target = ScrobbleTarget(isMovie, imdbId, tmdbId, season, episode),
-                progress = progress
+                progress = progress,
+                // The SESSION profile's key and id, resolved while that
+                // profile was still the active one (this call runs on the
+                // player's thread for the session's own start).
+                apiKey = apiKey,
+                profileId = ProfileStorage.activeProfileId(context)
             )
         }
         return ok

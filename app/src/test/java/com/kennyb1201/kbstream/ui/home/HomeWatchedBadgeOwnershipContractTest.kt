@@ -24,9 +24,14 @@ class HomeWatchedBadgeOwnershipContractTest {
         val refresh = viewModel.substringAfter("siblingOwnedMarkerIds = siblingOwnedIds")
             .substringBefore("_partialWatchedKeys.value =")
         assertTrue(
-            "the completed set must drop keys another profile positively owns",
+            "the completed set must drop keys another profile positively owns - " +
+                "but not one this profile marked explicitly (see " +
+                "ExplicitMarkBeatsOwnershipContractTest)",
             refresh.contains("_watchedKeys.value =") &&
-                refresh.contains("filterNot { key -> keyOwnedByAnotherProfile(key) }")
+                refresh.contains(
+                    "filterNot { key -> keyOwnedByAnotherProfile(key) && " +
+                        "key !in explicitWatched }"
+                )
         )
         assertTrue(
             "the ownership ids must be resolved BEFORE the completed set is published, " +
@@ -43,7 +48,9 @@ class HomeWatchedBadgeOwnershipContractTest {
             .substringBefore("Log.d(")
         assertTrue(
             "the partial set must stay filtered - this is the PAW Patrol case",
-            eyePublish.contains("keyOwnedByAnotherProfile(key)")
+            eyePublish.contains(
+                "keyOwnedByAnotherProfile(key) && key !in explicitWatched"
+            )
         )
         assertTrue(
             "and it must still subtract the completed set first",
@@ -59,7 +66,10 @@ class HomeWatchedBadgeOwnershipContractTest {
             .substringBefore("val partial =")
         assertTrue(
             "the live update's completed publish must apply the same filter",
-            completedPublish.contains("filterNot { key -> keyOwnedByAnotherProfile(key) }")
+            completedPublish.contains(
+                "filterNot { key -> keyOwnedByAnotherProfile(key) && " +
+                    "key !in explicitWatched }"
+            )
         )
     }
 

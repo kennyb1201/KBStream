@@ -92,7 +92,18 @@ class WatchHistoryRepository(private val appContext: Context) {
     suspend fun getAll(): List<WatchHistoryEntity> =
         WatchHistoryDatabase.withScopedDao(appContext) { it.getAll() }
 
+    /**
+     * Wipes this profile's history, and its CLAIM on every title with it.
+     *
+     * Ownership is derived from history (see [TitleProfileOwnership]), so a
+     * cleared history that left its owners behind would keep hiding titles from
+     * the other profiles long after this one stopped watching them (spec §5.3).
+     */
     suspend fun clearAll() {
         WatchHistoryDatabase.withScopedDao(appContext) { it.clearAll() }
+        TitleProfileOwnership.removeProfile(
+            appContext,
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+        )
     }
 }

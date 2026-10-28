@@ -468,6 +468,28 @@ class HomeViewModel(
     private fun keyOwnedByAnotherProfile(key: String): Boolean =
         siblingOwnedMarkerIds.any { id -> key.endsWith("::$id") }
 
+    /**
+     * The keys an EXPLICIT mark on the ACTIVE profile wins the ownership filter
+     * with (see [WatchedStatusRepository.explicitWatchedOverrideKeys]).
+     *
+     * The filter's whole job is to keep ANOTHER profile's watched state off
+     * this profile's rails, and its evidence is name+type ownership - which a
+     * title the viewer marks with their own thumb also carries once a sibling
+     * has watched it. That is how a manual mark vanished: the write landed in
+     * this profile's override store, and the publish stripped its key because
+     * the kids profile owned the title. An explicit mark is the viewer saying
+     * it directly, so it outranks the filter; tracker-derived state (the leak
+     * the filter was built for) still does not.
+     *
+     * Read LIVE on every publish, never cached in a field: an unmark takes the
+     * key out of the set, so filtering resumes on the next publish by itself,
+     * and a profile switch cannot carry one profile's exemption into another.
+     */
+    private suspend fun explicitWatchedKeys(): Set<String> =
+        runCatchingCancellable {
+            watchedStatusRepository.explicitWatchedOverrideKeys()
+        }.getOrDefault(emptySet())
+
     private val _upNext =
         MutableStateFlow<List<UpNextItem>>(
             emptyList()
@@ -624,6 +646,14 @@ class HomeViewModel(
                 .getOrDefault(emptyList())
             if (epoch == topPicksBuildEpoch) {
                 _topPicks.value = picks
+                // Re-ask for the watched markers now that the row exists. The
+                // picks are not a [Rail], so their ids are only in the marker
+                // preload while this list is non-empty (see
+                // refreshWatchedStatus) - and the refresh that ran before this
+                // build finished knew about none of them. Without this the row
+                // drew bare posters: no eye on a started title, no checkmark on
+                // a finished one (field 2026-10-28).
+                refreshWatchedStatus(_rails.value)
             }
         }
     }
@@ -708,21 +738,38 @@ class HomeViewModel(
      * something they disliked is exactly what the row must not recommend. A
      * completion that cannot be resolved to a TMDB id is skipped and the next
      * one takes its place, so one unresolvable row can never empty the rail.
+     *
+     * TYPE COVERAGE comes before recency. A series' neighbourhood is series and
+     * a film's is films, so a viewer who spent the last few evenings on one show
+     * got a row of nothing but shows - the seed list was the three newest
+     * completions, and those were two episodes of that show plus its neighbour
+     * (field 2026-10-28). The newest title of EACH type is claimed first, and
+     * only then do the remaining slots fill newest-first, so a profile with any
+     * finished film in its history gets films in the row.
      */
     private suspend fun pickTopPicksSeeds(
         rows: List<WatchHistoryEntity>,
         taste: TasteSignals.Snapshot,
         repo: TmdbRepository
     ): List<TopPicksSeed> {
-        val chosen = ArrayList<TopPicksSeed>(TOP_PICKS_SEEDS)
+        // Every resolvable completion in the scan window, newest first. The
+        // window (TOP_PICKS_SEED_SCAN) is much deeper than the seed count on
+        // purpose: a binge run must not hide the film the viewer finished last
+        // week from the coverage pass below.
+        val candidates = ArrayList<TopPicksSeed>(TOP_PICKS_SEED_SCAN)
         for (row in rows) {
-            if (chosen.size >= TOP_PICKS_SEEDS) break
+            if (candidates.size >= TOP_PICKS_SEED_SCAN) break
             val mediaType = seedMediaType(row.type)
             val tmdbId = seedTmdbId(row.parentId, mediaType, repo) ?: continue
             // Only the id flavors the history row can prove are asked about:
             // the resolved IMDB id is looked up only when the profile HAS
             // signals, so a viewer who never pressed a thumb pays nothing.
-            val imdbId = if (taste.isEmpty) {
+            //
+            // And only for the HEAD of the window: that resolution is a network
+            // round-trip per title, so the deep rows - which exist for the
+            // type-coverage pass, not for extra seeds - are matched by their
+            // tmdb id and their name instead (see TOP_PICKS_TASTE_SCAN).
+            val imdbId = if (taste.isEmpty || candidates.size >= TOP_PICKS_TASTE_SCAN) {
                 null
             } else {
                 runCatchingCancellable { repo.resolveImdbId(tmdbId, mediaType) }.getOrNull()
@@ -737,7 +784,7 @@ class HomeViewModel(
             ) {
                 continue
             }
-            chosen += TopPicksSeed(
+            candidates += TopPicksSeed(
                 tmdbId = tmdbId,
                 mediaType = mediaType,
                 name = row.name,
@@ -746,6 +793,20 @@ class HomeViewModel(
                 rating = ratingAt(taste, mediaType, row.name, tmdbId, imdbId)
             )
         }
+
+        // One seed per type first, then the rest by recency. Both types are
+        // asked for by name (the blend's own spelling), so a profile with no
+        // films simply skips that slot and fills from the shows it has.
+        val chosen = ArrayList<TopPicksSeed>(TOP_PICKS_SEEDS)
+        SEED_MEDIA_TYPES.forEach { type ->
+            if (chosen.size >= TOP_PICKS_SEEDS) return@forEach
+            candidates.firstOrNull { it.mediaType == type }?.let { chosen += it }
+        }
+        for (candidate in candidates) {
+            if (chosen.size >= TOP_PICKS_SEEDS) break
+            if (candidate !in chosen) chosen += candidate
+        }
+
         return chosen.sortedWith(
             compareByDescending<TopPicksSeed> { it.likedAt > 0L }
                 // Among the liked seeds, the STRENGTH of the verdict decides:
@@ -2430,8 +2491,10 @@ Log.d(
 
         // Every local card claims its title for the active profile, on every
         // pass: this is the only place that knows both the profile and the
-        // titles its history holds, and a later watch on another profile has
-        // to be able to take the title over.
+        // titles its history holds. The claim ADDS this profile to the title's
+        // owner set (multi-owner, spec C10/D4) - it no longer takes the title
+        // over from a sibling, so a show two profiles watch stays on both
+        // rails.
         items
             .filterNot { item -> isTrackerSourcedCard(item) }
             .forEach { item ->
@@ -9610,7 +9673,22 @@ private suspend fun calculateEpisodesRemaining(
 
             try {
 
-                val preloadItems =
+                // The personalized row is not a [Rail], so nothing in the loop
+                // below ever saw its picks - which is exactly why its cards wore
+                // no watched markers while every catalog card did. Its ids are
+                // the same "tmdb:<n>" form the TMDB-built rails already use, so
+                // they ride along in the same preload.
+                val topPickItems =
+                    _topPicks.value.mapNotNull { pick ->
+                        val mediaType = normalizeMediaType(pick.type)
+                        if (pick.tmdbId <= 0 || mediaType == null) {
+                            null
+                        } else {
+                            "tmdb:${pick.tmdbId}" to mediaType
+                        }
+                    }
+
+                val railItems =
                     rails
                         .asSequence()
                         .flatMap { rail ->
@@ -9645,6 +9723,9 @@ private suspend fun calculateEpisodesRemaining(
 
                             id to mediaType
                         }
+
+                val preloadItems =
+                    (railItems + topPickItems.asSequence())
                         .distinct()
                         .toList()
 
@@ -9712,6 +9793,12 @@ private suspend fun calculateEpisodesRemaining(
 
                 siblingOwnedMarkerIds = siblingOwnedIds
 
+                // Fetched once for this publish pass, and only here: the
+                // exemption below is per KEY, so asking per key would re-read
+                // prefs (and the twin memo) hundreds of times per refresh.
+                val explicitWatched =
+                    explicitWatchedKeys()
+
                 // BOTH sets obey the rule above, not just the eye. The
                 // completed set used to be published straight from the
                 // preload cache - the same cache, fed by the same
@@ -9719,14 +9806,21 @@ private suspend fun calculateEpisodesRemaining(
                 // finished on the kids profile could wear profile 1's
                 // checkmark. The ownership ids are already resolved here; the
                 // filter is the one the eye has used all along.
+                // The exemption is the same at both sites and in the live
+                // collector below: an explicitly marked key publishes even when
+                // a sibling owns the title, and everything else stays filtered.
                 _watchedKeys.value =
                     resolvedWatchedKeys
-                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .filterNot { key ->
+                            keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                        }
                         .toSet()
 
                 _partialWatchedKeys.value =
                     (resolvedPartialWatchedKeys - resolvedWatchedKeys)
-                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .filterNot { key ->
+                            keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                        }
                         .toSet()
 
                 Log.d(
@@ -9895,6 +9989,13 @@ private suspend fun calculateEpisodesRemaining(
 
             WatchStateBus.updates.collect { update ->
 
+                // The exemption, re-read per event rather than remembered: this
+                // event may BE the mark (a key that just entered the set) or the
+                // unmark that removes it, and a cached set would answer with the
+                // state before either.
+                val explicitWatched =
+                    explicitWatchedKeys()
+
                 val current =
                     _watchedKeys.value
                         .toMutableSet()
@@ -9911,7 +10012,9 @@ private suspend fun calculateEpisodesRemaining(
                 // the leak was fixed).
                 _watchedKeys.value =
                     current
-                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .filterNot { key ->
+                            keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                        }
                         .toSet()
 
                 // The badge state as the write resolved it - not "anything
@@ -9932,7 +10035,9 @@ private suspend fun calculateEpisodesRemaining(
 
                 _partialWatchedKeys.value =
                     partial
-                        .filterNot { key -> keyOwnedByAnotherProfile(key) }
+                        .filterNot { key ->
+                            keyOwnedByAnotherProfile(key) && key !in explicitWatched
+                        }
                         .toSet()
 
                 // Dynamic addon catalogs (BingeCat "Because you watched …",
@@ -10129,18 +10234,45 @@ private suspend fun calculateEpisodesRemaining(
             300L
 
         /** How many completed titles the Top Picks row is built from. */
-        private const val TOP_PICKS_SEEDS = 3
+        private const val TOP_PICKS_SEEDS = 5
 
         /**
-         * How far down the completion list the seed pass may look. Deeper than
-         * the seed count on purpose: an unresolvable or disliked completion is
-         * skipped rather than emptying a seed slot.
+         * The types a seed list has to cover when the history carries them, in
+         * the blend's own spelling (see pickTopPicksSeeds).
          */
-        private const val TOP_PICKS_SEED_SCAN = 12
+        private val SEED_MEDIA_TYPES = listOf("movie", "series")
 
-        /** Picks per seed, and cards in the row (see mergeTopPicksSeeds). */
-        private const val TOP_PICKS_PER_SEED = 6
-        private const val TOP_PICKS_ROW_CAP = 18
+        /**
+         * How far down the completion list the seed pass may look.
+         *
+         * Much deeper than the seed count, for two reasons: an unresolvable or
+         * disliked completion is skipped rather than emptying a seed slot, and
+         * the type-coverage pass has to see past a binge run of one show to find
+         * the film the viewer finished last week.
+         */
+        private const val TOP_PICKS_SEED_SCAN = 40
+
+        /**
+         * How many candidates the IMDB-id resolution is worth.
+         *
+         * The resolution is one TMDB `/external_ids` request per title (cached
+         * after the first). The scan window is 40 rows, so resolving all of them
+         * would put up to forty sequential requests in the row's build for
+         * candidates that only exist to be the newest film or the newest show -
+         * a tmdb id and a title match the same signals for those.
+         */
+        private const val TOP_PICKS_TASTE_SCAN = 12
+
+        /**
+         * Picks per seed, and cards in the row (see mergeTopPicksSeeds).
+         *
+         * Five seeds at eight each, capped at forty: the row is a LazyRow a
+         * viewer scrolls, and the old 3x6/18 filled barely a screen and a half
+         * (field 2026-10-28). Dedupe across seeds means the row rarely reaches
+         * the cap, which is the point of setting it generously.
+         */
+        private const val TOP_PICKS_PER_SEED = 8
+        private const val TOP_PICKS_ROW_CAP = 40
 
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
             50

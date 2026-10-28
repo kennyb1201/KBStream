@@ -581,6 +581,24 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * The keys an EXPLICIT mark on the ACTIVE profile wins the ownership filter
+     * with (see [WatchedStatusRepository.explicitWatchedOverrideKeys]).
+     *
+     * Ownership is keyed by name+type, so a title the kids profile has watched
+     * counts as owned elsewhere even when the viewer marks it here - and that
+     * mark used to be swallowed with the tracker leak the filter exists for. A
+     * mark made here outranks the filter; tracker-derived state does not.
+     *
+     * Read live per publish, never cached in a field: an unmark stops exempting
+     * the title on the next publish by itself, and a profile switch re-scopes the
+     * set (the prefs handle is per profile).
+     */
+    private suspend fun explicitWatchedKeys(): Set<String> =
+        runCatchingCancellable {
+            watchedStatusRepository.explicitWatchedOverrideKeys()
+        }.getOrDefault(emptySet())
+
     private fun refreshPosterWatchedStatus(type: String) {
         viewModelScope.launch {
             try {
@@ -613,6 +631,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     .map { item -> item.tmdbId }
                     .toSet()
 
+                // Fetched once for this pass: the exemption is per item, and
+                // reading prefs per poster would re-read them for every tile.
+                val explicitWatched = explicitWatchedKeys()
+
                 if (rawItems.isEmpty()) {
                     _watchedKeys.value = emptySet()
                     _resolvedPosterIds.value = emptyMap()
@@ -640,6 +662,29 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 val resolvedMap = _resolvedPosterIds.value
 
+                // An OWNED poster is withheld - unless THIS profile marked it
+                // explicitly. The check is the badges' own key math
+                // ([WatchedStatusKeys.watchedKeysOf]) with the override set as
+                // its matcher, so both id flavors count and the exemption
+                // cannot describe a title differently from its badge.
+                val withheldElsewhere =
+                    ownedElsewhere
+                        .toMutableSet()
+                for (item in rawItems) {
+                    if (item.tmdbId !in withheldElsewhere) continue
+                    val explicitlyMarked =
+                        WatchedStatusKeys.watchedKeysOf(
+                            tmdbId = item.tmdbId,
+                            mediaType = item.mediaType,
+                            resolvedImdbId =
+                                resolvedMap[posterLookupKey(item.tmdbId, item.mediaType)],
+                            matches = { id, type ->
+                                WatchedStatusKeys.key(id, type) in explicitWatched
+                            }
+                        ).isNotEmpty()
+                    if (explicitlyMarked) withheldElsewhere -= item.tmdbId
+                }
+
                 // The badges, though, come from EVERY poster, through both id
                 // flavors: the IMDB one when resolution produced it, and the
                 // poster's own raw `tmdb:<n>` one always. That flavor needs no
@@ -664,7 +709,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 watchedStatusRepository.preload(preloadItems)
 
                 val watchedKeys = rawItems
-                    .filterNot { item -> item.tmdbId in ownedElsewhere }
+                    .filterNot { item -> item.tmdbId in withheldElsewhere }
                     .flatMap { item ->
                         WatchedStatusKeys.watchedKeysOf(
                             tmdbId = item.tmdbId,
@@ -679,7 +724,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 _watchedKeys.value = watchedKeys
 
                 _partialWatchedKeys.value = rawItems
-                    .filterNot { item -> item.tmdbId in ownedElsewhere }
+                    .filterNot { item -> item.tmdbId in withheldElsewhere }
                     .flatMap { item ->
                         WatchedStatusKeys.watchedKeysOf(
                             tmdbId = item.tmdbId,
@@ -780,6 +825,14 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 type = normalizedType,
                 tmdbId = tmdbId
             ) ?: mdbListPlaybackResumeFor(
+                id = parentId,
+                type = normalizedType,
+                tmdbId = tmdbId
+            ) ?: traktPlaybackResumeFor(
+                // The third leg (spec C28): Trakt-only progress used to get a
+                // plain PLAY here, because this fallback chain stopped at two
+                // trackers while the Continue Watching rail already read all
+                // three.
                 id = parentId,
                 type = normalizedType,
                 tmdbId = tmdbId
@@ -1050,12 +1103,12 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         parentId: String,
         completedEntries: List<WatchHistoryEntity>
     ) {
-        _completedEpisodeIds.value =
-            if (detailOwnedByAnotherProfile()) {
-                emptySet()
-            } else {
-                completedEntries.map { it.id }.toSet()
-            }
+        // These ids are LOCAL rows of this profile's own history database -
+        // per profile by construction - so they publish whatever another
+        // profile owns. Withholding them because a sibling owns the TITLE is
+        // the badge bug one level down: a per-episode mark made here vanished
+        // from here.
+        _completedEpisodeIds.value = completedEntries.map { it.id }.toSet()
 
         publishWatchedEpisodeKeys(parentId, completedEntries)
     }
@@ -1072,10 +1125,19 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         if (detailOwnedByAnotherProfile()) {
             // The merged set has non-per-profile members (Simkl, MDBList,
             // Trakt), so a title finished on the kids profile was ticking its
-            // episodes on profile 1's Detail page. Positive ownership by
-            // another profile withholds the whole set; a title with no owner
-            // keeps it.
-            _watchedEpisodeKeys.value = emptySet()
+            // episodes on profile 1's Detail page. Those tracker-derived keys
+            // stay withheld - but the LOCAL slice does not: it is built from
+            // this profile's own history rows, the same rows
+            // markEpisodeWatchedLocal writes, so withholding it hid the
+            // episodes the viewer ticked by hand here. Publish exactly what
+            // the local entries derive (empty Simkl set), nothing from the
+            // tracker feeds.
+            _watchedEpisodeKeys.value =
+                WatchedEpisodeState.buildMergedWatchedKeys(
+                    parentId = parentId,
+                    localCompletedEntries = localCompletedEntries,
+                    simklCompletedEpisodes = emptySet()
+                )
             return
         }
         _watchedEpisodeKeys.value =
@@ -2086,6 +2148,12 @@ for ((metaAddon, response, error) in probeResults) {
         type: String,
         tmdbId: Int?
     ): WatchHistoryEntity? = DetailPlaybackResume.mdbList(this, id, type, tmdbId)
+
+    private suspend fun traktPlaybackResumeFor(
+        id: String,
+        type: String,
+        tmdbId: Int?
+    ): WatchHistoryEntity? = DetailPlaybackResume.trakt(this, id, type, tmdbId)
 
     fun loadEpisodesForSeason(season: Int) {
         // Synthetic (addon-videos) detail: build the episode list from the

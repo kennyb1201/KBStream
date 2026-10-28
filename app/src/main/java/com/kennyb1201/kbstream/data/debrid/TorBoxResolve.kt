@@ -4,11 +4,13 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.network.awaitResponse
 import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -158,7 +160,7 @@ internal object TorBoxResolve {
                 .getOrNull()
         }
 
-    private fun resolve(
+    private suspend fun resolve(
         apiKey: String,
         stream: Stream,
         hash: String,
@@ -202,7 +204,23 @@ internal object TorBoxResolve {
      * [allowCreate] permits it. Null when the account does not hold it and may
      * not be given it.
      */
-    private fun knownTorrent(apiKey: String, hash: String, allowCreate: Boolean): Torrent? {
+    /**
+     * The account's entry for [hash], registering a CACHED one that is not in
+     * the account yet when [allowCreate] permits it (spec S2/D7).
+     *
+     * [allowCreate] no longer means "add an uncached torrent on play": TorBox
+     * Instant serves only torrents its cache already holds, so a hash the walk
+     * got here with is one [TorBoxClient.checkCached] said is cached, and the
+     * only thing ever registered is that cached torrent, under the viewer's
+     * account. An uncached hash never reaches this call - [playableStream] has
+     * already answered null for it - so nothing is downloaded, created or
+     * queued on the viewer's behalf.
+     */
+    private suspend fun knownTorrent(
+        apiKey: String,
+        hash: String,
+        allowCreate: Boolean
+    ): Torrent? {
         val now = System.currentTimeMillis()
         knownIds[hash]?.let { entry ->
             if (now - entry.atMs < ID_TTL_MS) {
@@ -249,12 +267,14 @@ internal object TorBoxResolve {
      * match is on the hash rather than the name because a name is whatever the
      * uploader called it.
      */
-    private fun findInAccount(apiKey: String, hash: String): Torrent? {
+    private suspend fun findInAccount(apiKey: String, hash: String): Torrent? {
         val request = Request.Builder()
             .url(MYLIST_URL)
             .header("Authorization", "Bearer $apiKey")
             .build()
-        client.newCall(request).execute().use { response ->
+        // awaitResponse, not execute(): a cancelled walk must abort the exchange
+        // rather than leave a write running behind the gone screen (spec S3).
+        client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
                 Log.w(TAG, "mylist HTTP ${response.code}")
                 return null
@@ -266,14 +286,14 @@ internal object TorBoxResolve {
     }
 
     /** The account entry for one torrent id, for its file list. */
-    private fun fetchTorrent(apiKey: String, torrentId: Long): Torrent? {
+    private suspend fun fetchTorrent(apiKey: String, torrentId: Long): Torrent? {
         // bypassCache so a torrent created a moment ago is visible instead of
         // waiting out TorBox's own cache on this route.
         val request = Request.Builder()
             .url("$MYLIST_URL?id=$torrentId&bypassCache=true")
             .header("Authorization", "Bearer $apiKey")
             .build()
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
                 Log.w(TAG, "mylist?id HTTP ${response.code}")
                 return null
@@ -293,7 +313,7 @@ internal object TorBoxResolve {
      * seed" - the file is already on their servers, and a viewer asking to play
      * an episode has not asked to upload it.
      */
-    private fun createTorrent(apiKey: String, hash: String): Long {
+    private suspend fun createTorrent(apiKey: String, hash: String): Long {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("magnet", "magnet:?xt=urn:btih:$hash")
@@ -304,7 +324,7 @@ internal object TorBoxResolve {
             .header("Authorization", "Bearer $apiKey")
             .post(body)
             .build()
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 // DUPLICATE_ITEM lands here too: the account already holds what
@@ -331,10 +351,12 @@ internal object TorBoxResolve {
      * in-memory request - it is never logged, never recorded in the trace, and
      * never shown.
      */
-    private fun requestDownloadUrl(apiKey: String, torrentId: Long, fileId: Int): String {
+    private suspend fun requestDownloadUrl(apiKey: String, torrentId: Long, fileId: Int): String {
         var lastFailure: Throwable? = null
         repeat(DL_ATTEMPTS) { attempt ->
-            if (attempt > 0) Thread.sleep(DL_RETRY_MS)
+            // delay, not Thread.sleep: this runs on a coroutine, and the wait
+            // has to be cancellable like the calls around it (spec S3).
+            if (attempt > 0) delay(DL_RETRY_MS)
             runCatching { requestDownloadOnce(apiKey, torrentId, fileId) }
                 .onSuccess { return it }
                 .onFailure { lastFailure = it }
@@ -342,11 +364,11 @@ internal object TorBoxResolve {
         throw lastFailure ?: IllegalStateException("requestdl failed")
     }
 
-    private fun requestDownloadOnce(apiKey: String, torrentId: Long, fileId: Int): String {
+    private suspend fun requestDownloadOnce(apiKey: String, torrentId: Long, fileId: Int): String {
         val request = Request.Builder()
             .url("$REQUEST_DL_URL?token=$apiKey&torrent_id=$torrentId&file_id=$fileId&redirect=false")
             .build()
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw IllegalStateException("requestdl HTTP ${response.code}")

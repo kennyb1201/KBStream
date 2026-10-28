@@ -2804,6 +2804,17 @@ private fun blendPickPreview(pick: BlendPick): MetaPreview =
 private fun BuiltinTopPicksRail(
     picks: List<BlendPick>,
     title: String,
+    /**
+     * The Home card shape, the same switch the catalog rails obey (Settings'
+     * landscape cards / landscape posters - see
+     * [AppPreferences.homeLandscapeActive]).
+     *
+     * This row drew portrait tiles whatever that switch said, which made it the
+     * one rail on Home that ignored the viewer's shape choice (field
+     * 2026-10-28). The row is made of the same cards as a catalog rail, so it
+     * reads the same answer they do.
+     */
+    landscapeCards: Boolean,
     bringIntoViewSpec: BringIntoViewSpec,
     onTitleHeight: (Int) -> Unit,
     /**
@@ -2856,34 +2867,61 @@ private fun BuiltinTopPicksRail(
                         onDispose { cardFocusRequesters.remove(cardKey) }
                     }
 
+                    // The shape, the card and the slot all follow the Home
+                    // setting, exactly as they do in a catalog rail: the same
+                    // two sizes, the same composable per shape.
+                    val cardWidth =
+                        if (landscapeCards) HomeLandscapeWidth else HomePosterWidth
+                    val cardHeight =
+                        if (landscapeCards) HomeLandscapeHeight else HomePosterHeight
+                    val cardModifier = Modifier
+                        .heroSourceElement(meta.type, meta.id)
+                        .homeRailHeadLeftEdgeStop(index == 0)
+                        .focusRequester(requester)
+                        .width(cardWidth)
+                        .height(cardHeight)
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) {
+                                onFocusedCard(cardKey, requester)
+                                onSelectHero(meta)
+                            }
+                        }
+                        .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
+
                     Box(
                         modifier = Modifier
-                            .width(HomePosterWidth)
-                            .height(HomePosterHeight + PosterFocusHeadroom)
+                            .width(cardWidth)
+                            .height(cardHeight + PosterFocusHeadroom)
                             .padding(end = HomeRailGap),
                         contentAlignment = Alignment.Center
                     ) {
-                        PosterCard(
-                            posterUrl = meta.poster,
-                            contentDescription = meta.name,
-                            isWatched = isWatched(meta),
-                            isPartiallyWatched = isPartiallyWatched(meta),
-                            onClick = { onOpen(meta) },
-                            onLongClick = { onLongPress(meta, requester) },
-                            modifier = Modifier
-                                .heroSourceElement(meta.type, meta.id)
-                                .homeRailHeadLeftEdgeStop(index == 0)
-                                .focusRequester(requester)
-                                .width(HomePosterWidth)
-                                .height(HomePosterHeight)
-                                .onFocusChanged { focusState ->
-                                    if (focusState.isFocused) {
-                                        onFocusedCard(cardKey, requester)
-                                        onSelectHero(meta)
-                                    }
-                                }
-                                .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
-                        )
+                        if (landscapeCards) {
+                            LandscapeCard(
+                                // The pick's TMDB backdrop; a title without one
+                                // falls back to its poster, cropped - the same
+                                // degradation the catalog rails accept.
+                                backdropUrl = meta.background ?: meta.poster,
+                                // No wordmark: a blend pick carries no logo art.
+                                logoUrl = null,
+                                fallbackTitle = meta.name,
+                                contentDescription = meta.name,
+                                isWatched = isWatched(meta),
+                                isPartiallyWatched = isPartiallyWatched(meta),
+                                onClick = { onOpen(meta) },
+                                onLongClick = { onLongPress(meta, requester) },
+                                modifier = cardModifier
+                            )
+                        } else {
+                            PosterCard(
+                                posterUrl = meta.poster,
+                                contentDescription = meta.name,
+                                isWatched = isWatched(meta),
+                                isPartiallyWatched = isPartiallyWatched(meta),
+                                onClick = { onOpen(meta) },
+                                onLongClick = { onLongPress(meta, requester) },
+                                modifier = cardModifier
+                            )
+                        }
                     }
                 }
             }
@@ -5067,6 +5105,7 @@ fun HomeScreen(
                 BuiltinTopPicksRail(
                     picks = topPicks,
                     title = title,
+                    landscapeCards = landscapeCards,
                     bringIntoViewSpec = railCardsBringIntoViewSpec,
                     onTitleHeight = { railTitleHeightPx = it.toFloat() },
                     cardFocusRequesters = railFocusRequesters,

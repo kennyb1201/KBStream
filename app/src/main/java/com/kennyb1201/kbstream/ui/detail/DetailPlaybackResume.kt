@@ -351,4 +351,129 @@ internal object DetailPlaybackResume {
             completedAt = null
         )
     }
+
+    /**
+     * Trakt playback fallback for the Detail screen (spec C28).
+     *
+     * The third tracker leg, on exactly the contract of [simkl] and [mdbList]:
+     * a paused Trakt session becomes a display-only resume row, so a viewer who
+     * only scrobbles to Trakt still gets RESUME + progress here instead of a
+     * plain PLAY. Earlier this leg existed only for the Continue Watching rail,
+     * which is why Detail showed nothing for Trakt-only progress.
+     *
+     * Nothing is written, nothing throws, and [ResumeAuthority]'s chooser is
+     * untouched - this only gives it a third synthetic row to consider, in the
+     * order it already applies.
+     */
+    suspend fun trakt(
+        vm: DetailViewModel,
+        id: String,
+        type: String,
+        tmdbId: Int?
+    ): WatchHistoryEntity? {
+        val trakt = vm.traktRepository
+        if (!runCatching { trakt.isConfigured() && trakt.hasToken() }.getOrDefault(false)) {
+            return null
+        }
+
+        val sessions = runCatchingCancellable { trakt.playbackSessions() }
+            .getOrDefault(emptyList())
+
+        val normalizedType = type.lowercase()
+        val match = sessions.firstOrNull { session ->
+            val idMatch =
+                session.imdbId?.equals(id, ignoreCase = true) == true ||
+                    (tmdbId != null && session.tmdbId == tmdbId)
+            when (normalizedType) {
+                "movie" -> session.isMovie && idMatch
+                "series" -> !session.isMovie &&
+                    session.season != null &&
+                    session.episode != null &&
+                    idMatch
+                else -> false
+            }
+        } ?: return null
+
+        val progress = match.progressPercent
+            .takeIf { it > 0.0 && it < 100.0 }
+            ?: return null
+
+        val season: Int?
+        val episode: Int?
+        val name: String
+        var runtimeMinutes: Int? = null
+
+        if (normalizedType == "movie") {
+            season = null
+            episode = null
+            name = match.title ?: "movie-$id"
+            runtimeMinutes = tmdbId?.let {
+                runCatchingCancellable {
+                    vm.tmdbRepository.getDetailByTmdbId(it, "movie")
+                }.getOrNull()?.displayRuntimeMinutes()
+            }
+        } else {
+            season = match.season
+            episode = match.episode
+            name = match.title ?: "show-$id"
+            runtimeMinutes = tmdbId?.let {
+                runCatchingCancellable {
+                    vm.tmdbRepository.getDetailByTmdbId(it, "tv")
+                }.getOrNull()?.displayRuntimeMinutes()
+            }
+        }
+
+        val durationMs = runtimeMinutes?.times(60_000L)?.takeIf { it > 0L } ?: 0L
+        val positionMs = if (durationMs > 0L) {
+            (durationMs * (progress / 100.0)).toLong()
+        } else {
+            0L
+        }
+
+        // A bar with no time reads as a bug; see the two legs above.
+        if (positionMs <= 0L && durationMs <= 0L) return null
+
+        val syntheticId =
+            if (normalizedType == "movie") "trakt-playback:$id"
+            else "trakt-playback:$id:$season:$episode"
+
+        return WatchHistoryEntity(
+            id = syntheticId,
+            parentId = id,
+            type = normalizedType,
+            name = name,
+            episodeTitle = match.episodeTitle?.takeIf { it.isNotBlank() },
+            overview = null,
+            clearLogo = null,
+            backdropUrl = null,
+            totalEpisodesInSeason = null,
+            poster = null,
+            streamUrl = null,
+            season = season,
+            episode = episode,
+            // FILE numbering, like the other two legs: the card this row
+            // resumes has to be the episode id the add-ons resolve.
+            episodeStreamId =
+                if (normalizedType == "series" && season != null && episode != null) {
+                    fileEpisodeStreamId(
+                        context = vm.getApplication(),
+                        rootId = vm.tmdbRepository.streamRootIdFor(
+                            id,
+                            tmdbId,
+                            normalizedType
+                        ),
+                        tmdbId = tmdbId,
+                        season = season,
+                        tmdbEpisode = episode
+                    )
+                } else {
+                    null
+                },
+            positionMs = positionMs,
+            durationMs = durationMs,
+            updatedAt = System.currentTimeMillis(),
+            isCompleted = false,
+            completedAt = null
+        )
+    }
 }

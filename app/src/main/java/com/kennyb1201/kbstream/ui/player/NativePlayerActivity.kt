@@ -1273,6 +1273,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // internal: PlayerPanelSection reads this — the panel's own ± offset
     // buttons change it without going through the track bridge.
     internal var subtitleOffsetMs = 0
+
+    /**
+     * Whether the "an embedded track cannot be shown earlier" disclosure has
+     * been shown this session (spec C23). Once is information; per press is
+     * noise.
+     */
+    private var negativeOffsetDisclosed = false
     private var subtitleSize = 1
     private var subtitleBackground = 0
 
@@ -3058,33 +3065,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * IntroDB is keyed by IMDb id, but a title opened from a TMDB id carries
-     * only the numeric one — and the segment fetcher has no Context with which
-     * to resolve it. So the lookup runs here at playback start and the fetcher
-     * picks the answer up, falling back to the id it was given if it is slow.
-     */
-    private fun startIntroDbImdbHint() {
-        IntroDbHints.begin()
-        val numericId = parentId.trim().toLongOrNull()
-        if (numericId == null) {
-            // Already an IMDb id: nothing to resolve.
-            IntroDbHints.publish(null)
-            return
-        }
-        val type = if (parentType.lowercase() == "movie") "movie" else "series"
-        val tmdbId = numericId.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        lifecycleScope.launch {
-            val imdbId = runCatchingCancellable {
-                withContext(Dispatchers.IO) {
-                    TmdbRepository.getInstance(this@NativePlayerActivity)
-                        .resolveImdbId(tmdbId, type)
-                }
-            }.getOrNull()
-            IntroDbHints.publish(imdbId)
-        }
-    }
-
-    /**
      * Keeps the poster out of the two title-graphic slots.
      *
      * With no clear logo art, updateHeaderInfo() falls back to [itemPoster].
@@ -4085,8 +4065,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         setupListeners()
         setupKeyboardHandler()
-        // Before setupIntroDb(): the fetch waits briefly for this hint.
-        startIntroDbImdbHint()
+        // No TMDB->IMDb pre-resolution here any more: IntroDB's v4 /media takes
+        // tmdb_id directly, so the hint it used to feed had no consumer left and
+        // cost one round trip per Exo session (spec C29).
         // Nothing in this launch asked to resume, so ask the watch history: a
         // launch carrying no position of its own (a source picked from the
         // picker, a rebuilt or restored player) would otherwise replay a
@@ -4159,6 +4140,38 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun applyChosenSubtitleOffset(ms: Int) {
         subtitleOffsetMs = ms
         runCatching { subtitleOffsetValue.text = "${ms}ms" }
+        discloseNegativeOffsetIfItCannotApply(ms)
+    }
+
+    /**
+     * Says so when a negative offset cannot do anything (spec C23).
+     *
+     * A NEGATIVE offset means "show the line earlier", and the pipeline can
+     * only be driven from the playhead when this app owns the cue list - which
+     * it does for a downloaded/external subtitle file ([externalSubtitleCues],
+     * see [SubtitleCueHandler.positionDriven]) and for an ASS sidecar the
+     * overlay typesets. An EMBEDDED track (SRT/WebVTT/PGS inside the file) is
+     * emitted by Media3 at its authored time and there is no API to emit it
+     * sooner, so the pads used to promise a behaviour that silently did
+     * nothing in one direction. Disclosed rather than faked: the positive
+     * direction still works everywhere, and a viewer who needs "earlier" is
+     * told to use an external subtitle.
+     *
+     * Once per session: the pads are pressed repeatedly, and a toast per press
+     * would be noise rather than information.
+     */
+    private fun discloseNegativeOffsetIfItCannotApply(ms: Int) {
+        if (ms >= 0) return
+        if (externalSubtitleCues.isNotEmpty()) return
+        if (sidecarRenderedByApp) return
+        if (negativeOffsetDisclosed) return
+        negativeOffsetDisclosed = true
+        Toast.makeText(
+            this,
+            "Showing a subtitle earlier needs an external subtitle; " +
+                "this embedded track can only be delayed, not advanced.",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     /**
@@ -4174,6 +4187,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun nudgeSubtitleOffset(stepMs: Int) {
         PlayerTrackBridge.chooseSubtitleOffset(this, subtitleOffsetMs + stepMs)
         subtitleCueHandler?.reapplyOffset()
+        // The pads go through the bridge, so the panel's label path is not the
+        // one they take - the disclosure is checked here too (spec C23).
+        discloseNegativeOffsetIfItCannotApply(subtitleOffsetMs + stepMs)
     }
 
     /**
@@ -7626,7 +7642,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // stop). The card means the load is over.
         hideSplash()
         errorContainer.visibility = View.VISIBLE
-        errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
+        // A distinct state for a session that has run out of sources (spec
+        // C31). The card used to show the LAST source's failure as if it were
+        // the whole story, which reads as "this one link is broken" - when the
+        // truth is that every source in the list was tried. The last error stays
+        // underneath as detail; the title carries the verdict.
+        errorTitle.text = when {
+            isLiveChannel -> "Channel unavailable"
+            retryExhausted -> "Every source was tried"
+            else -> "Playback failed"
+        }
         errorMessage.text = errorMessageStr.orEmpty()
         recordShownFailure()
         btnChangeSource.visibility = View.VISIBLE
@@ -10559,6 +10584,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Pausing — keep overlay visible
                 showControls()
                 removeAutoHide()
+                // In the session trace too (spec I15): a pause save is the one
+                // write nobody can see, so a capture that shows a pause and no
+                // "filed" line around it can say whether the row was written.
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "pause save s=${season ?: "-"} e=${episode ?: "-"} " +
+                        "pos=${exoPlayer?.currentPosition ?: 0L}ms"
+                )
                 // Persist the pause point right away so the item jumps to
                 // the top of Continue Watching even if the player is torn
                 // down before onStop() (process death, force close).
@@ -13203,9 +13235,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
             // Same title, same canonical parent id, whichever id flavor
             // launched this playback (see canonicalHistoryParentId). The row
-            // goes through PlaybackHistoryWriter, which files it under the
-            // profile this SESSION started on and refuses the write if the
-            // user switched profiles while it was playing.
+            // goes through PlaybackHistoryWriter, which REDIRECTS to the
+            // profile this SESSION started on: a switch mid-playback files the
+            // row where the session came from rather than refusing it (spec
+            // C33). Only a session whose profile no longer exists is dropped.
             val entry =
                 WatchHistoryEntity(
                     id = historyId, parentId = canonicalHistoryParentId(), type = parentType,
@@ -13289,6 +13322,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun handOffToMpv(reason: String, manual: Boolean = false): Boolean {
         if (mpvHandoffStarted) return false
         if (isLiveChannel || drmLicenseUrl != null) return false
+        // Engines changing mid-episode is invisible in every other line: the
+        // session ring is what connects the two halves of one playback (spec
+        // I15), and it is read first when a report says "it played twice".
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "handoff: exoPlayer -> mpv reason=$reason manual=$manual " +
+                "s=${season ?: "-"} e=${episode ?: "-"}"
+        )
         if (currentUrl.isBlank()) return false
         if (isFinishing || isDestroyed) return false
         // [mpvFallbackEnabled] answers "may the engine change WITHOUT being
@@ -13446,6 +13486,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun handOffToExternal(): Boolean {
         if (externalHandoffStarted) return false
+        // In the session trace, like the MPV handoff above (spec I15): a session
+        // that changes engines mid-episode reads as two sessions otherwise, and
+        // the ring is the only place that connects them.
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "handoff: exoPlayer -> external s=${season ?: "-"} e=${episode ?: "-"}"
+        )
         if (isLiveChannel || drmLicenseUrl != null) return false
         if (currentUrl.isBlank()) return false
         if (isFinishing || isDestroyed) return false
@@ -13542,8 +13588,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private suspend fun scrobbleMdbList(action: String, progress: Double) {
         if (MdbListClient.apiKey(this).isBlank() || parentId.isBlank()) return
+        // The guard the other two trackers have and this one never did: the key
+        // above is the ACTIVE profile's (MdbListClient.apiKey resolves per
+        // call), so a session that outlived a profile switch posted the
+        // departing profile's episode to the incoming profile's account while
+        // Simkl and Trakt correctly skipped. Checked at fire time AND again
+        // after the suspend below - the same TOCTOU shape as the Simkl leg
+        // (playback spec C2).
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
         val imdbId = parentId.takeIf { it.startsWith("tt") }
         val tmdbId = resolveParentTmdbId()
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
         val isMovie = parentType.lowercase() == "movie"
         when (action) {
             "start" -> MdbListClient.scrobbleStart(
@@ -13585,12 +13640,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /** Records a finished title on Trakt, once per session. */
-    private suspend fun syncCompletionToTrakt() {
-        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+    /**
+     * The Trakt leg of a completion. False only when an attempted push FAILED
+     * (so the caller can release its once-per-session latch and retry in-session,
+     * spec C13); "nothing to do" - unconfigured, no token, departed session -
+     * answers true.
+     */
+    private suspend fun syncCompletionToTrakt(): Boolean {
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return true
         val trakt = TraktRepository.getInstance(this)
-        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return true
         val tmdb = resolveParentTmdbId()
-        when (parentType.lowercase()) {
+        return when (parentType.lowercase()) {
             "movie" -> trakt.pushWatchedMovie(parentId = parentId, tmdbId = tmdb)
             "series", "show", "tv" -> {
                 val s = season
@@ -13599,16 +13660,22 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // Same covered-episode fan-out as Simkl and MDBList: a file
                     // covering two TMDB episodes marks both, or the second
                     // segment stays unwatched on the tracker.
+                    var pushed = true
                     coveredTmdbEpisodes(e).forEach { coveredEpisode ->
-                        trakt.pushWatchedEpisode(
+                        val ok = trakt.pushWatchedEpisode(
                             showId = parentId,
                             season = s,
                             episode = coveredEpisode,
                             tmdbId = tmdb
                         )
+                        if (!ok) pushed = false
                     }
+                    pushed
+                } else {
+                    true
                 }
             }
+            else -> true
         }
     }
 
@@ -13752,25 +13819,72 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 return@launch
             }
             // Mirror the completion to MDBList (POST /sync/watched) so both
-            // trackers record finished movies/episodes.
-            runCatchingCancellable {
-                if (MdbListClient.apiKey(this@NativePlayerActivity).isNotBlank()) {
+            // trackers record finished movies/episodes. A multi-episode file
+            // fans out over every episode it covered, exactly as the Simkl and
+            // Trakt legs do (spec C15).
+            val mdbListOk = runCatchingCancellable {
+                if (MdbListClient.apiKey(this@NativePlayerActivity).isBlank()) {
+                    // No key pasted: nothing was attempted, so nothing failed.
+                    true
+                } else {
                     val isMovie = parentType.lowercase() == "movie"
-                    MdbListClient.pushWatched(
-                        this@NativePlayerActivity,
-                        mediaType = if (isMovie) "movie" else "episode",
-                        imdbId = parentId.takeIf { it.startsWith("tt") },
-                        tmdbId = resolveParentTmdbId(),
-                        season = season,
-                        episode = episode
-                    )
+                    val imdb = parentId.takeIf { it.startsWith("tt") }
+                    val tmdb = resolveParentTmdbId()
+                    val showSeason = season
+                    val showEpisode = episode
+                    if (isMovie || showSeason == null || showEpisode == null) {
+                        MdbListClient.pushWatched(
+                            this@NativePlayerActivity,
+                            mediaType = if (isMovie) "movie" else "episode",
+                            imdbId = imdb,
+                            tmdbId = tmdb,
+                            season = showSeason,
+                            episode = showEpisode
+                        )
+                    } else {
+                        MdbListClient.pushWatchedEpisodes(
+                            this@NativePlayerActivity,
+                            imdbId = imdb,
+                            tmdbId = tmdb,
+                            season = showSeason,
+                            episodes = coveredTmdbEpisodes(showEpisode)
+                        )
+                    }
                 }
             }.onFailure { Log.w(TAG, "MDBList completion sync error: ${it.message}") }
-            runCatchingCancellable { syncCompletionToTrakt() }
+                .getOrDefault(false)
+            val traktOk = runCatchingCancellable { syncCompletionToTrakt() }
                 .onFailure { Log.w(TAG, "Trakt completion sync error: ${it.message}") }
-            if (!ok) {
+                .getOrDefault(false)
+            // The latch is shared by all three legs, so ANY failed leg releases
+            // it and the next completion tick re-posts the whole completion
+            // in-session. Previously only a Simkl failure retried, and a
+            // dropped MDBList/Trakt write was silently gone for the session
+            // (spec C13).
+            // Each leg's outcome, for COPY DIAGNOSTICS (spec C11).
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "simkl", ok
+            )
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "mdblist", mdbListOk
+            )
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "trakt", traktOk
+            )
+            if (!ok || !mdbListOk || !traktOk) {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
+                    "tracker",
+                    "completion leg failed (simkl=$ok mdblist=$mdbListOk trakt=$traktOk)"
+                )
                 simklScrobbleSent = false
-                Log.e(TAG, "Simkl completion sync failed; will retry")
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "tracker completion incomplete (simkl=$ok mdblist=$mdbListOk " +
+                        "trakt=$traktOk); latch reset for an in-session retry"
+                )
+                Log.e(
+                    TAG,
+                    "completion legs simkl=$ok mdblist=$mdbListOk trakt=$traktOk; retrying"
+                )
             }
             // The completion is now on the tracker, so the Continue Watching
             // feeds this episode's title came from are stale. Home's ON_RESUME
@@ -14275,6 +14389,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // surviving into the next source is the same stale-identity class of
         // bug the two lines above exist for.
         dvRpuStripKeepDvActive = false
+        // A source switch is a NEW title, so the end-of-file panels are asked
+        // again (spec C5/D2). MPV has always reset these per source - the
+        // parity comment there claimed the main player did the same, and it did
+        // not: `endPanelsShown`, `bywDismissed` and `nextUpHandoffArmed`
+        // survived the rebuild, so after one finished episode the end panels and
+        // the Next Up handoff never came up again for the rest of the session.
+        //
+        // A running countdown belongs to the file being left, so it is
+        // cancelled with the rest. Completion filing and the scrobble stop are
+        // NOT touched here - this is about re-raising panels, nothing else.
+        endPanelsShown = false
+        bywDismissed = false
+        nextUpHandoffArmed = false
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        // Auto-skip memories are per source too (spec C22): an intro stamp
+        // skipped on the previous file must not suppress the SAME segment ids
+        // on a file that has its own timeline. MPV already clears this on a
+        // handoff; the 750 ms poller's own bookkeeping is unchanged.
+        autoSkippedSegments.clear()
         // A manual source switch is a fresh, actively-playing load — drop
         // the actor-return pause semantics so the new source starts
         // playing like any other switch.

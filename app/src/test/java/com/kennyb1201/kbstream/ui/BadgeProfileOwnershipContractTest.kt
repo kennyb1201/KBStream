@@ -37,7 +37,10 @@ class BadgeProfileOwnershipContractTest {
             body.contains(
                 "_partialWatchedKeys.value =\n" +
                     "                    (resolvedPartialWatchedKeys - resolvedWatchedKeys)\n" +
-                    "                        .filterNot { key -> keyOwnedByAnotherProfile(key) }\n" +
+                    "                        .filterNot { key ->\n" +
+                    "                            keyOwnedByAnotherProfile(key) && " +
+                    "key !in explicitWatched\n" +
+                    "                        }\n" +
                     "                        .toSet()"
             )
         )
@@ -51,7 +54,7 @@ class BadgeProfileOwnershipContractTest {
         val collector = functionBody(HOME_VM, "WatchStateBus.updates.collect {")
         assertTrue(
             "the watch-state collector must apply the ownership filter too",
-            collector.contains(".filterNot { key -> keyOwnedByAnotherProfile(key) }")
+            collector.contains("keyOwnedByAnotherProfile(key) && key !in explicitWatched")
         )
         assertTrue(
             "and the checkmark set gets the same rule: the completed twin of the " +
@@ -61,7 +64,10 @@ class BadgeProfileOwnershipContractTest {
             body.contains(
                 "_watchedKeys.value =\n" +
                     "                    resolvedWatchedKeys\n" +
-                    "                        .filterNot { key -> keyOwnedByAnotherProfile(key) }\n" +
+                    "                        .filterNot { key ->\n" +
+                    "                            keyOwnedByAnotherProfile(key) && " +
+                    "key !in explicitWatched\n" +
+                    "                        }\n" +
                     "                        .toSet()"
             )
         )
@@ -84,6 +90,11 @@ class BadgeProfileOwnershipContractTest {
         assertTrue(
             "the eye the enrichment resolves must be checked against the owner map",
             body.contains("titleOwnedByAnotherProfile(")
+        )
+        assertTrue(
+            "and an explicit mark on this profile outranks that map (see " +
+                "ExplicitMarkBeatsOwnershipContractTest)",
+            body.contains("!explicitlyMarked &&")
         )
         assertTrue(
             "and cleared, so the grid draws nothing for it",

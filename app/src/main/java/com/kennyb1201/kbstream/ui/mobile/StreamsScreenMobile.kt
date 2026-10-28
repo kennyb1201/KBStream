@@ -51,7 +51,9 @@ import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.streamNavigationKey
+import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -124,6 +126,11 @@ fun StreamsScreenMobile(
     tmdbId: Int?,
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean,
+    /** The binge identity this picker continues from (spec C19); null = none. */
+    bingeGroup: String? = null,
+    bingeAddonName: String? = null,
+    /** The show, for recalling a cold start's binge identity. */
+    parentId: String? = null,
     onStreamSelected: (
         selected: Stream,
         allSources: List<Stream>,
@@ -224,9 +231,29 @@ fun StreamsScreenMobile(
         // One capped pick for the whole phone (see autoplayPickFor), so "the row
         // auto-play would play" is one function rather than several opinions.
         // The Detail page no longer downloads, so this picker is its only
-        // caller.
+        // caller - and it now carries the binge identity the same way the TV
+        // picker and the background resolve do (spec C19), handed over by an
+        // advance or recalled for this show on a cold start.
+        val bingeIdentity = remember(loadedKey, bingeGroup, bingeAddonName, parentId) {
+            AutoplayPick.binge(
+                memory = parentId?.let { BingeGroupMemory.recall(context, it) },
+                handedGroup = bingeGroup,
+                handedAddon = bingeAddonName
+            )
+        }
+
         fun autoplayPickFrom(remaining: List<Stream>): Stream? =
-            autoplayPickFor(context, remaining, season, episode, runtimeMinutes)
+            autoplayPickFor(
+                context = context,
+                sources = remaining,
+                season = season,
+                episode = episode,
+                runtimeMinutes = runtimeMinutes,
+                binge = bingeIdentity,
+                addonOf = { stream ->
+                    sourceAddons.getOrNull(streams.indexOfFirst { it === stream })
+                }
+            )
 
         /*
          * Auto-play's start, the TV picker's exact route: a url-bearing pick
@@ -242,11 +269,18 @@ fun StreamsScreenMobile(
                     resolve = { TorBoxResolve.playableStream(context, it) }
                 )
                 StreamRankReport.noteAutoPlay(
-                    start?.let { picked ->
+                    (start?.let { picked ->
                         "started · ${StreamRanker.labelOf(picked.stream)}" +
                             if (picked.resolved) " (prepared from its hash)" else ""
                     } ?: "none - the picker is showing instead " +
-                        "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
+                        "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})") +
+                        // The four facts a "wrong pick" report needs (spec I19).
+                        " · cap=${
+                            AppPreferences.getEffectiveAutoPlayQuality(context).takeIf { it > 0 }
+                                ?.let { "${it}p" } ?: "none"
+                        }" +
+                        (if (addonFailures.isEmpty()) ""
+                        else " · failed=${addonFailures.joinToString(",")}")
                 )
                 // Auto-play carries no tab: it is not a tab selection at all,
                 // so the player's manual advance must stay merged if the viewer

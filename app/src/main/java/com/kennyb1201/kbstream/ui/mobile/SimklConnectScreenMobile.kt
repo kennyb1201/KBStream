@@ -74,9 +74,11 @@ fun SimklConnectScreenMobile(
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     var showDisconnectConfirm by remember { mutableStateOf(false) }
-    // A kids profile never gets the destructive button: `disconnect()` clears
-    // every resume position, watched marker and Continue Watching row on this
-    // device, and the parent has a profile of their own to do that from.
+    // A kids profile never gets the account controls: linking or unlinking the
+    // household's tracker account is the parent's decision, and they have a
+    // profile of their own to do it from. (This used to be phrased as "the
+    // destructive button" because disconnect() also wiped local history - it
+    // no longer does, see SimklViewModel.disconnect.)
     val kidsProfile = ProfileManager.activeProfile
         .collectAsStateWithLifecycle().value
         ?.kidsMaxAge != null
@@ -292,11 +294,13 @@ fun SimklConnectScreenMobile(
                 Dialog(onDismissRequest = { showDisconnectConfirm = false }) {
                     KBDialogPanel(title = "Disconnect from Simkl?") {
                         Text(
-                            text = "This unlinks your Simkl account and clears every " +
-                                "resume position and watched marker stored on this " +
-                                "device, along with the launcher's Continue Watching " +
-                                "rows. It cannot be undone. Simkl keeps this app in " +
-                                "your connected apps until you remove it at simkl.com " +
+                            // The wipe this used to promise is gone (playback spec
+                            // C4/D1): unlinking drops the account's tracker state
+                            // and leaves this device's history alone.
+                            text = "This unlinks your Simkl account on this device. " +
+                                "Your watch history, resume positions and Continue " +
+                                "Watching stay here. Simkl keeps this app in your " +
+                                "connected apps until you remove it at simkl.com " +
                                 "— the app cannot revoke its own access there.",
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodyMedium
@@ -305,9 +309,10 @@ fun SimklConnectScreenMobile(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
-                            // CANCEL first: this is the most destructive
-                            // confirm in the app, and the safe choice must not
-                            // be the one under the thumb's resting place.
+                            // CANCEL first: unlinking is still the irreversible
+                            // half (the app cannot revoke its own grant), so the
+                            // safe choice must not sit under the thumb's
+                            // resting place.
                             KBButton(
                                 label = "CANCEL",
                                 modifier = Modifier.weight(1f),

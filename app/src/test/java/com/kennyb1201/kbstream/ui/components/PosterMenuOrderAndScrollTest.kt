@@ -21,9 +21,10 @@ import org.junit.Test
  *    menu in the same section order.
  *
  * The taste rows ("Like this title" / "Dislike this title") joined that ladder
- * between the library rows and the reminder, and this file is deliberately not
- * re-derived from memory: the ranks below are the same ladder with one section
- * inserted, not a new scheme.
+ * between the library rows and the reminder, and the watched row was later
+ * hoisted to the TOP of it (the action a long press is most often opened to do),
+ * and this file is deliberately not re-derived from memory: the ranks below are
+ * the same ladder with one section moved, not a new scheme.
  *
  * The order is pure and pinned directly; the scroll is UI, so its wiring is
  * pinned against the source the way the other contract tests in this package do.
@@ -40,50 +41,84 @@ class PosterMenuOrderAndScrollTest {
     // ── Section order ──────────────────────────────────────────────────────
 
     @Test
-    fun `the sections run open, play, library, taste, reminder, watched, other, destructive`() {
+    fun `the sections run watched, open, play, library, taste, reminder, other, destructive`() {
         // One representative row per section, in the order a menu must draw
         // them. Ranks must also be non-decreasing, which is exactly what the
         // stable sort in the menu relies on.
         //
-        // Taste was inserted BETWEEN library and reminder, so the reminder and
-        // everything below it shifted up one step; the numbers are an ordering
-        // device, and the order is what this test pins.
+        // The WATCHED row leads: it is what a long press is most often opened
+        // to do, and the first row is where focus lands. Everything else keeps
+        // the ladder it had, one step lower, and destructive stays last.
         val ranks = listOf(
+            action("Mark as Watched"),
             action("Go to Details"),
             action("Play Manually"),
             action("Add to Library"),
             action("Like this title"),
             action("Remind me when it airs"),
-            action("Mark as Watched"),
             action("A Caller's Own Row"),
             action("Hide", destructive = true)
         ).map { contextMenuSectionRank(it) }
         assertEquals(ranks.sorted(), ranks)
         assertEquals(listOf(0, 1, 2, 3, 4, 5, 6, 7), ranks)
+        assertTrue(
+            "nothing may outrank the watched row: the whole point is that it is " +
+                "the first thing the menu offers",
+            ranks.first() == ranks.minOrNull()
+        )
+    }
+
+    @Test
+    fun `a menu with a watched row draws it above every other action`() {
+        // The reported shape: a poster menu carrying navigate, play, library,
+        // thumbs, a reminder and the watch toggle. Sorted the way both menus
+        // sort, the toggle has to be row 0 - and Hide, the one destructive row,
+        // still the last.
+        val rows = listOf(
+            action("Add to Library"),
+            action("Go to Details"),
+            action("Play Manually"),
+            action("Play from Beginning"),
+            action("Like this title"),
+            action("Dislike this title"),
+            action("Rate this title"),
+            action("Remind me when it airs"),
+            action("Mark Entire Series as Watched"),
+            action("Hide everywhere", destructive = true)
+        ).sortedBy { contextMenuSectionRank(it) }
+
+        assertEquals("Mark Entire Series as Watched", rows.first().label)
+        assertEquals("Hide everywhere", rows.last().label)
+        assertTrue(
+            "and it is above the navigate and play rows it used to sit below",
+            rows.indexOfFirst { it.label == "Mark Entire Series as Watched" } <
+                rows.indexOfFirst { it.label == "Go to Details" }
+        )
     }
 
     @Test
     fun `every label the menus actually use lands in its section`() {
         val expected = mapOf(
-            "Go to Details" to 0,
-            "Open in Grid" to 0,
-            "Add to Home" to 0,
-            "Play Manually" to 1,
-            "Play from Beginning" to 1,
-            "Add to Library" to 2,
-            "In Library \u2713" to 2,
-            "Add to list\u2026" to 2,
-            "Like this title" to 3,
-            "Liked \u2713" to 3,
-            "Dislike this title" to 3,
-            "Disliked \u2713" to 3,
-            "Remind me when it airs" to 4,
-            "Reminder on \u2713" to 4,
-            "Mark as Watched" to 5,
-            "Mark as Unwatched" to 5,
-            "Mark Previous as Watched" to 5,
-            "Mark Season as Watched" to 5,
-            "Mark Entire Series as Watched" to 5
+            "Mark as Watched" to 0,
+            "Mark as Unwatched" to 0,
+            "Mark Previous as Watched" to 0,
+            "Mark Season as Watched" to 0,
+            "Mark Entire Series as Watched" to 0,
+            "Mark Entire Series as Unwatched" to 0,
+            "Go to Details" to 1,
+            "Open in Grid" to 1,
+            "Add to Home" to 1,
+            "Play Manually" to 2,
+            "Play from Beginning" to 2,
+            "Add to Library" to 3,
+            "In Library \u2713" to 3,
+            "Add to list\u2026" to 3,
+            "Like this title" to 4,
+            "Liked \u2713" to 4,
+            "Dislike this title" to 4,
+            "Disliked \u2713" to 4,
+            "Remind me when it airs" to 5,
+            "Reminder on \u2713" to 5
         )
         expected.forEach { (label, rank) ->
             assertEquals("wrong section for \"$label\"", rank, contextMenuSectionRank(action(label)))
@@ -114,7 +149,7 @@ class PosterMenuOrderAndScrollTest {
         assertEquals(7, contextMenuSectionRank(action("Remove from Home", destructive = true)))
         // The same browse chip is "Add to Home" (an open/navigate row) while it
         // is OFF Home, and only becomes the destructive row when it is on.
-        assertEquals(0, contextMenuSectionRank(action("Add to Home")))
+        assertEquals(1, contextMenuSectionRank(action("Add to Home")))
     }
 
     @Test

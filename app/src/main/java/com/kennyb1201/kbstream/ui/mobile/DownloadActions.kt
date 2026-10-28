@@ -24,8 +24,7 @@ import com.kennyb1201.kbstream.data.download.DownloadTarget
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.download.WAITING_FOR_WIFI
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
-import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -332,14 +331,19 @@ internal fun autoplayPickFor(
     sources: List<Stream>,
     season: Int?,
     episode: Int?,
-    runtimeMinutes: Int?
-): Stream? = AutoPlayQuality.cappedPick(
-    pick = EpisodeMatch.autoplayPick(sources, season, episode, runtimeMinutes),
-    candidates = sources,
+    runtimeMinutes: Int?,
+    /** The binge identity to continue, when the caller has one (spec C19). */
+    binge: AutoplayPick.Binge = AutoplayPick.Binge(),
+    /** The add-on behind each row, by identity; null when unknown. */
+    addonOf: (Stream) -> String? = { null }
+): Stream? = AutoplayPick.pick(
+    context = context,
+    remaining = sources,
     season = season,
     episode = episode,
     runtimeMinutes = runtimeMinutes,
-    cap = AppPreferences.getEffectiveAutoPlayQuality(context)
+    binge = binge,
+    addonOf = addonOf
 )
 
 /** The line under a download's title on the Downloads screen. */

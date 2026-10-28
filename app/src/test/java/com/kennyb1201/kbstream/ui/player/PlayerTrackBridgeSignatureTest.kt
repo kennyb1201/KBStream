@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -102,15 +103,116 @@ class PlayerTrackBridgeSignatureTest {
     }
 
     @Test
-    fun `the tag and codec are stored lowercase, as before`() {
+    fun `the tag and codec are stored lowercase, in the canonical codec vocabulary`() {
+        // Lowercase as before, and now in ONE vocabulary: media3's "EC-3" and
+        // libmpv's "eac3" are the same track and sign the same way (C16), so a
+        // pick made on one engine identity-matches it on the other.
         assertEquals(
-            "eng|ec-3|6|0|1",
+            "eng|eac3|6|0|1",
             PlayerTrackBridge.signatureOf(
                 language = "ENG",
                 codecs = "EC-3",
                 channelCount = 6,
                 index = 0,
                 trackCount = 1
+            )
+        )
+    }
+
+    // ── empty codecs and two vocabularies (C1 / C16) ───────────────────────
+
+    /**
+     * media3's Matroska/FFmpeg paths leave `codecs` empty for essentially every
+     * audio track. The signature used to be built from that empty string, so
+     * every untagged track in a file collapsed to one identity - and on the
+     * reported The War at Home twins (blank language, 2 channels, AC-3 vs MP3)
+     * a pick could not be told apart from the other track at all.
+     */
+    @Test
+    fun `an empty codec signs from the sample mime type`() {
+        assertEquals(
+            "|ac3|2",
+            PlayerTrackBridge.signatureOf(
+                language = null,
+                codecs = "audio/ac3",
+                channelCount = 2
+            )
+        )
+        assertEquals(
+            "|mp3|2",
+            PlayerTrackBridge.signatureOf(
+                language = null,
+                codecs = "audio/mpeg",
+                channelCount = 2
+            )
+        )
+        assertNotEquals(
+            "two tracks whose codecs string is empty must not sign alike",
+            PlayerTrackBridge.signatureOf(language = null, codecs = "audio/ac3", channelCount = 2),
+            PlayerTrackBridge.signatureOf(language = null, codecs = "audio/mpeg", channelCount = 2)
+        )
+    }
+
+    @Test
+    fun `a codec-empty twin pick still finds its own track when the order flips`() {
+        // Picked: the AC-3, first of two untagged 2-channel tracks (the file the
+        // report describes, with media3 reporting no `codecs` for either).
+        val stored = "|ac3|2|0|2"
+        // The next episode's encode puts the MP3 first.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                stored,
+                listOf(untagged("audio/mpeg", 2), untagged("audio/ac3", 2))
+            )
+        )
+    }
+
+    @Test
+    fun `a pick made on mpv matches the same track under media3 spelling`() {
+        // MPV writes `ac3` from track-list/codec; Exo reports `audio/ac3`.
+        assertEquals(
+            0,
+            PlayerTrackBridge.resolveSignature("|ac3|2|0|1", listOf(untagged("audio/ac3", 2)))
+        )
+        assertEquals(
+            "and the other way round",
+            0,
+            PlayerTrackBridge.resolveSignature("|audio/ac3|2|0|1", listOf(untagged("ac3", 2)))
+        )
+    }
+
+    /**
+     * The subtitle fallback before the seat guess is KIND, not position (C17).
+     * A subtitle memory carries no channel count, so the loose tier can never
+     * fire for one; a reshuffled encode used to send the viewer to whatever sat
+     * at the old seat - the forced / signs track, typically.
+     */
+    @Test
+    fun `a subtitle fallback takes the most complete kind in the language`() {
+        val tracks = listOf(
+            PlayerTrackBridge.TrackIdentity("eng", "srt", 0, title = "Signs & Songs"),
+            PlayerTrackBridge.TrackIdentity("eng", "srt", 0, title = "SDH"),
+            PlayerTrackBridge.TrackIdentity("eng", "srt", 0, title = null)
+        )
+        // Stored subrip (another encode's spelling), seat 0.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                "eng|subrip|0|0|3",
+                tracks,
+                allowIdentity = false,
+                rankFallbackByKind = true
+            )
+        )
+        // No SDH left: the regular track wins over the forced one.
+        assertEquals(
+            1,
+            PlayerTrackBridge.resolveSignature(
+                "eng|subrip|0|0|3",
+                listOf(tracks[0], tracks[2]),
+                allowIdentity = false,
+                rankFallbackByKind = true
             )
         )
     }

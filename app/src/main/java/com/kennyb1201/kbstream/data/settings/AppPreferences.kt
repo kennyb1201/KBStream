@@ -596,9 +596,15 @@ object AppPreferences {
         val chosen = getMaxAutoPlayQuality(context)
         if (!getCellularDataSaver(context)) return chosen
         if (!NetworkMetering.isMetered(context)) return chosen
-        // CAP_AUTO is "whatever is best", the loosest of the ceilings, so it is
-        // the one the saver has to narrow; an explicit 720p stays 720p.
-        return if (chosen == AutoPlayQuality.CAP_AUTO) AutoPlayQuality.CAP_1080 else chosen
+        // A CEILING, not a default (spec D5): the saver caps what the
+        // connection may spend at 1080p, so both ceilings above it narrow to
+        // it - CAP_AUTO ("whatever is best") and an explicit 4K alike. Narrow
+        // only the looser ones: an explicit 720p stays 720p, because a ceiling
+        // never raises what the viewer already limited.
+        return when (chosen) {
+            AutoPlayQuality.CAP_AUTO, AutoPlayQuality.CAP_2160 -> AutoPlayQuality.CAP_1080
+            else -> chosen
+        }
     }
 
     // ── Binge group (Stremio behaviorHints.bingeGroup) ───────────────
@@ -816,8 +822,8 @@ object AppPreferences {
      * FFmpeg decoders play the 10-bit/Hi10P and 4:4:4 profiles release groups
      * ship, which a box's MediaCodec list frequently refuses (or hands out and
      * then fails on). Detection is AnimeDetect's job and the decision is
-     * PlayerEngine.prefersMpv's (both in data/player), which is where the
-     * anime verdict published for a launch is finally applied.
+     * PlayerEngine.prefersMpvForLaunch's (both in data/player), which is where
+     * the launch's anime verdict is finally applied.
      *
      * Off by default. Deliberately NOT part of syncDisplayPrefsBlob, for the
      * same reason the engine itself is not: what a box can decode is a

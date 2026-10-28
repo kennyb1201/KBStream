@@ -901,6 +901,16 @@ class LibraryViewModel(
                 com.kennyb1201.kbstream.data.history.TitleProfileOwnership
                     .snapshot(appContext)
 
+            // Once per batch, not per row: the badges an EXPLICIT mark on this
+            // profile wins the ownership rule below with (see
+            // WatchedStatusRepository.explicitWatchedOverrideKeys). Read live,
+            // so an unmark stops exempting immediately and a profile switch
+            // re-scopes the set.
+            val explicitWatchedKeys =
+                runCatchingCancellable {
+                    watchedRepository.explicitWatchedOverrideKeys()
+                }.getOrDefault(emptySet())
+
             suspend fun resolve(item: LibraryItem): Resolved {
                 val normalizedType = when (item.mediaType.lowercase()) {
                     "tv", "series" -> "series"
@@ -971,7 +981,19 @@ class LibraryViewModel(
                 // completed twin was not, which is the same half-fix in the one
                 // direction that matters most: a CHECKMARK is the stronger
                 // claim. One rule for the pair, so they cannot drift again.
-                if ((watched != null || partiallyWatched != null) &&
+                //
+                // With one exception: a key the viewer marked EXPLICITLY on
+                // this profile outranks the rule. Ownership is name+type, so a
+                // title is "owned elsewhere" even after the viewer marked it
+                // here, and their own mark was being swallowed with the tracker
+                // leak this gate exists for. Either badge key qualifies - both
+                // id flavors are the row's own.
+                val explicitBadgeKeys =
+                    listOfNotNull(watched, partiallyWatched)
+                val explicitlyMarked =
+                    explicitBadgeKeys.any { key -> key in explicitWatchedKeys }
+                if (explicitBadgeKeys.isNotEmpty() &&
+                    !explicitlyMarked &&
                     titleOwnedByAnotherProfile(
                         ownerByTitleKey = badgeTitleOwners,
                         type = normalizedType,

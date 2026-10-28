@@ -1141,16 +1141,17 @@ private fun IntegrationsPaneMobile(
                 }
             )
         }
-        // The one TorBox switch that lets the app WRITE to the account: a
-        // source that is only a torrent hash is added to the cloud when it is
-        // missing, then played. Off by default (see TorBoxResolve).
+        // The one TorBox switch that lets the app WRITE to the account, and it
+        // is CACHED ONLY (spec S2/D7): TorBox Instant serves only torrents its
+        // cache already holds, so this registers one of those and plays it.
+        // Off by default (see TorBoxResolve).
         SyncedToggleMobile(
-            label = "Add missing torrents on play",
-            description = "Pressing a source that is only a torrent hash plays it through " +
-                "TorBox when your account already holds it. With this on, one the cloud " +
-                "does not have yet is added there first - it will appear in your TorBox " +
-                "library, and TorBox may count it against your download quota. Off, " +
-                "nothing is ever added.",
+            label = "Add cached torrents to TorBox on play",
+            description = "TorBox Instant only plays torrents its cache already holds. With " +
+                "this on, pressing such a source registers it in your TorBox account first - " +
+                "it will appear in your library, and TorBox may count it against your " +
+                "download quota - then plays it. Off, only torrents already in your account " +
+                "play. Nothing that is not already cached is ever added.",
             get = AppPreferences::getTorboxResolveCreate,
             set = AppPreferences::setTorboxResolveCreate
         )
@@ -2541,7 +2542,7 @@ private fun InterfacePaneMobile() {
     val context = LocalContext.current
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
     // The device-local rows key on the profile, not on the sync revision (see
-    // rememberProfileRowKey): the PO-token answer is one per device AND profile.
+    // rememberProfileRowKey).
     val profileRowKey = rememberProfileRowKey()
 
     var newEpisodeNotifications by remember(syncedRevision) {
@@ -2567,12 +2568,6 @@ private fun InterfacePaneMobile() {
     }
     var use24h by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUse24HourClock(context))
-    }
-    // Device-local and EXCLUDED, like the TV row: some Fire OS images ship no
-    // usable WebView, so one phone's answer must never switch another device's
-    // minter off (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
-    var youtubePoTokens by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getYouTubePoTokenEnabled(context))
     }
     var railType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
@@ -2718,21 +2713,6 @@ private fun InterfacePaneMobile() {
                 AppPreferences.setHeroTrailerMuted(context, it)
             }
         )
-        // The only user-visible trailer control in Settings is this section, so
-        // the PO-token kill switch closes it (settings reorg §13.1, U1). The
-        // reader is per call, so the flip takes effect without a restart.
-        SettingsToggleMobile(
-            label = "YouTube PO Tokens",
-            description = "Allow the app to mint YouTube tokens for trailer " +
-                "playback. Turning this off may break trailers on some videos; it " +
-                "takes effect immediately, no restart needed.",
-            checked = youtubePoTokens,
-            onChange = {
-                youtubePoTokens = it
-                AppPreferences.setYouTubePoTokenEnabled(context, it)
-            }
-        )
-
         SettingsSectionMobile("Home Rails")
         SettingsToggleMobile(
             label = "Home rail type",

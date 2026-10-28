@@ -881,18 +881,25 @@ internal fun dropTrackerCardsForCompletedTargets(
  * on another device, or before this TV had profiles, cannot be attributed, and
  * hiding it would break the cross-device Continue Watching the tracker feeds
  * exist for.
+ *
+ * MULTI-OWNER (spec C10/D4): the map holds an owner SET per title, so a show
+ * BOTH this profile and a sibling watched - a household cartoon, the reported
+ * case - keeps its card on both profiles. Only a set that excludes the viewing
+ * profile suppresses the card, and an empty set is "no local owner", which
+ * suppresses nothing.
  */
 internal fun trackerCardOwnedByAnotherProfile(
     item: UpNextItem,
-    ownerByTitleKey: Map<String, String>,
+    ownerByTitleKey: Map<String, Set<String>>,
     activeProfileId: String?
 ): Boolean {
     if (!isTrackerSourcedCard(item)) return false
 
     val active = activeProfileId?.takeIf { it.isNotBlank() } ?: return false
-    val owner = ownerByTitleKey[upNextTitleKey(item)] ?: return false
+    val owners = ownerByTitleKey[upNextTitleKey(item)] ?: return false
+    if (owners.isEmpty()) return false
 
-    return owner != active
+    return active !in owners
 }
 
 /**

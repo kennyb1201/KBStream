@@ -137,6 +137,11 @@ object Diagnostics {
         // watched". Absent until something has played (see
         // PlaybackSessionTrace).
         PlaybackSessionTrace.lines().forEach { report.appendLine("session: $it") }
+        // The last outcome of each outbound write leg (spec C11). The outbox
+        // summary above says what is QUEUED; this says whether the last attempt
+        // to write it anywhere actually landed, which is the half a "my
+        // scrobbles stopped" report could never be answered from.
+        TrackerHealth.lines().forEach { report.appendLine(it) }
         // The tail of the last Trakt device-flow attempt: HTTP status, elapsed
         // seconds, code lifetime and resolved state. The release APK carries no
         // debug log and a TV has no logcat, so this is the only way a "code

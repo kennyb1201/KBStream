@@ -131,6 +131,79 @@ class HomeBlobReadSafetyTest {
     }
 
     @Test
+    fun `an addon-id remap does not claim a viewer edit`() {
+        // The remap runs from a MANIFEST REFRESH (a dynamic addon swapped catalog
+        // ids), not from the viewer arranging rails. It used to go through save(),
+        // which restamped the arrangement as edited "now" and published - so a
+        // device that merely refreshed add-ons outranked the sibling's real
+        // move/rename, rejected it, and reverted the arrangement account-wide.
+        val stamp = 111_111L
+        val oldKey = KBHomeOrderPrefs.addonKeyFromManifest(
+            "https://example.test/manifest.json",
+            "movie",
+            "top"
+        )
+        val newKey = KBHomeOrderPrefs.addonKeyFromManifest(
+            "https://example.test/manifest.json",
+            "movie",
+            "top-v2"
+        )
+        KBHomeOrderPrefs.save(context, KBHomeOrder(order = listOf(oldKey)))
+        homeOrder.edit().putLong("home_order_synced_at", stamp).commit()
+
+        KBHomeOrderPrefs.remapAddonKeys(context, mapOf(oldKey to newKey))
+
+        assertEquals(
+            "the position follows the new catalog id",
+            listOf(newKey),
+            KBHomeOrderPrefs.get(context).order
+        )
+        assertEquals(
+            "a refresh must not outrank the sibling's real edit",
+            stamp,
+            homeOrder.getLong("home_order_synced_at", 0L)
+        )
+    }
+
+    @Test
+    fun `a pulled rename lands without touching the arrangement's edit time`() {
+        // The arrangement is one coherent thing and the newer copy owns it - but a
+        // rail's NAME is one label on one row, so a name that arrives on a copy
+        // which lost that race is still merged in, and never over a name this
+        // device already has (see KBHomeOrderPrefs.mergeRenames).
+        val stamp = 222_222L
+        val key = KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU
+        KBHomeOrderPrefs.save(context, KBHomeOrder(order = listOf(key)))
+        val localBlob = homeOrder.getString("home_order_json", null).orEmpty()
+        KBHomeOrderPrefs.save(
+            context,
+            KBHomeOrder(order = listOf(key), renames = mapOf(key to "Because you watched"))
+        )
+        val remoteBlob = homeOrder.getString("home_order_json", null).orEmpty()
+        homeOrder.edit()
+            .putString("home_order_json", localBlob)
+            .putLong("home_order_synced_at", stamp)
+            .commit()
+
+        assertTrue(KBHomeOrderPrefs.mergeRenames(context, remoteBlob))
+
+        assertEquals(
+            "the pulled name is what Home draws",
+            "Because you watched",
+            KBHomeOrderPrefs.get(context).renames[key]
+        )
+        assertEquals(
+            "merged, not adopted: the local edit time is untouched",
+            stamp,
+            homeOrder.getLong("home_order_synced_at", 0L)
+        )
+        assertFalse(
+            "a name already stored here is never overwritten",
+            KBHomeOrderPrefs.mergeRenames(context, remoteBlob)
+        )
+    }
+
+    @Test
     fun `a readable store still writes normally`() {
         // The guard must not be a permanent lock: a clean store is a store.
         val after = BrowseHomeShortcuts.add(context, BrowseHomeShortcut("genres", 35, "Comedy"))

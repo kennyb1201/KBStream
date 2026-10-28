@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
@@ -109,6 +110,31 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var overview: String? = null
     private var totalEpisodesInSeason: Int? = null
     private var runtimeMinutes: Int? = null
+
+    /**
+     * The whole ranked source list this session was launched with, and the
+     * add-on behind each row (see the `sources_json` / `source_addons` extras).
+     *
+     * External used to read neither: a session that fell back into the app lost
+     * its source list and its session context entirely (spec C26), and this
+     * engine could not name the provider it was continuing a binge with.
+     */
+    private var sources: List<Stream> = emptyList()
+    private var sourceAddons: List<String?> = emptyList()
+
+    /** The raw payloads, forwarded verbatim by [playInApp]. */
+    private var sourcesJsonRaw: String? = null
+    private var sourceAddonsJsonRaw: String? = null
+
+    /** The binge identity of the row that is playing: what an advance continues. */
+    private var currentBingeGroup: String? = null
+    private var currentAddonName: String? = null
+
+    /** The next episode's synopsis, when its TMDB row answered (handoff context). */
+    private var pendingNextOverview: String? = null
+
+    /** Random mode: the player chains into random aired episodes, not the next one. */
+    private var randomEpisodes = false
 
     /*
      * One file is not one TMDB episode (see EpisodeScheme).
@@ -348,6 +374,20 @@ class ExternalPlayerActivity : ComponentActivity() {
             episode = correctedEpisode
         }
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
+        // The session-identity line the two in-app engines write (spec C12/D6).
+        // It matters MORE here: this engine's fields are the only description of
+        // an episode another app is playing, and the id it files under is the
+        // only comparison a "wrong episode was marked" report can be checked
+        // against. Same line, same inputs, including the corrected episode.
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            PlaybackHistoryIds.playbackSessionLine(
+                season,
+                episode,
+                episodeStreamId,
+                historyId,
+                bingeScheme
+            )
+        )
         setupBecauseYouWatched()
         setupEndOfEpisodeHandlers()
 
@@ -482,6 +522,24 @@ class ExternalPlayerActivity : ComponentActivity() {
             intent.getLongExtra("start_position_ms", 0L).coerceAtLeast(0L)
         }
         positionMs = startPositionMs
+        // The source list and its session context (spec C26/C6): a hand-off
+        // clones the original launch, so these arrive here exactly as they would
+        // have at the in-app engines. Reading them is what lets an advance name
+        // the provider this binge is continuing with, and what keeps
+        // [playInApp]'s fallback session whole.
+        sourcesJsonRaw = intent.getStringExtra("sources_json")
+        sourceAddonsJsonRaw = intent.getStringExtra("source_addons")
+        val parsedSources = parseSourcesJson(sourcesJsonRaw)
+        sources = parsedSources.withCurrentSource(Stream(url = currentUrl))
+        sourceAddons = addonsFor(
+            streams = sources,
+            parsed = parsedSources,
+            addons = parseSourceAddonsJson(sourceAddonsJsonRaw)
+        )
+        val playingIndex = sources.indexOfFirst { it.url == currentUrl }
+        currentBingeGroup = sources.getOrNull(playingIndex)?.bingeGroup
+        currentAddonName = sourceAddons.getOrNull(playingIndex)?.takeIf { it.isNotBlank() }
+        randomEpisodes = intent.getBooleanExtra("random_episodes", false)
     }
 
     private fun bindViews() {
@@ -941,6 +999,14 @@ class ExternalPlayerActivity : ComponentActivity() {
             putExtra("start_position_ms", positionMs)
             putExtra("from_beginning", positionMs < MIN_RESUME_POSITION_MS)
             historyParentIdOverride?.let { putExtra("history_parent_id", it) }
+            // The session CONTEXT, not just the one URL (spec C26): without the
+            // source list the in-app fallback could not offer "next source",
+            // and a further hand-off out of it had nothing to carry.
+            sourcesJsonRaw?.let { putExtra("sources_json", it) }
+            sourceAddonsJsonRaw?.let { putExtra("source_addons", it) }
+            // Session settings the in-app engine reads from its own extras: a
+            // random-mode binge that fell back in kept chaining in order.
+            putExtra("random_episodes", randomEpisodes)
             if (streamHeaders.isNotEmpty()) {
                 putExtra(
                     "stream_headers",
@@ -1161,6 +1227,10 @@ class ExternalPlayerActivity : ComponentActivity() {
             } ?: return@launch
             if (nextUpPanel?.visibility != View.VISIBLE) return@launch
             pendingNextEpisodeName = nextEp.name
+            // The synopsis the next session opens with: the in-app engines hand
+            // this over, and external left it null so the player fell back to
+            // the CURRENT episode's text (spec C6, full parity).
+            pendingNextOverview = nextEp.overview
             // Spoiler-free mode, the same rule and the same reasoning as the
             // other two engines (see NativePlayerActivity.showNextUpPanel).
             // This panel offers the episode the viewer has NOT reached, so the
@@ -1223,15 +1293,25 @@ class ExternalPlayerActivity : ComponentActivity() {
             append("S${targetSeason}E$targetEpisode")
             if (!pendingNextEpisodeName.isNullOrBlank()) append(" \u2022 $pendingNextEpisodeName")
         }
+        // FULL PARITY (spec C6/D3): external is not a terminal engine, so the
+        // advance carries everything the in-app engines' handoff carries. These
+        // used to be nulled/false here, which is exactly what made a binge stop
+        // continuing: `PendingPlay.isNextEpisodeAdvance` is derived from the
+        // binge identity, so with both blank MainActivity took the CACHE-REPLAY
+        // branch instead of the resolver branch - the next episode replayed the
+        // previous one's ordering (and lost the group for the one after it).
         val pending = NextEpisodeResult.PendingNext(
             season = targetSeason,
             episode = targetEpisode,
             title = label,
             streamId = nextStreamId(targetSeason, nextFileEpisodeFor(targetSeason, targetEpisode)),
-            runtimeMinutes = null,
-            bingeGroup = null,
-            addonName = null,
-            randomEpisodes = false
+            // The next episode's own length, when this session knows it: it is
+            // what lets the ranker score a file's size as a density.
+            runtimeMinutes = runtimeMinutes,
+            bingeGroup = currentBingeGroup,
+            addonName = currentAddonName,
+            overview = pendingNextOverview,
+            randomEpisodes = randomEpisodes
         )
         NextEpisodeResult.persist(this, pending)
         setResult(
@@ -1242,7 +1322,13 @@ class ExternalPlayerActivity : ComponentActivity() {
                 putExtra("next_season", pending.season)
                 putExtra("next_title", pending.title)
                 putExtra("next_stream_id", pending.streamId)
-                putExtra("next_random", false)
+                // The context extras the in-app engines put here too: without
+                // them the result callback rebuilt the advance from the five
+                // classic fields and dropped the identity it was handed.
+                putExtra("next_binge_group", pending.bingeGroup)
+                putExtra("next_addon_name", pending.addonName)
+                putExtra("next_overview", pending.overview)
+                putExtra("next_random", pending.randomEpisodes)
             }
         )
         finish()
@@ -1546,9 +1632,11 @@ class ExternalPlayerActivity : ComponentActivity() {
                 "save progress: ${safePosition}ms / ${durationMs}ms completed=$completed"
             )
 
-            // The write goes through PlaybackHistoryWriter, which files the
-            // row under the profile this SESSION started on and refuses it if
-            // the user switched profiles while it was playing.
+            // The write goes through PlaybackHistoryWriter, which REDIRECTS to
+            // the profile this SESSION started on: a switch mid-playback does
+            // not refuse the row, it files it where the session came from
+            // (spec C33). The only refusal is a session whose profile no longer
+            // exists, which is logged loudly.
             val entry =
                 WatchHistoryEntity(
                     id = historyId,
@@ -1572,7 +1660,17 @@ class ExternalPlayerActivity : ComponentActivity() {
                     // the writer reads it back from the row it replaces.
                     completedAt = null
                 )
-            PlaybackHistoryWriter.write(this@ExternalPlayerActivity, sessionProfileId, entry)
+            val written =
+                PlaybackHistoryWriter.write(this@ExternalPlayerActivity, sessionProfileId, entry)
+            // The handoff/exit `filed` note both in-app engines write (spec
+            // C12): "was this row stored, and under which profile". A capture
+            // without it could not tell a refused write (a profile switch) from
+            // a save that never ran.
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "filed s=${season ?: "-"} e=${episode ?: "-"} row=$historyId " +
+                    "completed=$completed written=$written " +
+                    "profile=${sessionProfileId ?: "-"} pos=${safePosition}ms"
+            )
             if (completed) pushCompletion()
         }
     }
@@ -1696,34 +1794,51 @@ class ExternalPlayerActivity : ComponentActivity() {
     }
 
     /** Records a finished title on Trakt, once per session. */
-    private suspend fun syncCompletionToTrakt() {
-        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
+    /**
+     * The Trakt leg of a completion. False only when an attempted push FAILED,
+     * so the caller can release its latch and retry in-session (spec C13);
+     * "nothing to do" answers true.
+     */
+    private suspend fun syncCompletionToTrakt(): Boolean {
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return true
         val trakt = TraktRepository.getInstance(this)
-        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return
+        if (!trakt.isConfigured() || !trakt.hasToken() || parentId.isBlank()) return true
         val tmdb = tmdbId()
-        when (parentType.lowercase()) {
+        return when (parentType.lowercase()) {
             "movie" -> trakt.pushWatchedMovie(parentId = parentId, tmdbId = tmdb)
             "series", "show", "tv" -> {
                 val s = season
                 val e = episode
                 if (s != null && e != null) {
+                    var pushed = true
                     coveredTmdbEpisodes(e).forEach { coveredEpisode ->
-                        trakt.pushWatchedEpisode(
+                        val ok = trakt.pushWatchedEpisode(
                             showId = parentId,
                             season = s,
                             episode = coveredEpisode,
                             tmdbId = tmdb
                         )
+                        if (!ok) pushed = false
                     }
+                    pushed
+                } else {
+                    true
                 }
             }
+            else -> true
         }
     }
 
     private suspend fun scrobbleMdbList(action: String, progress: Double) {
         if (MdbListClient.apiKey(this).isBlank() || parentId.isBlank()) return
+        // The session-profile guard the other two trackers already had, at fire
+        // time and again after the suspend (spec C2). Without it a profile
+        // switch mid-session posted this session to the NEW profile's MDBList
+        // account.
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
         val imdbId = parentId.takeIf { it.startsWith("tt") }
         val tmdb = tmdbId()
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) return
         val isMovie = parentType.lowercase() == "movie"
         when (action) {
             "start" -> MdbListClient.scrobbleStart(
@@ -1740,7 +1855,13 @@ class ExternalPlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Marks the title watched on both trackers, once per session. */
+    /**
+     * Marks the title watched on both trackers, once per session.
+     *
+     * The latch is set before the legs run (no double-post from a second
+     * completion tick) and RELEASED when an attempted leg failed, so the next
+     * tick retries in-session instead of the completion being lost (spec C13).
+     */
     private fun pushCompletion() {
         if (trackersMarkedWatched || parentId.isBlank()) return
         if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) {
@@ -1751,59 +1872,126 @@ class ExternalPlayerActivity : ComponentActivity() {
         }
         trackersMarkedWatched = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            runCatchingCancellable {
-                val simkl = SimklRepository.getInstance(this@ExternalPlayerActivity)
-                val tmdb = tmdbId()
-                when (parentType.lowercase()) {
-                    "movie" -> simkl.pushWatchedMovie(
-                        imdbId = parentId,
-                        title = itemName,
-                        tmdbId = tmdb
+            // A departed session is not a failure: nothing to retry against.
+            var departed = false
+            val simklOk = runCatchingCancellable {
+                // TOCTOU: the guard above ran before this coroutine's first
+                // suspension, and Simkl resolves the ACTIVE profile's token at
+                // CALL time - so re-check here, as Native does.
+                if (!PlaybackHistoryWriter.sessionStillActive(
+                        this@ExternalPlayerActivity, sessionProfileId
                     )
+                ) {
+                    departed = true
+                    false
+                } else {
+                    val simkl = SimklRepository.getInstance(this@ExternalPlayerActivity)
+                    val tmdb = tmdbId()
+                    when (parentType.lowercase()) {
+                        "movie" -> simkl.pushWatchedMovie(
+                            imdbId = parentId,
+                            title = itemName,
+                            tmdbId = tmdb
+                        )
 
-                    "series", "show", "tv" -> {
-                        val showSeason = season
-                        val showEpisode = episode
-                        if (showSeason != null && showEpisode != null) {
-                            // One file can cover several TMDB episodes (see
-                            // coveredTmdbEpisodes): every one of them is marked,
-                            // or the second segment of a doubled file stays
-                            // unwatched on the tracker.
-                            var pushed = true
-                            coveredTmdbEpisodes(showEpisode).forEach { coveredEpisode ->
-                                val ok = simkl.pushWatchedEpisode(
-                                    showImdbId = parentId,
-                                    season = showSeason,
-                                    episode = coveredEpisode,
-                                    title = itemName,
-                                    tmdbId = tmdb
-                                )
-                                if (!ok) pushed = false
+                        "series", "show", "tv" -> {
+                            val showSeason = season
+                            val showEpisode = episode
+                            if (showSeason != null && showEpisode != null) {
+                                // One file can cover several TMDB episodes (see
+                                // coveredTmdbEpisodes): every one of them is
+                                // marked, or the second segment of a doubled
+                                // file stays unwatched on the tracker.
+                                var pushed = true
+                                coveredTmdbEpisodes(showEpisode).forEach { coveredEpisode ->
+                                    val ok = simkl.pushWatchedEpisode(
+                                        showImdbId = parentId,
+                                        season = showSeason,
+                                        episode = coveredEpisode,
+                                        title = itemName,
+                                        tmdbId = tmdb
+                                    )
+                                    if (!ok) pushed = false
+                                }
+                                pushed
+                            } else {
+                                false
                             }
-                            pushed
-                        } else {
-                            false
                         }
-                    }
 
-                    else -> false
+                        else -> false
+                    }
                 }
             }.onFailure { Log.w(TAG, "Simkl completion sync failed", it) }
-            runCatchingCancellable {
-                if (MdbListClient.apiKey(this@ExternalPlayerActivity).isNotBlank()) {
+                .getOrDefault(false)
+            if (departed) {
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "tracker completion skipped after suspend: session profile departed"
+                )
+                return@launch
+            }
+            val mdbListOk = runCatchingCancellable {
+                val key = MdbListClient.apiKey(this@ExternalPlayerActivity)
+                if (key.isBlank()) {
+                    true
+                } else {
                     val isMovie = parentType.lowercase() == "movie"
-                    MdbListClient.pushWatched(
-                        this@ExternalPlayerActivity,
-                        mediaType = if (isMovie) "movie" else "episode",
-                        imdbId = parentId.takeIf { it.startsWith("tt") },
-                        tmdbId = tmdbId(),
-                        season = season,
-                        episode = episode
-                    )
+                    val imdb = parentId.takeIf { it.startsWith("tt") }
+                    val tmdb = tmdbId()
+                    val showSeason = season
+                    val showEpisode = episode
+                    if (isMovie || showSeason == null || showEpisode == null) {
+                        MdbListClient.pushWatched(
+                            this@ExternalPlayerActivity,
+                            mediaType = if (isMovie) "movie" else "episode",
+                            imdbId = imdb,
+                            tmdbId = tmdb,
+                            season = showSeason,
+                            episode = showEpisode
+                        )
+                    } else {
+                        // Covered-episode fan-out, matching Simkl and Trakt
+                        // (spec C15).
+                        MdbListClient.pushWatchedEpisodes(
+                            this@ExternalPlayerActivity,
+                            imdbId = imdb,
+                            tmdbId = tmdb,
+                            season = showSeason,
+                            episodes = coveredTmdbEpisodes(showEpisode)
+                        )
+                    }
                 }
             }.onFailure { Log.w(TAG, "MDBList completion sync failed", it) }
-            runCatchingCancellable { syncCompletionToTrakt() }
+                .getOrDefault(false)
+            val traktOk = runCatchingCancellable { syncCompletionToTrakt() }
                 .onFailure { Log.w(TAG, "Trakt completion sync failed", it) }
+                .getOrDefault(false)
+            // Each leg's outcome, for COPY DIAGNOSTICS (spec C11).
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "simkl", simklOk
+            )
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "mdblist", mdbListOk
+            )
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "trakt", traktOk
+            )
+            if (!simklOk || !mdbListOk || !traktOk) {
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
+                    "tracker",
+                    "completion leg failed (simkl=$simklOk mdblist=$mdbListOk " +
+                        "trakt=$traktOk)"
+                )
+                trackersMarkedWatched = false
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "tracker completion incomplete (simkl=$simklOk mdblist=$mdbListOk " +
+                        "trakt=$traktOk); latch reset for an in-session retry"
+                )
+                Log.w(
+                    TAG,
+                    "completion legs simkl=$simklOk mdblist=$mdbListOk trakt=$traktOk; retrying"
+                )
+            }
         }
     }
 
