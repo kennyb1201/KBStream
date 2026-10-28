@@ -971,10 +971,7 @@ internal class FrameRateMatcher(
             FrameRateMatch.describeReasserted(heldModeId, currentModeId)
         )
         PlaybackSessionTrace.note(
-            PlaybackSessionTrace.describe(
-                cause = "AFR re-asked the engaged mode",
-                detail = "mode=$heldModeId was $currentModeId"
-            )
+            "afr re-asked the engaged mode: mode=$heldModeId was $currentModeId"
         )
         Log.i(TAG, "panel left the engaged mode $heldModeId for $currentModeId; re-asked")
     }
@@ -1140,10 +1137,8 @@ internal class FrameRateMatcher(
                         FrameRateMatch.describeAlreadyInBestMode(contentFps, best)
                     )
                     PlaybackSessionTrace.note(
-                        PlaybackSessionTrace.describe(
-                            cause = "AFR took over an already-matched panel",
-                            detail = "mode=${best.id} ${rate(contentFps)} fps"
-                        )
+                        "afr took over an already-matched panel: mode=${best.id} " +
+                            "${rate(contentFps)} fps"
                     )
                     Log.i(
                         TAG,
@@ -1215,11 +1210,8 @@ internal class FrameRateMatcher(
             FrameRateMatch.describeSurfaceRequest(request, strategy != null)
         )
         PlaybackSessionTrace.note(
-            PlaybackSessionTrace.describe(
-                cause = "AFR asked the surface",
-                detail = "${request.frameRate} fps mode=$modeId nonSeamless=" +
-                    (strategy != null)
-            )
+            "afr asked the surface: ${request.frameRate} fps mode=$modeId " +
+                "nonSeamless=${strategy != null}"
         )
         Log.i(TAG, "surface asked for ${request.frameRate} fps (non-seamless=${strategy != null})")
         val serial = ++askSerial
@@ -1244,11 +1236,8 @@ internal class FrameRateMatcher(
             FrameRateMatch.describeModeSwitch(contentFps, chosen, currentModeId)
         )
         PlaybackSessionTrace.note(
-            PlaybackSessionTrace.describe(
-                cause = "AFR asked for a mode",
-                detail = "mode=${chosen.id} ${chosen.refreshRate} Hz for " +
-                    "${rate(contentFps)} fps (was $currentModeId)"
-            )
+            "afr asked for a mode: mode=${chosen.id} ${chosen.refreshRate} Hz for " +
+                "${rate(contentFps)} fps (was $currentModeId)"
         )
         Log.i(
             TAG,
@@ -1321,14 +1310,8 @@ internal class FrameRateMatcher(
         // a session ring that records what was asked but never what came of it
         // cannot corroborate an AFR session at all.
         PlaybackSessionTrace.note(
-            PlaybackSessionTrace.describe(
-                cause = if (afterModeId != beforeModeId) {
-                    "AFR panel moved"
-                } else {
-                    "AFR panel unmoved"
-                },
-                detail = "mode=$beforeModeId->$afterModeId at $afterRate Hz step=$step"
-            )
+            "afr ${if (afterModeId != beforeModeId) "panel moved" else "panel unmoved"}: " +
+                "mode=$beforeModeId->$afterModeId at $afterRate Hz step=$step"
         )
         when (step) {
             // Both looks are spent. Still not moved means the panel refused a
@@ -1370,11 +1353,9 @@ internal class FrameRateMatcher(
             FrameRateMatch.describeModeRefused(contentFps, requested, afterModeId)
         )
         PlaybackSessionTrace.note(
-            PlaybackSessionTrace.describe(
-                cause = "AFR mode refused",
-                detail = "asked mode=${requested.id} at ${rate(requested.refreshRate)} Hz " +
-                    "for ${rate(contentFps)} fps, panel in $afterModeId; re-asked once"
-            )
+            "afr mode refused: asked mode=${requested.id} at " +
+                "${rate(requested.refreshRate)} Hz for ${rate(contentFps)} fps, " +
+                "panel in $afterModeId; re-asked once"
         )
         Log.i(TAG, "mode ${requested.id} still not taken; re-asked the mode, no surface request")
     }
