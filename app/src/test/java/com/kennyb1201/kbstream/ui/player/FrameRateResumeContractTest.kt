@@ -82,8 +82,14 @@ class FrameRateResumeContractTest {
             mpv.contains(
                 "surface?.videoFrameRate()?.let { fps -> " +
                     "if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps " +
-                    "frameRateMatcher?.onContentFrameRate(fps) }"
+                    "ensureFrameRateMatcher()?.onContentFrameRate(fps, FrameRateSource.RESUME) }"
             )
+        )
+        assertTrue(
+            "offered as RESUME, not as a fresh PLAYER report (audit AFR C11): a PLAYER " +
+                "offer runs the whole engage ladder, so a return more than 90 s in was " +
+                "refused as late and could fall through to a vote on the live surface",
+            mpv.contains("ensureFrameRateMatcher()?.onContentFrameRate(fps, FrameRateSource.RESUME)")
         )
     }
 
@@ -120,8 +126,9 @@ class FrameRateResumeContractTest {
             )
             assertTrue(
                 "$who re-offers it as a RESUME, so the diagnostics row can say the rate was " +
-                    "measured earlier rather than reported now",
-                src.contains("frameRateMatcher?.onContentFrameRate(fps, FrameRateSource.RESUME)")
+                    "measured earlier rather than reported now (through the matcher " +
+                    "getter, which also creates it when the setting was just switched on)",
+                src.contains("?.onContentFrameRate(fps, FrameRateSource.RESUME)")
             )
             assertTrue(
                 "$who must log the re-arm under the probe's own tag, or a field capture of " +
@@ -161,8 +168,12 @@ class FrameRateResumeContractTest {
             )
             assertTrue(
                 "$who still only builds the matcher when the setting is on and does not have one " +
-                    "already, so a session's original mode is captured once",
-                src.contains("frameRateMatcher == null && AppPreferences.getMatchFrameRate(")
+                    "already, so a session's original mode is captured once - and now also only on " +
+                    "a television (audit AFR S4 / I7)",
+                src.contains("private fun ensureFrameRateMatcher(): FrameRateMatcher? {") &&
+                    src.contains("frameRateMatcher?.let { return it }") &&
+                    src.contains("if (!AppPreferences.getMatchFrameRate(this)) return null") &&
+                    src.contains("if (!com.kennyb1201.kbstream.FormFactor.isTv) return null")
             )
         }
         assertTrue(
@@ -241,8 +252,10 @@ class FrameRateResumeContractTest {
             native.contains("isPlaybackActive = { exoPlayer?.playWhenReady == true }")
         )
         assertTrue(
-            "and mpv from its pause property, at both places the matcher is built",
-            mpv.split("isPlaybackActive = { surface?.isPaused() == false }").size == 3
+            "and mpv from its pause property, at the one factory every creation path " +
+                "goes through (session start, mpv's own rate report, a source switch)",
+            mpv.split("isPlaybackActive = { surface?.isPaused() == false }").size == 2 &&
+                mpv.split("= FrameRateMatcher(").size == 2
         )
     }
 

@@ -119,6 +119,11 @@ object Diagnostics {
         // session whose player never had a decoder problem (see
         // PlaybackEngineTrace), so a clean report stays short.
         PlaybackEngineTrace.summary()?.let { report.appendLine(it) }
+        // Frame-rate matching, which the report could not show at all: the
+        // panel, what was asked for and what the panel answered. Absent on a
+        // report whose install never got a panel line (see AfrTrace), so it
+        // never reads as "AFR failed" when nothing played.
+        AfrTrace.lines().forEach { report.appendLine(it) }
         // What the last sports-hub matching pass cost, stage by stage. These
         // PerfTrace samples are the only place the figures live - logcat is
         // exactly what is not reachable from the couch, so the pass a viewer

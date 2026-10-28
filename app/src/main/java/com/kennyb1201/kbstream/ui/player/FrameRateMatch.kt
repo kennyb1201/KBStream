@@ -10,6 +10,8 @@ import android.util.Log
 import android.view.Display
 import android.view.Surface
 import android.view.WindowManager
+import com.kennyb1201.kbstream.data.reporting.AfrTrace
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
@@ -45,7 +47,22 @@ import kotlinx.coroutines.flow.asStateFlow
  *    24 Hz would make the whole TV interface — menus, launcher, everything —
  *    look wrong, which is far worse than the judder this fixes.
  */
-internal data class DisplayModeInfo(val id: Int, val refreshRate: Double)
+internal data class DisplayModeInfo(
+    val id: Int,
+    val refreshRate: Double,
+    /**
+     * The mode's own pixel size, or 0 when the platform would not say.
+     *
+     * Carried because a mode list is not sorted by anything useful: a panel can
+     * list 1080p@23.976 and 2160p@23.976, and until this was read the winner at
+     * the target rate was whichever had the lower mode id - the platform's
+     * listing order, not the picture. A 2160p film dropped to a 1080p mode is a
+     * real loss and one the diagnostics row could not even show (audit AFR C3).
+     * Zero means "unknown", and an unknown size never disqualifies a mode.
+     */
+    val width: Int = 0,
+    val height: Int = 0
+)
 
 /**
  * Which half of the player supplied a content rate: the player's own track
@@ -201,9 +218,25 @@ internal object FrameRateMatch {
      * that appeared mid-file - and the panel is left exactly where it is. The
      * diagnostics row says so, so the next field report can name the late claim.
      *
-     * [FrameRateSource.RESUME] is the one exception: its whole job is repairing
-     * a panel the platform put back while the player was away, and that repair
-     * can be hours into a session.
+     * Two exceptions, both decided rather than inferred (audit AFR C7):
+     *
+     *  - [FrameRateSource.RESUME]'s whole job is repairing a panel the platform
+     *    put back while the player was away, and that repair can be hours into a
+     *    session.
+     *  - [FrameRateSource.PROBE_RETRY] is definitionally the FIRST usable rate
+     *    for this title, arriving late because the first attempt lost to a slow
+     *    host. Refusing it would leave a title unmatched for no reason the
+     *    window was written for - the rule exists to stop a mid-film mode
+     *    change, and no mode has been engaged at that point.
+     *
+     * A first [FrameRateSource.PROBE] result that somehow lands this late is
+     * still refused when the source has already offered a rate: the probe is
+     * bounded by 6 s, so a late one means the player was rebuilt, which is
+     * exactly what the window is about.
+     *
+     * What the age is measured FROM is [engageAgeMs]: this source's first usable
+     * offer, so a slow host whose opening only reports after 90 s is not refused
+     * for the whole title (audit AFR S9).
      */
     const val ENGAGE_WINDOW_MS = 90_000L
 
@@ -212,7 +245,58 @@ internal object FrameRateMatch {
      * the rate. Pure, so the rule is unit-tested rather than only observed.
      */
     fun engageWindowAllows(ageMs: Long, source: FrameRateSource): Boolean =
-        source == FrameRateSource.RESUME || ageMs <= ENGAGE_WINDOW_MS
+        source == FrameRateSource.RESUME ||
+            source == FrameRateSource.PROBE_RETRY ||
+            ageMs <= ENGAGE_WINDOW_MS
+
+    /**
+     * The age an offer is measured against: from this SOURCE's first usable
+     * offer once it has made one, otherwise from the moment the source opened
+     * (audit AFR S9).
+     *
+     * [ENGAGE_WINDOW_MS] used to be measured from the matcher's construction,
+     * and construction happens inside `createPlayer` - so a slow host whose first
+     * track report (or first probe result) only landed after 90 s lost frame-rate
+     * matching for the whole title, even though the picture had only just
+     * started. The window exists to stop a mode change under a film that is
+     * already playing, and "already playing" is measured from the first rate this
+     * source offered, not from the moment the player object was built.
+     *
+     * A REBUILT player does not re-anchor it: a rebuild is not a new source
+     * (only [FrameRateMatcher.beginSource] is, for a source switch), so a track
+     * re-reported thirty minutes into a film is still refused as late - which is
+     * the whole point of the rule.
+     */
+    fun engageAgeMs(nowMs: Long, openedAtMs: Long, firstOfferAtMs: Long?): Long =
+        nowMs - (firstOfferAtMs ?: openedAtMs)
+
+    /**
+     * [modes] with every mode SMALLER than [current] removed, so an AFR switch
+     * can never trade resolution for refresh rate (audit AFR C3).
+     *
+     * The ladder's whole vocabulary is refresh rate, so on a panel that offers
+     * the target rate at two resolutions the old tie-break (lowest mode id) was
+     * a coin toss - and losing it meant a 4K film played at 1080p with the
+     * diagnostics row still saying `id@23.976`, which reads as success. Modes
+     * whose size the platform did not report are kept: unknown is not smaller.
+     *
+     * The fallback matters: a panel that lists only scaled modes (or reports the
+     * current one at a size no other mode reaches) would otherwise be left with
+     * an empty list and lose frame-rate matching entirely, which is worse than
+     * the downgrade. Nothing is filtered when the current size is unknown.
+     */
+    fun atLeastResolution(
+        modes: List<DisplayModeInfo>,
+        current: DisplayModeInfo?
+    ): List<DisplayModeInfo> {
+        val width = current?.width ?: 0
+        val height = current?.height ?: 0
+        if (width <= 0 || height <= 0) return modes
+        val bigEnough = modes.filter { mode ->
+            mode.width <= 0 || mode.height <= 0 || (mode.width >= width && mode.height >= height)
+        }
+        return bigEnough.ifEmpty { modes }
+    }
 
     /**
      * The diagnostics line for a panel that left the mode this session engaged,
@@ -221,6 +305,27 @@ internal object FrameRateMatch {
     fun describeReasserted(engagedModeId: Int, currentModeId: Int): String =
         "panel left the engaged mode $engagedModeId for $currentModeId; asked for " +
             "$engagedModeId again (the film's rate is the one this session chose)"
+
+    /**
+     * The diagnostics line for a held mode the panel no longer offers at all -
+     * an input or sink change that took the engaged mode off the list (audit AFR
+     * S7). Re-asking would be a request that cannot land.
+     */
+    fun describeModeGone(engagedModeId: Int, currentModeId: Int): String =
+        "panel left the engaged mode $engagedModeId for $currentModeId and no longer " +
+            "offers $engagedModeId; nothing re-asked (a different display is attached)"
+
+    /**
+     * ` (1920x1080)` when the platform named the mode's size, otherwise
+     * nothing.
+     *
+     * The size is what makes the resolution rule in [atLeastResolution]
+     * checkable from a report (audit AFR C3): without it a line reading
+     * `2@23.976` cannot tell a 4K mode from a 1080p one, and dropping to the
+     * smaller mode for the right rate looked exactly like success.
+     */
+    internal fun sizeSuffix(mode: DisplayModeInfo): String =
+        if (mode.width > 0 && mode.height > 0) " (${mode.width}x${mode.height})" else ""
 
     /** The diagnostics line for a rate offered after [ENGAGE_WINDOW_MS]. */
     fun describeLateOffer(contentFps: Double?, ageMs: Long): String {
@@ -282,6 +387,24 @@ internal object FrameRateMatch {
     }
 
     /**
+     * The better of two modes the ladder has already judged equal on rate: the
+     * larger picture first, then the lower id.
+     *
+     * A panel can list the target rate at more than one resolution (1080p and
+     * 2160p at 23.976 is the common pair), and the old tie-break was the mode
+     * id - the platform's listing order, not the picture (audit AFR C3).
+     * [atLeastResolution] already refuses a mode SMALLER than the panel's
+     * current one; this is what picks the bigger of two modes that both pass.
+     * Unknown sizes compare equal, so those ties still fall back to the id.
+     */
+    private fun prefersOver(candidate: DisplayModeInfo, current: DisplayModeInfo): Boolean {
+        val candidatePixels = candidate.width.toLong() * candidate.height
+        val currentPixels = current.width.toLong() * current.height
+        return candidatePixels > currentPixels ||
+            (candidatePixels == currentPixels && candidate.id < current.id)
+    }
+
+    /**
      * Step 1: the closest mode that is an exact integer multiple of the content
      * within [TOLERANCE], small multiple first. Null when the panel offers none.
      */
@@ -309,7 +432,7 @@ internal object FrameRateMatch {
                 currentBest == null -> true
                 multiple != bestMultiple -> multiple < bestMultiple
                 else -> diff < bestDiff - 1e-9 ||
-                    (diff <= bestDiff + 1e-9 && mode.id < currentBest.id)
+                    (diff <= bestDiff + 1e-9 && prefersOver(mode, currentBest))
             }
             if (better) {
                 best = mode
@@ -340,7 +463,7 @@ internal object FrameRateMatch {
             val better = when {
                 currentBest == null -> true
                 diff < bestDiff - 1e-9 -> true
-                diff <= bestDiff + 1e-9 && mode.id < currentBest.id -> true
+                diff <= bestDiff + 1e-9 && prefersOver(mode, currentBest) -> true
                 else -> false
             }
             if (better) {
@@ -377,7 +500,7 @@ internal object FrameRateMatch {
             val better = when {
                 currentBest == null -> true
                 error < bestError - 1e-9 -> true
-                error <= bestError + 1e-9 && mode.id < currentBest.id -> true
+                error <= bestError + 1e-9 && prefersOver(mode, currentBest) -> true
                 else -> false
             }
             if (better) {
@@ -438,13 +561,13 @@ internal object FrameRateMatch {
     fun describeModes(modes: List<DisplayModeInfo>, currentModeId: Int): String {
         val now = modes.firstOrNull { it.id == currentModeId }
         val showing = if (now != null) {
-            "mode ${now.id} at ${rate(now.refreshRate)} Hz"
+            "mode ${now.id} at ${rate(now.refreshRate)} Hz${sizeSuffix(now)}"
         } else {
             "mode $currentModeId (not in the panel's list)"
         }
         if (modes.isEmpty()) return "$showing; the panel reports no modes at all"
         val listed = modes.take(MAX_LISTED_MODES)
-            .joinToString(", ") { "${it.id}@${rate(it.refreshRate)}" }
+            .joinToString(", ") { "${it.id}@${rate(it.refreshRate)}${sizeSuffix(it)}" }
         val more = modes.size - MAX_LISTED_MODES
         val rest = if (more > 0) ", +$more more" else ""
         val count = if (modes.size == 1) "1 mode" else "${modes.size} modes"
@@ -636,11 +759,28 @@ internal class FrameRateMatcher(
     private val originalPreferredModeId = activity.window.attributes.preferredDisplayModeId
     private val handler = Handler(Looper.getMainLooper())
 
-    /** When this session opened, for [FrameRateMatch.engageWindowAllows]. */
-    private val openedAtMs = SystemClock.elapsedRealtime()
+    /**
+     * When the CURRENT SOURCE opened, for [FrameRateMatch.engageWindowAllows].
+     *
+     * Per source, not per activity (audit AFR C1). The matcher is created once
+     * per activity - the Native player guards on `frameRateMatcher == null`, MPV
+     * keeps it until `onDestroy` - so a field measured from construction
+     * refused every offer after the first 90 s of the ACTIVITY, which is why an
+     * in-player source switch or a live zap in a long session got no mode switch
+     * at all. [beginSource] restarts it; the comments' "no HDMI renegotiation
+     * under a playing film" rationale still holds, because the window that
+     * matters is the one measured from the source's own opening.
+     */
+    private var openedAtMs = SystemClock.elapsedRealtime()
 
-    /** The mode this session asked for by id, or [UNSET] when it has asked for none. */
-    private var appliedModeId = UNSET
+    /**
+     * The mode this session holds the panel to: asked for by id, or taken over
+     * by finding the panel already in it. There is one field rather than a
+     * "requested" one plus a "held" one (audit AFR C5): a takeover makes no
+     * request, so a session keyed on the requested id alone had nothing for
+     * [verifyEngagedMode] to hold even though it owns the restore.
+     */
+    private var heldModeId = UNSET
 
     /**
      * Whether leaving still owes the panel a restore.
@@ -673,6 +813,30 @@ internal class FrameRateMatcher(
 
     /** Bumped per request, so only the newest second look runs. */
     private var askSerial = 0
+
+    /**
+     * The last rate and source offered, and whether that offer did anything.
+     *
+     * [apply] runs the whole ladder - display read, mode list, panel string, a
+     * diagnostics rewrite and possibly a fresh confirm that drops the previous
+     * one's second look - and the player is allowed to call it as often as it
+     * likes. media3 can report several video formats per group, so a
+     * multi-format track list re-ran all of that per format, mid-opening (audit
+     * AFR C10). A repeat of the same rate from the same half of the app, after
+     * something has already been engaged, is a no-op by definition.
+     */
+    private var lastOfferRate: Double? = null
+    private var lastOfferSource: FrameRateSource? = null
+
+    /**
+     * When this SOURCE first offered a usable rate, or null before it has (audit
+     * AFR S9).
+     *
+     * The engage window is measured from here rather than from construction, so a
+     * slow host's late first reading is still the opening of its own picture.
+     * Reset by [beginSource], because a switched source opens its window again.
+     */
+    private var firstOfferAtMs: Long? = null
 
     /** Set by [release]; a second look that lands after it does nothing. */
     private var released = false
@@ -722,6 +886,35 @@ internal class FrameRateMatcher(
     }
 
     /**
+     * Starts a new SOURCE inside this activity (audit AFR C1).
+     *
+     * The matcher is built once per activity while a source switch rebuilds the
+     * player, so everything measured from construction was measured from the
+     * previous title: the engage window expired after 90 s and the next source
+     * was refused as a "late" offer, and a take-over from the previous source
+     * kept [heldModeId] pointing at a mode this source never asked for. Both are
+     * per-source facts.
+     *
+     * [restoreOnRelease] and [originalPreferredModeId] are deliberately NOT
+     * reset: the pre-title mode is still what the way out owes, and a new
+     * "original" captured now would be the film rate this session itself set.
+     */
+    fun beginSource() {
+        cancelPending()
+        openedAtMs = SystemClock.elapsedRealtime()
+        heldModeId = UNSET
+        reassertedMode = false
+        lastVerifyMs = 0L
+        // A new source's first offer is news even when it happens to repeat
+        // the previous source's rate (audit AFR C10's dedupe is per source).
+        lastOfferRate = null
+        lastOfferSource = null
+        // Its window starts with its own first offer (audit AFR S9).
+        firstOfferAtMs = null
+        Log.i(TAG, "new source: engage window restarted")
+    }
+
+    /**
      * Holds the panel to the mode this session engaged.
      *
      * The engage ladder runs once, in the opening seconds, and then never looks
@@ -739,24 +932,51 @@ internal class FrameRateMatcher(
      * The repair re-asks the mode this session already chose - [apply]'s engage
      * window still refuses to pick a NEW mode mid-film.
      *
-     * Nothing happens for a session that never asked by id: an "already in the
-     * best mode" session has no request to hold the panel to.
+     * Held is [heldModeId], which a request by id sets and a TOOK-OVER panel
+     * sets too: a session that found the panel already at the film rate asked
+     * for nothing, but it is still the session that owes the restore, and it was
+     * precisely the one that used to stop holding (audit AFR C5). Nothing
+     * happens for a session that never engaged at all.
      */
     fun verifyEngagedMode() {
-        if (released || appliedModeId == UNSET || reassertedMode) return
+        if (released || heldModeId == UNSET || reassertedMode) return
         if (!isPlaybackActive()) return
         val now = SystemClock.elapsedRealtime()
         if (now - lastVerifyMs < VERIFY_INTERVAL_MS) return
         lastVerifyMs = now
         val display = displayOf() ?: return
         val currentModeId = runCatching { display.mode.modeId }.getOrNull() ?: return
-        if (currentModeId == appliedModeId) return
+        if (currentModeId == heldModeId) return
+        // A sink change can take the engaged mode off the panel's own list
+        // (audit AFR S7): re-asserting an id the new sink does not offer is a
+        // request that cannot land, so check the list before asking. An empty
+        // list means the platform would not say, and the id came from this panel
+        // minutes earlier - ask anyway, the platform is allowed to refuse.
+        val modes = supportedModes(display)
+        if (modes.isNotEmpty() && modes.none { it.id == heldModeId }) {
+            reassertedMode = true
+            FrameRateDiagnostics.setOutcome(
+                FrameRateMatch.describeModeGone(heldModeId, currentModeId)
+            )
+            Log.i(
+                TAG,
+                "panel left the engaged mode $heldModeId and no longer offers it " +
+                    "(in $currentModeId); not re-asked"
+            )
+            return
+        }
         reassertedMode = true
-        setPreferredModeId(appliedModeId)
+        setPreferredModeId(heldModeId)
         FrameRateDiagnostics.setOutcome(
-            FrameRateMatch.describeReasserted(appliedModeId, currentModeId)
+            FrameRateMatch.describeReasserted(heldModeId, currentModeId)
         )
-        Log.i(TAG, "panel left the engaged mode $appliedModeId for $currentModeId; re-asked")
+        PlaybackSessionTrace.note(
+            PlaybackSessionTrace.describe(
+                cause = "AFR re-asked the engaged mode",
+                detail = "mode=$heldModeId was $currentModeId"
+            )
+        )
+        Log.i(TAG, "panel left the engaged mode $heldModeId for $currentModeId; re-asked")
     }
 
     /** Puts the panel back. Called from the player's teardown. */
@@ -767,7 +987,7 @@ internal class FrameRateMatcher(
             .onFailure { Log.w(TAG, "could not clear the surface frame rate", it) }
         if (!restoreOnRelease) return
         restoreOnRelease = false
-        appliedModeId = UNSET
+        heldModeId = UNSET
         runCatching {
             val attributes = activity.window.attributes
             attributes.preferredDisplayModeId = originalPreferredModeId
@@ -777,16 +997,45 @@ internal class FrameRateMatcher(
     }
 
     private fun apply(contentFps: Double, source: FrameRateSource) {
+        val offeredRate = FrameRateMatch.normalise(contentFps)
+        // A repeat of a rate this session has already acted on, from the same
+        // half of the app, asks nothing and says nothing (audit AFR C10). Only
+        // suppressed once something is engaged: before that a repeat is still
+        // the first real attempt, and a probe that failed silently must not be
+        // locked out by the player's own (unusable) report of the same rate.
+        if (offeredRate != null &&
+            offeredRate == lastOfferRate &&
+            source == lastOfferSource &&
+            (heldModeId != UNSET || surfaceRateApplied)
+        ) {
+            Log.i(TAG, "repeat ${rate(offeredRate)} fps offer from $source; nothing to do")
+            return
+        }
+        offeredRate?.let {
+            lastOfferRate = it
+            lastOfferSource = source
+        }
         val display = displayOf() ?: return
         val modeId = runCatching { display.mode.modeId }.getOrNull() ?: return
-        val modes = supportedModes(display)
-        val panel = FrameRateMatch.describeModes(modes, modeId)
-        FrameRateDiagnostics.setPanel(panel)
+        val allModes = supportedModes(display)
+        // A switch may not trade resolution for refresh rate (audit AFR C3), so
+        // every candidate list below is the panel's list minus anything smaller
+        // than the mode it is currently in. The panel LINE still lists them all:
+        // it answers "does this TV offer 24 Hz?", which is a different question.
+        val modes = FrameRateMatch.atLeastResolution(
+            allModes,
+            allModes.firstOrNull { it.id == modeId }
+        )
+        val panel = FrameRateMatch.describeModes(allModes, modeId)
+        // Cleared first, then written: the clear drops the previous title's
+        // request AND outcome AND panel, so the row can never describe a
+        // playback that already ended (audit AFR C8's staleness half).
         FrameRateDiagnostics.clearRequest()
+        FrameRateDiagnostics.setPanel(panel)
         // Which half of the app supplied this number, first in the sequence.
         // Nothing is written for a rate that does not describe content, so a
         // track the player could not measure adds no line, exactly as before.
-        val normalised = FrameRateMatch.normalise(contentFps)
+        val normalised = offeredRate
         normalised?.let {
             FrameRateDiagnostics.addRequest(FrameRateMatch.describeSource(it, source))
         }
@@ -799,7 +1048,14 @@ internal class FrameRateMatcher(
         // renegotiates HDMI under a playing film, which is the judder that
         // starts partway through. Recorded rather than silently dropped, so a
         // field capture can name what was still asking.
-        val ageMs = SystemClock.elapsedRealtime() - openedAtMs
+        //
+        // Measured from this source's first usable offer, not from the player
+        // build (audit AFR S9): a slow host's first rate can land well after
+        // construction while the picture has only just started, and refusing it
+        // left the whole title unmatched.
+        val nowMs = SystemClock.elapsedRealtime()
+        if (normalised != null && firstOfferAtMs == null) firstOfferAtMs = nowMs
+        val ageMs = FrameRateMatch.engageAgeMs(nowMs, openedAtMs, firstOfferAtMs)
         if (!FrameRateMatch.engageWindowAllows(ageMs, source)) {
             FrameRateDiagnostics.setOutcome(FrameRateMatch.describeLateOffer(normalised, ageMs))
             Log.i(
@@ -876,8 +1132,18 @@ internal class FrameRateMatcher(
                     // put back on the way out (an engine switch leaves this
                     // session as the only one holding it).
                     restoreOnRelease = true
+                    // Taken over, so held: this session owes the restore, and a
+                    // panel that leaves the mode mid-film has to be asked back
+                    // by the session that took it on (audit AFR C5).
+                    heldModeId = best.id
                     FrameRateDiagnostics.setOutcome(
                         FrameRateMatch.describeAlreadyInBestMode(contentFps, best)
+                    )
+                    PlaybackSessionTrace.note(
+                        PlaybackSessionTrace.describe(
+                            cause = "AFR took over an already-matched panel",
+                            detail = "mode=${best.id} ${rate(contentFps)} fps"
+                        )
                     )
                     Log.i(
                         TAG,
@@ -948,6 +1214,13 @@ internal class FrameRateMatcher(
         FrameRateDiagnostics.addRequest(
             FrameRateMatch.describeSurfaceRequest(request, strategy != null)
         )
+        PlaybackSessionTrace.note(
+            PlaybackSessionTrace.describe(
+                cause = "AFR asked the surface",
+                detail = "${request.frameRate} fps mode=$modeId nonSeamless=" +
+                    (strategy != null)
+            )
+        )
         Log.i(TAG, "surface asked for ${request.frameRate} fps (non-seamless=${strategy != null})")
         val serial = ++askSerial
         handler.postDelayed(
@@ -964,10 +1237,18 @@ internal class FrameRateMatcher(
      */
     private fun requestMode(chosen: DisplayModeInfo, contentFps: Double, currentModeId: Int) {
         setPreferredModeId(chosen.id)
-        appliedModeId = chosen.id
+        // The mode this session holds, and the one the restore debt rides on.
+        heldModeId = chosen.id
         restoreOnRelease = true
         FrameRateDiagnostics.addRequest(
             FrameRateMatch.describeModeSwitch(contentFps, chosen, currentModeId)
+        )
+        PlaybackSessionTrace.note(
+            PlaybackSessionTrace.describe(
+                cause = "AFR asked for a mode",
+                detail = "mode=${chosen.id} ${chosen.refreshRate} Hz for " +
+                    "${rate(contentFps)} fps (was $currentModeId)"
+            )
         )
         Log.i(
             TAG,
@@ -1036,6 +1317,19 @@ internal class FrameRateMatcher(
         FrameRateDiagnostics.setOutcome(
             FrameRateMatch.describeOutcome(beforeModeId, afterModeId, afterRate)
         )
+        // One trace line per outcome, not only per request (audit AFR C8 / I1):
+        // a session ring that records what was asked but never what came of it
+        // cannot corroborate an AFR session at all.
+        PlaybackSessionTrace.note(
+            PlaybackSessionTrace.describe(
+                cause = if (afterModeId != beforeModeId) {
+                    "AFR panel moved"
+                } else {
+                    "AFR panel unmoved"
+                },
+                detail = "mode=$beforeModeId->$afterModeId at $afterRate Hz step=$step"
+            )
+        )
         when (step) {
             // Both looks are spent. Still not moved means the panel refused a
             // mode, and that is what the row has to say.
@@ -1075,6 +1369,13 @@ internal class FrameRateMatcher(
         FrameRateDiagnostics.setOutcome(
             FrameRateMatch.describeModeRefused(contentFps, requested, afterModeId)
         )
+        PlaybackSessionTrace.note(
+            PlaybackSessionTrace.describe(
+                cause = "AFR mode refused",
+                detail = "asked mode=${requested.id} at ${rate(requested.refreshRate)} Hz " +
+                    "for ${rate(contentFps)} fps, panel in $afterModeId; re-asked once"
+            )
+        )
         Log.i(TAG, "mode ${requested.id} still not taken; re-asked the mode, no surface request")
     }
 
@@ -1098,19 +1399,41 @@ internal class FrameRateMatcher(
      */
     private fun clearSurfaceRate() {
         if (!surfaceRateApplied) return
+        // The vote was cast on THIS surface, so it is this surface that has to
+        // take it back (audit AFR C6). Re-resolving `videoSurface()` here asked
+        // whichever surface the player happens to hold at release time: after a
+        // SurfaceView -> TextureView fallback (or with the P5 GLES view in
+        // front) the voted surface was never cleared, and the flags said it had
+        // been. The current surface is only a fallback for a stored one the
+        // process no longer has.
+        val voted = surfaceRateSurface
+        val surface = voted?.takeIf { it.isValid } ?: videoSurface()?.takeIf { it.isValid }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || surface == null) {
+            // Nothing could be written. Keep the state so a later release (the
+            // activity's own onDestroy after a transient stop) tries again,
+            // rather than reporting a clear that never happened.
+            Log.i(TAG, "surface frame rate left in place: no usable surface to clear")
+            return
+        }
+        surface.setFrameRate(0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
         surfaceRateApplied = false
         surfaceRateSurface = null
         surfaceRateValue = 0f
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        val surface = videoSurface() ?: return
-        if (!surface.isValid) return
-        surface.setFrameRate(0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
         Log.i(TAG, "cleared the surface frame rate")
     }
 
     private fun supportedModes(display: Display): List<DisplayModeInfo> =
         runCatching {
-            display.supportedModes.map { DisplayModeInfo(it.modeId, it.refreshRate.toDouble()) }
+            display.supportedModes.map {
+                DisplayModeInfo(
+                    id = it.modeId,
+                    refreshRate = it.refreshRate.toDouble(),
+                    // physical* are the mode's own pixel size - what the switch
+                    // would actually put on screen (audit AFR C3).
+                    width = it.physicalWidth,
+                    height = it.physicalHeight
+                )
+            }
         }.getOrDefault(emptyList())
 
     private fun displayOf(): Display? = displayFor(activity)
@@ -1181,10 +1504,31 @@ internal object FrameRateDiagnostics {
 
     fun setPanel(line: String) {
         _report.value = _report.value.copy(panel = line)
+        publish()
     }
 
+    /**
+     * Mirrors the row into [AfrTrace], which is what COPY DIAGNOSTICS prints
+     * (audit AFR C8 / I1). Called from every mutator rather than from the
+     * reader, because the report is read after the player has gone.
+     */
+    private fun publish() {
+        val value = _report.value
+        AfrTrace.set(value.panel, value.request, value.outcome)
+    }
+
+    /**
+     * Clears the request sequence, the outcome and the PANEL line.
+     *
+     * The panel line used to survive, so Settings could show the previous
+     * title's panel next to the new title's request - a row describing two
+     * different playbacks (audit AFR C8). [FrameRateMatcher.apply] writes the
+     * panel line back immediately after this call, so nothing is lost for the
+     * session it belongs to.
+     */
     fun clearRequest() {
-        _report.value = _report.value.copy(request = null, outcome = null)
+        _report.value = FrameRateReport()
+        publish()
     }
 
     /** Records one request. More than one per session is shown as a sequence. */
@@ -1193,10 +1537,12 @@ internal object FrameRateDiagnostics {
         _report.value = current.copy(
             request = listOfNotNull(current.request, line).joinToString(" · ")
         )
+        publish()
     }
 
     fun setOutcome(line: String) {
         _report.value = _report.value.copy(outcome = line)
+        publish()
     }
 }
 
@@ -1223,7 +1569,14 @@ internal fun displayReport(context: Context): String? {
     val display = displayFor(context) ?: return null
     val current = runCatching { display.mode.modeId }.getOrNull() ?: return null
     val modes = runCatching {
-        display.supportedModes.map { DisplayModeInfo(it.modeId, it.refreshRate.toDouble()) }
+        display.supportedModes.map {
+            DisplayModeInfo(
+                it.modeId,
+                it.refreshRate.toDouble(),
+                it.physicalWidth,
+                it.physicalHeight
+            )
+        }
     }.getOrDefault(emptyList())
     return FrameRateMatch.describeModes(modes, current)
 }

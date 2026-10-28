@@ -1244,22 +1244,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
         view.onVideoFrameRateChanged = { fps ->
             // The same setting the main player reads, applied from the rate mpv
-            // reports (see FrameRateMatcher). Created here rather than up
-            // front because the mode it restores has to be captured before any
-            // switch, and this is the first moment a switch is possible.
-            if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@MpvPlayerActivity)) {
-                frameRateMatcher = FrameRateMatcher(
-                    this@MpvPlayerActivity,
-                    // mpv draws into its own SurfaceView, so the frame-rate
-                    // request rides on that view's surface.
-                    videoSurface = { surface?.holder?.surface },
-                    // A paused picture has nothing for the ladder's second
-                    // look to repair (see FrameRateMatcher).
-                    isPlaybackActive = { surface?.isPaused() == false }
-                )
-            }
+            // reports (see FrameRateMatcher). Created through the one factory,
+            // which is also where the TV gate and the hold tick live, so this
+            // path cannot build a matcher with different rules.
+            val matcher = ensureFrameRateMatcher()
             if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
-            frameRateMatcher?.onContentFrameRate(fps)
+            matcher?.onContentFrameRate(fps)
             // mpv usually reports its own rate, so this is the backup leg of the
             // retry (the native player's trigger is its arriving video track): it
             // fires only when mpv reported nothing usable at all AND the earlier
@@ -1448,16 +1438,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * (or is too slow) leaves every path exactly as it was.
      */
     private fun startFrameRateProbe() {
-        if (!AppPreferences.getMatchFrameRate(this@MpvPlayerActivity)) return
-        if (frameRateMatcher == null) {
-            frameRateMatcher = FrameRateMatcher(
-                this@MpvPlayerActivity,
-                videoSurface = { surface?.holder?.surface },
-                isPlaybackActive = { surface?.isPaused() == false }
-            )
-        }
+        val matcher = ensureFrameRateMatcher() ?: return
         if (!FrameRateProbe.isProbeable(currentUrl)) return
-        val matcher = frameRateMatcher ?: return
         val probeUrl = currentUrl
         val probeHeaders = streamHeaders
         lifecycleScope.launch {
@@ -1470,6 +1452,56 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     matcher.onContentFrameRate(fps, FrameRateSource.PROBE)
                 }
         }
+    }
+
+    /**
+     * The activity's one [FrameRateMatcher], created on first use.
+     *
+     * One per activity because the mode it restores has to be the one from
+     * before any switch, and TV-only (audit AFR S4 / I7) because the toggle is
+     * deliberately absent from the mobile Settings screen: a phone panel lists
+     * 60/90/120 Hz, so a preference that arrived true by backup restore would
+     * otherwise have had the app switching a phone's display for film. The
+     * preference itself is left untouched; only the matcher is withheld.
+     *
+     * The hold tick is started with it: unlike the Media3 player, this engine has
+     * no one-second position tick of its own - its clock only runs while the
+     * control bar is up - so the panel hold needed a tick of its own (audit AFR
+     * C4).
+     */
+    private fun ensureFrameRateMatcher(): FrameRateMatcher? {
+        frameRateMatcher?.let { return it }
+        if (!AppPreferences.getMatchFrameRate(this)) return null
+        if (!com.kennyb1201.kbstream.FormFactor.isTv) return null
+        val matcher = FrameRateMatcher(
+            this@MpvPlayerActivity,
+            videoSurface = { surface?.holder?.surface },
+            isPlaybackActive = { surface?.isPaused() == false }
+        )
+        frameRateMatcher = matcher
+        startFrameRateHold()
+        return matcher
+    }
+
+    /**
+     * The AFR hold's own tick (audit AFR C4).
+     *
+     * [FrameRateMatcher.verifyEngagedMode] throttles to one panel read per 20 s
+     * and repairs once per session, so this only has to be frequent enough for
+     * a panel that left the mode to be noticed; it is cheap and does nothing at
+     * all while paused or after a release.
+     */
+    private val afrHoldHandler = Handler(Looper.getMainLooper())
+    private val afrHoldRunnable = object : Runnable {
+        override fun run() {
+            frameRateMatcher?.verifyEngagedMode()
+            afrHoldHandler.postDelayed(this, AFR_HOLD_TICK_MS)
+        }
+    }
+
+    private fun startFrameRateHold() {
+        afrHoldHandler.removeCallbacks(afrHoldRunnable)
+        afrHoldHandler.postDelayed(afrHoldRunnable, AFR_HOLD_TICK_MS)
     }
 
     /**
@@ -3362,6 +3394,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // switched to is worse than no request at all (nothing re-reads the head
         // here - the probe is a session-start step, see startFrameRateProbe).
         lastContentFps = null
+        // A new source restarts the engage window and drops the held mode (audit
+        // AFR C1). It does NOT release the restore debt: the pre-title mode is
+        // still what leaving owes, and a mode taken over now would be the film
+        // rate this session itself set. The probe re-runs below, because the
+        // rate an addon stream never declares can only come from reading the new
+        // head.
+        frameRateMatcher?.beginSource()
         currentAudioUrl = stream.audioUrl
         // The switched source brings its OWN request headers. These used to
         // stay at whatever this activity launched with, so a host gated on a
@@ -3452,6 +3491,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 startPositionMs = resumeAt
             )
         )
+        // The new file's head, for the same reason the session-start probe reads
+        // the first one (audit AFR C1): mpv reports nothing for an addon stream,
+        // so a source switched to would otherwise have had no rate at all.
+        startFrameRateProbe()
     }
 
     /** Opens the settings side panel and puts focus inside it. */
@@ -6501,9 +6544,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // happened, so it is re-offered here rather than waited for. The engage
         // now recognises a panel it is already in the best mode of (or a rate it
         // already put on the surface) and asks for nothing.
+        //
+        // Offered as RESUME rather than as a fresh PLAYER report (audit AFR C11):
+        // the ladder runs the whole engage sequence for a PLAYER offer, so a
+        // return that is more than 90 s into the session had its offer refused as
+        // late, and on a panel with no better mode it fell through to the surface
+        // vote - a request against a live surface mid-playback, which is the one
+        // the 2026-10-18 capture links to choppy playback. RESUME is exempt from
+        // the window, mode-only, and idempotent against a mode this session
+        // already engaged.
         surface?.videoFrameRate()?.let { fps ->
             if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
-            frameRateMatcher?.onContentFrameRate(fps)
+            ensureFrameRateMatcher()?.onContentFrameRate(fps, FrameRateSource.RESUME)
         }
     }
 
@@ -6547,6 +6599,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             return
         }
         val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
+        // Created here when it does not exist yet: the matcher used to be built
+        // only at session start, so switching the setting ON in Settings and
+        // coming back to the SAME player session left matching dead until the
+        // title was relaunched (audit AFR C13).
+        ensureFrameRateMatcher()
         // Same tag the probe and the matcher log under, so a field capture of
         // "AFR did not re-arm" reads as one sequence.
         Log.i("PLAYER_AFR", "re-arming frame-rate match with $fps fps")
@@ -6698,6 +6755,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // release() is a no-op once onStop has already restored the panel.
         frameRateMatcher?.release()
         frameRateMatcher = null
+        afrHoldHandler.removeCallbacksAndMessages(null)
         sleepTimerSection?.release()
         addonSubtitleFetchJob?.cancel()
         addonSubtitleFetchJob = null
@@ -7139,6 +7197,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
         /** Why the handoff happened, for the notice and the diagnostics log. */
         const val EXTRA_MPV_FALLBACK_REASON = "mpv_fallback_reason"
+
+        /**
+         * How often the AFR hold looks at the panel. The matcher throttles its
+         * own reads to one per 20 s and repairs once per session, so this is
+         * only the tick that gives it the chance (audit AFR C4).
+         */
+        private const val AFR_HOLD_TICK_MS = 5_000L
     }
 }
 

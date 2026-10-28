@@ -21,6 +21,97 @@ class FrameRateMatchTest {
 
     private fun mode(id: Int, rate: Double) = DisplayModeInfo(id, rate)
 
+    private fun sized(id: Int, rate: Double, width: Int, height: Int) =
+        DisplayModeInfo(id, rate, width, height)
+
+    // ── The engage window's anchor (audit AFR S9) ─────────────────────────
+
+    @Test
+    fun `the window is measured from the source's first offer, not from the build`() {
+        // A slow host: construction at 0, first usable rate at 120 s. The old
+        // measurement refused it (120 s > 90 s) and the title stayed unmatched,
+        // even though its picture had only just started.
+        assertEquals(0L, FrameRateMatch.engageAgeMs(120_000L, openedAtMs = 0L, firstOfferAtMs = 120_000L))
+        assertTrue(
+            FrameRateMatch.engageWindowAllows(
+                FrameRateMatch.engageAgeMs(120_000L, openedAtMs = 0L, firstOfferAtMs = 120_000L),
+                FrameRateSource.PLAYER
+            )
+        )
+    }
+
+    @Test
+    fun `before a source has offered anything the window still runs from its opening`() {
+        // A rate that never describes content must not itself open the window:
+        // the age is the source's own age until a usable rate arrives.
+        assertEquals(
+            30_000L,
+            FrameRateMatch.engageAgeMs(30_000L, openedAtMs = 0L, firstOfferAtMs = null)
+        )
+        assertEquals(
+            100L,
+            FrameRateMatch.engageAgeMs(250_100L, openedAtMs = 250_000L, firstOfferAtMs = 250_000L)
+        )
+    }
+
+    @Test
+    fun `a re-report long after the first offer is still late`() {
+        // The protection the window exists for: a rebuilt player re-reporting a
+        // track thirty minutes in. It is anchored at the source's first offer,
+        // so the rebuild does not buy a fresh window.
+        assertEquals(
+            1_800_000L,
+            FrameRateMatch.engageAgeMs(
+                nowMs = 1_800_000L,
+                openedAtMs = 0L,
+                firstOfferAtMs = 2_000L
+            )
+        )
+        assertFalse(
+            FrameRateMatch.engageWindowAllows(
+                FrameRateMatch.engageAgeMs(1_800_000L, 0L, 2_000L),
+                FrameRateSource.PLAYER
+            )
+        )
+    }
+
+    @Test
+    fun `the target rate at two resolutions picks the bigger picture`() {
+        // Audit AFR C3: the tie-break used to be the mode id, so which of a
+        // panel's 1080p and 2160p modes at 23.976 won was the platform's listing
+        // order. A 4K film quietly dropped to 1080p read as success on the
+        // diagnostics row, which printed only `id@rate`.
+        val chosen = FrameRateMatch.bestMode(
+            contentFps = 23.976,
+            modes = listOf(
+                sized(1, 23.976, 1920, 1080),
+                sized(2, 23.976, 3840, 2160)
+            )
+        )
+        assertEquals(2, chosen?.id)
+    }
+
+    @Test
+    fun `a mode smaller than the one the panel is in is not a candidate`() {
+        // ...and when only the smaller mode is left, it is dropped rather than
+        // traded for the rate. Falling back to the unfiltered list when the
+        // filter empties the panel is deliberate: losing frame-rate matching is
+        // worse than the downgrade.
+        val modes = listOf(
+            sized(1, 60.0, 3840, 2160),
+            sized(2, 23.976, 1920, 1080)
+        )
+        assertEquals(
+            listOf(1),
+            FrameRateMatch.atLeastResolution(modes, current = modes[0]).map { it.id }
+        )
+        assertEquals(
+            "a panel with only scaled modes keeps them rather than losing the match",
+            modes,
+            FrameRateMatch.atLeastResolution(modes, current = modes[1])
+        )
+    }
+
     @Test
     fun `film on a panel that can do 24 Hz switches to it`() {
         val chosen = FrameRateMatch.chooseMode(

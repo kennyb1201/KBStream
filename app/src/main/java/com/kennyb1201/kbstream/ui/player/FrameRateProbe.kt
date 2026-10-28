@@ -6,7 +6,6 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,15 +67,63 @@ internal object FrameRateProbe {
     /** Manifests and playlists are not files to parse. */
     private val NON_FILE_SUFFIXES = listOf(".m3u8", ".m3u", ".mpd", ".ism")
 
-    /** URL → fps, for the life of the process. */
-    private val cache = ConcurrentHashMap<String, Double>()
+    /**
+     * How many probed URLs either map keeps.
+     *
+     * Both used to be unbounded `ConcurrentHashMap`s living for the whole
+     * process (audit AFR C12). A television sticks around for days and every
+     * distinct addon/debrid URL probed added an entry - and since signed URLs
+     * rotate, the cache rarely hit and mostly accumulated. Small on purpose: the
+     * entries that matter are the few sources of the title being watched, and
+     * this is a cache, not a record.
+     */
+    private const val MAX_TRACKED_URLS = 32
+
+    private val cacheLock = Any()
+
+    /**
+     * URL → fps, most-recently-used last, bounded by [MAX_TRACKED_URLS].
+     *
+     * An LRU rather than the plain map it was: a hit is still a hit, but the
+     * oldest entry is dropped once the cap is reached, so a long-lived process
+     * cannot grow this without limit.
+     */
+    private val cache = object : LinkedHashMap<String, Double>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Double>?): Boolean =
+            size > MAX_TRACKED_URLS
+    }
 
     /**
      * URL → why its last probe came back null, for the one-shot retry decision
      * (see [consumeNetworkFailure]). Consumed rather than read by production:
      * the call sites ask once per URL and are answered false from then on.
+     * Bounded for the same reason as [cache] - and because evicting a failure
+     * only means that URL may be probed again later, which is what the retry was
+     * for in the first place.
      */
-    private val failures = ConcurrentHashMap<String, ProbeFailure>()
+    private val failures = object : LinkedHashMap<String, ProbeFailure>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, ProbeFailure>?
+        ): Boolean = size > MAX_TRACKED_URLS
+    }
+
+    /** Reads the cached rate for [url], or null. */
+    private fun cachedFps(url: String): Double? = synchronized(cacheLock) { cache[url] }
+
+    /** Replaces the cached rate for [url]. */
+    private fun cacheFps(url: String, fps: Double) = synchronized(cacheLock) { cache[url] = fps }
+
+    private fun recordFailure(url: String, kind: ProbeFailure) =
+        synchronized(cacheLock) { failures[url] = kind }
+
+    private fun clearFailure(url: String) =
+        synchronized(cacheLock) { failures.remove(url) }
+
+    private fun takeFailure(url: String): ProbeFailure? =
+        synchronized(cacheLock) { failures.remove(url) }
+
+    private fun peekFailure(url: String): ProbeFailure? =
+        synchronized(cacheLock) { failures[url] }
 
     /**
      * How long the whole probe (warm-up + head + parse) may take. Settable so a
@@ -157,7 +204,7 @@ internal object FrameRateProbe {
         // showed a rate offered to the panel with no `probed ...` line before
         // it and read as if the probe had never run. Host only: the URL may be
         // a signed debrid link.
-        cache[url]?.let {
+        cachedFps(url)?.let {
             Log.i(TAG, "probe cache hit: $it fps (host=${hostOf(url)})")
             return it
         }
@@ -169,7 +216,7 @@ internal object FrameRateProbe {
         if (reading == null) {
             // The bytes never arrived: timeout, refused, connection died. The
             // one failure a retry can fix, so it is the one recorded.
-            failures[url] = ProbeFailure.NETWORK
+            recordFailure(url, ProbeFailure.NETWORK)
             Log.w(TAG, "probe: no reading (timeout or download failed, host=${hostOf(url)})")
             return null
         }
@@ -182,7 +229,7 @@ internal object FrameRateProbe {
             // exactly the difference between this and the bytes never arriving
             // (re-downloading the same head returns the same nothing, so this
             // must NOT set off the retry).
-            failures[url] = ProbeFailure.UNUSABLE
+            recordFailure(url, ProbeFailure.UNUSABLE)
             Log.w(TAG, "probe: head arrived but carries no usable rate (host=${hostOf(url)})")
             return null
         }
@@ -191,12 +238,12 @@ internal object FrameRateProbe {
             // A numeric reading that describes no content (0, NaN, absurd). The
             // head arrived, so a second download would return the same number:
             // no retry here either.
-            failures[url] = ProbeFailure.UNUSABLE
+            recordFailure(url, ProbeFailure.UNUSABLE)
             Log.w(TAG, "probe: reading $measured fps unusable (host=${hostOf(url)})")
             return null
         }
-        failures.remove(url)
-        cache[url] = fps
+        clearFailure(url)
+        cacheFps(url, fps)
         Log.i(TAG, "probed $fps fps from the stream head")
         return fps
     }
@@ -213,7 +260,7 @@ internal object FrameRateProbe {
      * channel's URL, say, or a probe that had not finished yet.
      */
     internal fun consumeNetworkFailure(url: String): Boolean =
-        failures.remove(url) == ProbeFailure.NETWORK
+        takeFailure(url) == ProbeFailure.NETWORK
 
     /**
      * The recorded failure kind for [url] without consuming it, or null when
@@ -221,7 +268,7 @@ internal object FrameRateProbe {
      * [consumeNetworkFailure], but the rule that an unreadable head must not
      * arm the retry is a distinction a test has to be able to see.
      */
-    internal fun failureKind(url: String): ProbeFailure? = failures[url]
+    internal fun failureKind(url: String): ProbeFailure? = peekFailure(url)
 
     /**
      * The host of [url] for the log lines, or "?" when it will not parse.

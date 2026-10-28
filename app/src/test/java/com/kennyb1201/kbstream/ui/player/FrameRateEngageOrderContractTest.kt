@@ -76,8 +76,9 @@ class FrameRateEngageOrderContractTest {
                 match.contains("attributes.preferredDisplayModeId = modeId")
         )
         assertTrue(
-            "the restore on teardown depends on knowing which mode this session asked for",
-            requestMode.contains("appliedModeId = chosen.id")
+            "the restore on teardown and the mid-film hold both depend on knowing which mode " +
+                "this session holds (audit AFR C5: one field, so a taken-over panel is held too)",
+            requestMode.contains("heldModeId = chosen.id")
         )
         assertTrue(
             "the field log line the acceptance check reads for ('forced mode ... as the FIRST " +

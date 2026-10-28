@@ -136,7 +136,35 @@ class FrameRateDiagnosticsRowContractTest {
         )
         assertTrue(
             "the live panel is still read from the display helper",
-            body.contains("val livePanel = remember(context) { displayReport(context) }")
+            body.contains("val livePanel = displayReport(context)")
+        )
+        assertFalse(
+            "and read on every composition rather than remembered once (audit AFR C8): the " +
+                "row can stay on screen across a sink or input change, and a remembered read " +
+                "answered 'does this TV offer 24 Hz?' about the display it was composed on",
+            body.contains("remember(context)")
+        )
+    }
+
+    @Test
+    fun `the report carries the AFR lines, not only this row`() {
+        // Audit AFR C8 / I1: COPY DIAGNOSTICS is the artifact a field report is
+        // made of, and it carried no AFR evidence at all - the row was the only
+        // place the panel, the request and the answer existed.
+        val diagnostics = squash(
+            source("com/kennyb1201/kbstream/data/reporting/Diagnostics.kt")
+        )
+        assertTrue(
+            "the report prints the AFR record",
+            diagnostics.contains("AfrTrace.lines().forEach { report.appendLine(it) }")
+        )
+        val matcher = squash(
+            source("com/kennyb1201/kbstream/ui/player/FrameRateMatch.kt")
+        )
+        assertTrue(
+            "and every mutation of the row's own report publishes it",
+            matcher.contains("AfrTrace.set(value.panel, value.request, value.outcome)") &&
+                matcher.contains("fun clearRequest() { _report.value = FrameRateReport() publish() }")
         )
     }
 

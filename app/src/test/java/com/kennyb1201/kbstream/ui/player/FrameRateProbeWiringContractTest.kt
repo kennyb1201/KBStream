@@ -42,6 +42,31 @@ class FrameRateProbeWiringContractTest {
 
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
 
+    @Test
+    fun `the probe's own maps are bounded`() {
+        // Both were unbounded `ConcurrentHashMap`s for the life of the process
+        // (audit AFR C12). A television runs for days, every distinct signed URL
+        // added an entry, and a hit was rare because signed URLs rotate - so the
+        // map only grew. The cap is the whole fix; the LRU form is what keeps
+        // the entries that can still be hit.
+        val probe = squash(source(PROBE))
+        assertTrue(
+            "there is a stated cap",
+            probe.contains("private const val MAX_TRACKED_URLS = 32")
+        )
+        assertEquals(
+            "both maps evict, so neither can grow past it",
+            2,
+            count(probe, "override fun removeEldestEntry")
+        )
+        assertTrue(
+            "and every access goes through the lock - the plain ConcurrentHashMap " +
+                "is gone",
+            !probe.contains("ConcurrentHashMap<") &&
+                probe.contains("synchronized(cacheLock)")
+        )
+    }
+
     /** How many times [needle] occurs in [text]. */
     private fun count(text: String, needle: String): Int =
         Regex(Regex.escape(needle)).findAll(text).count()
@@ -304,6 +329,7 @@ class FrameRateProbeWiringContractTest {
 
         // Counted as CALL SITES, not as mentions: both files' comments name the
         // record on purpose, and only the calls can retry anything.
+
         listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
             assertEquals(
                 "$who must ask the one-shot record from exactly one place - a second call " +
@@ -328,6 +354,76 @@ class FrameRateProbeWiringContractTest {
             "every existing caller keeps the process budget: that is what makes the " +
                 "first attempt byte-for-byte today's behavior",
             squash(source(PROBE)).contains("budgetMs: Long = FrameRateProbe.budgetMs")
+        )
+    }
+
+    @Test
+    fun `both engines restart matching for a source switched mid-session`() {
+        // Audit AFR C1: the matcher is built once per activity, so the engage
+        // window, the held mode and the remembered rate all described the
+        // activity's FIRST title. After 90 s every offer for a switched source
+        // was refused as late, on both engines.
+        val native = squash(source(NATIVE))
+        val mpv = squash(source(MPV))
+
+        val nativeSwitch = window(
+            native,
+            "fun switchToSource(stream: Stream",
+            "recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)"
+        )
+        assertTrue(
+            "the native player restarts the per-source state before the rebuild",
+            nativeSwitch.contains("restartFrameRateMatchForSource()")
+        )
+        val nativeRestart = window(
+            native,
+            "private fun restartFrameRateMatchForSource()",
+            "internal fun stepDialogueBoost"
+        )
+        assertTrue(
+            "which forgets the old source's rate (audit AFR C2)",
+            nativeRestart.contains("lastContentFps = null")
+        )
+        assertTrue(
+            "restarts the engage window and the held mode",
+            nativeRestart.contains("matcher.beginSource()")
+        )
+        assertTrue(
+            "and re-probes the new head, because an addon stream reports no rate",
+            nativeRestart.contains("FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)")
+        )
+
+        val mpvSwitch = window(
+            mpv,
+            "private fun switchToSource(stream: Stream",
+            "private fun showSettingsPanel"
+        )
+        assertTrue(
+            "mpv restarts the same state for its switch",
+            mpvSwitch.contains("frameRateMatcher?.beginSource()")
+        )
+        assertTrue(
+            "and probes the new file's head, which it never used to do",
+            mpvSwitch.contains("startFrameRateProbe()")
+        )
+    }
+
+    @Test
+    fun `live channels are not offered to the matcher`() {
+        // Audit AFR C9: a 50 fps live channel on a 60 Hz-only panel has no mode
+        // to switch to, so the only reachable outcome was the surface vote - a
+        // live surface asked for 50 fps, the write the 2026-10-18 capture
+        // convicted. The probe was already gated on live; the offer was not.
+        val native = squash(source(NATIVE))
+        val offer = window(
+            native,
+            "if (!isLiveChannel) { if (FrameRateMatch.normalise(reportedFrameRate)",
+            "// A video track arriving is the field-proven"
+        )
+        assertTrue(
+            "the live gate wraps the remember AND the offer",
+            offer.contains("lastContentFps = reportedFrameRate") &&
+                offer.contains("frameRateMatcher?.onContentFrameRate(reportedFrameRate)")
         )
     }
 

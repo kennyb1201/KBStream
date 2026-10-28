@@ -137,9 +137,7 @@ class FrameRateSurfaceVoteContractTest {
                 "business, and a REBUILT player never reaches that guard, so a hoist that stayed " +
                 "inside it would leave media3 as a second voter exactly on the rebuild path",
             createPlayer.indexOf("setVideoChangeFrameRateStrategy(") <
-                createPlayer.indexOf(
-                    "frameRateMatcher == null && AppPreferences.getMatchFrameRate("
-                )
+                createPlayer.indexOf("ensureFrameRateMatcher()")
         )
         assertEquals(
             "there is one player seam, so silencing it there covers the first player and every " +

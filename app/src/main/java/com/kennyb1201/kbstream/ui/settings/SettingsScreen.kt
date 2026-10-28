@@ -5650,7 +5650,12 @@ private fun ToggleRow(
 private fun FrameRateDiagnosticRow(enabled: Boolean) {
     val context = LocalContext.current
     val report by FrameRateDiagnostics.report.collectAsStateWithLifecycle()
-    val livePanel = remember(context) { displayReport(context) }
+    // Read per composition rather than remembered once (audit AFR C8): the
+    // panel is whatever the display says NOW, and this row can stay on screen
+    // across a sink or input change. `remember(context)` answered with the
+    // panel from the moment Settings was first composed, so "does this TV offer
+    // 24 Hz?" was answered about a different display.
+    val livePanel = displayReport(context)
     Column(
         modifier = Modifier
             .fillMaxWidth()

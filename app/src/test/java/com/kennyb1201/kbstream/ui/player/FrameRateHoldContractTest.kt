@@ -51,6 +51,9 @@ class FrameRateHoldContractTest {
     private fun player(): String =
         source("com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt")
 
+    private fun mpvPlayer(): String =
+        source("com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt")
+
     @Test
     fun `the player's tick holds the panel to the engaged mode`() {
         val tick = player().substringAfter("private val positionRunnable")
@@ -64,13 +67,30 @@ class FrameRateHoldContractTest {
     }
 
     @Test
+    fun `mpv holds the panel too, on a tick of its own`() {
+        // This engine has no one-second position tick (its clock only runs while
+        // the control bar is up), so the hold landing earlier held only for the
+        // Media3 player and mpv's panel was never re-checked mid-film (audit AFR
+        // C4). The tick is what gives verifyEngagedMode the chance to look.
+        val mpv = mpvPlayer()
+        assertTrue(
+            "mpv runs the same hold from its own tick",
+            mpv.contains("frameRateMatcher?.verifyEngagedMode()")
+        )
+        assertTrue(
+            "and the tick re-posts itself, or it would look exactly once",
+            mpv.contains("afrHoldHandler.postDelayed(this, AFR_HOLD_TICK_MS)")
+        )
+    }
+
+    @Test
     fun `verification re-asks the mode this session chose, once`() {
         val verify = matcher().substringAfter("fun verifyEngagedMode()")
             .substringBefore("/** Puts the panel back.")
 
         assertTrue(
             "nothing to hold: a session that never asked by id must do nothing",
-            verify.contains("appliedModeId == UNSET")
+            verify.contains("heldModeId == UNSET")
         )
         assertTrue(
             "only a moving picture is repaired - a paused session's panel is " +
@@ -78,13 +98,15 @@ class FrameRateHoldContractTest {
             verify.contains("if (!isPlaybackActive()) return")
         )
         assertTrue(
-            "the repair is the mode this session already asked for, never a new one",
-            verify.contains("setPreferredModeId(appliedModeId)")
+            "the repair is the mode this session holds - asked for by id, or taken " +
+                "over from a panel already in it, which still owns the restore (audit " +
+                "AFR C5) - and never a new one",
+            verify.contains("setPreferredModeId(heldModeId)")
         )
         assertTrue(
             "one repair per session: a box that keeps dropping the mode must not " +
                 "be renegotiated in a loop",
-            verify.contains("if (released || appliedModeId == UNSET || reassertedMode) return") &&
+            verify.contains("if (released || heldModeId == UNSET || reassertedMode) return") &&
                 verify.contains("reassertedMode = true")
         )
     }
@@ -110,6 +132,33 @@ class FrameRateHoldContractTest {
         assertFalse(
             "the window must not apply to a resume repair",
             apply.contains("engageWindowAllows(ageMs = 0")
+        )
+    }
+
+    @Test
+    fun `the window is anchored to the source's first offer, and a new source re-anchors it`() {
+        // Audit AFR S9: the age was measured from construction, which happens
+        // inside createPlayer - so a slow host whose first rate landed after 90 s
+        // had its opening refused. The anchor is the first usable offer, per
+        // source; a source switch clears it with the rest of the per-source
+        // state, while a rebuilt player does not (a rebuild is not a new source).
+        val apply = matcher().substringAfter("private fun apply(")
+            .substringBefore("private fun askSurfaceIfPossible(")
+        assertTrue(
+            "the age comes from the anchor helper",
+            apply.contains("FrameRateMatch.engageAgeMs(nowMs, openedAtMs, firstOfferAtMs)")
+        )
+        assertTrue(
+            "and only a usable rate sets the anchor, so a track that reports no rate " +
+                "cannot open the window early",
+            apply.contains("if (normalised != null && firstOfferAtMs == null) firstOfferAtMs = nowMs")
+        )
+
+        val begin = matcher().substringAfter("fun beginSource()")
+            .substringBefore("/**")
+        assertTrue(
+            "a new source starts its own window",
+            begin.contains("firstOfferAtMs = null")
         )
     }
 }

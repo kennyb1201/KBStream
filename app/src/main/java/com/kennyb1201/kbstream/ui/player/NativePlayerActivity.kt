@@ -498,7 +498,78 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // Same tag the probe and the matcher log under, so a field capture of
         // "AFR did not re-arm" reads as one sequence.
         Log.i("PLAYER_AFR", "re-arming frame-rate match with $fps fps")
-        frameRateMatcher?.onContentFrameRate(fps, FrameRateSource.RESUME)
+        // Created here when it does not exist yet: the matcher used to be built
+        // only inside the first player build, so switching the setting ON in
+        // Settings and coming back to the SAME player session left matching
+        // dead until the title was relaunched (audit AFR C13). The off
+        // direction was already handled above.
+        ensureFrameRateMatcher()?.onContentFrameRate(fps, FrameRateSource.RESUME)
+    }
+
+    /**
+     * The activity's one [FrameRateMatcher], created on first use.
+     *
+     * One per activity, because the mode it restores has to be the one from
+     * before any switch (see [FrameRateMatcher]). Created only when the setting
+     * is on AND this is a television (audit AFR S4 / I7): the toggle is a TV
+     * setting - the mobile Settings screen deliberately has no such row - and a
+     * phone panel lists 60/90/120 Hz, so a preference that arrived true by
+     * backup restore would otherwise have had the app switching a phone to 48
+     * Hz for film. The preference is left untouched either way; only the
+     * matcher is withheld.
+     */
+    private fun ensureFrameRateMatcher(): FrameRateMatcher? {
+        frameRateMatcher?.let { return it }
+        if (!AppPreferences.getMatchFrameRate(this)) return null
+        if (!com.kennyb1201.kbstream.FormFactor.isTv) return null
+        return FrameRateMatcher(
+            this,
+            videoSurface = { videoOutputSurface() },
+            // The ladder's second look is dropped while playback is paused: a
+            // backstop must not re-request the surface on a stopped picture
+            // (see FrameRateMatcher).
+            isPlaybackActive = { exoPlayer?.playWhenReady == true }
+        ).also { frameRateMatcher = it }
+    }
+
+    /**
+     * Restarts frame-rate matching for a NEW source inside this activity (audit
+     * AFR C1 / C2).
+     *
+     * The matcher outlives the player - one per activity, so rebuilt players
+     * keep their original mode - which meant everything measured from the
+     * session's opening actually belonged to the activity's first title: after
+     * 90 s every offer for a switched source or a zapped channel was refused as
+     * "late", the taken-over mode still named the previous source's mode, and
+     * the rate remembered for the old track was re-offered on every return.
+     * Both are per-source facts, so both are reset here, and the probe runs
+     * again because the rate an addon stream never declares can only come from
+     * reading the new head.
+     */
+    private fun restartFrameRateMatchForSource() {
+        lastContentFps = null
+        val matcher = frameRateMatcher ?: return
+        matcher.beginSource()
+        if (isLiveChannel || !FrameRateProbe.isProbeable(currentUrl)) {
+            Log.i(
+                "PLAYER_AFR",
+                "probe not launched for the new source: live=$isLiveChannel " +
+                    "probeable=${FrameRateProbe.isProbeable(currentUrl)}"
+            )
+            return
+        }
+        val probeUrl = currentUrl
+        val probeHeaders = streamHeaders
+        lifecycleScope.launch {
+            FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)?.let { fps ->
+                // A second switch while this probe is in flight owns the
+                // matcher now; its own rate is the one that describes what is
+                // playing.
+                if (probeUrl != currentUrl) return@launch
+                lastContentFps = fps
+                matcher.onContentFrameRate(fps, FrameRateSource.PROBE)
+            }
+        }
     }
 
     /**
@@ -6255,16 +6326,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
             // One instance per activity (see FrameRateMatcher): the mode it
             // restores on the way out has to be the one from before any
-            // switch, so a rebuilt player must not hand it a second one.
-            if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@NativePlayerActivity)) {
-                frameRateMatcher = FrameRateMatcher(
-                    this@NativePlayerActivity,
-                    videoSurface = { videoOutputSurface() },
-                    // The ladder's second look is dropped while playback is
-                    // paused: a backstop must not re-request the surface on a
-                    // stopped picture (see FrameRateMatcher).
-                    isPlaybackActive = { exoPlayer?.playWhenReady == true }
-                )
+            // switch, so a rebuilt player must not hand it a second one. The
+            // creation rule lives in ensureFrameRateMatcher (setting on, TV
+            // only), and the re-arm path uses the same one.
+            run {
+                val matcher = ensureFrameRateMatcher()
                 // The player's own onTracksChanged report is the confirmation;
                 // but an addon stream often carries no fps at all, so race a
                 // probe of the stream's head alongside player prep and feed the
@@ -6275,7 +6341,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // wins (the matcher dedupes repeat rates); probe late → its
                 // result still applies. Live channels are never probed: a live
                 // playlist is 60 fps anyway and its bytes never end.
-                val matcher = frameRateMatcher
                 if (matcher != null && !isLiveChannel && FrameRateProbe.isProbeable(currentUrl)) {
                     val probeUrl = currentUrl
                     val probeHeaders = streamHeaders
@@ -6756,10 +6821,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         // which must not become the rate a resume re-offers.
                         // [FrameRateMatch.resumeRate] refuses it again on the way
                         // out of the field, so the stored value can be kept raw.
-                        if (FrameRateMatch.normalise(reportedFrameRate) != null) {
-                            lastContentFps = reportedFrameRate
+                        // Live TV is deliberately NOT matched (audit AFR C9): a
+                        // 50 fps channel on a 60 Hz-only panel has no mode to
+                        // switch to, so the only outcome the old unconditional
+                        // offer could reach was the surface vote - a live
+                        // surface asked for 50 fps, which is exactly the write
+                        // the 2026-10-18 capture convicted. A live playlist is
+                        // 60 fps anyway, and its rate is not a property of a
+                        // title that ends. So neither the rate nor the memory of
+                        // it is taken from a live track.
+                        if (!isLiveChannel) {
+                            if (FrameRateMatch.normalise(reportedFrameRate) != null) {
+                                lastContentFps = reportedFrameRate
+                            }
+                            frameRateMatcher?.onContentFrameRate(reportedFrameRate)
                         }
-                        frameRateMatcher?.onContentFrameRate(reportedFrameRate)
                         // A video track arriving is the field-proven "bytes are
                         // flowing" signal (2026-10-16: the Compat format
                         // emission followed the failed probe by ~3 s, and the
@@ -14141,6 +14217,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // is broken" report. Read them off this stream, exactly as the
         // launch intent does (see requestHeaders on Stream).
         streamHeaders = stream.requestHeaders
+        // Frame-rate matching is per SOURCE, not per activity (audit AFR C1 /
+        // C2): the matcher survives this rebuild, so the window measured from
+        // the previous title's opening and the rate remembered for its track
+        // were both still being applied to a source they do not describe.
+        restartFrameRateMatchForSource()
         // The previous source's decoded identity does not describe this one.
         // Left behind, it only mislabelled the next failure's copy ("This
         // file's video (h264 3840x2160) can't be decoded") with the old
