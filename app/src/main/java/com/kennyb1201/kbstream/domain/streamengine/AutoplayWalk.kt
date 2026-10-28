@@ -42,9 +42,15 @@ object AutoplayWalk {
      * [sources] is [candidates] with the prepared stream substituted in place of
      * the hash row it came from - the same substitution the picker's manual press
      * makes, so the player's list holds the link it is actually playing (and the
-     * "next source" walk continues from the right place). The substitution is
-     * positional: a failed candidate stays in the list where it was, so an
-     * add-on-name array built against [candidates] still lines up.
+     * "next source" walk continues from the right place).
+     *
+     * A row the walk was answered NO by is NOT in it: a hash that would not
+     * resolve, or one the budget never got to, is a row the player cannot start,
+     * and leaving it in made "next source" walk onto a dead link the walk had
+     * already refused. Every other row keeps its order, so the player's list is
+     * still a subsequence of [candidates]; names are resolved by stream identity
+     * rather than by index (see `addonsFor`), which is what makes the removal
+     * safe for the parallel add-on array.
      */
     data class Start(
         val stream: Stream,
@@ -64,16 +70,26 @@ object AutoplayWalk {
     ): Start? {
         var remaining = candidates
         var attempts = 0
+        // The rows the walk abandoned, by identity - a failed hash and a hash the
+        // spent budget skipped both count. [sourcesFor] leaves them out of the
+        // list the player is handed.
+        val abandoned = ArrayList<Stream>()
+        val sourcesFor: (prepared: Stream?, from: Stream) -> List<Stream> = { prepared, from ->
+            candidates
+                .filterNot { row -> abandoned.any { it === row } }
+                .map { row -> if (prepared != null && row === from) prepared else row }
+        }
         while (true) {
             val candidate = pick(remaining) ?: return null
             if (!candidate.url.isNullOrBlank()) {
-                return Start(candidate, candidates, resolved = false)
+                return Start(candidate, sourcesFor(null, candidate), resolved = false)
             }
             // The resolve budget is spent, but the LIST is not: skip this hash
             // and ask again, so a url-bearing row anywhere behind it still
             // starts. Returning null here was how a hash-heavy list whose first
             // three hashes had failed abandoned the free rows after them.
             if (attempts >= maxAttempts) {
+                abandoned += candidate
                 remaining = remaining.without(candidate) ?: return null
                 continue
             }
@@ -82,12 +98,13 @@ object AutoplayWalk {
             if (prepared != null) {
                 return Start(
                     stream = prepared,
-                    sources = candidates.map { if (it === candidate) prepared else it },
+                    sources = sourcesFor(prepared, candidate),
                     resolved = true
                 )
             }
             // Identity, not equality: two add-ons can serve the same torrent,
             // and the rows the picker ranks are the objects in this list.
+            abandoned += candidate
             remaining = remaining.without(candidate) ?: return null
         }
     }

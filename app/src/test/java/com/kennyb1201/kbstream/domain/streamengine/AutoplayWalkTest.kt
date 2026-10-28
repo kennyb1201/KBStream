@@ -104,6 +104,24 @@ class AutoplayWalkTest {
     }
 
     @Test
+    fun `a hash the walk refused is not handed to the player`() = runBlocking {
+        val dead = hash("dead")
+        val alsoDead = hash("also-dead")
+        val free = link("free")
+        val start = AutoplayWalk.start(
+            candidates = listOf(dead, alsoDead, free),
+            pick = headPick,
+            resolve = { null }
+        )
+        assertSame(free, start?.stream)
+        assertEquals(
+            "the rows the walk gave up on are gone, not left for next-source to try",
+            listOf(free),
+            start!!.sources
+        )
+    }
+
+    @Test
     fun `nothing startable is still a null answer`() = runBlocking {
         var resolves = 0
         val start = AutoplayWalk.start(

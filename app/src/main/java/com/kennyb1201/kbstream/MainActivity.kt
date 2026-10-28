@@ -1663,10 +1663,14 @@ fun AppRoot(
         screen = if (start != null) {
             // The list handed to the player is the walked one: the prepared
             // stream is IN it where its hash row was, so "next source" continues
-            // from the right place. The substitution is positional, so the names
-            // resolved against `ordered` still line up with it.
+            // from the right place, and the rows the walk refused are NOT (a
+            // dead hash that stayed in the list was the next-source press after
+            // a walk that had already given up on it). The names are resolved
+            // against THAT list, by stream identity, so a removal cannot shift
+            // them; the prepared row answers null because the payload never
+            // described it, which is "unknown add-on" rather than a wrong one.
             val startedSources = start.sources
-            val startedAddons = addonsFor(ordered, resolved.streams, resolved.addons)
+            val startedAddons = addonsFor(startedSources, resolved.streams, resolved.addons)
             if (pending.isNextEpisodeAdvance) {
                 // Not remembered either: caching the advance's ordering would
                 // hand the NEXT replay of this episode the same stale ordering

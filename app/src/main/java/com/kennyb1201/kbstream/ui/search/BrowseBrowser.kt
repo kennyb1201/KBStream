@@ -808,14 +808,23 @@ private fun SubmenuChipGrid(
         // room is load-bearing: a lazy grid clips its own viewport, so a
         // focused chip's scale-up and glow would be sliced flat along the
         // first and last row without it.
+        //
+        // The two arrange-ments are load-bearing too, and for the same reason
+        // one axis in. A chip grows by KBFocusChip per side and draws a
+        // KBFocusGlowSmall glow OUTSIDE its own bounds, so a neighbour glued
+        // 8dp away was painted over by both: the focused pill's border ran into
+        // the next pill's, which is the "clipped tile" the grid was reported
+        // for. KBFocusChipInset is the number the chip rows use for exactly
+        // this room, so the grid uses it too instead of a literal that predates
+        // the focus cue.
         contentPadding = PaddingValues(
-            top = 10.dp,
-            bottom = 18.dp,
+            top = KBFocusChipInset,
+            bottom = KBFocusChipInset,
             start = SEARCH_RAIL_EDGE_PADDING,
             end = SEARCH_RAIL_EDGE_PADDING
         ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(KBFocusChipInset),
+        verticalArrangement = Arrangement.spacedBy(KBFocusChipInset),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = SUBMENU_CHIP_MAX_HEIGHT)
