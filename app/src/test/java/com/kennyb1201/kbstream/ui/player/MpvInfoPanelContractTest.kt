@@ -69,15 +69,22 @@ class MpvInfoPanelContractTest {
     }
 
     @Test
-    fun `the MPV panel adds exactly the one row the main player does not have`() {
-        // SUBTITLE: mpv is the engine that typesets an embedded ASS/SSA track
-        // with libass, so which track is being drawn is worth a line here. It is
-        // deliberate, and it is the only difference - anything else drifting in
-        // is a comparison that no longer lines up.
+    fun `the two panels now share every row, SUBTITLE included`() {
+        // SUBTITLE used to be MPV-only, because libass typesets an embedded
+        // ASS/SSA track and which one is being drawn was worth a line there.
+        // The main player reads it too now (audit U-F6: "which track is this"
+        // was a question only the other engine answered), so the difference is
+        // the EMPTY set - and it stays that way, because two panels that are
+        // meant to be id-for-id identical must not drift by a row either way.
         assertEquals(
-            "only SUBTITLE may be MPV-only",
-            setOf("info_subtitle", "info_subtitle_header"),
+            "no row may be unique to either panel any more",
+            emptySet<String>(),
             (infoIds(mpvLayout) - infoIds(mainLayout).toSet()).toSet()
+        )
+        assertEquals(
+            "and the main player's panel is allowed nothing MPV lacks",
+            emptySet<String>(),
+            (infoIds(mainLayout) - infoIds(mpvLayout).toSet()).toSet()
         )
     }
 

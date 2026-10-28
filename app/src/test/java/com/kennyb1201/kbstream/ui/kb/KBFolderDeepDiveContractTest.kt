@@ -164,10 +164,23 @@ class KBFolderDeepDiveContractTest {
                 "a grid the viewer asked for elsewhere",
             viewModel.contains("private var gridOverrideFolderId: String? = null") &&
                 viewModel.contains("fun setGridOverride(folderId: String?)") &&
+                viewModel.contains("fun gridOverrideActive(folderId: String): Boolean")
+        )
+        assertTrue(
+            "RECORDED, not just remembered in memory: the pin used to last exactly as " +
+                "long as this ViewModel did, so Back out of the folder and the same " +
+                "folder came back in its manifest layout",
+            viewModel.contains("AppPreferences.setKbFolderGridPin(getApplication(), folderId)") &&
                 viewModel.contains(
-                    "fun gridOverrideActive(folderId: String): Boolean = " +
-                        "gridOverrideFolderId == folderId"
+                    "gridOverrideFolderId ?: AppPreferences.getKbFolderGridPin(getApplication())"
                 )
+        )
+        assertTrue(
+            "and re-read on every load, so a relaunch opens the folder the way it was " +
+                "left rather than flipping once the rails have landed",
+            viewModel.contains(
+                "gridOverrideFolderId = AppPreferences.getKbFolderGridPin(getApplication())"
+            )
         )
         assertTrue(
             "the screen seeds its layout from it on the FIRST frame, so a return does not " +
@@ -176,17 +189,17 @@ class KBFolderDeepDiveContractTest {
                 screen.contains("mutableStateOf(viewModel.gridOverrideActive(folderId))")
         )
         assertTrue(
-            "Open in Grid records it while the menu is still up, not after",
-            screen.contains("showAsGrid = true") &&
-                screen.indexOf("showAsGrid = true") <
-                screen.indexOf("viewModel.setGridOverride(folderId)")
+            "the menu records the pin while it is still up (not after), and is also the " +
+                "way back out of it: unaided, a recorded layout would have no off switch",
+            screen.contains("viewModel.setGridOverride(if (showAsGrid) folderId else null)") &&
+                screen.contains("showAsGrid = !showAsGrid") &&
+                screen.indexOf("showAsGrid = !showAsGrid") <
+                screen.indexOf("viewModel.setGridOverride(")
         )
-        assertTrue(
-            "and the folder's own layout restore (Back) clears it, or the folder would " +
-                "still be pinned to the grid on its next visit",
-            screen.contains("viewModel.setGridOverride(null)") &&
-                screen.indexOf("showAsGrid = false") <
-                screen.indexOf("viewModel.setGridOverride(null)")
+        assertFalse(
+            "Back therefore only leaves the folder - it used to restore the folder's own " +
+                "layout first, which is exactly what threw the pin away",
+            screen.contains("viewModel.setGridOverride(null)")
         )
         assertTrue(
             "the layout that comes back is the one that can honour a rail-less grid " +
