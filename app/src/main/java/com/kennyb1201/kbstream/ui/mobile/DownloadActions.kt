@@ -23,7 +23,6 @@ import com.kennyb1201.kbstream.data.download.DownloadState
 import com.kennyb1201.kbstream.data.download.DownloadTarget
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.download.WAITING_FOR_WIFI
-import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
