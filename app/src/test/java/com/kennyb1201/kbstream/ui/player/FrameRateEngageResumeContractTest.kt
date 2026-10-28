@@ -46,7 +46,9 @@ class FrameRateEngageResumeContractTest {
             "the branch must use the exclusion-free search: chooseMode answers null for " +
                 "BOTH \"nothing better exists\" and \"already there\", which is the confusion " +
                 "that fired the surface hint at the live surface",
-            branch.contains("val best = FrameRateMatch.bestMode(contentFps, modes)")
+            // The third argument is the whole-number preference (audit AFR S1);
+            // the exclusion-free search is what this pins.
+            branch.contains("val best = FrameRateMatch.bestMode(contentFps, modes, preferWholeRate)")
         )
         assertFalse(
             "and it must not go back to the choice search, which cannot tell them apart",

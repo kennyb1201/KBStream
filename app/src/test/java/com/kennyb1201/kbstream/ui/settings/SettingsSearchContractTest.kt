@@ -100,7 +100,14 @@ class SettingsSearchContractTest {
     @Test
     fun `every searchable row label is a label the screen actually draws`() {
         val text = resolveEscapes(screen())
-        SettingsSearchIndex.entries.filterNot { it.isSection }.forEach { entry ->
+        // A shared index carries the phone-only rows too (settings reorg §15.2.7):
+        // "Episode layout" has no row on this page by design, and the surface
+        // filter keeps it out of the TV's results. It is not a stale entry, so it
+        // is skipped here rather than removed from the index.
+        SettingsSearchIndex.entries
+            .filterNot { it.isSection }
+            .filterNot { it.key in MOBILE_ONLY_SEARCH_KEYS }
+            .forEach { entry ->
             assertTrue(
                 "no row in SettingsScreen.kt is labelled \"${entry.label}\", so that " +
                     "index entry would be a result that jumps nowhere",
@@ -349,8 +356,10 @@ class SettingsSearchContractTest {
             "SettingsSectionHeader(\"Notifications\", first = true)",
             // "Buffering & Playback" used to open the Video & Audio pane; the
             // audio section moved in above it (settings reorg §5), so Audio is
-            // that pane's opener now and this list follows.
-            "SettingsSectionHeader(\"Behavior\", first = true)"
+            // that pane's opener now and this list follows. Subtitles opens on
+            // the language-and-fetching section the reorg put there (§7.1), not
+            // on Behavior.
+            "SettingsSectionHeader(\"Language & Fetching\", first = true)"
         ).forEach { opener ->
             assertTrue("missing pane-opening heading: $opener", text.contains(opener))
         }

@@ -39,7 +39,12 @@ class FrameRateEngageOrderContractTest {
 
     @Test
     fun `apply requests the mode id before it touches the surface`() {
-        val best = modeFirst.indexOf("FrameRateMatch.bestMode(contentFps, modes)")
+        // The third argument is the panel's whole-number preference (audit AFR
+        // S1): the search itself is unchanged, its answer can now be steered
+        // by the viewer's own answer about which of two modes presents better.
+        val best = modeFirst.indexOf(
+            "FrameRateMatch.bestMode(contentFps, modes, preferWholeRate)"
+        )
         val request = modeFirst.indexOf("best.id != modeId -> requestMode(best, contentFps, modeId)")
         val nothingBetter = modeFirst.indexOf("best == null -> askSurfaceIfPossible(contentFps, modeId)")
         assertTrue("the mode-first block must search the panel's modes", best >= 0)
@@ -123,9 +128,18 @@ class FrameRateEngageOrderContractTest {
             "and a panel that DID move ends the engage right there",
             confirm.contains("if (afterModeId != beforeModeId) return")
         )
+        // A stopped picture no longer DROPS the look (audit AFR S6): the
+        // request this look was posted for is still out, so dropping it left a
+        // session with no landing line at all. It is deferred and replayed once
+        // the picture moves, which is what this asserts now.
         assertTrue(
-            "a paused picture drops every look, the second one included",
-            confirm.contains("if (!isPlaybackActive()) return")
+            "a paused picture defers the look rather than losing it",
+            confirm.contains("if (!isPlaybackActive()) {") &&
+                confirm.contains("deferredConfirm = { confirm(")
+        )
+        assertTrue(
+            "and the deferred look only runs while playback is active",
+            confirm.contains("deferredConfirm = null")
         )
     }
 

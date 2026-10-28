@@ -200,7 +200,9 @@ class FrameRateResumeContractTest {
         assertTrue(
             "the resume is its own branch, before the engage ladder: the open ladder asked " +
                 "the surface before decode, which is the smooth point for it",
-            resume.contains("val best = FrameRateMatch.bestMode(contentFps, modes)")
+            // The third argument is the whole-number preference (audit AFR S1):
+            // a resume repairs the mode through the same search the engage uses.
+            resume.contains("val best = FrameRateMatch.bestMode(contentFps, modes, preferWholeRate)")
         )
         assertTrue(
             "the panel being in the wrong mode is the one thing a resume repairs",
@@ -244,8 +246,9 @@ class FrameRateResumeContractTest {
     @Test
     fun `a paused picture gets no backstop, and both engines say when it is paused`() {
         assertTrue(
-            "the delayed second look is dropped while playback is stopped",
-            confirm.contains("if (!isPlaybackActive()) return")
+            "a stopped picture defers the look instead of losing it (audit AFR S6)",
+            confirm.contains("if (!isPlaybackActive()) {") &&
+                confirm.contains("deferredConfirm = { confirm(")
         )
         assertTrue(
             "the native player answers from its own play intent",

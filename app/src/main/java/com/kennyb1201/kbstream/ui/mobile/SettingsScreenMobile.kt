@@ -801,7 +801,8 @@ private fun IntegrationsPaneMobile(
         activeProfile?.kidsMaxAge != null && activeProfile?.kidsHideAddons == true
     val keysHidden = activeProfile?.kidsMaxAge != null
     // Resume Source is a behaviour pref, not a secret: it re-seeds on the sync
-    // revision like every other synced row, and it is NOT gated by keysHidden.
+    // revision like every other synced row, and the kids-keys rule never
+    // touches it.
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
     var resumeAuthority by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getResumeAuthority(context))
@@ -868,7 +869,7 @@ private fun IntegrationsPaneMobile(
         // the tie-break the two trackers above feed, so it belongs with them -
         // it used to sit AFTER the MDBList key card, which put it on the far side
         // of a different concern. A behaviour preference, not a secret, so it
-        // re-seeds on the sync revision and is never gated by keysHidden.
+        // re-seeds on the sync revision and the kids-keys rule never touches it.
         ResumeAuthorityMobile(
             selected = resumeAuthority,
             onPick = { authority ->

@@ -271,8 +271,10 @@ class SettingsDeepDiveContractTest {
                 mobile.contains("var saved by remember(loadedValue) {")
         )
         assertTrue(
-            "the badge pack URL is per profile too",
-            mobile.contains("var badgePackInput by remember(activeProfile?.id) {")
+            "the badge pack URL is per profile too - keyed on the pane's own " +
+                "profile key now that the importer lives in Playback (settings reorg " +
+                "§4.5), which is the same per-profile seed by another name",
+            mobile.contains("var badgePackInput by remember(profileRowKey) {")
         )
     }
 

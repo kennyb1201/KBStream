@@ -88,9 +88,10 @@ class FrameRateSurfaceVoteContractTest {
             confirm.contains("askSurfaceIfPossible(")
         )
         assertTrue(
-            "a paused picture drops every look, the second one included: a repair against a " +
-                "stopped picture is the mid-session surface request this avoids",
-            confirm.contains("if (!isPlaybackActive()) return")
+            "a stopped picture defers the look, the second one included, and a repair against " +
+                "a running picture is the mid-session surface request this avoids (audit AFR S6)",
+            confirm.contains("if (!isPlaybackActive()) {") &&
+                confirm.contains("deferredConfirm = { confirm(")
         )
     }
 

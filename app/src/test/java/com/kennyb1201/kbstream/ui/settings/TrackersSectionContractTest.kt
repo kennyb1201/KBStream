@@ -6,17 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Integrations pane's Trackers section (decision, 2026-10-20).
+ * The Integrations pane's Trackers section, as the reorg left it.
  *
- * Simkl, Trakt, the MDBList key and the Resume Source picker are one subject -
- * the services that hold this account's viewing state, plus the tie-break
- * between them - so they live in one section between Profiles & Accounts and
- * API Keys instead of being split across two sections and two panes. Nothing
- * about the four items changed: same rows, same card, same pref.
+ * The section used to hold four items - Simkl, Trakt, the MDBList key and the
+ * Resume Source picker. The reorg split that by what each item IS (settings
+ * reorg §3.2, §3.3): the two trackers and the tie-break between them stay in
+ * Trackers, and every credential moved into one contiguous API Keys block, so
+ * "where do I paste a key" has one answer instead of two.
  *
  * The guardrails are the reason this is a test and not just a move:
  *  - the MDBList key is still a secret, so its FIELD can never be REVEALED on a
- *    kids profile (the card keeps its own `kidsKeysHidden` behaviour, now as
+ *    kids profile (the card keeps its own `kidsKeysHidden` behaviour, as
  *    `revealable = false` - the field itself stays so a profile holding no key
  *    can paste one);
  *  - Resume Source is a behaviour preference, not a secret, so it must NOT
@@ -31,7 +31,8 @@ class TrackersSectionContractTest {
 
     @Test
     fun `the tv pane puts Trackers between Profiles & Accounts and API Keys`() {
-        val profiles = tv.indexOf("SettingsSectionHeader(\"Profiles & Accounts\")")
+        // No closing paren on the first one: that section carries `first = true`.
+        val profiles = tv.indexOf("SettingsSectionHeader(\"Profiles & Accounts\"")
         val trackers = tv.indexOf("SettingsSectionHeader(\"Trackers\")")
         val keys = tv.indexOf("SettingsSectionHeader(\"API Keys\")")
 
@@ -41,29 +42,37 @@ class TrackersSectionContractTest {
     }
 
     @Test
-    fun `the tv Trackers section holds the four items in order`() {
+    fun `the tv Trackers section holds Simkl, Trakt and Resume Source in order`() {
         val trackers = tv.indexOf("SettingsSectionHeader(\"Trackers\")")
         val keys = tv.indexOf("SettingsSectionHeader(\"API Keys\")")
         val simkl = tv.indexOf("label = \"Simkl\"")
         val trakt = tv.indexOf("label = \"Trakt\"")
-        // The card's own connected/not-connected line: the field lives in it.
-        val mdbList = tv.indexOf("\"MDBList — Connected\"")
         val resume = tv.indexOf("ResumeAuthorityRow(")
 
-        listOf(simkl, trakt, mdbList, resume).forEach { index ->
+        listOf(simkl, trakt, resume).forEach { index ->
             assertTrue("every item must be inside the Trackers section", index in trackers until keys)
         }
         assertTrue("Simkl, then Trakt", simkl < trakt)
-        assertTrue("then the MDBList key card", trakt < mdbList)
-        assertTrue("then Resume Source as the last row", mdbList < resume)
+        assertTrue(
+            "then Resume Source as the last row - the tie-break the two above feed " +
+                "(settings reorg §3.2)",
+            trakt < resume
+        )
+        assertFalse(
+            "and the MDBList card is NOT in this section any more: it moved into " +
+                "the API Keys block (§3.3)",
+            tv.indexOf("\"MDBList — Connected\"") in trackers until keys
+        )
     }
 
     @Test
-    fun `the tv MDBList card moved intact, secret field and focus hook included`() {
-        val card = tv.substring(
-            tv.indexOf("// MDBList API key: mdblist.com key enables the critic ratings"),
-            tv.indexOf("// Resume Source: which tracker's resume point wins")
-        )
+    fun `the tv MDBList card moved into API Keys intact, focus hook and kids rule included`() {
+        val keys = tv.indexOf("SettingsSectionHeader(\"API Keys\")")
+        val cardStart = tv.indexOf("// MDBList API key: mdblist.com key enables the critic ratings")
+        val cardEnd = tv.indexOf("// ── OMDB KEY (awards on the detail screen)")
+        assertTrue("the card and the OMDb block must both exist", cardStart > keys && cardEnd > cardStart)
+
+        val card = tv.substring(cardStart, cardEnd)
         assertTrue(
             "the card's click must still raise the field's focus requester",
             card.contains("val mdbListFocusRequester = remember { FocusRequester() }") &&
@@ -87,8 +96,8 @@ class TrackersSectionContractTest {
                 card.contains("MdbListClient.verifyKey(context)")
         )
         assertTrue(
-            "and it is no longer under the API Keys heading",
-            tv.indexOf("\"MDBList — Connected\"") < tv.indexOf("SettingsSectionHeader(\"API Keys\")")
+            "and it leads the block, before OMDb (§3.3)",
+            cardStart in keys until cardEnd
         )
     }
 
@@ -104,20 +113,18 @@ class TrackersSectionContractTest {
             tvAfter.contains("kidsKeysHidden")
         )
 
-        val mobileRow = mobile.indexOf("ResumeAuthorityMobile(")
-        val mobileTail = mobile.substring(
-            mobile.indexOf("savedDescription = \"Key saved — ratings appear on the next title you open.\""),
-            mobileRow
-        )
+        val trackers = mobile.indexOf("SettingsSectionMobile(\"Trackers\")")
+        val keys = mobile.indexOf("SettingsSectionMobile(\"API Keys\")")
+        val mobileTail = mobile.substring(trackers, keys)
         assertFalse(
-            "phone: the resume row must sit OUTSIDE the MDBList keys-hidden branch, " +
-                "which has to close before it: $mobileTail",
+            "phone: the resume row must not sit behind a keys-hidden branch: $mobileTail",
             mobileTail.contains("keysHidden")
         )
         assertTrue(
-            "phone: and the row composes at pane level, right after the MDBList card " +
-                "closes - there is no keys branch left for it to sit in",
-            mobileTail.trimEnd().endsWith(")") && !mobileTail.contains("if (")
+            "phone: and it is composed once, at pane level, closing Trackers " +
+                "before the key block",
+            mobileTail.trimEnd().contains("ResumeAuthorityMobile(") &&
+                mobileTail.split("ResumeAuthorityMobile(").size == 2
         )
     }
 
@@ -134,19 +141,17 @@ class TrackersSectionContractTest {
 
         val simkl = mobile.indexOf("label = \"Simkl\"")
         val trakt = mobile.indexOf("label = \"Trakt\"")
-        val mdbList = mobile.indexOf("title = \"MDBList API Key\"")
         val resume = mobile.indexOf("ResumeAuthorityMobile(")
-        listOf(simkl, trakt, mdbList, resume).forEach { index ->
+        listOf(simkl, trakt, resume).forEach { index ->
             assertTrue("every item must be inside the Trackers section", index in trackers until keys)
         }
-        assertTrue("Simkl, then Trakt, then MDBList, then Resume", simkl < trakt && trakt < mdbList)
-        assertTrue("with Resume Source last", mdbList < resume)
+        assertTrue("Simkl, then Trakt, then Resume Source", simkl < trakt && trakt < resume)
 
-        assertTrue(
-            "and MDBList left API Keys",
-            mobile.indexOf("title = \"MDBList API Key\"") <
-                mobile.indexOf("SettingsSectionMobile(\"API Keys\")")
-        )
+        // The MDBList card, by contrast, is inside the key block now.
+        val mdbList = mobile.indexOf("title = \"MDBList API Key\"")
+        val omdb = mobile.indexOf("title = \"OMDb API Key\"")
+        assertTrue("the MDBList card lives inside API Keys", mdbList in keys until mobile.length)
+        assertTrue("and leads it, before OMDb", mdbList < omdb)
         assertFalse(
             "phone: no orphaned Continue Watching header",
             mobile.contains("SettingsSectionMobile(\"Continue Watching\")")
