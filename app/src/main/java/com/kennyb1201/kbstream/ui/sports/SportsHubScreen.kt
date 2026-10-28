@@ -1246,9 +1246,10 @@ private fun HubGrid(
  * the scroll cannot bounce mid-flight.
  *
  * A card that is ALREADY inside the viewport is the other page of the same
- * rule, and it answers zero: there is no landing to make. It is the page a
- * RE-REQUEST lands on, and re-requests are what a LIVE card produces, because
- * it remeasures on every 30s poll.
+ * rule: there is no landing to make, so it is asked only for the room the clip
+ * would otherwise eat of its focus cue, and nothing at all once it has that
+ * room. It is the page a RE-REQUEST lands on, and re-requests are what a LIVE
+ * card produces, because it remeasures on every 30s poll.
  *
  * The two pages are drawn here, in the one spec a scroll container reads,
  * rather than in the card they are about: `LocalBringIntoViewSpec` is consumed
@@ -1260,9 +1261,35 @@ private fun HubGrid(
  * `internal`, like the Home rail's own landing beside it, because what it
  * computes is arithmetic a contract test asserts exactly - with no device and
  * no D-pad.
+ *
+ * The room is kept for a card INSIDE the viewport as well, from v6 on, because
+ * v5's rule - zero for every card that fits - sheared the cue off a card
+ * resting within the room of an edge. That was the reported "clipping on bottom
+ * of matchup box": the box sits flush with the bottom of the list's clip, so
+ * its 2dp accent border and its 12dp glow end flat there while its last line
+ * (the channel name) is cut through. v5 answered zero because a card resting
+ * inside the margin had a distance to travel to it worked out from its own
+ * measured rectangle, and a LIVE card remeasures on the 30s poll - a poll that
+ * shifted that rectangle by any amount scrolled the card by the same amount.
+ * [deadzone] is what makes the room affordable: it is paid for only when the
+ * clip is eating MORE of it than that, so a sub-pixel remeasurement can never
+ * move a card that is already sitting, while a card flush with the edge - the
+ * case the viewer reports - gets its border and glow back.
  */
 @OptIn(ExperimentalFoundationApi::class)
 internal class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+
+    /**
+     * How much of [insetPx] a card may lose before the landing pays for it: a
+     * quarter of the room, 4dp at the app's 16dp row inset.
+     *
+     * Large enough that the sub-pixel wobble of a card remeasuring on the poll
+     * can never cross it - which is what v5's blanket zero bought - and small
+     * enough that only a sliver of the 12dp glow can ever be left under the
+     * clip, which reads as nothing at all next to a border and a glow sheared
+     * flat off the card.
+     */
+    private val deadzone get() = insetPx / 4f
 
     override fun calculateScrollDistance(
         offset: Float,
@@ -1277,23 +1304,22 @@ internal class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIn
         // the card that asked to be brought into view, which is also the thing
         // carrying the cue.
         val trailingEdge = offset + abs(size)
-        // Already inside the viewport: nothing to bring into view, and this is
-        // the page a RE-REQUEST lands on. Bring-into-view is asked again every
-        // time the focused card remeasures, and a LIVE card remeasures on the
-        // 30s poll. With the margin rule alone the answer there is not zero - a
-        // card resting inside the margin still has a distance to travel to it,
-        // worked out from the card's own measured rectangle - so a poll that
-        // shifted that rectangle by any amount scrolled the card by the same
-        // amount, and the focused card rode it up and down. The unfocused cards
-        // beside it never asked to be brought into view, which is why only one
-        // card moved. A card that is off the viewport is landed exactly as it
-        // always was: the margin rule below still decides that.
-        if (offset >= 0f && trailingEdge <= containerSize) return 0f
+        // How much of the cue room the clip is eating at each edge. Positive
+        // means the card has that much of its border-and-glow outside the
+        // viewport, whichever edge it is.
+        val shortOfTrailing = trailingEdge - (containerSize - margin)
+        val shortOfLeading = margin - offset
+        // Inside the viewport this is a RE-REQUEST page (see the class note):
+        // only the room the clip is actually eating is paid for, and only past
+        // the deadzone, so remeasurement cannot move a card that is already
+        // sitting. A card off the viewport is landed exactly as it always was.
+        val inside = offset >= 0f && trailingEdge <= containerSize
+        val floor = if (inside) deadzone else 0f
         return when {
-            // Past the bottom margin: scroll forward just far enough to clear it.
-            trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
+            // Past the bottom room: scroll forward just far enough to clear it.
+            shortOfTrailing > floor -> shortOfTrailing
             // Above the top one: back off by the same amount.
-            offset < margin -> offset - margin
+            shortOfLeading > floor -> -shortOfLeading
             // Already clear of both: no scroll at all, which is also what keeps
             // the spring quiet as focus moves around the visible part of a row.
             else -> 0f

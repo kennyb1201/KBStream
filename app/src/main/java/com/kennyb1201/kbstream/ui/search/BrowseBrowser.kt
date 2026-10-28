@@ -52,6 +52,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -73,6 +74,7 @@ import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
@@ -769,6 +771,10 @@ private fun SubmenuChipGrid(
     // so an unkeyed state carried the previous category's scroll position into
     // the next one - opening mid-list instead of at the top (see LS-P2-4).
     val gridState = remember(categoryKey) { LazyGridState() }
+    // The room a focused chip's own cue needs past the grid's edges: the trust
+    // the reveal below and the row measurement are in raw pixels. Read here
+    // because a suspend reveal function has no composition to read it from.
+    val chipCueRoomPx = with(LocalDensity.current) { KBFocusChipInset.roundToPx() }
     val armedIndex = armedChipName
         ?.takeIf { !returnChipConsumed }
         ?.let { name ->
@@ -857,7 +863,9 @@ private fun SubmenuChipGrid(
                 // moves only this grid.
                 modifier = Modifier.onFocusChanged { state ->
                     if (state.isFocused) {
-                        revealScope.launch { revealFocusedChipRow(gridState, entryIndex) }
+                        revealScope.launch {
+                            revealFocusedChipRow(gridState, entryIndex, chipCueRoomPx)
+                        }
                     }
                 },
                 grabInitialFocus = armedIndex == entryIndex,
@@ -944,13 +952,21 @@ private fun ChipRevealScope(content: @Composable () -> Unit) {
  *  - `scrollOffset` is negative for the bottom case (the item lands short of
  *    the viewport's top edge by its own height minus the viewport's), which is
  *    how `animateScrollToItem` aligns an item to the BOTTOM edge - the
- *    nearest-edge reveal the framework used to get right for rows 4+.
+ *    nearest-edge reveal the framework used to get right for rows 4+. The room
+ *    a focused chip draws its border and glow into is taken off the edge it is
+ *    landed on ([edgeInsetPx]), so a row the viewer is ON is revealed with its
+ *    whole cue instead of flush with the clip.
  *
  * A row that is not composed cannot be measured, and a cell that is not
  * composed cannot be focused either, so that case simply does nothing rather
  * than guessing a scroll from a constant.
  */
-private suspend fun revealFocusedChipRow(state: LazyGridState, index: Int) {
+private suspend fun revealFocusedChipRow(
+    state: LazyGridState,
+    index: Int,
+    /** The cue room in raw pixels, resolved by the caller from the theme. */
+    edgeInsetPx: Int
+) {
     val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
         ?: return
     when (
@@ -959,11 +975,14 @@ private suspend fun revealFocusedChipRow(state: LazyGridState, index: Int) {
             itemTop = info.offset.y,
             itemSize = info.size.height,
             viewportStart = state.layoutInfo.viewportStartOffset,
-            viewportEnd = state.layoutInfo.viewportEndOffset
+            viewportEnd = state.layoutInfo.viewportEndOffset,
+            edgeInset = edgeInsetPx
         )
     ) {
         ChipReveal.None -> Unit
-        is ChipReveal.Top -> runCatching { state.animateScrollToItem(target.index) }
+        is ChipReveal.Top -> runCatching {
+            state.animateScrollToItem(target.index, target.scrollOffset)
+        }
         is ChipReveal.Bottom -> runCatching {
             state.animateScrollToItem(target.index, target.scrollOffset)
         }

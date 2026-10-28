@@ -340,22 +340,23 @@ class SportsHubLayoutContractTest {
         SportsCardBringIntoViewSpec(insetPx = INSET_PX)
 
     @Test
-    fun `a card already inside the viewport is never scrolled, wherever it sits in it`() {
-        // v5, and the last of the movement: reported "only LIVE cards bob, the
-        // whole card moving up and down, focused only". v1-v3 made the card's
-        // CONTENT stable across a poll and v4 took the focus scale off live
-        // cards, so what was left was the scroll. Bring-into-view is asked again
-        // every time the focused card remeasures, and a LIVE card remeasures on
-        // the 30s poll - and a card resting INSIDE the margin still had a
-        // distance to travel to it, worked out from the card's own measured
-        // rectangle, so a poll that shifted that rectangle by any amount
-        // scrolled the card by the same amount. Inside the viewport the answer
-        // is now zero however the card measured, so no recomposition can move
-        // it. The two bands below are the ones the landing used to pull at, and
-        // the property that ends the bob is that both are 0f rather than a
-        // fresh distance.
+    fun `a card inside the viewport keeps its cue room, and a resting card still asks for nothing`() {
+        // v6. v5 answered zero for every card that fitted in the viewport (v5's
+        // own field report was "only LIVE cards bob, the whole card moving up
+        // and down, focused only": a card resting INSIDE the margin had a
+        // distance to travel to it worked out from its own measured rectangle,
+        // and a LIVE card remeasures on the 30s poll, so a poll that shifted
+        // that rectangle by any amount scrolled the card by the same amount).
+        // That zero also sheared the cue off a card resting within the margin of
+        // an edge - the reported "clipping on bottom of matchup box", where the
+        // box sits flush with the bottom of the list's clip and loses its 2dp
+        // border, its 12dp glow and part of its last line to it. The room is
+        // therefore paid for INSIDE the viewport too, but only past the
+        // deadzone: a card on - or within the deadzone of - the room line is
+        // left exactly where it is, which is the position a landing leaves it
+        // in, so a remeasurement still cannot move it.
         assertEquals(
-            "a card clear of both margins rests",
+            "a card clear of both rooms rests",
             0f,
             spec.calculateScrollDistance(
                 offset = 234f,
@@ -365,16 +366,62 @@ class SportsHubLayoutContractTest {
             TOLERANCE
         )
         assertEquals(
-            "and so does one inside the LEADING margin: inside the viewport is inside the viewport",
+            "a card sitting ON the trailing room line rests - the band that used to bob",
             0f,
-            spec.calculateScrollDistance(offset = 5f, size = CARD_HEIGHT, containerSize = VIEWPORT),
+            spec.calculateScrollDistance(
+                offset = VIEWPORT - INSET_PX - CARD_HEIGHT,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
             TOLERANCE
         )
         assertEquals(
-            "and one that stops a few pixels short of the trailing edge",
+            "and so does one on the leading room line",
             0f,
             spec.calculateScrollDistance(
+                offset = INSET_PX,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        assertEquals(
+            "and one a couple of pixels inside the trailing room line, which is the jitter the deadzone is for",
+            0f,
+            spec.calculateScrollDistance(
+                offset = VIEWPORT - INSET_PX - CARD_HEIGHT + 2f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        // The room the clip would be eating, paid for on both edges: the card is
+        // moved by exactly what it is short of the room line, no more.
+        assertEquals(
+            "a card stopping a few pixels short of the trailing edge gets that much of its room back",
+            INSET_PX - 5f,
+            spec.calculateScrollDistance(
                 offset = VIEWPORT - CARD_HEIGHT - 5f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        assertEquals(
+            "and one the same distance inside the leading edge is backed off by as much",
+            -(INSET_PX - 5f),
+            spec.calculateScrollDistance(
+                offset = 5f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        assertEquals(
+            "while a card flush with the trailing edge - the reported case - gets its whole room",
+            INSET_PX,
+            spec.calculateScrollDistance(
+                offset = VIEWPORT - CARD_HEIGHT,
                 size = CARD_HEIGHT,
                 containerSize = VIEWPORT
             ),

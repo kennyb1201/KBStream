@@ -80,20 +80,29 @@ internal fun browseChipNeedsReveal(index: Int, showing: Iterable<Int>): Boolean 
  */
 internal sealed interface ChipReveal {
 
-    /** The row is already inside the viewport: scrolling would only jitter. */
+    /** The row is already inside the viewport, cue and all: scrolling would only jitter. */
     data object None : ChipReveal
 
-    /** The row is above the viewport: align it to the top edge. */
-    data class Top(val index: Int) : ChipReveal
+    /**
+     * The row is above the viewport (or too close to its top edge to show its
+     * cue): align its top to the viewport's top edge plus the cue room.
+     *
+     * [scrollOffset] is what `animateScrollToItem` takes to do that: NEGATIVE,
+     * because the row's top has to come to rest BELOW the viewport's top edge by
+     * the room its own focus cue needs above it.
+     */
+    data class Top(val index: Int, val scrollOffset: Int = 0) : ChipReveal
 
     /**
-     * The row is below the viewport: align it to the bottom edge, the nearest
-     * of the two, so the rows above it stay where the viewer left them.
+     * The row is below the viewport (or too close to its bottom edge): align it
+     * to the bottom edge, the nearest of the two, so the rows above it stay
+     * where the viewer left them.
      *
      * [scrollOffset] is what `animateScrollToItem` takes, and it is NEGATIVE
      * for the ordinary case of a row shorter than the viewport: the item is
-     * placed `viewport - item` pixels above the top edge, which puts its
-     * bottom flush with the viewport's bottom.
+     * placed `viewport - item - room` pixels above the top edge, which puts its
+     * bottom the cue room's worth above the viewport's bottom - the room the
+     * chip's border and glow draw into.
      */
     data class Bottom(val index: Int, val scrollOffset: Int) : ChipReveal
 }
@@ -107,18 +116,32 @@ internal sealed interface ChipReveal {
  * [viewportStart] / [viewportEnd] are the grid's own visible bounds. A
  * degenerate layout - no index, no height, an inverted viewport - is None: the
  * grid must never scroll on a measurement it cannot trust.
+ *
+ * [edgeInset] is the room the focused chip's own cue needs past either edge, in
+ * raw pixels - its 2dp accent border and its glow draw OUTSIDE its layout
+ * rectangle, and the grid clips its content to its own bounds, so a row landed
+ * flush with an edge loses both (the caller passes the theme's own chip inset). A row is therefore not "in view" until that room is there
+ * too, and the landing keeps it. The default of 0 is the arithmetic without the
+ * room, which is what the rule was before the grid's chips were reported
+ * clipped along the bottom of the surface.
  */
 internal fun chipRevealTarget(
     index: Int,
     itemTop: Int,
     itemSize: Int,
     viewportStart: Int,
-    viewportEnd: Int
+    viewportEnd: Int,
+    edgeInset: Int = 0
 ): ChipReveal {
     if (index < 0 || itemSize <= 0 || viewportEnd <= viewportStart) return ChipReveal.None
-    if (itemTop >= viewportStart && itemTop + itemSize <= viewportEnd) return ChipReveal.None
-    if (itemTop < viewportStart) return ChipReveal.Top(index)
-    return ChipReveal.Bottom(index, itemSize - (viewportEnd - viewportStart))
+    if (
+        itemTop >= viewportStart + edgeInset &&
+        itemTop + itemSize <= viewportEnd - edgeInset
+    ) {
+        return ChipReveal.None
+    }
+    if (itemTop < viewportStart + edgeInset) return ChipReveal.Top(index, -edgeInset)
+    return ChipReveal.Bottom(index, itemSize - (viewportEnd - viewportStart) + edgeInset)
 }
 
 /**

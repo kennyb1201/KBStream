@@ -125,12 +125,18 @@ class BrowseRulesTest {
     /** The grid's viewport in these cases: 0..900 (a 360dp rail at 2.5x). */
     private val viewport = 0 to 900
 
-    private fun reveal(index: Int, itemTop: Int, itemSize: Int) = chipRevealTarget(
+    private fun reveal(
+        index: Int,
+        itemTop: Int,
+        itemSize: Int,
+        edgeInset: Int = 0
+    ) = chipRevealTarget(
         index = index,
         itemTop = itemTop,
         itemSize = itemSize,
         viewportStart = viewport.first,
-        viewportEnd = viewport.second
+        viewportEnd = viewport.second,
+        edgeInset = edgeInset
     )
 
     @Test
@@ -139,12 +145,12 @@ class BrowseRulesTest {
         // consumed automatic request used to cause.
         assertEquals(ChipReveal.None, reveal(index = 3, itemTop = 300, itemSize = 120))
         assertEquals(
-            "flush with both edges is still visible",
+            "and with no room asked for, flush with both edges counts as visible",
             ChipReveal.None,
             reveal(index = 3, itemTop = 0, itemSize = 120)
         )
         assertEquals(
-            "flush with the bottom edge too",
+            "and flush with the bottom edge too",
             ChipReveal.None,
             reveal(index = 3, itemTop = 780, itemSize = 120)
         )
@@ -163,7 +169,8 @@ class BrowseRulesTest {
     fun `a row below the grid viewport aligns to the bottom edge`() {
         // The offset is the row's own height minus the viewport's, which is
         // the NEGATIVE number animateScrollToItem needs to put the row's
-        // bottom flush with the viewport's bottom: 120 - 900 = -780.
+        // bottom on the viewport's bottom edge: 120 - 900 = -780. The caller
+        // adds the cue room to it (see the landing test below).
         assertEquals(
             ChipReveal.Bottom(index = 9, scrollOffset = -780),
             reveal(index = 9, itemTop = 950, itemSize = 120)
@@ -193,6 +200,41 @@ class BrowseRulesTest {
         // revealed from the top.
         assertEquals(ChipReveal.Bottom(3, -780), reveal(index = 3, itemTop = 784, itemSize = 120))
         assertEquals(ChipReveal.Top(3), reveal(index = 3, itemTop = -5, itemSize = 120))
+    }
+
+    @Test
+    fun `a row landed on an edge keeps the room the focused chip's cue draws into`() {
+        // Reported: "clipping on the last chips on search browse bottom of tile".
+        // The reveal aligned a row's bottom flush with the grid's bottom edge,
+        // and a chip's cue is not inside its layout rectangle - it grows by
+        // KBFocusChip and carries a glow - so the row the viewer was ON lost its
+        // 2dp border and its glow flat along the clip, with its last line of
+        // text cut through. The room (the theme's KBFocusChipInset: 30px in
+        // these cases) is taken off the edge the row lands on.
+        assertEquals(
+            "a row flush with the bottom edge lands with the room below it",
+            ChipReveal.Bottom(index = 8, scrollOffset = -750),
+            reveal(index = 8, itemTop = 780, itemSize = 120, edgeInset = 30)
+        )
+        assertEquals(
+            "and one at the top edge lands with the room ABOVE it, which is why Top carries an offset",
+            ChipReveal.Top(index = 2, scrollOffset = -30),
+            reveal(index = 2, itemTop = 0, itemSize = 120, edgeInset = 30)
+        )
+    }
+
+    @Test
+    fun `a row with the room around it already is still revealed by no scroll`() {
+        assertEquals(
+            "clear of both edges by more than the room",
+            ChipReveal.None,
+            reveal(index = 3, itemTop = 40, itemSize = 120, edgeInset = 30)
+        )
+        assertEquals(
+            "and exactly the room away from each edge is inside it",
+            ChipReveal.None,
+            reveal(index = 3, itemTop = 30, itemSize = 840, edgeInset = 30)
+        )
     }
 
     @Test

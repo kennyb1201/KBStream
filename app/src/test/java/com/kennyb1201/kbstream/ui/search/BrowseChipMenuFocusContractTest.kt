@@ -122,11 +122,16 @@ class BrowseChipMenuFocusContractTest {
         )
         assertTrue(
             "the reveal the grid performs instead is a nearest-edge " +
-                "animateScrollToItem driven by the chip's own focus event",
+                "animateScrollToItem driven by the chip's own focus event, " +
+                "landing on the offset the rule computed (which carries the " +
+                "room the focused chip's cue draws into) from BOTH arms",
             grid.contains("if (state.isFocused) {") &&
-                grid.contains("revealScope.launch { revealFocusedChipRow(gridState, entryIndex) }") &&
-                grid.contains("state.animateScrollToItem(target.index)") &&
-                grid.contains("state.animateScrollToItem(target.index, target.scrollOffset)")
+                grid.contains(
+                    "revealScope.launch { revealFocusedChipRow(gridState, entryIndex, chipCueRoomPx) }"
+                ) &&
+                Regex("state.animateScrollToItem\\(target.index, target.scrollOffset\\)")
+                    .findAll(grid)
+                    .count() == 2
         )
         assertTrue(
             "the row's height is the one the grid measured, so a two-line " +
@@ -137,7 +142,15 @@ class BrowseChipMenuFocusContractTest {
         assertTrue(
             "the decision itself is the pure rule, not arithmetic inline in " +
                 "the composable",
-            grid.contains("val target = chipRevealTarget(")
+            grid.contains("val target = chipRevealTarget(") &&
+                grid.contains("edgeInset = edgeInsetPx")
+        )
+        assertTrue(
+            "and the room is the theme's own chip inset, resolved where a " +
+                "composition can resolve it",
+            grid.contains(
+                "val chipCueRoomPx = with(LocalDensity.current) { KBFocusChipInset.roundToPx() }"
+            )
         )
     }
 
