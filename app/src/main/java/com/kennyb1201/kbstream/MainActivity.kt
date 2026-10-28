@@ -1566,11 +1566,12 @@ fun AppRoot(
             if (replay != null) {
                 Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
                 pendingAutoPlay = null
-                // The link cache stores sources, not their add-ons, so a replay
-                // hands the player an unknown-add-on list: nothing is skipped
-                // and nothing is demoted off a stale name, which is the safe
-                // default (see SourceAddonSession).
-                screen = pending.toPlayerScreen(replay, cached.sources, emptyList())
+                // The names the resolve recorded travel with the cached rows,
+                // so a replay hands the player the same picture rather than an
+                // all-unknown list (see PlayedLinkCache.CachedPlay.addons). An
+                // entry stored before they were kept answers an empty list,
+                // which is the old, safe default (see SourceAddonSession).
+                screen = pending.toPlayerScreen(replay, cached.sources, cached.addons)
                     .copy(linkCacheKey = pending.streamKey)
                 return@LaunchedEffect
             }
@@ -1685,7 +1686,8 @@ fun AppRoot(
                     context,
                     pending.streamKey,
                     start.stream,
-                    startedSources
+                    startedSources,
+                    startedAddons
                 )
                 // ...and stamp the key on the player screen as well, exactly as
                 // the cache-hit path above does: the key is the invalidation
@@ -3200,7 +3202,13 @@ fun AppRoot(
                             .copy(linkCacheKey = streamKey)
                         // Remember the manual pick too, so a replay of this
                         // episode within the link's lifetime skips the resolve.
-                        PlayedLinkCache.remember(context, streamKey, stream, allSources)
+                        PlayedLinkCache.remember(
+                            context,
+                            streamKey,
+                            stream,
+                            allSources,
+                            sourceAddons
+                        )
                     }
                 },
 

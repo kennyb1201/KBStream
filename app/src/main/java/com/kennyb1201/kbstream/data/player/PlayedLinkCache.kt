@@ -68,7 +68,16 @@ internal object PlayedLinkCache {
         val fileIdx: Int? = null,
         val headers: Map<String, String> = emptyMap(),
         val drmLicenseUrl: String? = null,
-        val drmHeaders: Map<String, String> = emptyMap()
+        val drmHeaders: Map<String, String> = emptyMap(),
+        /**
+         * The add-on this row came from, so a replay can hand the player the
+         * same picture the resolve did (see [CachedPlay.addons]).
+         *
+         * Stored per row rather than as a parallel array: the array rule is
+         * "same length as the list", and a list rebuilt from a cache with one
+         * undescribed row is exactly where that rule breaks.
+         */
+        val addon: String? = null
     )
 
     @Serializable
@@ -81,21 +90,41 @@ internal object PlayedLinkCache {
     @Serializable
     private data class Store(val entries: Map<String, Entry> = emptyMap())
 
-    /** What the auto-play path needs to skip resolution. */
-    data class CachedPlay(val played: Stream, val sources: List<Stream>)
+    /**
+     * What the auto-play path needs to skip resolution.
+     *
+     * [addons] is the add-on name for each row of [sources], in that order, or
+     * empty when none was recorded: the replay path used to hand the player an
+     * empty array, so every replayed row was an unknown add-on - nothing was
+     * skipped and nothing was demoted off a stale name (safe, but blind where
+     * the resolve had known).
+     */
+    data class CachedPlay(
+        val played: Stream,
+        val sources: List<Stream>,
+        val addons: List<String?> = emptyList()
+    )
 
     /**
      * Records [played] and the ordered [sources] it came from. A blank key or a
      * blank URL is a no-op: there would be nothing to replay.
      */
     @Synchronized
-    fun remember(context: Context, key: String, played: Stream, sources: List<Stream>) {
+    fun remember(
+        context: Context,
+        key: String,
+        played: Stream,
+        sources: List<Stream>,
+        addons: List<String?> = emptyList()
+    ) {
         if (key.isBlank() || played.url.isNullOrBlank()) return
         runCatching {
             val entries = LinkedHashMap(read(context).entries)
             entries[key] = Entry(
-                played = played.toCached(),
-                sources = sources.take(MAX_SOURCES_PER_ENTRY).map { it.toCached() },
+                played = played.toCached(addons.addonAt(sources.indexOfFirst { it === played })),
+                sources = sources.take(MAX_SOURCES_PER_ENTRY).mapIndexed { index, stream ->
+                    stream.toCached(addons.addonAt(index))
+                },
                 atMs = System.currentTimeMillis()
             )
 
@@ -123,7 +152,14 @@ internal object PlayedLinkCache {
         if (System.currentTimeMillis() - entry.atMs > TTL_MS) return null
         val played = entry.played.toStream() ?: return null
         if (played.url.isNullOrBlank()) return null
-        return CachedPlay(played, entry.sources.mapNotNull { it.toStream() })
+        // The names travel with the rows they describe, so a replay keeps the
+        // picture the resolve had instead of an all-unknown list. Built as
+        // pairs so the two lists cannot drift: a row with no URL is dropped
+        // from both, which is what keeps a shorter list aligned.
+        val pairs = entry.sources.mapNotNull { cached ->
+            cached.toStream()?.let { stream -> stream to cached.addon }
+        }
+        return CachedPlay(played, pairs.map { it.first }, pairs.map { it.second })
     }
 
     @Synchronized
@@ -154,7 +190,11 @@ internal object PlayedLinkCache {
         }
     }
 
-    private fun Stream.toCached(): CachedStream = CachedStream(
+    /** The name at [index], or null when the array is short or absent. */
+    private fun List<String?>.addonAt(index: Int): String? =
+        if (index >= 0) getOrNull(index) else null
+
+    private fun Stream.toCached(addon: String? = null): CachedStream = CachedStream(
         url = url.orEmpty(),
         audioUrl = audioUrl,
         name = name,
@@ -164,7 +204,8 @@ internal object PlayedLinkCache {
         fileIdx = fileIdx,
         headers = requestHeaders,
         drmLicenseUrl = drm?.licenseUrl,
-        drmHeaders = drm?.headers.orEmpty()
+        drmHeaders = drm?.headers.orEmpty(),
+        addon = addon
     )
 
     /** Null for a cached row with no URL — nothing to hand the player. */

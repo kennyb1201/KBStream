@@ -95,6 +95,28 @@ class PlayedLinkCacheTest {
     }
 
     @Test
+    fun `a remembered link keeps its add-on names for the replay`() {
+        val played = stream("https://cdn.example/head.mp4")
+        val fallback = stream("https://cdn.example/fallback.mp4")
+
+        PlayedLinkCache.remember(
+            context,
+            "tt-addons",
+            played,
+            listOf(played, fallback),
+            listOf("Torrentio", null)
+        )
+
+        val cached = PlayedLinkCache.get(context, "tt-addons")
+        assertNotNull("the entry must be a hit", cached)
+        // The replay used to hand the player an empty array, so every row was
+        // an unknown add-on where the resolve had known - and a row it did not
+        // know stays null rather than taking a neighbour's name.
+        assertEquals(listOf("Torrentio", null), cached!!.addons)
+        assertEquals("and the rows still line up with the names", 2, cached.sources.size)
+    }
+
+    @Test
     fun `an unknown key is a miss`() {
         assertNull(PlayedLinkCache.get(context, "never-stored"))
     }
