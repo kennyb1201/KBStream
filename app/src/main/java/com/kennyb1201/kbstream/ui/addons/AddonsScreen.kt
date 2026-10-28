@@ -124,6 +124,14 @@ fun AddonsScreen(
     var selectedId by remember { mutableStateOf<String?>(null) }
     var renameText by remember { mutableStateOf("") }
     var showAddPanel by remember { mutableStateOf(false) }
+    // A3: a press on ADD keeps the sheet up until the add ANSWERS. Closing it
+    // on the press hid both the "ADDING…" state the dialog already draws and
+    // the error a bad URL produces, so a refused manifest looked like a press
+    // that did nothing. These two track that in-flight press: [addPending] is
+    // "the sheet is up because of a press", and [addSawLoading] is "the add
+    // actually started", which the first frame of the effect cannot assume.
+    var addPending by remember { mutableStateOf(false) }
+    var addSawLoading by remember { mutableStateOf(false) }
     var showRenamePanel by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
     // Destructive-action guard for collection sources: OK on a chip only
@@ -412,19 +420,38 @@ fun AddonsScreen(
             onUrlChange = { urlInput = it },
             onDismiss = {
                 showAddPanel = false
+                addPending = false
+                addSawLoading = false
                 urlInput = ""
             },
             onAdd = {
                 viewModel.addAddon(urlInput)
-                showAddPanel = false
-                urlInput = ""
+                addPending = true
             },
             onAddPreset = { presetUrl ->
                 viewModel.addAddon(presetUrl)
-                showAddPanel = false
-                urlInput = ""
+                addPending = true
             }
         )
+    }
+
+    // The other half of A3: the sheet closes when the add ANSWERS, not when the
+    // press happens. The page's error row is what reports a refused manifest,
+    // and it is only readable once the sheet is out of the way - so a failure
+    // closes it too, and leaves the URL in the field (it is cleared only on
+    // success) so re-opening the sheet offers the bad URL for a correction
+    // instead of a retype.
+    LaunchedEffect(isLoading) {
+        if (!addPending) return@LaunchedEffect
+        if (isLoading) {
+            addSawLoading = true
+            return@LaunchedEffect
+        }
+        if (!addSawLoading) return@LaunchedEffect
+        addSawLoading = false
+        addPending = false
+        showAddPanel = false
+        if (error == null) urlInput = ""
     }
 
     if (showRenamePanel && selectedAddon != null) {
