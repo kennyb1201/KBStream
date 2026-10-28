@@ -391,6 +391,18 @@ internal object SettingsSearchIndex {
             "hide unreleased upcoming not yet aired"
         ),
         SettingSearchEntry(
+            "playback.cellular-data-saver",
+            SettingsPane.PLAYBACK,
+            "Cellular Data Saver",
+            "cellular data saver metered mobile network data plan"
+        ),
+        SettingSearchEntry(
+            "interface.hide-watched-home",
+            SettingsPane.INTERFACE,
+            "Hide Watched Titles on Home Rails",
+            "hide watched finished completed home rail"
+        ),
+        SettingSearchEntry(
             "interface.english-only",
             SettingsPane.INTERFACE,
             "English-Only Browse & Discover",

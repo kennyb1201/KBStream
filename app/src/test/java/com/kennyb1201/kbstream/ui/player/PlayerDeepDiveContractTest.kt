@@ -134,16 +134,34 @@ class PlayerDeepDiveContractTest {
     }
 
     @Test
-    fun `a hash row pressed in either engine's own picker says why and stays put`() {
+    fun `a hash row pressed in either engine's own picker is prepared, not skipped`() {
         listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
             val row = window(src, "isSelected = stream.url == currentUrl", 1_400)
             assertTrue(
-                "$who must refuse a row it cannot open rather than closing the picker over it",
+                "$who must not open a row with no URL of its own directly",
                 row.contains("stream.url.isNullOrBlank()")
             )
             assertTrue(
-                "$who must say what the row needs (TorBox resolves it, not the player)",
-                row.contains("needs TorBox")
+                "$who must hand that row to the resolver, which is what the streams " +
+                    "screen does with the same row",
+                row.contains("resolveAndSwitch(stream)")
+            )
+            // The resolver itself: TorBox's own call, the resolved row replacing
+            // the hash in this session's list, and a refusal that stays open
+            // with the reason instead of dismissing into an unchanged player.
+            val resolver = functionBody(src, "private fun resolveAndSwitch(stream: Stream) {")
+            assertTrue(
+                "$who must ask TorBox for the CDN link",
+                resolver.contains("TorBoxResolve.playableStream(")
+            )
+            assertTrue(
+                "$who must keep the picker open and say why when the resolve fails",
+                resolver.contains("needs TorBox") && resolver.contains("return@launch")
+            )
+            assertTrue(
+                "$who must continue from the prepared row, not the hash it replaced",
+                resolver.contains("sources = sources.toMutableList()") &&
+                    resolver.contains("switchToSource(resolved)")
             )
         }
     }

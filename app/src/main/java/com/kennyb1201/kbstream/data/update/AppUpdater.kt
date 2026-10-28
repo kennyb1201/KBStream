@@ -11,6 +11,8 @@ import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.NetworkMetering
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -407,6 +409,21 @@ object AppUpdater {
     }
 
     fun downloadAndInstall(context: Context, available: UpdateState.Available) {
+        // The cellular data saver covers the self-update as well as playback: an
+        // APK is tens of megabytes, and starting one on a phone's data plan
+        // without being asked is exactly what the saver exists to prevent (see
+        // AppPreferences.getCellularDataSaver). The refusal is loud - a Failed
+        // state carrying the reason, which the Settings row and the popup both
+        // show - because a silent no-op on an Update press reads as a broken
+        // updater, and the viewer can simply turn the saver off.
+        if (AppPreferences.getCellularDataSaver(context) &&
+            NetworkMetering.isMetered(context)
+        ) {
+            state.value = UpdateState.Failed(
+                "Connected over cellular - turn off the data saver in Settings to download updates"
+            )
+            return
+        }
         state.value = UpdateState.Downloading(
             percent = 0,
             versionName = available.versionName,

@@ -1001,6 +1001,31 @@
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
 
+            <!-- SUBTITLES: MPV's INFO panel has carried this block all along
+                 (see activity_mpv_player.xml); Exo's listed source, engine,
+                 file, video and audio and stopped there, so "which subtitle is
+                 playing, and is the offset mine or the file's" had no answer
+                 on the engine most sessions run (audit U-F6). -->
+            <TextView
+                android:id="@+id/info_subtitles_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="SUBTITLES"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_subtitles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
             <TextView
                 android:id="@+id/info_hint"
                 android:layout_width="match_parent"

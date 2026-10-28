@@ -279,7 +279,9 @@ class StreamsRankWiringContractTest {
             "StreamsScreen.kt must cap the automatic pick: without it a 1080p " +
                 "ceiling still starts a 4K head",
             tv.contains("AutoPlayQuality.cappedPick(") &&
-                tv.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+                // The effective ceiling (the viewer's own cap, narrowed by the
+                // cellular data saver on a metered connection).
+                tv.contains("cap = AppPreferences.getEffectiveAutoPlayQuality(context)")
         )
 
         // The phone has one capped pick, and one caller of it: the picker's own
@@ -294,7 +296,7 @@ class StreamsRankWiringContractTest {
             "autoplayPickFor must cap the automatic pick: without it a 1080p " +
                 "ceiling still starts a 4K head",
             shared.contains("AutoPlayQuality.cappedPick(") &&
-                shared.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+                shared.contains("cap = AppPreferences.getEffectiveAutoPlayQuality(context)")
         )
         assertTrue(
             "the phone picker must reach the capped pick through autoplayPickFor, " +
@@ -335,7 +337,7 @@ class StreamsRankWiringContractTest {
                 "runs, so a link remembered before the cap was set is exactly how " +
                 "a 4K starts under a 1080p ceiling",
             replay.contains("AutoPlayQuality.cappedPick(") &&
-                replay.contains("cap = AppPreferences.getMaxAutoPlayQuality(context)")
+                replay.contains("cap = AppPreferences.getEffectiveAutoPlayQuality(context)")
         )
         assertTrue(
             "and a cache whose every source is over the ceiling must fall through " +

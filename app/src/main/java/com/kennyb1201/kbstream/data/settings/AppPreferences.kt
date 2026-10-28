@@ -133,6 +133,13 @@ object AppPreferences {
     // exactly the two who disagree about it.
     private const val KEY_SPOILER_FREE = "spoiler_free"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
+    // Hide finished titles from every Home rail (not from Up Next or the
+    // Library). Synced like the digital filter beside it: it is a statement
+    // about what the viewer wants offered to them, and the other TV in the
+    // house should not have to be told separately.
+    private const val KEY_HIDE_WATCHED_ON_HOME = "home_rail_hide_watched"
+    // The cellular data saver (see getCellularDataSaver). Device-local.
+    private const val KEY_CELLULAR_DATA_SAVER = "cellular_data_saver"
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_LANDSCAPE_POSTERS = "landscape_posters"
@@ -444,6 +451,46 @@ object AppPreferences {
     fun setMaxAutoPlayQuality(context: Context, cap: Int) {
         prefs(context).edit().putInt(KEY_MAX_AUTO_PLAY_QUALITY, cap).apply()
         notifyDisplayPrefChanged()
+    }
+
+    // ── Cellular data saver ────────────────────────────────────────
+    //
+    // On by default and device-local: it is a statement about THIS device's
+    // connection (the same reasoning as the decode ceiling beside it), and the
+    // app's standing cellular caution is that nothing large is spent on a data
+    // plan without being asked for. What it does is narrow, not silent:
+    //
+    //  - auto-play's quality ceiling becomes 1080p while the connection is
+    //    metered, so a phone does not open a 60 Mbps 4K file on its data plan;
+    //  - the self-updater does not start a download on a metered connection.
+    //
+    // Everything else is untouched - the picker still lists every source, and
+    // a manual press on a 4K row still plays it. Turning it off restores the
+    // viewer's own ceiling everywhere.
+    fun getCellularDataSaver(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CELLULAR_DATA_SAVER, true)
+
+    fun setCellularDataSaver(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CELLULAR_DATA_SAVER, enabled).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    /**
+     * The auto-play ceiling to use RIGHT NOW: the viewer's own choice, narrowed
+     * to 1080p while the cellular data saver applies.
+     *
+     * Every auto-play call site reads this rather than
+     * [getMaxAutoPlayQuality], so "what a box can decode" and "what this
+     * connection should spend" cannot be honoured by only one of the five
+     * screens that start a stream by themselves.
+     */
+    fun getEffectiveAutoPlayQuality(context: Context): Int {
+        val chosen = getMaxAutoPlayQuality(context)
+        if (!getCellularDataSaver(context)) return chosen
+        if (!NetworkMetering.isMetered(context)) return chosen
+        // CAP_AUTO is "whatever is best", the loosest of the ceilings, so it is
+        // the one the saver has to narrow; an explicit 720p stays 720p.
+        return if (chosen == AutoPlayQuality.CAP_AUTO) AutoPlayQuality.CAP_1080 else chosen
     }
 
     // ── Binge group (Stremio behaviorHints.bingeGroup) ───────────────
@@ -1755,6 +1802,21 @@ object AppPreferences {
 
     fun setHomeRailHideUpcoming(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HIDE_UPCOMING, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Home rails: hide titles this profile has finished ────────────
+    //
+    // Off by default, exactly like the Library's own WATCHED HIDDEN filter is:
+    // a rail that silently drops what the viewer just finished reads as a rail
+    // that lost a title. Only COMPLETED titles are hidden - a title with a
+    // resume point is still being watched, and Home's Up Next rail is where it
+    // belongs, not something to sweep away.
+    fun getHomeRailHideWatched(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HIDE_WATCHED_ON_HOME, false)
+
+    fun setHomeRailHideWatched(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HIDE_WATCHED_ON_HOME, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

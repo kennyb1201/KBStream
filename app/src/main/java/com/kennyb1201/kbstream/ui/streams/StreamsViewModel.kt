@@ -67,7 +67,16 @@ data class ResolvedSources(
      * so a viewer with a Plex-class add-on first and AIOStreams second saw one
      * add-on's rows, no tabs and no way out, however long they waited.
      */
-    val complete: Boolean = true
+    val complete: Boolean = true,
+    /**
+     * The add-ons that FAILED for this answer, by their own names.
+     *
+     * Distinct from an empty success: an add-on that answered with nothing is
+     * working, one that threw is not, and the picker says so (see the notice in
+     * StreamsScreen) instead of leaving the viewer to wonder why a source they
+     * expected is never in the list.
+     */
+    val failedAddons: List<String> = emptyList()
 )
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
@@ -170,6 +179,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
     private val _debug = MutableStateFlow<List<String>>(emptyList())
     val debug: StateFlow<List<String>> = _debug.asStateFlow()
+
+    /**
+     * The add-ons that FAILED for the streams on screen, by name.
+     *
+     * Published with the list rather than derived on the screen, because the
+     * failure is only known here, where each add-on's own result still exists
+     * (see [ResolvedSources.failedAddons]).
+     */
+    private val _addonFailures = MutableStateFlow<List<String>>(emptyList())
+    val addonFailures: StateFlow<List<String>> = _addonFailures.asStateFlow()
 
     // The last target ("contentType:streamId") this ViewModel fetched. Lets the
     // streams screen skip a redundant re-fetch when it re-opens a target that
@@ -275,6 +294,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _debug.value = debugLines
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
+            _addonFailures.value = resolved.failedAddons
             _loadedKey.value = "$contentType:$streamId"
             _isLoading.value = false
         }
@@ -376,6 +396,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _debug.value = debugLines
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
+            _addonFailures.value = resolved.failedAddons
             // Only a COMPLETE collection may tell the picker this target is
             // loaded: that stamp is the picker's licence to skip its own fetch
             // (see MainActivity's Screen.Streams), so stamping a truncated
@@ -739,7 +760,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         return ResolvedSources(
             streams = markedStreams,
             addons = markedStreams.map { addonByStream[streamKey(it)] },
-            complete = complete
+            complete = complete,
+            // Which add-ons did not answer at all. A failed add-on contributes
+            // no rows, so a picker built from three add-ons where one is down
+            // looked exactly like a title whose third source had nothing today
+            // - the failure itself was only ever in debugLines.
+            failedAddons = results
+                .filterIsInstance<AddonLoadResult.Failure>()
+                .map { it.addonName }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sorted()
         )
     }
 
@@ -793,7 +824,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             season = episode?.first,
             episode = episode?.second,
             runtimeMinutes = runtimeMinutes,
-            cap = AppPreferences.getMaxAutoPlayQuality(getApplication())
+            cap = AppPreferences.getEffectiveAutoPlayQuality(getApplication())
         )
     }
 

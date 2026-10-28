@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -111,14 +112,45 @@ private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
 
 // The gap BETWEEN cells, as opposed to the inset at the grid's edge.
 //
-// It is bigger than KBFocusChipInset on purpose. The edge inset only has to
-// cover ONE focused chip's overhang into its own clip; a shared gap has to
-// cover the overhang of the chip on each side of it, and two neighbours can be
-// focused at different times rather than at once, so the room has to fit the
-// limit case: 3% of a 216dp cell (6.5dp) of focus growth plus the 8dp
-// KBFocusGlowSmall glow drawn outside the chip = 14.5dp. 16dp clears it and is
-// still visibly looser than the 8dp this grid had before the focus cue.
+// This used to BE the room the focus cue got, which could not work for every
+// width: a focused chip grows by KBFocusChip either side - 3% of its own width
+// - and then draws KBFocusGlowSmall outside that, so the room it needs is
+// proportional to the chip. 16dp covered the 216dp floor (14.5dp) and nothing
+// wider, and GridCells.Adaptive stretches cells well past the floor on a wide
+// TV; a focused pill's border still ran onto its neighbour there.
+//
+// The room now comes from each CELL instead (see [submenuCellCueRoomDp]), which
+// is the only place it can be measured. What is left here is breathing space
+// between the reserved rooms, so it can be small.
 private val SUBMENU_CHIP_GAP = 16.dp
+
+// Columns only: each cell already reserves its own cue room, so the column gap
+// is pure breathing space rather than the thing that prevents an overlap.
+private val SUBMENU_CHIP_COLUMN_GAP = 8.dp
+
+/**
+ * The room one submenu cell leaves on each side for its chip's focus cue.
+ *
+ * A focused chip grows by `(KBFocusChip - 1) / 2` of its width on each side and
+ * then draws [KBFocusGlowSmall] outside that, so the overhang is
+ * `s * chipWidth + glow` - proportional, which is exactly why a fixed shared
+ * gap could only ever fit the narrowest chip. Sized from the CELL instead,
+ * where the chip can never be wider than `cell - 2 * inset`:
+ *
+ *     inset >= s * (cell - 2 * inset) + glow
+ *     inset >= (glow + s * cell) / (1 + 2s)
+ *
+ * At the 216dp cell floor that is the same 14.5dp the 16dp gap used to cover,
+ * and it keeps pace with the cell as the grid widens, so the cue always lands
+ * in the cell's own room instead of on the pill beside it.
+ *
+ * Pure and internal so the arithmetic is checked directly.
+ */
+internal fun submenuCellCueRoomDp(cellWidthDp: Float): Float {
+    val s = (KBFocusChip - 1f) / 2f
+    return ((KBFocusGlowSmall.value + s * cellWidthDp) / (1f + 2f * s))
+        .coerceAtLeast(KBFocusGlowSmall.value)
+}
 
 // The grid is a lazy scroll container sitting inside the screen's LazyColumn,
 // so its height must be definite: an unbounded (infinite) height would make
@@ -820,21 +852,19 @@ private fun SubmenuChipGrid(
         // focused chip's scale-up and glow would be sliced flat along the
         // first and last row without it.
         //
-        // The two arrange-ments are load-bearing too, and for the same reason
-        // one axis in. A chip grows by KBFocusChip per side and draws a
-        // KBFocusGlowSmall glow OUTSIDE its own bounds, so a neighbour glued
-        // 8dp away was painted over by both: the focused pill's border ran into
-        // the next pill's, which is the "clipped tile" the grid was reported
-        // for. KBFocusChipInset is the number the chip rows use for the room at
-        // an EDGE, and the shared gap between cells needs more than that: the
-        // two neighbours' overhangs both land in it (see SUBMENU_CHIP_GAP).
+        // The grid itself no longer has to reserve the focus cue's room: each
+        // cell does, sized from its own width (see [submenuCellCueRoomDp]),
+        // because a chip grows by a percentage of itself and a fixed gap could
+        // only ever fit the narrowest one. What is left here is the row gap and
+        // the viewport's own padding, which is still load-bearing: a lazy grid
+        // clips its viewport, so the first and last row would be sliced flat.
         contentPadding = PaddingValues(
             top = SUBMENU_CHIP_GAP,
             bottom = SUBMENU_CHIP_GAP,
             start = SEARCH_RAIL_EDGE_PADDING,
             end = SEARCH_RAIL_EDGE_PADDING
         ),
-        horizontalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_GAP),
+        horizontalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_COLUMN_GAP),
         verticalArrangement = Arrangement.spacedBy(SUBMENU_CHIP_GAP),
         modifier = Modifier
             .fillMaxWidth()
@@ -848,54 +878,68 @@ private fun SubmenuChipGrid(
             // and a chip keeps its identity across a re-resolve.
             key = { _, entry -> BrowseChipVisibility.key(categoryKey, entry.name) }
         ) { entryIndex, entry ->
-            // Handed BOTH to the chip and to the long-press handler: the menu
-            // that handler opens is drawn over the page and takes the focus
-            // with it, so a request from the menu's own action - naming this
-            // node - is the only thing that puts focus back without the focus
-            // system first falling back to the page's first focusable and
-            // scrolling the browser up to it.
-            //
-            // Taken from the caller's registry rather than a local remember, so
-            // the Hide action - which runs in SearchScreen's scope and cannot
-            // see inside this lazy grid - can hand focus to the chip that takes
-            // a hidden one's place before that chip leaves (see
-            // BrowseChipVisibility.successorKey).
-            val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)
-            // The registry lookup itself is REMEMBERED, not just the requester
-            // inside it: creating a FocusRequester during composition without
-            // remember is what lint's RememberInComposition rule rejects, and a
-            // memoising map is not something it can see through. Behaviour is
-            // unchanged - the registry is handed the one instance per chip, so
-            // the menu's Hide can still name a chip it is not looking at.
-            val chipFocusRequester = remember(chipKey) {
-                chipFocusRequesters.getOrPut(chipKey) { FocusRequester() }
-            }
+            // BoxWithConstraints, not a fixed inset: the room a focused chip's
+            // scale + glow needs is a percentage of the chip, so it can only be
+            // worked out from the cell the grid actually laid out.
+            BoxWithConstraints {
+                // The cell's own cue room, measured from the cell rather than
+                // guessed from a constant: see [submenuCellCueRoomDp]. The chip
+                // is padded by it on both sides, which is what makes "the chip
+                // can never be wider than the cell minus this inset" true.
+                val cellCueRoom = submenuCellCueRoomDp(maxWidth.value).dp
 
-            SearchChip(
-                label = entry.name,
-                onClick = { onEntryClicked(categoryKey, entry) },
-                onLongClick = onEntryLongClick?.let { handler ->
-                    { handler(categoryKey, entry, chipFocusRequester) }
-                },
-                chipFocusRequester = chipFocusRequester,
-                // With the automatic reveal neutralized by the spec above,
-                // this observer is the reveal: a nearest-edge scroll that
-                // moves only this grid.
-                modifier = Modifier.onFocusChanged { state ->
-                    if (state.isFocused) {
-                        revealScope.launch {
-                            revealFocusedChipRow(gridState, entryIndex, chipCueRoomPx)
-                        }
-                    }
-                },
-                grabInitialFocus = armedIndex == entryIndex,
-                onInitialFocusConsumed = {
-                    returnChipConsumed = true
-                    onReturnChipConsumed()
-                },
-                labelMaxLines = 2,
-                showChevron = true
-            )
+                // Handed BOTH to the chip and to the long-press handler: the
+                // menu that handler opens is drawn over the page and takes the
+                // focus with it, so a request from the menu's own action -
+                // naming this node - is the only thing that puts focus back
+                // without the focus system first falling back to the page's
+                // first focusable and scrolling the browser up to it.
+                //
+                // Taken from the caller's registry rather than a local
+                // remember, so the Hide action - which runs in SearchScreen's
+                // scope and cannot see inside this lazy grid - can hand focus
+                // to the chip that takes a hidden one's place before that chip
+                // leaves (see BrowseChipVisibility.successorKey).
+                val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)
+                // The registry lookup itself is REMEMBERED, not just the
+                // requester inside it: creating a FocusRequester during
+                // composition without remember is what lint's
+                // RememberInComposition rule rejects, and a memoising map is
+                // not something it can see through. Behaviour is unchanged -
+                // the registry is handed the one instance per chip, so the
+                // menu's Hide can still name a chip it is not looking at.
+                val chipFocusRequester = remember(chipKey) {
+                    chipFocusRequesters.getOrPut(chipKey) { FocusRequester() }
+                }
+
+                SearchChip(
+                    label = entry.name,
+                    onClick = { onEntryClicked(categoryKey, entry) },
+                    onLongClick = onEntryLongClick?.let { handler ->
+                        { handler(categoryKey, entry, chipFocusRequester) }
+                    },
+                    chipFocusRequester = chipFocusRequester,
+                    // With the automatic reveal neutralized by the spec above,
+                    // this observer is the reveal: a nearest-edge scroll that
+                    // moves only this grid.
+                    modifier = Modifier
+                        .padding(horizontal = cellCueRoom)
+                        .onFocusChanged { state ->
+                            if (state.isFocused) {
+                                revealScope.launch {
+                                    revealFocusedChipRow(gridState, entryIndex, chipCueRoomPx)
+                                }
+                            }
+                        },
+                    grabInitialFocus = armedIndex == entryIndex,
+                    onInitialFocusConsumed = {
+                        returnChipConsumed = true
+                        onReturnChipConsumed()
+                    },
+                    labelMaxLines = 2,
+                    showChevron = true
+                )
+            }
         }
     }
 }

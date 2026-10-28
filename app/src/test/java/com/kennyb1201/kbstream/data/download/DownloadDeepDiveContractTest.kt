@@ -23,8 +23,10 @@ import org.robolectric.annotation.Config
  *     a merge - so the next pause, completion or delete wrote that emptiness
  *     back and the whole queue was gone, with the bytes still in the downloader's
  *     index and no path back to them. The blob is now read RECORD BY RECORD when
- *     the list decoder rejects it, and the first unreadable blob is kept before
- *     any write replaces it.
+ *     the list decoder rejects it, the first unreadable blob is kept before any
+ *     write replaces it, that kept copy is read back so an orphan it still names
+ *     is re-attached, and a write that would drop a recoverable record is
+ *     refused instead of being allowed to make the loss permanent.
  *  2. **Delete after finishing (C2).** The toggle matched on the record's media
  *     key, which on a series episode is the SHOW's - so finishing S01E01 deleted
  *     every completed episode of that show.
@@ -140,20 +142,29 @@ class DownloadDeepDiveContractTest {
     }
 
     @Test
-    fun `the first unreadable blob is kept before a write replaces it`() {
+    fun `an unreadable blob is kept, and a write that would lose a record is refused`() {
         val corrupt = "[{\"id\":\"a\",\"key\":\"k\",\"mediaKey\":\"m\",\"title\":\"T\",\"qualityLabel\":\"\",\"sourceUrl\":\"u\"},{"
         writeRaw(corrupt)
 
-        DownloadsStore.putAll(context, listOf(record("c")))
+        val saved = DownloadsStore.putAll(context, listOf(record("c")))
 
+        assertFalse(
+            "a write that drops the record the blob still holds is refused",
+            saved
+        )
         assertEquals(
-            "the blob a repair would need is still on the device after the write",
+            "and the blob is left exactly as it was",
+            corrupt,
+            rawBlob()
+        )
+        assertEquals(
+            "the blob a repair would need is on the device too",
             corrupt,
             store().getString(DownloadsStore.KEY_RECORDS_UNREADABLE, null)
         )
         assertEquals(
-            "and the store carried on rather than locking the feature out",
-            listOf("c"),
+            "the queue the viewer sees is unchanged by the refused write",
+            listOf("a"),
             DownloadsStore.records(context).map { it.id }
         )
 
@@ -167,6 +178,79 @@ class DownloadDeepDiveContractTest {
             "only the first copy is kept",
             corrupt,
             store().getString(DownloadsStore.KEY_RECORDS_UNREADABLE, null)
+        )
+    }
+
+    @Test
+    fun `a write that keeps what the damaged blob held is allowed, and heals it`() {
+        val corrupt = "[{\"id\":\"a\",\"key\":\"k\",\"mediaKey\":\"m\",\"title\":\"T\",\"qualityLabel\":\"\",\"sourceUrl\":\"u\"},{"
+        writeRaw(corrupt)
+
+        val kept = DownloadsStore.records(context)
+        assertTrue(
+            "the ordinary path - read, add, write back - is not blocked",
+            DownloadsStore.putAll(context, kept + record("c"))
+        )
+        assertEquals(
+            "and the store now holds both, readably",
+            listOf("c", "a"),
+            DownloadsStore.records(context).map { it.id }
+        )
+        assertTrue(
+            "the unreadable blob is still kept as the repair record",
+            store().getString(DownloadsStore.KEY_RECORDS_UNREADABLE, null) == corrupt
+        )
+    }
+
+    @Test
+    fun `a delete still deletes on a damaged store`() {
+        val corrupt = "[{\"id\":\"a\",\"key\":\"k\",\"mediaKey\":\"m\",\"title\":\"T\",\"qualityLabel\":\"\",\"sourceUrl\":\"u\"},{"
+        writeRaw(corrupt)
+
+        DownloadsStore.remove(context, "a")
+
+        assertTrue(
+            "a delete names what it drops, so the loss guard does not read it as damage",
+            DownloadsStore.records(context).isEmpty()
+        )
+    }
+
+    @Test
+    fun `an orphan the preserved copy still names is re-attached`() {
+        // The shape an OLDER build left behind: a salvaged subset written back
+        // over the damage, with the lost record surviving only in the copy kept
+        // for a repair.
+        val lost = "[{\"id\":\"gone\",\"key\":\"k2\",\"mediaKey\":\"m\",\"title\":\"Lost\"," +
+            "\"qualityLabel\":\"\",\"sourceUrl\":\"u2\"},{"
+        val keptNow = "[{\"id\":\"a\",\"key\":\"k\",\"mediaKey\":\"m\",\"title\":\"A\"," +
+            "\"qualityLabel\":\"\",\"sourceUrl\":\"u\"},{"
+        store().edit()
+            .putString(DownloadsStore.KEY_RECORDS_UNREADABLE, lost)
+            .putString(DownloadsStore.KEY_RECORDS, keptNow)
+            .commit()
+
+        assertEquals(
+            "a record the live blob lost is read back out of the preserved copy",
+            listOf("a", "gone"),
+            DownloadsStore.records(context).map { it.id }.sorted()
+        )
+    }
+
+    @Test
+    fun `the preserved copy is not consulted once the live blob reads again`() {
+        store().edit()
+            .putString(
+                DownloadsStore.KEY_RECORDS_UNREADABLE,
+                "[{\"id\":\"gone\",\"key\":\"k2\",\"mediaKey\":\"m\",\"title\":\"Lost\"," +
+                    "\"qualityLabel\":\"\",\"sourceUrl\":\"u2\"}]"
+            )
+            .commit()
+        DownloadsStore.putAll(context, listOf(record("a")))
+
+        assertEquals(
+            "a deleted download must not come back on the next read",
+            listOf("a"),
+            DownloadsStore.records(context).map { it.id }
         )
     }
 
@@ -258,8 +342,18 @@ class DownloadDeepDiveContractTest {
         )
         assertTrue(
             "the salvage is what a rejected blob reads as instead",
-            store.contains("val salvaged = salvageRecords(raw)") &&
+            store.contains("val repaired = repairedRecords(prefs, raw)") &&
                 store.contains("internal fun salvageRecords(raw: String): List<DownloadRecord> {")
+        )
+        assertTrue(
+            "the preserved copy is read back, not just kept",
+            store.contains("internal fun repairedRecords(") &&
+                store.contains("prefs.getString(KEY_RECORDS_UNREADABLE, null)")
+        )
+        assertTrue(
+            "and a write that would lose a recovered record is refused outright",
+            store.contains("internal fun wouldLoseRecords(") &&
+                store.contains("if (wouldLoseRecords(target, records, droppedIds)) return false")
         )
 
         assertTrue(

@@ -634,8 +634,10 @@ class HomeViewModel(
      * The seeds are this profile's most recent COMPLETIONS (the DAO query is
      * profile-scoped, so no other profile's history can seed this row), the
      * blends run concurrently, and the merge is the shared
-     * [mergeTopPicksSeeds] - round-robin by seed, deduped across seeds, capped
-     * per seed and in total. The two profile-wide filters the other TMDB rails
+     * [mergeTopPicksSeeds] - interleaved by seed, deduped across seeds, capped
+     * per seed and in total, and scored by each seed's own strength and by how
+     * many LIKED seeds agree on a title (see the merge's own note). The two
+     * profile-wide filters the other TMDB rails
      * use are applied ONCE to the merged list, exactly as Detail's More Like
      * This applies them to its blend: the kids ceiling and the digital-release
      * filter, never a per-tier copy of either.
@@ -674,7 +676,14 @@ class HomeViewModel(
         var picks = mergeTopPicksSeeds(
             perSeed = perSeed,
             perSeedCap = TOP_PICKS_PER_SEED,
-            rowCap = TOP_PICKS_ROW_CAP
+            rowCap = TOP_PICKS_ROW_CAP,
+            // The two things the merge can only learn from the seeds themselves:
+            // how strongly each one pulls (a hand-picked 10 over a 7, see
+            // TopPicksSeed.strength) and which of them are LIKES at all (the
+            // multi-seed overlap bonus is for liked seeds only - a completion
+            // seed the viewer never gave a verdict on carries no vote to add up).
+            seedStrength = seeds.map { it.strength },
+            likeSeeds = seeds.map { it.likedAt > 0L }
         )
         if (picks.isEmpty()) return emptyList()
 
@@ -865,13 +874,13 @@ class HomeViewModel(
          * this is an ordering question ("is a hand-picked 10 a stronger pull
          * than a thumb?"), not a stored default.
          *
-         * Rating strength lands as SEED ORDER, which is the shape this row has:
-         * the seeds' blends are merged round-robin ([mergeTopPicksSeeds]), so a
-         * 10-rated seed's neighbourhood opens the rail ahead of a 7's and ahead
-         * of a thumb-only like's. There is no per-additional-liked-seed score
-         * bonus here to scale - the row interleaves its seeds, it does not score
-         * merged candidates - so the number steers by position, and the drop for
-         * a disliked title (1-3) stays the store's binary veto.
+         * Rating strength lands as SEED ORDER first - the seeds' blends are
+         * merged from this order ([mergeTopPicksSeeds]), so a 10-rated seed's
+         * neighbourhood opens the rail ahead of a 7's and ahead of a thumb-only
+         * like's - and then as a per-seed score bonus on every card that seed
+         * contributed (numeric-ratings spec §4.2), which is what keeps a strong
+         * seed's second card from being ordered as if the number did not exist.
+         * The drop for a disliked title (1-3) stays the store's binary veto.
          */
         val strength: Int get() = rating ?: 8
     }
@@ -887,6 +896,31 @@ class HomeViewModel(
 
     val error: StateFlow<String?> =
         _error.asStateFlow()
+
+    /**
+     * The add-ons whose catalog rows FAILED in the last build.
+     *
+     * A failed catalog contributes no rail, so the only symptom of an add-on
+     * being down was a Home with fewer rows on it; the failure itself existed
+     * only in logcat. Named and published so the screen can say so (see
+     * [failedAddonsMessage]), and empty on every successful build - a viewer who
+     * fixed their add-on must not keep reading yesterday's failure.
+     */
+    private val _failedAddons =
+        MutableStateFlow<List<String>>(emptyList())
+
+    val failedAddons: StateFlow<List<String>> =
+        _failedAddons.asStateFlow()
+
+    /**
+     * The add-ons that failed during the build now running.
+     *
+     * Concurrent because the catalog loads inside one build run in parallel;
+     * a plain MutableList would be the same race the whole point of which is
+     * "which add-on dropped a row".
+     */
+    private val failedAddonsThisBuild: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private val _heroMeta =
         MutableStateFlow<Meta?>(null)
@@ -8104,6 +8138,10 @@ private suspend fun calculateEpisodesRemaining(
         // rather than from inside it - see there for why that is not a detail.
         var retryAfterMs = -1L
 
+        // This build's own failure collection, not the previous build's: the
+        // notice Home draws is about the rows that are on screen now.
+        failedAddonsThisBuild.clear()
+
         try {
 
             railsRefreshMutex.withLock {
@@ -8488,6 +8526,13 @@ private suspend fun calculateEpisodesRemaining(
                 _error.value =
                     null
 
+                // ...and publish which add-ons, if any, dropped a row in THIS
+                // build. Set here, from the build's own collection, so a
+                // recovered add-on goes quiet on the next build rather than
+                // leaving a notice nobody can clear.
+                _failedAddons.value =
+                    failedAddonsThisBuild.toList().sorted()
+
                 // Cold-start resilience: when every catalog fetch fails
                 // simultaneously (network not yet up when the TV launcher
                 // restores the app, DNS briefly unresolved, Wi-Fi still
@@ -8661,6 +8706,14 @@ private suspend fun calculateEpisodesRemaining(
                         e.message,
                     e
                 )
+
+                // Named for the screen, not just for logcat: this is the only
+                // place a catalog failure is known, and a rail that never
+                // appears is otherwise indistinguishable from a catalog that
+                // is simply empty (see HomeViewModel.failedAddons).
+                if (pending.addonName.isNotBlank()) {
+                    failedAddonsThisBuild.add(pending.addonName)
+                }
 
                 return null
             }

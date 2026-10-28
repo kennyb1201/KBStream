@@ -4019,6 +4019,13 @@ fun HomeScreen(
     val landscapeCards by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.homeLandscapeActive(context))
     }
+    // Settings' "hide finished titles on Home rails". Read with the same two
+    // keys as its neighbours: it is profile-scoped and synced, so a value
+    // arriving from the account has to repaint Home rather than wait for the
+    // next entry.
+    val hideWatchedOnRails by remember(activeProfileId, syncRevision) {
+        mutableStateOf(AppPreferences.getHomeRailHideWatched(context))
+    }
     // Profile-gated: rows render only while they belong to the ACTIVE
     // profile. The ViewModel clears them on a switch, but that clear is
     // dispatched, so without this gate the profile the user just left could
@@ -4038,7 +4045,15 @@ fun HomeScreen(
     // emptied out is dropped with it instead of leaving a gap. The key set
     // re-reads whenever the store changes (see rememberHiddenTitleKeys).
     val hiddenTitleKeys = rememberHiddenTitleKeys()
-    val rails = remember(railsRawForProfile, hiddenTitleKeys) {
+    // Collected BEFORE the rails are filtered, because the hide-watched switch
+    // below is an input to the rail list itself: a finished title has to leave
+    // the rail, not be painted and then dropped.
+    val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    // The add-ons whose catalogs did not answer in the last build (see the
+    // notice above the rails).
+    val failedAddons by viewModel.failedAddons.collectAsStateWithLifecycle()
+    val railsAfterHiddenTitles = remember(railsRawForProfile, hiddenTitleKeys) {
         railsRawForProfile.mapNotNull { rail ->
             val visible = rail.items.filterNot { meta ->
                 HiddenTitles.hides(
@@ -4052,8 +4067,25 @@ fun HomeScreen(
             rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
         }
     }
-    val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
-    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    // ...and, when the viewer asked for it, finished titles come off the rails
+    // entirely. Applied HERE rather than in the build because "watched" is only
+    // known once the marker refresh lands, and because the same keys drive the
+    // badges: a title hidden by this switch is exactly one that would have worn
+    // a checkmark. Continue Watching, Up Next and Upcoming are deliberately
+    // untouched - those rows exist to offer the NEXT thing, and a finished
+    // title's next episode is the whole reason the viewer is on Home.
+    val rails = remember(railsAfterHiddenTitles, watchedKeys, hideWatchedOnRails) {
+        if (!hideWatchedOnRails) {
+            railsAfterHiddenTitles
+        } else {
+            railsAfterHiddenTitles.mapNotNull { rail ->
+                val visible = rail.items.filterNot { meta ->
+                    viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                }
+                rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
+            }
+        }
+    }
     val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
     // A hidden show's Continue Watching / Up Next cards come from history and
     // from Simkl rather than from the rails above, so they are filtered here
@@ -5337,6 +5369,22 @@ fun HomeScreen(
                                     KBStatusMessage(
                                         message = "Error: $error",
                                         modifier = Modifier.padding(24.dp)
+                                    )
+                                }
+                            }
+
+                            // ...and the add-ons that did NOT answer, named.
+                            // The rails on screen are the ones that worked, so
+                            // the fact that a catalog is missing used to be
+                            // visible only in logcat: a viewer whose second
+                            // add-on was down saw a shorter Home and nothing
+                            // else. Same LINE shape as the error pill above -
+                            // the working rails stay the thing on screen.
+                            if (failedAddons.isNotEmpty()) {
+                                item(key = "failed_addons", contentType = "status") {
+                                    KBStatusMessage(
+                                        message = failedAddonsMessage(failedAddons),
+                                        modifier = Modifier.padding(horizontal = 24.dp)
                                     )
                                 }
                             }

@@ -488,6 +488,9 @@ fun SettingsScreen(
     // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on the
     // profile only, like the decoder toggles above and below, so another
     // device's display push never re-reads a ceiling it does not share.
+    var dataSaver by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getCellularDataSaver(context))
+    }
     var maxAutoPlayQuality by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
@@ -561,6 +564,9 @@ fun SettingsScreen(
     }
     var railHideUpcoming by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context))
+    }
+    var railHideWatched by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeRailHideWatched(context))
     }
     var browseEnglishOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
@@ -2613,6 +2619,22 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // The data saver narrows the ceiling above while the connection
+                // is metered, and holds back the self-update download. It does
+                // not touch the picker or a hand-picked source.
+                ToggleRow(
+                    label = "Cellular Data Saver",
+                    description = "On a metered connection, auto-play stays at 1080p or lower " +
+                        "and app updates wait. Downloads over cellular keep their own setting.",
+                    checked = dataSaver,
+                    onToggle = {
+                        dataSaver = it
+                        AppPreferences.setCellularDataSaver(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 ToggleRow(
                     label = "Auto-play Next Episode",
                     description = "Continue to the next episode when one ends",
@@ -3128,6 +3150,21 @@ fun SettingsScreen(
                     onToggle = {
                         railHideUpcoming = it
                         AppPreferences.setHomeRailHideUpcoming(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Only the catalog rails: Continue Watching, Up Next and the
+                // Upcoming schedule stay, because a title that is finished is
+                // exactly the one whose next episode someone came home for.
+                ToggleRow(
+                    label = "Hide Watched Titles on Home Rails",
+                    description = "Removes titles you have finished from the Home catalog rails. Continue Watching, Up Next and Upcoming keep them.",
+                    checked = railHideWatched,
+                    onToggle = {
+                        railHideWatched = it
+                        AppPreferences.setHomeRailHideWatched(context, it)
                     }
                 )
 

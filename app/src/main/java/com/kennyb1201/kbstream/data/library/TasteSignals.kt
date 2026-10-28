@@ -640,6 +640,122 @@ object TasteSignals {
     private fun effectiveSignalOrNull(entry: Entry?): String? =
         entry?.let(::effectiveSignal)?.takeIf { it == LIKE || it == DISLIKE }
 
+    // ── Cross-device sync ───────────────────────────────────────────
+    //
+    // The signals were device-local until this pair of functions existed: the
+    // thumbs and ratings a viewer gave on the television were invisible to the
+    // phone, because nothing in the sync payload carried them (audit: "taste
+    // signals sync - zero KEY_TASTE_SIGNALS refs"). The store is the right
+    // thing to carry whole: an entry is a title, its verdict and the timestamp
+    // that verdict was made, which is exactly the unit a merge needs.
+    //
+    // The blob travels as the store's own encoded text rather than as a
+    // re-shaped payload, so this file stays the single owner of the schema and
+    // a future field on [Entry] syncs without a second serialization to keep
+    // in step.
+
+    /**
+     * ONE profile's signals, encoded, for the sync blob - or null when there is
+     * nothing to say.
+     *
+     * A store this build cannot parse answers null: publishing a repair of a
+     * damaged blob would push that repair over a good copy on every other
+     * device (the same refusal [readOrNull] makes for local writes).
+     */
+    fun encodedForSync(context: Context, profileId: String? = null): String? {
+        val store = storeFor(context.applicationContext, profileId)
+        val raw = store.getString(KEY_ENTRIES, null)
+        if (raw.isNullOrBlank()) return null
+        val parses = runCatching { json.decodeFromString(Store.serializer(), raw) }.isSuccess
+        return if (parses) raw else null
+    }
+
+    /**
+     * Merges another device's blob into ONE profile's store, and returns how
+     * many entries it changed (0 means the account had nothing new).
+     *
+     * The merge rule is per TITLE, newest wins, keys united:
+     *
+     *  - two entries are the same title when any identity key is shared, or
+     *    when their normalized names and types agree - a thumb given on a
+     *    device that only knew `tt...` and one given on a device that only knew
+     *    the TMDB id are the same opinion, not two;
+     *  - the newer [Entry.updatedAt] wins the verdict, so a dislike on the phone
+     *    replaces an older like from the television rather than being averaged
+     *    with it;
+     *  - the key SETS are united either way, so after a merge every surface can
+     *    find the title however it spells it.
+     *
+     * Nothing is enqueued for tracker submission here: a signal that came FROM
+     * the cloud was already submitted by the device that made it, and
+     * re-submitting it would write the same rating again. A corrupt local store
+     * refuses the whole merge (see [readOrNull]) - the incoming blob is
+     * recoverable from the account, the local one is not.
+     */
+    fun mergeFromSync(context: Context, raw: String, profileId: String? = null): Int {
+        val app = context.applicationContext
+        val remote = runCatching {
+            json.decodeFromString(Store.serializer(), raw).entries
+        }.getOrNull()
+        if (remote.isNullOrEmpty()) {
+            Log.w(TAG, "sync blob will not parse or carries no entries; nothing merged")
+            return 0
+        }
+        val store = storeFor(app, profileId)
+        val local = readOrNull(store, storeName(app, profileId)) ?: return 0
+        val merged = local.toMutableList()
+        var changed = 0
+        remote.forEach { incoming ->
+            val index = merged.indexOfFirst { sameTitle(it, incoming) }
+            if (index < 0) {
+                merged.add(incoming)
+                changed += 1
+                return@forEach
+            }
+            val existing = merged[index]
+            val keys = (existing.keys + incoming.keys).distinct()
+            val winner = if (incoming.updatedAt > existing.updatedAt) incoming else existing
+            val next = winner.copy(keys = keys)
+            if (next != existing) {
+                merged[index] = next
+                changed += 1
+            }
+        }
+        if (changed == 0) return 0
+        store.edit().putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), Store(merged)))
+            .apply()
+        // The flows serve the ACTIVE profile. A merge into a sibling's file is
+        // written and left there for that profile's next switch.
+        if (storeName(app, profileId) == ProfileStorage.prefsName(app, PREFS_BASE)) {
+            loadedFor = storeName(app, profileId)
+            _entries.value = merged.sortedByDescending { it.updatedAt }
+            _version.value = _version.value + 1
+            TasteProfileStore.markDirty(app)
+        }
+        return changed
+    }
+
+    /** Two entries describe the same title (see [mergeFromSync]). */
+    private fun sameTitle(a: Entry, b: Entry): Boolean {
+        if (a.keys.any { it in b.keys }) return true
+        val nameA = HiddenTitles.normalizeTitle(a.title) ?: return false
+        val nameB = HiddenTitles.normalizeTitle(b.title) ?: return false
+        return nameA == nameB &&
+            HiddenTitles.normalizedType(a.mediaType) == HiddenTitles.normalizedType(b.mediaType)
+    }
+
+    private fun storeName(context: Context, profileId: String?): String =
+        if (profileId == null) {
+            ProfileStorage.prefsName(context, PREFS_BASE)
+        } else {
+            ProfileStorage.prefsName(profileId, PREFS_BASE)
+        }
+
+    private fun storeFor(context: Context, profileId: String?) = context.getSharedPreferences(
+        storeName(context, profileId),
+        Context.MODE_PRIVATE
+    )
+
     /**
      * Publishes the active profile's set. Cheap and idempotent, so any screen may
      * call it; the prefs name is compared first so a profile switch is picked up
@@ -751,7 +867,16 @@ object TasteSignals {
      * which is a refusal to write rather than an empty set to add to.
      */
     private fun readOrNull(context: Context): List<Entry>? {
-        val store = prefs(context)
+        val app = context.applicationContext
+        return readOrNull(prefs(app), cacheKey(app))
+    }
+
+    /**
+     * [readOrNull] for one named store, so a merge into a SIBLING profile's file
+     * reads (and refuses) that file rather than the active profile's. [key] is
+     * the last-good entry to file it under, which is the store's own name.
+     */
+    private fun readOrNull(store: android.content.SharedPreferences, key: String): List<Entry>? {
         val raw = store.getString(KEY_ENTRIES, null)
         if (raw != null) {
             val parsed = runCatching {
@@ -765,7 +890,7 @@ object TasteSignals {
                 )
                 return null
             }
-            lastGood[cacheKey(context)] = parsed
+            lastGood[key] = parsed
             return parsed
         }
 
@@ -786,7 +911,7 @@ object TasteSignals {
             )
             return null
         }
-        lastGood[cacheKey(context)] = migrated
+        lastGood[key] = migrated
         return migrated
     }
 
@@ -801,6 +926,28 @@ object TasteSignals {
         loadedFor = ProfileStorage.prefsName(context, PREFS_BASE)
         _entries.value = store.entries.sortedByDescending { it.updatedAt }
         _version.value = _version.value + 1
+        publishToAccount(context, store)
+    }
+
+    /**
+     * Hands a local write to the account, so a thumb pressed here reaches the
+     * other devices without waiting for the next full sync.
+     *
+     * Only a NON-EMPTY store publishes: an empty one is "this profile has no
+     * signals", which the push path skips anyway, and publishing it would land
+     * as nothing to merge on every sibling. A sync failure never reaches the
+     * caller - the local write has already happened and is what the viewer
+     * pressed; the next full sync carries the same state.
+     */
+    private fun publishToAccount(context: Context, store: Store) {
+        if (store.entries.isEmpty()) return
+        runCatching {
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                context,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_TASTE_SIGNALS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildTasteSignals(context)
+            )
+        }.onFailure { Log.w(TAG, "could not queue the signals for sync: ${it.message}") }
     }
 
     private fun cacheKey(context: Context): String =

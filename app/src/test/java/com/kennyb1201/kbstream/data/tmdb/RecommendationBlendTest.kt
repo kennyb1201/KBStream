@@ -451,6 +451,87 @@ class RecommendationBlendTest {
         )
     }
 
+    // ── the merge's two bonuses (taste §3.3, numeric ratings §4.2) ──────
+
+    @Test
+    fun `a title two liked seeds both reach outranks a single seed's next card`() {
+        val seedOne = listOf(pick(1), pick(2))
+        val seedTwo = listOf(pick(2), pick(3))
+
+        assertEquals(
+            "the shared title carries the +15 and opens the row; " +
+                "without the bonus it would sit third, behind both seeds' heads",
+            listOf(2, 1, 3),
+            mergeTopPicksSeeds(
+                perSeed = listOf(seedOne, seedTwo),
+                perSeedCap = 6,
+                rowCap = 18,
+                seedStrength = listOf(8, 8),
+                likeSeeds = listOf(true, true)
+            ).map { it.tmdbId }
+        )
+    }
+
+    @Test
+    fun `a completion seed carries no like vote`() {
+        val seedOne = listOf(pick(1), pick(2))
+        val seedTwo = listOf(pick(2), pick(3))
+
+        assertEquals(
+            "neither seed was thumbed up, so agreement between them is worth nothing",
+            listOf(1, 2, 3),
+            mergeTopPicksSeeds(
+                perSeed = listOf(seedOne, seedTwo),
+                perSeedCap = 6,
+                rowCap = 18,
+                seedStrength = listOf(8, 8),
+                likeSeeds = listOf(false, false)
+            ).map { it.tmdbId }
+        )
+        assertEquals(
+            "one LIKE seed has nothing to agree with, so its titles keep the " +
+                "interleave too",
+            listOf(1, 2, 3),
+            mergeTopPicksSeeds(
+                perSeed = listOf(seedOne, seedTwo),
+                perSeedCap = 6,
+                rowCap = 18,
+                seedStrength = listOf(8, 8),
+                likeSeeds = listOf(true, false)
+            ).map { it.tmdbId }
+        )
+    }
+
+    @Test
+    fun `a ten-rated seed pulls its cards ahead of a seven-rated one`() {
+        val seedTen = listOf(pick(1), pick(2))
+        val seedSeven = listOf(pick(11), pick(12))
+
+        assertEquals(
+            "a hand-picked 10 opens the row; before the strength bonus the two " +
+                "seeds scored the same and this was 1, 11, 2, 12",
+            listOf(1, 2, 11, 12),
+            mergeTopPicksSeeds(
+                perSeed = listOf(seedTen, seedSeven),
+                perSeedCap = 6,
+                rowCap = 18,
+                seedStrength = listOf(10, 7),
+                likeSeeds = listOf(true, true)
+            ).map { it.tmdbId }
+        )
+        assertEquals(
+            "and equal strengths keep the round-robin exactly as it was",
+            listOf(1, 11, 2, 12),
+            mergeTopPicksSeeds(
+                perSeed = listOf(seedTen, seedSeven),
+                perSeedCap = 6,
+                rowCap = 18,
+                seedStrength = listOf(8, 8),
+                likeSeeds = listOf(true, true)
+            ).map { it.tmdbId }
+        )
+    }
+
     @Test
     fun `nothing to merge is nothing, not a placeholder`() {
         assertTrue(mergeTopPicksSeeds(emptyList(), perSeedCap = 6, rowCap = 18).isEmpty())

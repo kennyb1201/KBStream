@@ -88,6 +88,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
+import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import kotlinx.coroutines.android.awaitFrame
@@ -164,6 +165,8 @@ fun StreamsScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val loadedKey by viewModel.loadedKey.collectAsStateWithLifecycle()
     val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
+    // The add-ons that failed for these sources (see the notice above the rows).
+    val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -229,7 +232,7 @@ fun StreamsScreen(
             season = season,
             episode = episode,
             runtimeMinutes = runtimeMinutes,
-            cap = AppPreferences.getMaxAutoPlayQuality(context)
+            cap = AppPreferences.getEffectiveAutoPlayQuality(context)
         )
 
     /*
@@ -485,7 +488,7 @@ fun StreamsScreen(
             season = season,
             episode = episode,
             runtimeMinutes = runtimeMinutes,
-            cap = AppPreferences.getMaxAutoPlayQuality(context)
+            cap = AppPreferences.getEffectiveAutoPlayQuality(context)
         )
     }
 
@@ -640,6 +643,22 @@ fun StreamsScreen(
                     }
 
                     else -> {
+                        // The add-ons that did not answer, named above the rows
+                        // they would have added. A failed add-on contributes no
+                        // sources, so without this line a picker short one
+                        // provider's rows looked exactly like a title whose
+                        // sources were thin today. A line, not a card: the list
+                        // below is what the viewer came for.
+                        if (addonFailures.isNotEmpty()) {
+                            item(key = "addon-failures") {
+                                Text(
+                                    text = failedAddonsMessage(addonFailures, surface = "this list"),
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                                )
+                            }
+                        }
                         itemsIndexed(
                             items = visibleStreams,
                             key = { index, _ -> streamKeys[index] }

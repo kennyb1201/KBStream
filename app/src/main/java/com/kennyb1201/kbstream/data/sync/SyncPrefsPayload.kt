@@ -238,6 +238,7 @@ object PrefsPayloadBuilder {
         "poster_caption_year",
         "poster_caption_rating",
         "home_rail_hide_upcoming",
+        "home_rail_hide_watched",            // hide finished titles on Home: a viewing preference
         "browse_english_only",               // catalog language filter, not device-specific
         "poster_partial_watch_badge",
         "poster_border_strength",           // poster edge strength: same look on every device
@@ -310,6 +311,12 @@ object PrefsPayloadBuilder {
         // the source: a stick capped at 1080p must not cap the phone on the
         // same profile. Device-local, decided 2026-10-20.
         "max_auto_play_quality",
+        // The cellular data saver is a statement about THIS device's
+        // connection: the phone on a data plan needs it, the television on
+        // fibre does not, and a synced value would either cap the TV for no
+        // reason or spend the phone's plan. Device-local, like the ceiling it
+        // narrows.
+        "cellular_data_saver",
         "force_software_decoder",
         "enable_tunneling",
         "enable_pip",
@@ -378,6 +385,15 @@ object PrefsPayloadBuilder {
     const val KEY_BADGE_PACK = "badge_pack"
     const val KEY_LIBRARY = "library"
     const val KEY_DISMISSALS = "dismissals"
+    /**
+     * The profile's own thumbs and 1-10 ratings (see [TasteSignals]). Its own
+     * payload key rather than a row in the display-prefs blob: those are
+     * per-KEY last-write-wins scalars, while this is a per-TITLE merge (see
+     * [TasteSignals.mergeFromSync]), and a blob whose whole point is "the
+     * newer verdict wins per title" cannot be stored as one string with one
+     * timestamp.
+     */
+    const val KEY_TASTE_SIGNALS = "taste_signals"
     const val KEY_PROFILES = "profiles"
 
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
@@ -403,6 +419,10 @@ object PrefsPayloadBuilder {
         KEY_BADGE_PACK to buildBadgePack(context),
         KEY_LIBRARY to buildLibrary(context),
         KEY_DISMISSALS to buildDismissals(context),
+        // Skipped when this profile has no signals at all (see
+        // SupabaseSync.pushPrefsBlobs): a device that never thumbed anything
+        // must not publish an empty set over an account that has some.
+        KEY_TASTE_SIGNALS to buildTasteSignals(context),
         KEY_PROFILES to com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
     )
 
@@ -1000,6 +1020,38 @@ object PrefsPayloadBuilder {
                 prefs.getString("continue_watching_dismissals", null) ?: ""
             )
         }
+
+    /**
+     * True when this profile has any signal at all: the guard the push path
+     * uses so a device that never thumbed anything does not publish an empty
+     * set over the account's real one.
+     */
+    fun hasTasteSignalsToPublish(context: Context): Boolean =
+        !com.kennyb1201.kbstream.data.library.TasteSignals
+            .encodedForSync(context)
+            .isNullOrBlank()
+
+    /**
+     * The profile's taste signals, as the store's own encoded text (see
+     * [TasteSignals.encodedForSync]) plus the moment this blob was built.
+     *
+     * The `updatedAt` is the blob's own age, NOT a conflict winner: the merge
+     * resolves per title from each entry's timestamp (see
+     * [TasteSignals.mergeFromSync]), so a device that has been offline for a
+     * week still contributes the titles nobody else rated. Blank `entries` means
+     * this profile has no signals, which the push path skips entirely rather
+     * than publishing as "nothing is rated".
+     */
+    fun buildTasteSignals(context: Context): JsonObject =
+        buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(
+                "entries",
+                com.kennyb1201.kbstream.data.library.TasteSignals
+                    .encodedForSync(context)
+                    .orEmpty()
+            )
+        }
 }
 
 /**
@@ -1138,6 +1190,8 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload, profileId)
             PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload, profileId)
             PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_TASTE_SIGNALS ->
+                applyTasteSignals(context, payload, profileId)
             PrefsPayloadBuilder.KEY_PROFILES ->
                 com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload(
                     context, payload
@@ -1227,6 +1281,30 @@ object PrefsPayloadApplier {
      * a remote blob older than the newest local dismissal write is
      * rejected so offline dismissals survive.
      */
+    /**
+     * Taste signals: MERGED per title rather than adopted whole.
+     *
+     * Every other blob here is last-write-wins because it describes one
+     * coherent thing (an arrangement, a library, a session). A signals set does
+     * not: two devices each rate different titles, and replacing one with the
+     * other would lose thumbs that were never in conflict. The merge (see
+     * [TasteSignals.mergeFromSync]) keeps every title from both sides and lets
+     * the newer verdict win where the same title was rated twice.
+     *
+     * A blank `entries` is "this account has none", never "erase yours" - the
+     * same rule the home order and library blobs follow, and the reason the push
+     * side skips a device with nothing to say.
+     */
+    private fun applyTasteSignals(context: Context, payload: JsonObject, profileId: String?) {
+        val raw = (payload["entries"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?.takeIf { it.isNotBlank() } ?: return
+        val changed = com.kennyb1201.kbstream.data.library.TasteSignals
+            .mergeFromSync(context, raw, profileId)
+        if (changed > 0) {
+            android.util.Log.i(TAG, "taste signals: merged $changed entr(y/ies) from the account")
+        }
+    }
+
     private fun applyDismissals(context: Context, payload: JsonObject, profileId: String?) {
         val remoteUpdated = payloadUpdatedAt(payload)
         val prefs = profilePrefs(context, "continue_watching_dismissals", profileId)

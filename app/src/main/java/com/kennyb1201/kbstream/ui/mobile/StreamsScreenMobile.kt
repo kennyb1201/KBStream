@@ -67,6 +67,7 @@ import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.streams.StreamItemKeys
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
+import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -143,6 +144,11 @@ fun StreamsScreenMobile(
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val loadedKey by viewModel.loadedKey.collectAsStateWithLifecycle()
         val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
+        // The add-ons that did not answer this request, named above the rows
+        // they would have added - the same line the television picker shows.
+        // A failed add-on contributes no sources, so without it a picker short
+        // one provider's rows read exactly like a title with thin sources.
+        val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         // This phone's downloads for the profile on screen. The rows read their
@@ -334,7 +340,7 @@ fun StreamsScreenMobile(
                 season = season,
                 episode = episode,
                 runtimeMinutes = runtimeMinutes,
-                cap = AppPreferences.getMaxAutoPlayQuality(context)
+                cap = AppPreferences.getEffectiveAutoPlayQuality(context)
             )
         }
 
@@ -369,6 +375,17 @@ fun StreamsScreenMobile(
                     notices = listOfNotNull(mismatchNotice, ceilingNotice),
                     onBack = { backDispatcher?.onBackPressed() }
                 )
+            }
+
+            if (addonFailures.isNotEmpty()) {
+                item(key = "addon-failures") {
+                    Text(
+                        text = failedAddonsMessage(addonFailures, surface = "this list"),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp)
+                    )
+                }
             }
 
             item(key = "controls") {

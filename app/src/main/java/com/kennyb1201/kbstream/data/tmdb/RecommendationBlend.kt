@@ -190,8 +190,9 @@ internal data class BlendParams(
      * back): a liked title is deliberately not boosted here, because the viewer
      * is already looking at one title and boosting its liked neighbours would
      * be a second, unasked ranking. The liked-side steering - the seed ordering
-     * and the multi-seed overlap bonus - belongs to the multi-seed (Home row)
-     * builder, which does not exist in this tree yet.
+     * and the multi-seed overlap bonus - belongs to the multi-seed merge that
+     * builds Home's Top Picks row ([mergeTopPicksSeeds]), which is where several
+     * liked neighbourhoods are added up rather than one.
      */
     val taste: TasteSignals.Snapshot = TasteSignals.Snapshot(),
     /**
@@ -940,36 +941,91 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
 internal fun mergeTopPicksSeeds(
     perSeed: List<List<BlendPick>>,
     perSeedCap: Int,
-    rowCap: Int
+    rowCap: Int,
+    seedStrength: List<Int> = emptyList(),
+    likeSeeds: List<Boolean> = emptyList()
 ): List<BlendPick> {
     if (rowCap <= 0 || perSeedCap <= 0 || perSeed.isEmpty()) return emptyList()
-    val cursor = IntArray(perSeed.size)
+
+    // How many LIKE seeds rank each title. This is the taste-signals spec's
+    // multi-seed overlap (§3.3): one title reached from two thumbs-up is a
+    // stronger recommendation than the same title reached from one, and the row
+    // used to have no way to say so - it interleaved by position only.
+    val likeHits = HashMap<Int, Int>()
+    perSeed.forEachIndexed { seedIndex, picks ->
+        if (likeSeeds.getOrElse(seedIndex) { false } != true) return@forEachIndexed
+        picks.mapTo(HashSet()) { it.tmdbId }.forEach { id ->
+            likeHits[id] = (likeHits[id] ?: 0) + 1
+        }
+    }
+
+    /** One seed's card, scored: its seed's pull plus the seeds that agree on it. */
+    data class Entry(val seed: Int, val rank: Int, val pick: BlendPick, val score: Int)
+
+    val entries = ArrayList<Entry>(perSeed.sumOf { it.size })
+    perSeed.forEachIndexed { seedIndex, picks ->
+        // A rating of 7, 8, 9 or 10 is a stronger pull the higher it is, and the
+        // thumb-only like (8) sits where it always did. Before this, a 10-rated
+        // seed and a 7-rated one scored exactly the same and the row could not
+        // tell them apart (numeric-ratings spec §4.2).
+        val strength = seedStrength.getOrElse(seedIndex) { NEUTRAL_SEED_STRENGTH }
+        val strengthBonus = (strength - NEUTRAL_SEED_STRENGTH) * SEED_RATING_STEP
+        picks.forEachIndexed { rank, pick ->
+            val overlap = (likeHits[pick.tmdbId] ?: 0) - 1
+            val overlapBonus = MULTI_SEED_LIKE_BONUS * overlap.coerceAtLeast(0)
+            entries += Entry(seedIndex, rank, pick, strengthBonus + overlapBonus)
+        }
+    }
+
+    // Highest score first. With every seed at the neutral strength and no title
+    // reached twice, every score is 0 and the order falls to (rank, seed) -
+    // which IS the round-robin this merge has always been: 1's #1, 2's #1, 3's
+    // #1, 1's #2, ... So the interleave is not lost, it is what remains when
+    // there is nothing to score. A per-seed cap still bounds any one seed and
+    // the row cap still bounds the row.
+    val ordered = entries.sortedWith(
+        compareByDescending<Entry> { it.score }
+            .thenBy { it.rank }
+            .thenBy { it.seed }
+    )
+
     val added = IntArray(perSeed.size)
     val seenTmdbIds = HashSet<Int>()
     val seenImdbIds = HashSet<String>()
     val merged = ArrayList<BlendPick>(rowCap)
-
-    while (merged.size < rowCap) {
-        var progressed = false
-        perSeed.forEachIndexed { seedIndex, picks ->
-            if (merged.size >= rowCap) return@forEachIndexed
-            if (added[seedIndex] >= perSeedCap) return@forEachIndexed
-            val pick = picks.getOrNull(cursor[seedIndex]) ?: return@forEachIndexed
-            cursor[seedIndex] += 1
-            progressed = true
-            if (!seenTmdbIds.add(pick.tmdbId)) return@forEachIndexed
-            pick.imdbId?.let { imdbId ->
-                if (!seenImdbIds.add(imdbId)) return@forEachIndexed
-            }
-            added[seedIndex] += 1
-            merged += pick
-        }
-        // No seed had anything left to offer (every cursor exhausted or every
-        // per-seed cap reached): the row is finished, short or not.
-        if (!progressed) break
+    for (entry in ordered) {
+        if (merged.size >= rowCap) break
+        if (added[entry.seed] >= perSeedCap) continue
+        if (!seenTmdbIds.add(entry.pick.tmdbId)) continue
+        val imdbId = entry.pick.imdbId
+        if (imdbId != null && !seenImdbIds.add(imdbId)) continue
+        added[entry.seed] += 1
+        merged += entry.pick
     }
     return merged
 }
+
+/**
+ * What one additional LIKE seed's agreement is worth, in blend-score points.
+ *
+ * The taste-signals spec's §3.3 figure. It is a big step on purpose: the blend's
+ * own tiers are worth 10-40 and its per-extra-signal bonus 5-10, so one title
+ * two liked seeds both reach outranks the next card of a single seed's
+ * neighbourhood, which is the behaviour the row was missing.
+ */
+internal const val MULTI_SEED_LIKE_BONUS = 15
+
+/**
+ * What one rating point above the liked band's middle is worth to a seed.
+ *
+ * Numeric ratings are 1-10 and 7 is the lowest thing that counts as a like, so
+ * a 7 weighs -5 and a 10 weighs +10 against a thumb-only like. Small enough to
+ * reorder neighbours of equal strength and never to jump a whole tier.
+ */
+internal const val SEED_RATING_STEP = 5
+
+/** Where a seed with no rating at all sits: the middle of the liked band. */
+internal const val NEUTRAL_SEED_STRENGTH = 8
 
 /** The release year a pick carries, for the hidden-title name match. */
 private fun yearOf(pick: BlendPick): Int? =

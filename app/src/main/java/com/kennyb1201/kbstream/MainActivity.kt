@@ -73,6 +73,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
+import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -1561,7 +1562,7 @@ fun AppRoot(
                 season = pending.target.season,
                 episode = pending.target.episode,
                 runtimeMinutes = pending.target.runtimeMinutes,
-                cap = AppPreferences.getMaxAutoPlayQuality(context)
+                cap = AppPreferences.getEffectiveAutoPlayQuality(context)
             )
             if (replay != null) {
                 Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
@@ -1600,15 +1601,39 @@ fun AppRoot(
         // viewer sees a different, working addon being forgotten every
         // episode. Requiring a group skipped the resolver entirely there.
         val streams = resolved.streams
+        // The binge identity this launch continues from: handed over when the
+        // player launched the next episode, and RECALLED from what this show was
+        // last played with when it is a cold start (audit S-F5 - every other
+        // path had it, so a binge kept one provider for ten episodes and then
+        // jumped on the first Play pressed from Detail after a restart).
+        val continuedFrom = if (pending.bingeGroup.isNullOrBlank() &&
+            pending.addonName.isNullOrBlank()
+        ) {
+            BingeGroupMemory.recall(context, pending.parentId)
+        } else {
+            null
+        }
+        // Whether every stream add-on was collected for this answer. Auto-play
+        // stops collecting a grace after its first STRONG head (see
+        // StreamsViewModel.AUTOPLAY_FIRST_RESULT_GRACE_MS), so this path is the
+        // one caller that routinely acts on a truncated list. Acting on it is
+        // the point - the viewer pressed play - but the truncation has to be
+        // read here rather than discovered later: a truncated list must not be
+        // remembered as this target's played links (see the cache write below),
+        // or a replay would keep replaying one add-on's rows.
+        val completeAnswer = resolved.complete
         val ordered =
-            if (pending.bingeGroup.isNullOrBlank() && pending.addonName.isNullOrBlank()) {
+            if (pending.bingeGroup.isNullOrBlank() &&
+                pending.addonName.isNullOrBlank() &&
+                continuedFrom == null
+            ) {
                 streams
             } else {
                 BingeGroupResolver.orderedForNextEpisode(
                     context = context,
                     streams = streams,
-                    previousBingeGroup = pending.bingeGroup,
-                    previousAddonName = pending.addonName
+                    previousBingeGroup = pending.bingeGroup ?: continuedFrom?.bingeGroup,
+                    previousAddonName = pending.addonName ?: continuedFrom?.addonName
                 )
             }
         // The add-on for each source, in the same order the advance will walk:
@@ -1639,7 +1664,7 @@ fun AppRoot(
                 season = pending.target.season,
                 episode = pending.target.episode,
                 runtimeMinutes = pending.target.runtimeMinutes,
-                cap = AppPreferences.getMaxAutoPlayQuality(context)
+                cap = AppPreferences.getEffectiveAutoPlayQuality(context)
             )
         }
         val start = AutoplayWalk.start(
@@ -1654,7 +1679,8 @@ fun AppRoot(
         com.kennyb1201.kbstream.data.reporting.StreamRankReport.noteAutoPlay(
             start?.let { picked ->
                 "started · ${StreamRanker.labelOf(picked.stream)}" +
-                    if (picked.resolved) " (prepared from its hash)" else ""
+                    if (picked.resolved) " (prepared from its hash)" else "" +
+                        if (completeAnswer) "" else " · from a TRUNCATED answer"
             } ?: "none - the picker is showing instead " +
                 "(episode length ${
                     pending.target.runtimeMinutes?.let { "$it min" } ?: "unknown"
@@ -1672,6 +1698,15 @@ fun AppRoot(
             // described it, which is "unknown add-on" rather than a wrong one.
             val startedSources = start.sources
             val startedAddons = addonsFor(startedSources, resolved.streams, resolved.addons)
+            // The identity this session is now continuing with, stored against
+            // the show so a cold Play press starts from the same provider
+            // (see BingeGroupMemory and the cold recall above).
+            BingeGroupMemory.remember(
+                context,
+                pending.parentId,
+                start.stream.bingeGroup,
+                startedAddons.getOrNull(startedSources.indexOf(start.stream))
+            )
             if (pending.isNextEpisodeAdvance) {
                 // Not remembered either: caching the advance's ordering would
                 // hand the NEXT replay of this episode the same stale ordering
@@ -1681,22 +1716,32 @@ fun AppRoot(
             } else {
                 // Remember what actually started - the RESOLVED stream, so a
                 // replay within the link's lifetime replays the CDN link rather
-                // than the hash it had to prepare first.
-                PlayedLinkCache.remember(
-                    context,
-                    pending.streamKey,
-                    start.stream,
-                    startedSources,
-                    startedAddons
-                )
+                // than the hash it had to prepare first. Only a COMPLETE answer
+                // is remembered: the cache's real job is the "next source" list
+                // handed to the player, and caching one add-on's rows as if they
+                // were the target's would put the truncated set back in front of
+                // the viewer on every replay.
+                if (completeAnswer) {
+                    PlayedLinkCache.remember(
+                        context,
+                        pending.streamKey,
+                        start.stream,
+                        startedSources,
+                        startedAddons
+                    )
+                }
                 // ...and stamp the key on the player screen as well, exactly as
                 // the cache-hit path above does: the key is the invalidation
                 // handle the player uses when this freshly-resolved link turns
                 // out to be dead before its first frame. Without it only a
                 // REPLAY (a cache hit) could heal the entry, so one more launch
-                // replayed the corpse.
+                // replayed the corpse. Only when there IS an entry to heal -
+                // a truncated answer was not cached (above), so there is no
+                // entry for this key and nothing to stamp.
                 pending.toPlayerScreen(start.stream, startedSources, startedAddons)
-                    .copy(linkCacheKey = pending.streamKey)
+                    .let { player ->
+                        if (completeAnswer) player.copy(linkCacheKey = pending.streamKey) else player
+                    }
             }
         } else {
             pending.toStreamsScreen()
@@ -3208,6 +3253,18 @@ fun AppRoot(
                             stream,
                             allSources,
                             sourceAddons
+                        )
+                        // ...and remember the binge identity this source
+                        // started with, against the SHOW. A hand-picked source
+                        // is exactly the case a cold Play press used to forget:
+                        // the viewer chose this provider for this show, and the
+                        // next cold start should still start with it (audit
+                        // S-F5, see BingeGroupMemory).
+                        BingeGroupMemory.remember(
+                            context,
+                            current.parentId,
+                            stream.bingeGroup,
+                            selectedAddon
                         )
                     }
                 },

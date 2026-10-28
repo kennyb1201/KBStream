@@ -129,7 +129,9 @@ class StreamsDeepDiveContractTest {
                 "pickers read",
             predicate.contains("EpisodeMatch.requestedFrom(streamId)") &&
                 predicate.contains("runtimeMinutes = runtimeMinutes") &&
-                predicate.contains("AppPreferences.getMaxAutoPlayQuality(getApplication())")
+                // The effective ceiling: the viewer's own cap, narrowed by the
+                // cellular data saver while the connection is metered.
+                predicate.contains("AppPreferences.getEffectiveAutoPlayQuality(getApplication())")
         )
         assertTrue(
             "and the verdict is AutoPlayQuality's own, so the grace's question and the " +

@@ -1440,6 +1440,11 @@ private fun PlaybackPaneMobile() {
     var qualityCap by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
+    // Device-local too, and for the same reason: it is about THIS phone's
+    // connection.
+    var dataSaver by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getCellularDataSaver(context))
+    }
 
     var audioDecoder by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getAudioDecoder(context))
@@ -1660,6 +1665,16 @@ private fun PlaybackPaneMobile() {
             // PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
             description = "A ceiling on what auto-play may start on this device only, " +
                 "so it never opens a stream it cannot decode."
+        )
+        SettingsToggleMobile(
+            label = "Cellular data saver",
+            description = "On a metered connection, auto-play stays at 1080p or lower and " +
+                "app updates wait. Downloads over cellular keep their own setting.",
+            checked = dataSaver,
+            onChange = {
+                dataSaver = it
+                AppPreferences.setCellularDataSaver(context, it)
+            }
         )
         SettingsToggleMobile(
             label = "Auto-play next episode",
@@ -2292,6 +2307,9 @@ private fun InterfacePaneMobile() {
     var hideUpcoming by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context))
     }
+    var hideWatchedOnRails by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeRailHideWatched(context))
+    }
     var englishOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
     }
@@ -2423,6 +2441,16 @@ private fun InterfacePaneMobile() {
             onChange = {
                 hideUpcoming = it
                 AppPreferences.setHomeRailHideUpcoming(context, it)
+            }
+        )
+        SettingsToggleMobile(
+            label = "Hide Watched Titles on Home Rails",
+            description = "Removes titles you have finished from the Home catalog rails. " +
+                "Continue Watching, Up Next and Upcoming keep them.",
+            checked = hideWatchedOnRails,
+            onChange = {
+                hideWatchedOnRails = it
+                AppPreferences.setHomeRailHideWatched(context, it)
             }
         )
 

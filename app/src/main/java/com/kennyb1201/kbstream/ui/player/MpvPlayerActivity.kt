@@ -29,6 +29,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.lifecycleScope
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
@@ -817,6 +818,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * actually opens - see [onFileLoaded].
      */
     private var openFailureSourcesTried = 0
+
+    /**
+     * Sources this session has walked past for producing no video frame (see
+     * [noVideoCheck]). Its own budget, because "no picture" and "will not open"
+     * are different failures and one must not spend the other's attempts.
+     */
+    private var noVideoSourcesTried = 0
 
     /**
      * Set once a launch that reused a cached debrid link has had that link
@@ -2429,6 +2437,31 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     // --- Picker: the main player's panel, driven by mpv ---------------------
 
     /**
+     * Switches to a hash-only source by first asking TorBox for its link.
+     *
+     * The in-player picker lists the same rows the streams screen does, and a
+     * row with no URL is a torrent this app cannot open by itself (audit S-F2).
+     * The picker stays up until the resolve answers: a success switches and
+     * dismisses, a failure says so and leaves the list where it was.
+     */
+    private fun resolveAndSwitch(stream: Stream) {
+        lifecycleScope.launch {
+            val resolved = runCatching { TorBoxResolve.playableStream(this@MpvPlayerActivity, stream) }
+                .getOrNull()
+            if (resolved == null || resolved.url.isNullOrBlank()) {
+                showToast("This source needs TorBox \u2014 it could not be prepared from its hash")
+                return@launch
+            }
+            val index = sources.indexOfFirst { TorBoxResolve.isUnresolved(it) && it == stream }
+            if (index >= 0) {
+                sources = sources.toMutableList().also { it[index] = resolved }
+            }
+            dismissPicker()
+            switchToSource(resolved)
+        }
+    }
+
+    /**
      * Opens the picker on [mode], filled from mpv's own state.
      *
      * The rows come from the same two places the main player's do: the ranked
@@ -2451,14 +2484,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                             // answers `url ?: return` and the picker used to
                             // close over a player that had not changed - a press
                             // with no effect and no word about it (audit S-F2,
-                            // 2026-10-27). Resolving a debrid link is the
-                            // streams picker's job, so this one says what the
-                            // row needs and stays open instead of dismissing
-                            // into the same source.
+                            // 2026-10-27). It now asks TorBox for the link and
+                            // switches to that, the same call the streams screen
+                            // makes for the same row (see resolveAndSwitch).
                             if (stream.url.isNullOrBlank()) {
-                                showToast(
-                                    "This source needs TorBox \u2014 pick it from the streams list"
-                                )
+                                resolveAndSwitch(stream)
                             } else {
                                 switchToSource(stream)
                                 dismissPicker()
@@ -3260,6 +3290,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
+
+        // The no-video watch belongs to the file being replaced: leaving it
+        // armed would fire it against the NEXT file's first seconds.
+        handler.removeCallbacks(noVideoCheck)
 
         // A fresh source starts with an empty stall window: the source just
         // left cannot condemn its replacement, and its seek clock is gone too.
@@ -4767,6 +4801,56 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
+     * Runs once per file load, MPV_NO_VIDEO_GRACE_MS after it opened.
+     *
+     * If mpv still reports no video size while the playhead is moving, the file
+     * is playing without a picture: a video track this build cannot start, or a
+     * container whose video stream mpv skipped. That is a dead source, and the
+     * walk to the next one is the same ladder the open-failure and
+     * rebuffer-downshift paths use - bounded, so a title whose whole list is
+     * like this still lands on the card.
+     */
+    private val noVideoCheck = Runnable {
+        if (!fileLoaded) return@Runnable
+        val report = surface?.fileReport()
+        val hasVideo = report != null && report.width > 0 && report.height > 0
+        val progressed = (surface?.positionMs() ?: 0L) > 0L
+        if (hasVideo || !progressed) return@Runnable
+        noVideoSourcesTried += 1
+        val advance = PlaybackRecoveryRules.shouldAdvancePastMissingVideo(
+            noVideoForMs = PlaybackRecoveryRules.MPV_NO_VIDEO_GRACE_MS,
+            sourcesTried = noVideoSourcesTried,
+            hasAnotherSource = nextSourceOrNull(tab = null) != null
+        )
+        Log.w(
+            TAG,
+            "Source played ${PlaybackRecoveryRules.MPV_NO_VIDEO_GRACE_MS / 1000}s with no video " +
+                "frame (${noVideoSourcesTried}/" +
+                "${PlaybackRecoveryRules.MAX_MPV_NO_VIDEO_SOURCES}) " +
+                "— advance=$advance"
+        )
+        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                cause = "MPV no video after open",
+                detail = "video=${report?.videoFormat ?: "none"} " +
+                    "audio=${report?.audioCodec ?: "none"} advance=$advance"
+            )
+        )
+        if (!advance) {
+            showToast("This source has no picture \u2014 try another one")
+            return@Runnable
+        }
+        SourceAddonSession.markDead(sessionDeadAddons, currentAddonName)
+        com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberFailed(
+            this@MpvPlayerActivity,
+            parentId,
+            currentAddonName
+        )
+        showToast("That source has no picture. Trying the next one\u2026")
+        tryNextSource(tab = null)
+    }
+
+    /**
      * Takes the prompt down, handing focus back to the control bar when it held
      * it: a hidden view cannot keep focus, and without a new target the next
      * D-pad press would go nowhere at all.
@@ -4781,6 +4865,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private fun onFileLoaded(mediaTitle: String?) {
         fileLoaded = true
+        // A file that opens and never produces a video frame is the third way a
+        // source is dead here (audit S-F13): audio plays, the screen stays
+        // black, and nothing errors, so nothing walked. Armed per file load and
+        // cancelled with every switch, so this bounds ONE source's silence
+        // rather than the session's.
+        handler.removeCallbacks(noVideoCheck)
+        handler.postDelayed(noVideoCheck, PlaybackRecoveryRules.MPV_NO_VIDEO_GRACE_MS)
         // The file is open, so mpv can report its chapters; resync (and hide
         // the strip for a file that has none) before the first frame.
         syncChapters()

@@ -104,12 +104,42 @@ object DownloadsStore {
         // it decodes to IN PIECES is now what it reads as: a blob truncated
         // mid-write - the shape `apply()` racing a process death leaves - loses
         // its tail instead of everything.
-        val salvaged = salvageRecords(raw)
+        val repaired = repairedRecords(prefs, raw)
         Log.w(
             TAG,
-            "download records blob could not be read as a list; salvaged ${salvaged.size}"
+            "download records blob could not be read as a list; salvaged ${repaired.size}"
         )
-        return salvaged.sortedByDescending { it.addedAt }
+        return repaired.sortedByDescending { it.addedAt }
+    }
+
+    /**
+     * Everything this store can still say about its records when the live blob
+     * is unreadable.
+     *
+     * Two sources, because a half-read blob is not the only thing a damaged
+     * store holds:
+     *
+     *  1. what salvages out of the live blob; and
+     *  2. the records the PRESERVED copy ([KEY_RECORDS_UNREADABLE]) still names
+     *     and the live blob no longer does - the orphans an earlier build left
+     *     when it wrote a salvaged subset straight back over the damage.
+     *
+     * The live blob wins a collision, since it is the newer of the two, and the
+     * preserved copy is only consulted while the live blob is unreadable: once
+     * it reads again the app's own list is the truth, or a download the viewer
+     * deleted would come back on the next read.
+     */
+    internal fun repairedRecords(
+        prefs: SharedPreferences,
+        raw: String
+    ): List<DownloadRecord> {
+        val kept = LinkedHashMap<String, DownloadRecord>()
+        salvageRecords(raw).forEach { kept[it.id] = it }
+        val preserved = prefs.getString(KEY_RECORDS_UNREADABLE, null)
+        if (!preserved.isNullOrBlank()) {
+            salvageRecords(preserved).forEach { orphan -> kept.putIfAbsent(orphan.id, orphan) }
+        }
+        return kept.values.toList()
     }
 
     /**
@@ -174,24 +204,62 @@ object DownloadsStore {
     /**
      * Replaces the stored records, keeping an unreadable blob first.
      *
-     * The refusal shape the add-on list and the built-catalog store use - keep
-     * the blob, refuse every write - is deliberately NOT what this store does,
-     * because the two features fail in opposite directions: a builder that
-     * cannot save can TELL the viewer the catalog is not there, while a
-     * downloads store that refuses to write cannot list a new download either,
-     * so the feature would be dead until the viewer cleared app data. The raw
-     * blob is preserved instead ([KEY_RECORDS_UNREADABLE]) and the store carries
-     * on with what it could salvage, so nothing is thrown away silently and
-     * nothing stops working.
+     * An unreadable blob does not stop the store working - a downloads store
+     * that refused every write could not list a new download either, so the
+     * feature would be dead until the viewer cleared app data - but it does stop
+     * the store LOSING anything. Before a write replaces a blob this build could
+     * not read, the records recoverable from it ([repairedRecords], which
+     * includes the preserved copy) are compared with the list about to be
+     * written; if any of them would disappear, nothing is written and the blob
+     * stays exactly as it was, so the next read and the next attempt see the
+     * same queue.
+     *
+     * [droppedIds] is the one thing a caller may lose on purpose: a delete
+     * names the record it is removing, so an explicit delete still works on a
+     * damaged store while an incidental merge overwrite cannot swallow a row.
+     *
+     * @return false when the write was refused, so a caller that cares can say
+     *   so; the manager's refresh is written to a superset of what it read and
+     *   therefore never trips this.
      */
-    fun putAll(context: Context, records: List<DownloadRecord>) {
+    fun putAll(
+        context: Context,
+        records: List<DownloadRecord>,
+        droppedIds: Set<String> = emptySet()
+    ): Boolean {
         val target = prefs(context)
+        if (wouldLoseRecords(target, records, droppedIds)) return false
         preserveUnreadableBlob(target)
         runCatching {
             target.edit()
                 .putString(KEY_RECORDS, json.encodeToString(serializer, records))
                 .apply()
         }
+        return true
+    }
+
+    /** The loss guard behind [putAll]. Kept separate so it can be tested directly. */
+    internal fun wouldLoseRecords(
+        prefs: SharedPreferences,
+        records: List<DownloadRecord>,
+        droppedIds: Set<String>
+    ): Boolean {
+        val raw = prefs.getString(KEY_RECORDS, null)
+        if (raw.isNullOrBlank()) return false
+        if (runCatching { json.decodeFromString(serializer, raw) }.isSuccess) return false
+        val recoverable = repairedRecords(prefs, raw)
+            .map { it.id }
+            .filterNot { it in droppedIds }
+            .toSet()
+        val incoming = records.mapTo(HashSet()) { it.id }
+        val lost = recoverable - incoming
+        if (lost.isEmpty()) return false
+        Log.w(
+            TAG,
+            "refused to write download records: ${lost.size} record(s) in the unreadable blob " +
+                "would be lost (${lost.take(3).joinToString()})"
+        )
+        return true
     }
 
     /**
@@ -214,7 +282,9 @@ object DownloadsStore {
     fun remove(context: Context, id: String) {
         val current = records(context)
         if (current.none { it.id == id }) return
-        putAll(context, current.filterNot { it.id == id })
+        // Named as dropped, not merely missing: on a damaged store the guard in
+        // [putAll] would otherwise read a delete as an accidental loss.
+        putAll(context, current.filterNot { it.id == id }, droppedIds = setOf(id))
     }
 
     /** Drops every record for this profile. The bytes are the manager's business. */

@@ -223,6 +223,47 @@ internal object PlaybackRecoveryRules {
     const val MAX_MPV_OPEN_FAILURE_SOURCES = 3
 
     /**
+     * How long a file may play with no video frame resolved before the backup
+     * engine treats the source as dead and walks to the next one.
+     *
+     * Long enough that a slow open, a seek, or a hardware decoder taking its
+     * time is not punished - the ordinary case resolves a video size within a
+     * second of the file opening - and short enough that a viewer is not left
+     * looking at a black screen with working audio, which is what a stream whose
+     * video track genuinely never decodes looks like.
+     */
+    const val MPV_NO_VIDEO_GRACE_MS = 8_000L
+
+    /** How many sources the no-video walk may burn before the card is the answer. */
+    const val MAX_MPV_NO_VIDEO_SOURCES = 2
+
+    /**
+     * True when the backup engine should walk past a source that opened but
+     * never produced a video frame.
+     *
+     * The MPV engine already walks past a file that fails to OPEN and past one
+     * that keeps rebuffering (see the call sites). A third failure looks the
+     * same to the viewer and was not covered: audio plays, the screen stays
+     * black, and mpv reports no video size at all, because the container"s
+     * video track is a codec this build cannot start. Nothing errors, so
+     * nothing walked - the session sat on a black screen until the viewer gave
+     * up (audit S-F13).
+     *
+     * [noVideoForMs] is how long playback has been running with no resolved
+     * video size, [sourcesTried] the sources this session has already walked
+     * past for this reason, and [hasAnotherSource] whether the list has one
+     * left. All three are required: below the grace the file may still be
+     * opening, and past the bound the honest outcome is the card.
+     */
+    fun shouldAdvancePastMissingVideo(
+        noVideoForMs: Long,
+        sourcesTried: Int,
+        hasAnotherSource: Boolean
+    ): Boolean = hasAnotherSource &&
+        noVideoForMs >= MPV_NO_VIDEO_GRACE_MS &&
+        sourcesTried <= MAX_MPV_NO_VIDEO_SOURCES
+
+    /**
      * True when the backup engine should open the NEXT ranked source instead
      * of showing the failure card.
      *

@@ -2275,6 +2275,17 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the taste signals, on the same rule for the same reason: a
+            // profile that has never thumbed anything would publish an empty
+            // set, and an empty set is what the applier refuses anyway - so
+            // publishing it is pure noise. Unlike the auth blobs there is no
+            // tombstone half: clearing every signal is a local intent that
+            // does not have to win on a sibling (see TasteSignals.clearAll).
+            if (key == PrefsPayloadBuilder.KEY_TASTE_SIGNALS &&
+                !PrefsPayloadBuilder.hasTasteSignalsToPublish(context)
+            ) {
+                return@forEach
+            }
             // Display prefs are merged per key, and a blob with no per-key
             // timestamps carries no evidence of a local edit. This bulk push
             // runs on every sign-in / Sync now, so a freshly created profile

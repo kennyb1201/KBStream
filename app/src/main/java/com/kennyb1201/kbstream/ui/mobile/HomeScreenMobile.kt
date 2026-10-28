@@ -67,6 +67,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.armHeroSource
@@ -266,6 +267,29 @@ fun HomeScreenMobile(
         val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
         val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
+        // The add-ons whose catalogs did not answer in the last build (see
+        // HomeViewModel.failedAddons and the notice below).
+        val failedAddons by viewModel.failedAddons.collectAsStateWithLifecycle()
+
+        // Settings' hide-watched switch, applied to the catalog rails exactly as
+        // the television applies it (see HomeScreen): finished titles leave the
+        // rails, Continue Watching / Up Next / Upcoming keep them.
+        val hideWatchedOnRails = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeRailHideWatched(context)
+        }
+        val railsShown = remember(rails, watchedKeys, hideWatchedOnRails) {
+            if (!hideWatchedOnRails) {
+                rails
+            } else {
+                rails.mapNotNull { rail ->
+                    val visible = rail.items.filterNot { meta ->
+                        viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                    }
+                    rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
+                }
+            }
+        }
+
         val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
         // Continue Watching comes from history and Simkl rather than from the
         // rails, so it is filtered here as well (see HomeScreen).
@@ -325,8 +349,8 @@ fun HomeScreenMobile(
                     }
                 }
             }
-        val homeEntries = remember(rails, kbState, builtinWithContent) {
-            KBHomeSlots.buildMergedEntries(context, rails, kbState, builtinWithContent)
+        val homeEntries = remember(railsShown, kbState, builtinWithContent) {
+            KBHomeSlots.buildMergedEntries(context, railsShown, kbState, builtinWithContent)
         }
 
         // The two rows this screen draws itself, titled the way the television
@@ -784,13 +808,31 @@ fun HomeScreenMobile(
                     }
                 }
 
+                // ...and the add-ons whose catalogs did not answer, named. A
+                // failed catalog produces no rail, so the only symptom used to
+                // be a Home a few rows shorter than expected, with the failure
+                // itself in logcat; the television shows this line and the
+                // phone had no equivalent.
+                if (failedAddons.isNotEmpty()) {
+                    item(key = "failed_addons", contentType = "status") {
+                        Text(
+                            text = failedAddonsMessage(failedAddons),
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .fillMaxWidth()
+                        )
+                    }
+                }
+
                 // Every rail the loader produced has been hidden by the viewer
                 // (HD-P2-5). The merged list is empty while the pieces it is
                 // built from are not, which separates this from a first run
                 // with no catalogs at all - there, there is nothing to manage
                 // yet. Without this card Home was the hero and nothing else.
                 val allRailsHidden = !isLoading && homeEntries.isEmpty() &&
-                    (rails.isNotEmpty() || upNext.isNotEmpty() || upcomingVisible)
+                    (railsShown.isNotEmpty() || upNext.isNotEmpty() || upcomingVisible)
                 if (allRailsHidden) {
                     item(key = "all-hidden", contentType = "status") {
                         Column(
@@ -818,7 +860,7 @@ fun HomeScreenMobile(
                     }
                 }
 
-                if (isLoading && rails.isEmpty() && upNext.isEmpty() && !upcomingVisible) {
+                if (isLoading && railsShown.isEmpty() && upNext.isEmpty() && !upcomingVisible) {
                     // Shaped placeholders, not a spinner (improvement F1): the
                     // phone reserved 180dp for a circle and then shoved the whole
                     // page down when the real hero and rails arrived. The TV

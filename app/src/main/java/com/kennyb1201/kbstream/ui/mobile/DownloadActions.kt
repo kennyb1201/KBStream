@@ -339,7 +339,7 @@ internal fun autoplayPickFor(
     season = season,
     episode = episode,
     runtimeMinutes = runtimeMinutes,
-    cap = AppPreferences.getMaxAutoPlayQuality(context)
+    cap = AppPreferences.getEffectiveAutoPlayQuality(context)
 )
 
 /** The line under a download's title on the Downloads screen. */

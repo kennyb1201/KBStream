@@ -27,6 +27,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import android.content.Intent
 import android.util.TypedValue
 import androidx.media3.common.AudioAttributes
@@ -155,6 +156,22 @@ private const val TAG_ASS = "PLAYER_ASS"
 // group arrived as images and where it was drawn. A bitmap track that shows
 // nothing is otherwise indistinguishable from one that was never selected.
 private const val TAG_SUB = "PLAYER_SUB"
+
+// The stored subtitle size / position values (see
+// AppPreferences.getDefaultSubtitleSize and getDefaultSubtitlePosition): 0 is
+// the smallest / lowest, and the defaults are 1.
+private const val SUBTITLE_SIZE_SMALL = 0
+private const val SUBTITLE_SIZE_LARGE = 2
+private const val SUBTITLE_POSITION_MID = 1
+private const val SUBTITLE_POSITION_HIGH = 2
+
+// How much of the view's height one position step lifts a BITMAP cue, and how
+// far the two size steps scale it. The step is a fraction of the viewport
+// (0.36 of the SubtitleView's height per step, about a line and a half) so it
+// reads the same on a phone and a 4K panel.
+private const val BITMAP_CUE_POSITION_STEP = 40f
+private const val BITMAP_CUE_SCALE_SMALL = 0.85f
+private const val BITMAP_CUE_SCALE_LARGE = 1.2f
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -703,6 +720,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private lateinit var infoFile: TextView
     private lateinit var infoVideo: TextView
     private lateinit var infoAudio: TextView
+    private lateinit var infoSubtitles: TextView
     private lateinit var pickerList: RecyclerView
     private lateinit var btnSubSmall: TextView
     private lateinit var btnSubNormal: TextView
@@ -4214,6 +4232,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         infoFile = findViewById(R.id.info_file)
         infoVideo = findViewById(R.id.info_video)
         infoAudio = findViewById(R.id.info_audio)
+        infoSubtitles = findViewById(R.id.info_subtitles)
         btnSettings = findViewById(R.id.chrome_btn_settings)
         pickerContainer = findViewById(R.id.picker_container)
         pickerTitle = findViewById(R.id.picker_title)
@@ -4517,6 +4536,21 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // the drag through its own isScrubbing. What stays here is this engine's
         // own key handling, which a bare SeekBar cannot give: LEFT/RIGHT are a
         // hold-to-scrub, OK is play/pause, and UP lands on the first cast tile.
+        //
+        // CHAPTER TICKS: this bar draws none, and that is a platform limit, not
+        // an omission (audit U-F4). The tick painter is shared
+        // (ChapterSeekBar / PlayerChrome.setChapters) and the MPV engine feeds
+        // it from mpv's own `chapter-list`; media3 at this build's pinned
+        // version (1.9.0, held there for the FFmpeg video decoder fallback)
+        // exposes no chapter list at all - it has no `Chapter` metadata entry
+        // and `Player` no longer even carries `currentStaticMetadata`. Its only
+        // chapter artefact is the ID3 `ChapterFrame`, which no MP4 or MKV in a
+        // debrid stream ever contains. So an ExoPlayer session cannot know where
+        // a file's chapters are; showing a made-up row would be worse than
+        // showing none. When media3's chapter API is available at the pinned
+        // version, the wiring is one call from onTracksChanged to
+        // `chrome?.setChapters(...)` with the file's duration - the bar already
+        // paints whatever it is given.
 
         // Quick-press = 10s jump; holding (past 400ms) = accelerated scrubbing.
         seekbar.setOnKeyListener { _, keyCode, event ->
@@ -8506,6 +8540,49 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         infoAudio.text =
             (listOf(outputLine, tuningLine) + audioLines).joinToString("\n")
+
+        // SUBTITLES block: the selected track, how it is being drawn, and the
+        // offset in force. MPV's INFO panel has always carried this and Exo's
+        // never did, so "what subtitle is playing and why is it 400 ms early"
+        // had no answer on the engine most sessions use (audit U-F6).
+        val subtitleLines = mutableListOf<String>()
+        exoPlayer?.currentTracks?.groups?.forEach { group ->
+            if (group.type != C.TRACK_TYPE_TEXT) return@forEach
+            for (i in 0 until group.length) {
+                if (!group.isTrackSelected(i)) continue
+                val format = group.getTrackFormat(i)
+                val parts = mutableListOf<String>()
+                format.label?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+                format.language?.uppercase()?.takeIf { it.isNotBlank() }
+                    ?.let { parts.add("Language: $it") }
+                normalizeCodec(format.sampleMimeType).takeIf { it != "—" }
+                    ?.let { parts.add("Format: $it") }
+                if (format.roleFlags and C.ROLE_FLAG_CAPTION != 0) parts.add("SDH/captions")
+                if (format.roleFlags and C.ROLE_FLAG_MAIN != 0) parts.add("forced")
+                subtitleLines.add(parts.joinToString(" • "))
+            }
+        }
+        val subtitleSource = when {
+            // The overlay typesets its own script, so the text cues this panel
+            // would otherwise describe are deliberately not drawn.
+            assRenderer.active -> "Drawn by: ASS overlay (libass typesetting)"
+            externalSubtitleCues.isNotEmpty() -> "Drawn by: external subtitle file"
+            subtitleLines.isEmpty() -> "Off"
+            else -> "Drawn by: embedded track"
+        }
+        val subtitleStyle = buildString {
+            append("Offset: ${subtitleOffsetMs}ms")
+            append(" • Size: ")
+            append(
+                when (AppPreferences.getDefaultSubtitleSize(applicationContext)) {
+                    SUBTITLE_SIZE_SMALL -> "small"
+                    SUBTITLE_SIZE_LARGE -> "large"
+                    else -> "normal"
+                }
+            )
+        }
+        infoSubtitles.text =
+            (subtitleLines + subtitleSource + subtitleStyle).joinToString("\n")
     }
 
 
@@ -9596,6 +9673,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private fun showBitmapCues(cueGroup: CueGroup) {
             val view = playerView.subtitleView ?: return
             view.setCues(cueGroup.cues)
+            // The player's own subtitle SIZE and POSITION reach a bitmap track
+            // too, as far as an authored image allows: the cue's pixels are
+            // fixed, so size is the view's scale and position is its vertical
+            // offset. Both are applied here rather than in the settings panel
+            // because this is the only place the bitmap path is drawn (audit
+            // U-F14: these settings reached text cues only).
+            applyBitmapCueGeometry(view)
             view.visibility = View.VISIBLE
             if (!bitmapCuesDrawn) {
                 bitmapCuesDrawn = true
@@ -9616,6 +9700,44 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             bitmapCuesDrawn = false
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
+            // Back to neutral: the text path positions itself with its own
+            // gravity, and a leftover scale/offset here would move it.
+            playerView.subtitleView?.apply {
+                scaleX = 1f
+                scaleY = 1f
+                translationY = 0f
+            }
+        }
+
+        /**
+         * The subtitle size and position settings, applied to a BITMAP cue.
+         *
+         * A PGS cue is an image with its own authored resolution, so nothing
+         * here can restyle it the way [renderText] restyles text: the honest
+         * mapping is scale for size and a vertical offset for position, and it
+         * is what the two settings can mean for an image at all. The scale is
+         * anchored bottom-centre, which is where a subtitle sits, so growing it
+         * pushes up from the same baseline instead of sinking off screen.
+         */
+        private fun applyBitmapCueGeometry(view: android.view.View) {
+            val size = when (AppPreferences.getDefaultSubtitleSize(applicationContext)) {
+                SUBTITLE_SIZE_SMALL -> BITMAP_CUE_SCALE_SMALL
+                SUBTITLE_SIZE_LARGE -> BITMAP_CUE_SCALE_LARGE
+                else -> 1f
+            }
+            // The position setting is an index into low / mid / high, the same
+            // three the text renderer's own gravity uses.
+            val liftFraction = when (AppPreferences.getDefaultSubtitlePosition(applicationContext)) {
+                SUBTITLE_POSITION_HIGH -> -BITMAP_CUE_POSITION_STEP * 2f
+                SUBTITLE_POSITION_MID -> -BITMAP_CUE_POSITION_STEP
+                else -> 0f
+            }
+            val lift = liftFraction * (view.height.takeIf { it > 0 }?.toFloat() ?: 0f) / 360f
+            view.scaleX = size
+            view.scaleY = size
+            view.pivotX = view.width / 2f
+            view.pivotY = view.height.toFloat()
+            view.translationY = lift
         }
 
         /**
@@ -10346,6 +10468,45 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     // --- Picker ---
+
+    /**
+     * Switches to a hash-only source by first asking TorBox for its link.
+     *
+     * The in-player picker lists the same rows the streams screen does, and a
+     * row with no URL of its own is a torrent the app cannot open by itself
+     * (audit S-F2). The streams screen resolved these already; this is the same
+     * call, made from the player, so the press works here too instead of being
+     * a toast that sends the viewer back a screen.
+     *
+     * Resolving takes a round trip, so the picker stays up until it answers: a
+     * success switches and dismisses, and every failure - no key, not cached,
+     * a dead request - leaves the picker where it is with the resolver's own
+     * words when it has any.
+     */
+    private fun resolveAndSwitch(stream: Stream) {
+        lifecycleScope.launch {
+            val resolved = runCatching { TorBoxResolve.playableStream(this@NativePlayerActivity, stream) }
+                .getOrNull()
+            if (resolved == null || resolved.url.isNullOrBlank()) {
+                Toast.makeText(
+                    this@NativePlayerActivity,
+                    "This source needs TorBox — it could not be prepared from its hash",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+            // The resolved row replaces the hash row in this session's list, so
+            // "next source" and the picker itself continue from a playable row
+            // rather than from the hash that was just prepared.
+            val index = sources.indexOfFirst { TorBoxResolve.isUnresolved(it) && it == stream }
+            if (index >= 0) {
+                sources = sources.toMutableList().also { it[index] = resolved }
+            }
+            dismissPicker()
+            switchToSource(resolved)
+        }
+    }
+
     private fun showPicker(mode: PickerMode) {
         // The rows are built BEFORE anything becomes visible, and an empty list
         // abandons the whole call. The order used to be the other way round -
@@ -10373,16 +10534,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             // answers `url ?: return` and the picker used to
                             // close over a player that had not changed - a press
                             // with no effect and no word about it (audit S-F2,
-                            // 2026-10-27). Resolving a debrid link belongs to
-                            // the picker that owns TorBox (the streams screen),
-                            // so this one says what the row needs and stays open
-                            // rather than dismissing into the same source.
+                            // 2026-10-27). It now does what the streams screen
+                            // does with the same row: asks TorBox for the CDN
+                            // link (see TorBoxResolve) and switches to THAT,
+                            // which is the whole reason the row is in the list.
+                            // Every refusal keeps the picker open and says why,
+                            // so a failed resolve is not a press that did
+                            // nothing.
                             if (stream.url.isNullOrBlank()) {
-                                Toast.makeText(
-                                    this@NativePlayerActivity,
-                                    "This source needs TorBox — pick it from the streams list",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                resolveAndSwitch(stream)
                             } else {
                                 switchToSource(stream)
                                 dismissPicker()

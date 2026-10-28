@@ -142,7 +142,10 @@ class StreamsScreenMobileContractTest {
         assertTrue(
             "both prefs (on, and the quality cap) must gate the automatic start",
             mobile.contains("AppPreferences.getAutoSelectStream(context)") &&
-                mobile.contains("AppPreferences.getMaxAutoPlayQuality(context)")
+                // The EFFECTIVE ceiling, not the raw preference: the cellular
+                // data saver narrows the viewer's own cap while the connection
+                // is metered (see AppPreferences.getEffectiveAutoPlayQuality).
+                mobile.contains("AppPreferences.getEffectiveAutoPlayQuality(context)")
         )
         assertTrue(
             "a manual pick and a viewer refresh must both suppress auto-select",
