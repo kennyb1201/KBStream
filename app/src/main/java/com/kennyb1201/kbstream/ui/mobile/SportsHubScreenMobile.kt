@@ -1726,7 +1726,6 @@ private fun standingsTextMobile(value: String): String = value.takeIf { it.isNot
 
 // ── Detail sheets ──────────────────────────────────────────────────────
 
-@Composable
 /**
  * One labelled ON/OFF row, shaped like the hub's other phone toggles.
  *
