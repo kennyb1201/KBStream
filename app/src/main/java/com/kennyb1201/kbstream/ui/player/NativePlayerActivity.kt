@@ -494,6 +494,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (frameRateMatcher?.hasEngaged == true) frameRateMatcher?.release()
             return
         }
+        // A look at the panel that a pause swallowed belongs to the request that
+        // is already out, not to the re-offer below, so it is replayed first and
+        // whatever the resume decides next cannot lose it (audit AFR S6).
+        frameRateMatcher?.resumeDeferredConfirm()
         val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
         // Same tag the probe and the matcher log under, so a field capture of
         // "AFR did not re-arm" reads as one sequence.
@@ -528,7 +532,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // The ladder's second look is dropped while playback is paused: a
             // backstop must not re-request the surface on a stopped picture
             // (see FrameRateMatcher).
-            isPlaybackActive = { exoPlayer?.playWhenReady == true }
+            isPlaybackActive = { exoPlayer?.playWhenReady == true },
+            // Whether this panel's whole-number rate beats a closer fractional
+            // one (audit AFR S1): a device-local answer, read when the matcher is
+            // built rather than mid-film.
+            preferWholeRate = AppPreferences.getPreferWholeFrameRate(this)
         ).also { frameRateMatcher = it }
     }
 
@@ -549,6 +557,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun restartFrameRateMatchForSource() {
         lastContentFps = null
         val matcher = frameRateMatcher ?: return
+        // Live is deliberately never matched (audit AFR C9), so a live source
+        // must not inherit the mode the source it replaced was played at (audit
+        // AFR C1's live half): nothing re-asks for that rate once the offer is
+        // gone, and the panel would stay at a film's rate until the player
+        // exited. A session that never engaged does nothing here, which is the
+        // ordinary launch on a channel.
+        if (isLiveChannel) matcher.restoreForUnmatchedSource()
         matcher.beginSource()
         if (isLiveChannel || !FrameRateProbe.isProbeable(currentUrl)) {
             Log.i(

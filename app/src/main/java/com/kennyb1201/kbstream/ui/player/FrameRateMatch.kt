@@ -137,6 +137,18 @@ internal object FrameRateMatch {
     private const val TOLERANCE = 0.005
 
     /**
+     * How close a mode's rate has to be to a whole number of frames per second
+     * to count as the whole-rate sibling of a fractional one.
+     *
+     * 24.000 is whole, 23.976 is 0.024 away (accepted as fractional), 59.940 is
+     * 0.06 away, 47.952 is 0.048 away. 0.01 separates those from the integers
+     * without ever calling 23.976 or 59.94 whole: the gap between a fractional
+     * rate and its integer sibling is a tenth of a percent, which is 0.024 at
+     * 24 Hz and 0.06 at 60 Hz - both well outside this.
+     */
+    private const val WHOLE_RATE_TOLERANCE = 0.01
+
+    /**
      * How far a mode may sit from an exact double or a 2.5x pulldown and still
      * be taken as that fallback.
      *
@@ -316,6 +328,29 @@ internal object FrameRateMatch {
             "offers $engagedModeId; nothing re-asked (a different display is attached)"
 
     /**
+     * The diagnostics line for a source that will never be rate-matched taking
+     * over from one that was, so the panel was put back (audit AFR C1's live
+     * half).
+     *
+     * A live channel is deliberately never matched (audit AFR C9), so nothing
+     * downstream would ever re-ask for the previous title's rate and nothing
+     * would put the panel back until the viewer left the player - the channel
+     * would simply play at the film's rate for the rest of the session.
+     *
+     * [restoredModeId] is the window's pre-session preference; a non-positive
+     * value means the window had none of its own, so the line names the TV
+     * interface's rate rather than printing a meaningless id.
+     */
+    fun describeUnmatchedSource(restoredModeId: Int): String =
+        if (restoredModeId > 0) {
+            "this source is live and is never rate-matched, so the panel was asked back " +
+                "to mode $restoredModeId rather than left at the previous title's rate"
+        } else {
+            "this source is live and is never rate-matched, so the panel was asked back " +
+                "to the rate the TV interface uses rather than the previous title's"
+        }
+
+    /**
      * ` (1920x1080)` when the platform named the mode's size, otherwise
      * nothing.
      *
@@ -360,8 +395,10 @@ internal object FrameRateMatch {
     fun chooseMode(
         contentFps: Double,
         modes: List<DisplayModeInfo>,
-        currentModeId: Int
-    ): DisplayModeInfo? = bestMode(contentFps, modes)?.takeIf { it.id != currentModeId }
+        currentModeId: Int,
+        preferWholeRate: Boolean = false
+    ): DisplayModeInfo? =
+        bestMode(contentFps, modes, preferWholeRate)?.takeIf { it.id != currentModeId }
 
     /**
      * The same ladder as [chooseMode] without the "already there" exclusion: the
@@ -375,12 +412,22 @@ internal object FrameRateMatch {
      *
      * [chooseMode] is defined in terms of this, so the exclusion-free answer
      * being the same mode [chooseMode] refuses cannot drift from it.
+     *
+     * [preferWholeRate] is the one rule in the ladder that is not arithmetic:
+     * see [exactMultipleMode]. Off by default, because the closest rate is the
+     * right answer on a panel that presents both modes properly - and because
+     * turning it on is a statement about a specific panel, not about film
+     * (audit AFR S1).
      */
-    fun bestMode(contentFps: Double, modes: List<DisplayModeInfo>): DisplayModeInfo? {
+    fun bestMode(
+        contentFps: Double,
+        modes: List<DisplayModeInfo>,
+        preferWholeRate: Boolean = false
+    ): DisplayModeInfo? {
         val content = normalise(contentFps) ?: return null
         val usable = modes.filter { it.refreshRate.isFinite() && it.refreshRate > 0.0 }
 
-        exactMultipleMode(content, usable)?.let { return it }
+        exactMultipleMode(content, usable, preferWholeRate)?.let { return it }
         ratioMode(content, usable, ratio = 2.0)?.let { return it }
         ratioMode(content, usable, ratio = 2.5)?.let { return it }
         return cadenceMode(content, usable)
@@ -407,14 +454,35 @@ internal object FrameRateMatch {
     /**
      * Step 1: the closest mode that is an exact integer multiple of the content
      * within [TOLERANCE], small multiple first. Null when the panel offers none.
+     *
+     * [preferWholeRate] inserts one rule between "smaller multiple wins" and
+     * "closer rate wins": within the same multiple, a mode whose rate is a whole
+     * number of frames per second beats one that is not.
+     *
+     * It exists for exactly one collision, and that collision is the whole of
+     * audit AFR S1: 23.976 fps film is an exact multiple of BOTH 23.976 Hz and
+     * 24.000 Hz, so this step always found both, and the closest-rate rule then
+     * always picked 23.976 - the mathematically better answer (0.1% drift, one
+     * frame per 41 s, which a panel's pulldown absorbs). But the panel has to
+     * present it, and the one field result that exists is film that still
+     * judders with matching on, on a chain whose EDID advertises 4K down to
+     * 23.98 Hz. So the ladder cannot answer from arithmetic, and this is the
+     * lever that separates the two hypotheses on a real TV instead of guessing.
+     *
+     * It also prefers 30.000 over 29.970 for 29.97 fps content, the same shape.
+     * Film's 60 Hz fallback is a LATER step and is deliberately untouched: that
+     * one is the 2.5x pulldown the panel already runs, not two modes that claim
+     * to be the same multiple.
      */
     private fun exactMultipleMode(
         content: Double,
-        modes: List<DisplayModeInfo>
+        modes: List<DisplayModeInfo>,
+        preferWholeRate: Boolean
     ): DisplayModeInfo? {
         var best: DisplayModeInfo? = null
         var bestMultiple = 0
         var bestDiff = 0.0
+        var bestWhole = false
 
         modes.forEach { mode ->
             // An integer multiple, never a fraction: a mode SLOWER than the
@@ -428,9 +496,14 @@ internal object FrameRateMatch {
             // `best` is a captured var and the compiler does not narrow it
             // across the branches.
             val currentBest = best
+            val whole = preferWholeRate && isWholeRate(mode.refreshRate)
             val better = when {
                 currentBest == null -> true
+                // The multiple still outranks everything: repeating the
+                // fewest frames is the point of the step.
                 multiple != bestMultiple -> multiple < bestMultiple
+                // ...then the whole-rate sibling, when this panel asked for it.
+                whole != bestWhole -> whole
                 else -> diff < bestDiff - 1e-9 ||
                     (diff <= bestDiff + 1e-9 && prefersOver(mode, currentBest))
             }
@@ -438,11 +511,16 @@ internal object FrameRateMatch {
                 best = mode
                 bestMultiple = multiple
                 bestDiff = diff
+                bestWhole = whole
             }
         }
 
         return best
     }
+
+    /** A mode whose rate is a whole number of frames per second. */
+    private fun isWholeRate(rate: Double): Boolean =
+        abs(rate - round(rate)) <= WHOLE_RATE_TOLERANCE
 
     /**
      * Step 2/3: the mode closest to [ratio] times the content, within
@@ -753,7 +831,18 @@ internal class FrameRateMatcher(
      * repair - on the way back the resume re-offer re-runs the ladder from the
      * top (see [apply]).
      */
-    private val isPlaybackActive: () -> Boolean = { true }
+    private val isPlaybackActive: () -> Boolean = { true },
+    /**
+     * Whether this panel's whole-number rate beats a fractional one that sits
+     * closer to the content (audit AFR S1) - 24.000 Hz over 23.976 Hz for film.
+     *
+     * Read once, when the matcher is built, because it is a statement about what
+     * this panel does with a mode rather than something settled mid-film: a
+     * player that changed its ladder halfway through would be renegotiating HDMI
+     * under a running title, which is the judder every rule in this class exists
+     * to avoid. Off by default, and the setting that arms it is device-local.
+     */
+    private val preferWholeRate: Boolean = false
 ) {
 
     private val originalPreferredModeId = activity.window.attributes.preferredDisplayModeId
@@ -813,6 +902,18 @@ internal class FrameRateMatcher(
 
     /** Bumped per request, so only the newest second look runs. */
     private var askSerial = 0
+
+    /**
+     * The look at the panel that fired while the picture was stopped, kept so it
+     * can run once playback moves again (audit AFR S6).
+     *
+     * A lambda rather than the parameters, because replaying it has to go
+     * through [confirm] itself - the serial, the release check and the deferral
+     * all still apply. It is deliberately NOT in the handler queue: that queue is
+     * emptied by [cancelPending] on every transient stop, which is exactly the
+     * event that produced the deferral.
+     */
+    private var deferredConfirm: (() -> Unit)? = null
 
     /**
      * The last rate and source offered, and whether that offer did anything.
@@ -886,6 +987,37 @@ internal class FrameRateMatcher(
     }
 
     /**
+     * Runs a confirm that [confirm] had to defer because the picture was stopped
+     * when it fired (audit AFR S6).
+     *
+     * Called from the resume path and from the hold tick rather than from a timer
+     * of its own, because the answer only means something once playback is
+     * moving: a panel settles during a pause in a way nobody can read as a
+     * verdict. A no-op when nothing was deferred, when the session has been
+     * released, or while the picture is still stopped - in that last case the
+     * pending look is kept for the next attempt. A newer request supersedes it on
+     * its own serial check, so this can never replay a look at a mode the ladder
+     * has since replaced.
+     */
+    fun resumeDeferredConfirm() {
+        val pending = deferredConfirm ?: return
+        // Released sessions owe nothing: the panel is being handed back, so a
+        // verdict on it is stale by definition.
+        if (released) {
+            deferredConfirm = null
+            return
+        }
+        // Still stopped: keep it for the next attempt rather than posting a look
+        // that [confirm] would only defer again.
+        if (!isPlaybackActive()) return
+        // NOT cleared before the post: the posted look clears it when it finally
+        // runs, so a stop that empties the handler queue between the post and the
+        // run cannot lose it a second time - which is the whole failure this
+        // method exists to close.
+        handler.post(pending)
+    }
+
+    /**
      * Starts a new SOURCE inside this activity (audit AFR C1).
      *
      * The matcher is built once per activity while a source switch rebuilds the
@@ -911,6 +1043,10 @@ internal class FrameRateMatcher(
         lastOfferSource = null
         // Its window starts with its own first offer (audit AFR S9).
         firstOfferAtMs = null
+        // A look at the PREVIOUS source's panel belongs to that source: replaying
+        // it now would read this one's answer as a verdict on the last one's
+        // request (audit AFR S6).
+        deferredConfirm = null
         Log.i(TAG, "new source: engage window restarted")
     }
 
@@ -939,6 +1075,10 @@ internal class FrameRateMatcher(
      * happens for a session that never engaged at all.
      */
     fun verifyEngagedMode() {
+        // The tick is the one thing that runs on both engines while a title
+        // plays, so it is also where a look that a pause swallowed is replayed
+        // (audit AFR S6). Cheap and a no-op unless one is pending.
+        resumeDeferredConfirm()
         if (released || heldModeId == UNSET || reassertedMode) return
         if (!isPlaybackActive()) return
         val now = SystemClock.elapsedRealtime()
@@ -980,17 +1120,66 @@ internal class FrameRateMatcher(
     fun release() {
         released = true
         cancelPending()
+        deferredConfirm = null
         runCatching { clearSurfaceRate() }
             .onFailure { Log.w(TAG, "could not clear the surface frame rate", it) }
         if (!restoreOnRelease) return
         restoreOnRelease = false
         heldModeId = UNSET
+        restorePanelMode()
+    }
+
+    /**
+     * Puts the window's mode preference back to what it was before this session
+     * asked for anything, which is what returns the panel to the rate the rest of
+     * the TV interface expects.
+     *
+     * Extracted because there are now two ways to owe that restore and both must
+     * write exactly the same value: leaving the player ([release]), and a source
+     * that will never be matched taking over ([restoreForUnmatchedSource]).
+     */
+    private fun restorePanelMode() {
         runCatching {
             val attributes = activity.window.attributes
             attributes.preferredDisplayModeId = originalPreferredModeId
             activity.window.attributes = attributes
             Log.i(TAG, "restored display mode preference $originalPreferredModeId")
         }.onFailure { Log.w(TAG, "could not restore the display mode", it) }
+    }
+
+    /**
+     * A source that will NEVER be matched has taken over from one that was (audit
+     * AFR C1's live half).
+     *
+     * Live is deliberately out of scope (audit AFR C9): a channel's rate is not a
+     * property of a title, and a 50 fps channel has no mode to switch to on the
+     * panels this ships to. But "not matched" cannot mean "left at the last
+     * film's rate" - the mode preference this session set would stand for the
+     * rest of the activity, nothing would re-ask for it and nothing would put it
+     * back until the viewer left the player, so a film's 24 Hz would be what the
+     * next channel played at.
+     *
+     * So the debt is paid here instead of at exit: the panel goes back to the
+     * pre-title mode, the held mode is dropped, and the surface vote (if this
+     * session cast one on a panel with no better mode) is cleared. A session that
+     * never engaged does nothing at all, which is the ordinary live launch.
+     */
+    fun restoreForUnmatchedSource() {
+        heldModeId = UNSET
+        reassertedMode = false
+        runCatching { clearSurfaceRate() }
+            .onFailure { Log.w(TAG, "could not clear the surface frame rate", it) }
+        if (!restoreOnRelease) return
+        restoreOnRelease = false
+        restorePanelMode()
+        FrameRateDiagnostics.setOutcome(
+            FrameRateMatch.describeUnmatchedSource(originalPreferredModeId)
+        )
+        PlaybackSessionTrace.note("afr restored the panel: the new source is live and unmatched")
+        Log.i(
+            TAG,
+            "live source: panel asked back to mode $originalPreferredModeId; nothing matched"
+        )
     }
 
     private fun apply(contentFps: Double, source: FrameRateSource) {
@@ -1076,7 +1265,7 @@ internal class FrameRateMatcher(
         // The only surface case left is a surface the player swapped while the
         // viewer was away, which the idempotence guard in [askSurface] allows.
         if (source == FrameRateSource.RESUME) {
-            val best = FrameRateMatch.bestMode(contentFps, modes)
+            val best = FrameRateMatch.bestMode(contentFps, modes, preferWholeRate)
             when {
                 best != null && best.id != modeId -> requestMode(best, contentFps, modeId)
                 best != null -> {
@@ -1114,7 +1303,7 @@ internal class FrameRateMatcher(
             //    the platform had already switched is the 2026-10-22 stutter.
             //    Ask for nothing, say so on the diagnostics row, and keep the
             //    restore debt.
-            val best = FrameRateMatch.bestMode(contentFps, modes)
+            val best = FrameRateMatch.bestMode(contentFps, modes, preferWholeRate)
             when {
                 best == null -> askSurfaceIfPossible(contentFps, modeId)
                 best.id != modeId -> requestMode(best, contentFps, modeId)
@@ -1265,7 +1454,12 @@ internal class FrameRateMatcher(
      * in records that, so the diagnostics row can say why nothing was switched.
      */
     private fun forceMode(contentFps: Double, modes: List<DisplayModeInfo>, currentModeId: Int) {
-        val chosen = FrameRateMatch.chooseMode(contentFps, modes, currentModeId)
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps,
+            modes,
+            currentModeId,
+            preferWholeRate
+        )
         if (chosen == null) {
             FrameRateDiagnostics.addRequest(FrameRateMatch.describeNoMatch(contentFps, modes))
             return
@@ -1298,8 +1492,23 @@ internal class FrameRateMatcher(
         if (released || serial != askSerial) return
         // Nothing to repair while the picture is stopped, and a backstop that
         // fires here is exactly the mid-session surface request this ladder is
-        // trying to avoid. The resume re-offer starts the ladder again.
-        if (!isPlaybackActive()) return
+        // trying to avoid.
+        //
+        // Not dropped, though (audit AFR S6): the request this look was posted for
+        // is still out, and this look is the only record of whether the panel took
+        // it. Dropping it meant a viewer who paused inside the 1.5 s window got a
+        // session with no landing line at all - unreadable in a field report. So it
+        // is kept and replayed by [resumeDeferredConfirm] once the picture moves
+        // again, and a newer request supersedes it on the serial check above.
+        if (!isPlaybackActive()) {
+            deferredConfirm = { confirm(serial, beforeModeId, contentFps, step, requestedMode) }
+            PlaybackSessionTrace.note(
+                "afr confirm deferred: the picture was stopped (step=$step, serial=$serial)"
+            )
+            Log.i(TAG, "confirm at step $step deferred: playback is stopped")
+            return
+        }
+        deferredConfirm = null
         val display = displayOf() ?: return
         val afterModeId = runCatching { display.mode.modeId }.getOrNull() ?: return
         val afterRate = runCatching { display.mode.refreshRate.toDouble() }.getOrDefault(0.0)

@@ -1476,7 +1476,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val matcher = FrameRateMatcher(
             this@MpvPlayerActivity,
             videoSurface = { surface?.holder?.surface },
-            isPlaybackActive = { surface?.isPaused() == false }
+            isPlaybackActive = { surface?.isPaused() == false },
+            // Whether this panel's whole-number rate beats a closer fractional
+            // one (audit AFR S1): a device-local answer, read when the matcher is
+            // built rather than mid-film. This engine has no live path, so the
+            // matched-source restore has no caller here.
+            preferWholeRate = AppPreferences.getPreferWholeFrameRate(this)
         )
         frameRateMatcher = matcher
         startFrameRateHold()
@@ -6598,6 +6603,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             if (frameRateMatcher?.hasEngaged == true) frameRateMatcher?.release()
             return
         }
+        // A look at the panel that a pause swallowed belongs to the request that
+        // is already out, not to the re-offer below, so it is replayed first
+        // (audit AFR S6).
+        frameRateMatcher?.resumeDeferredConfirm()
         val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
         // Created here when it does not exist yet: the matcher used to be built
         // only at session start, so switching the setting ON in Settings and

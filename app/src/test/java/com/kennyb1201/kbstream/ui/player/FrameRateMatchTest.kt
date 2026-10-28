@@ -749,4 +749,83 @@ class FrameRateMatchTest {
             FrameRateMatch.describeAlreadyInBestMode(23.976, mode(1, 60.0))
         )
     }
+
+    // ── The whole-rate sibling (audit AFR S1) ────────────────────────────
+    //
+    // 23.976 fps film is an exact multiple of BOTH 23.976 Hz and 24.000 Hz, so
+    // the ladder finds two valid modes and the closest-rate rule always answered
+    // 23.976. That is the better arithmetic (0.1% drift, one frame per 41 s) but
+    // not provably the better picture: the one field result on this build is film
+    // that still judders with matching on. Arithmetic cannot separate those two
+    // hypotheses, so the preference that can be tried on the TV does, and these
+    // are its exact rules.
+
+    @Test
+    fun `with nothing said the closer fractional mode is still chosen`() {
+        // The shipped answer until someone arms the preference: every install
+        // that never opens the row has to behave exactly as it did.
+        val modes = listOf(mode(1, 60.0), mode(2, 23.976), mode(3, 24.0))
+
+        assertEquals(2, FrameRateMatch.bestMode(23.976, modes)?.id)
+        assertEquals(
+            "passing the flag explicitly as off is the same thing, not a third behaviour",
+            2,
+            FrameRateMatch.bestMode(23.976, modes, preferWholeRate = false)?.id
+        )
+    }
+
+    @Test
+    fun `the whole-number rate wins only when it is asked for`() {
+        val modes = listOf(mode(1, 60.0), mode(2, 23.976), mode(3, 24.0))
+
+        assertEquals(3, FrameRateMatch.bestMode(23.976, modes, preferWholeRate = true)?.id)
+        assertEquals(
+            "and the choice search that the engage ladder uses agrees",
+            3,
+            FrameRateMatch.chooseMode(23.976, modes, currentModeId = 1, preferWholeRate = true)?.id
+        )
+        assertEquals(
+            "the same rule answers 30.000 for 29.97 fps content",
+            30.0,
+            FrameRateMatch.bestMode(
+                contentFps = 29.97,
+                modes = listOf(mode(1, 29.97), mode(2, 30.0)),
+                preferWholeRate = true
+            )?.refreshRate
+        )
+    }
+
+    @Test
+    fun `the preference still loses to a smaller multiple`() {
+        // Repeating the fewest frames is the point of the first step, so a whole
+        // rate two multiples up must not beat a fractional one at double: 48 Hz
+        // for film is still better than 72 Hz for film, flag or no flag.
+        val modes = listOf(mode(1, 47.952), mode(2, 72.0))
+
+        assertEquals(1, FrameRateMatch.bestMode(23.976, modes, preferWholeRate = true)?.id)
+        assertEquals(
+            "while at the SAME multiple the whole sibling is what the flag is for",
+            4,
+            FrameRateMatch.bestMode(
+                contentFps = 23.976,
+                modes = listOf(mode(1, 47.952), mode(4, 48.0)),
+                preferWholeRate = true
+            )?.id
+        )
+    }
+
+    @Test
+    fun `the preference never invents a mode the panel does not have`() {
+        // The one-field-capture limit: a panel that lists only 23.976 keeps it,
+        // and a panel already in it is asked for nothing. A preference is not a
+        // licence to ask for a mode id the box never reported.
+        val only = listOf(mode(2, 23.976))
+
+        assertEquals(2, FrameRateMatch.bestMode(23.976, only, preferWholeRate = true)?.id)
+        assertNull(FrameRateMatch.chooseMode(23.976, only, currentModeId = 2, preferWholeRate = true))
+        assertNull(
+            "and a panel with no modes at all is still left alone",
+            FrameRateMatch.bestMode(23.976, emptyList(), preferWholeRate = true)
+        )
+    }
 }
