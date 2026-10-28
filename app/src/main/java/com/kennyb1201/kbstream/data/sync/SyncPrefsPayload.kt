@@ -291,7 +291,15 @@ object PrefsPayloadBuilder {
         // blob and so could never sync.
         "sports_enabled_leagues",
         "sports_league_order",
-        "sports_favorite_teams"
+        "sports_favorite_teams",
+        // The hub's reminder master switch (settings reorg Q4). A per-profile
+        // viewing choice like the three above - following a team IS the opt-in -
+        // and not a device capability, so turning reminders off on the TV means
+        // the phone stops buzzing about the same game. A device that never
+        // touched it publishes nothing for it (no default is pushed on upgrade),
+        // and the receiving box picks the value up at its next reminder round
+        // rather than by rearming WorkManager from a sync apply.
+        "sports_game_reminders"
     )
 
     /**
@@ -322,7 +330,9 @@ object PrefsPayloadBuilder {
         // reason or spend the phone's plan. Device-local, like the ceiling it
         // narrows.
         "cellular_data_saver",
-        "force_software_decoder",
+        // `force_software_decoder` used to sit here with no accessor anywhere in
+        // the app - a key nothing could read or write. Removed with the other
+        // dead entries (settings reorg U4).
         "enable_tunneling",
         "enable_pip",
         "decoder_mode",
@@ -331,11 +341,11 @@ object PrefsPayloadBuilder {
         "audio_decoder",
         "dv_compat_mode",
         "strip_hdr10_plus",
-        // The temporary DV stall-bisect arms: what one decoder is doing right
-        // now, so a blob from another TV must never arm a bisect nobody there
-        // is running. They come out with the settings rows.
-        "dv_diag_drop_rpu",
-        "dv_diag_no_color_info",
+        // The DV persistence converters are real settings rows, so their keys
+        // stay: a blob from another TV must never arm a rewrite nobody there is
+        // running. (Two more entries used to sit above these - `dv_diag_drop_rpu`
+        // and `dv_diag_no_color_info` - claiming rows that never existed; removed
+        // with settings reorg U4.)
         "dv_convert_p7_to_81",
         "dv_convert_p5_to_81",
         "dv_p5_gles_correction",
@@ -347,6 +357,12 @@ object PrefsPayloadBuilder {
         // synced value would do.
         "mpv_vo",
         "match_frame_rate",                // which refresh rates this panel can do
+        // Which of two equally exact rates this panel presents properly: the
+        // question the match above only asks arithmetically (audit AFR S1). A
+        // synced answer would have one TV asking for the rate the other one was
+        // tried on, which is worse than no answer - so it stays on the box it was
+        // learned on.
+        "prefer_whole_frame_rate",
         // Whether the trailer pipeline can mint YouTube PO tokens at all is a
         // property of this box (some Fire OS images ship no usable WebView), so
         // a TV's answer must never switch the phone's minter off.

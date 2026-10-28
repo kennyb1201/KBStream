@@ -119,10 +119,15 @@ class UiUniformityBatchAContractTest {
                 "inside SyncSection stacked two labels on the same rows",
             sync.contains("KBSectionHeader")
         )
+        // The pane caption moved with the section (settings reorg §10.1, Q1):
+        // sign-in is the SYNC pane's "Account" section now. The one-heading rule
+        // above is what this test protects - the caption is the pane's, wherever
+        // the pane is - and the "(Beta)" qualifier deliberately did NOT come
+        // along, because the Account header is not a beta label.
         assertTrue(
-            "the section's \"(Beta)\" qualifier must survive on the pane caption",
+            "the section must still be captioned by the pane it lives in",
             source("ui/settings/SettingsScreen.kt")
-                .contains("SettingsSectionHeader(\"Sync (Beta)\", first = true)")
+                .contains("SettingsSectionHeader(\"Account\", first = true)")
         )
     }
 

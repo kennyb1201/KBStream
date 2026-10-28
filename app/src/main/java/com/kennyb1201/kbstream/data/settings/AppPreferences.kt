@@ -49,12 +49,16 @@ object AppPreferences {
     private const val KEY_BINGE_GROUP_FALLBACK = "binge_group_fallback"
     private const val KEY_STILL_THERE_PROMPT = "still_there_prompt"
     private const val KEY_STILL_THERE_EPISODES = "still_there_episodes"
-    private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
     // Matching the panel's refresh rate to the content. Device-local: what a
     // box's display can do is a property of that box, exactly like the decoder
     // choices it sits beside (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
     private const val KEY_MATCH_FRAME_RATE = "match_frame_rate"
+    // Whether this panel's whole-number rate is preferred over the fractional
+    // one that sits closer to the content (audit AFR S1). Device-local for the
+    // same reason, and its own key so the two questions can be answered
+    // separately on one box.
+    private const val KEY_PREFER_WHOLE_FRAME_RATE = "prefer_whole_frame_rate"
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
@@ -436,8 +440,12 @@ object AppPreferences {
         prefs(context).getBoolean(KEY_AUTO_SELECT_STREAM, false)
 
     fun setAutoSelectStream(context: Context, enabled: Boolean) {
+        // No display-prefs push: this key is in
+        // [PrefsPayloadBuilder.EXCLUDED_PREF_KEYS], so the builder would never
+        // publish it and the push was a silent no-op (settings reorg U4). The
+        // value stays on this device, which is the whole reason it is excluded -
+        // auto-select waits on THIS box's add-ons and connection.
         prefs(context).edit().putBoolean(KEY_AUTO_SELECT_STREAM, enabled).apply()
-        syncDisplayPrefsBlob(context)
     }
 
     // ── Stream ranker on/off (off = keep addon-provided order) ──────
@@ -746,13 +754,41 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_MATCH_FRAME_RATE, enabled).apply()
     }
 
+    /**
+     * Whether the panel's whole-number rate beats a fractional one that sits
+     * closer to the content (audit AFR S1).
+     *
+     * 23.976 fps film is an exact multiple of both 23.976 Hz and 24.000 Hz, so
+     * the ladder's closest-rate rule always asks for 23.976 - the mathematically
+     * better answer (0.1% drift, one frame per 41 s). But the panel is what has
+     * to present it, and the one field result that exists is film that still
+     * judders with matching on. Arithmetic cannot separate those two, so this is
+     * the lever that does: on, 24.000 Hz wins the tie inside a multiple (and
+     * 30.000 over 29.970, the same shape). Film's 60 Hz pulldown fallback is a
+     * later step and is not affected.
+     *
+     * Off by default, device-local, and only consulted while
+     * [getMatchFrameRate] is on: which rates a panel handles well is a property
+     * of that panel, so the answer comes from comparing two playbacks on the box
+     * in question, never from a default. Not part of the display-prefs blob for
+     * the same reason the toggle beside it is not.
+     */
+    fun getPreferWholeFrameRate(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PREFER_WHOLE_FRAME_RATE, false)
+
+    fun setPreferWholeFrameRate(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PREFER_WHOLE_FRAME_RATE, enabled).apply()
+    }
+
     // ── Picture-in-Picture ──────────────────────────────────────────
     fun getEnablePip(context: Context): Boolean =
         prefs(context).getBoolean(KEY_ENABLE_PIP, false)
 
     fun setEnablePip(context: Context, enabled: Boolean) {
+        // No display-prefs push: `enable_pip` is EXCLUDED (a box that cannot do
+        // PIP must not be switched on by another one's answer), so the push
+        // published nothing (settings reorg U4).
         prefs(context).edit().putBoolean(KEY_ENABLE_PIP, enabled).apply()
-        syncDisplayPrefsBlob(context)
     }
 
     // ── Playback engine ───────────────────────────────────────────────
@@ -1295,8 +1331,10 @@ object AppPreferences {
         prefs(context).getInt(KEY_DEFAULT_ASPECT_RATIO, 0)
 
     fun setDefaultAspectRatio(context: Context, ratio: Int) {
+        // No display-prefs push: `default_aspect_ratio` is EXCLUDED (it is a
+        // letterboxing choice made against this screen), so the push published
+        // nothing (settings reorg U4).
         prefs(context).edit().putInt(KEY_DEFAULT_ASPECT_RATIO, ratio).apply()
-        syncDisplayPrefsBlob(context)
     }
 
     // ── Preferred audio language ──────────────────────────────────────
@@ -2204,12 +2242,32 @@ object AppPreferences {
      * team has already said they care when it plays. The worker is only ever
      * scheduled while at least one team is followed, so the default costs
      * nothing to somebody who never used the hub.
+     *
+     * Synced with its sports siblings (settings reorg Q4): this is a per-profile
+     * viewing choice, not a device capability - a viewer who turned reminders off
+     * on the TV does not want the phone buzzing about the same game. Two
+     * consequences are deliberate:
+     *
+     *  - a device that never touched the switch publishes NOTHING for it, so no
+     *    default is written onto the account on upgrade and the other device's
+     *    own value stands until someone toggles it;
+     *  - the merge is per key with its own edit stamp, so this answer never
+     *    reverts a newer edit to the followed teams or the enabled leagues.
+     *
+     * The per-GAME requests in SportsReminderStore do NOT travel: only this
+     * master follows the profile, and each device still schedules and notifies
+     * from its own followed-team set.
      */
     fun getSportsGameReminders(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SPORTS_GAME_REMINDERS, true)
 
     fun setSportsGameReminders(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SPORTS_GAME_REMINDERS, enabled).apply()
+        // Publishes the answer for the account, exactly as the three siblings
+        // above do. There is no reschedule here for the RECEIVING device: an
+        // arriving value cannot rearm another box's WorkManager, so the round
+        // itself reads this switch before it posts (SportsNotificationWorker.run).
+        syncDisplayPrefsBlob(context)
     }
 
     /**

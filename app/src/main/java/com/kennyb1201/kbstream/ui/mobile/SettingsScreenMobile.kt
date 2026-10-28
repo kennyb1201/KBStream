@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,7 +36,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,6 +92,7 @@ import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.download.DownloadsStore
 import com.kennyb1201.kbstream.data.download.formatDownloadBytes
+import com.kennyb1201.kbstream.ui.components.KBSecretField
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
@@ -102,9 +106,15 @@ import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.settings.SettingsGroup
 import com.kennyb1201.kbstream.ui.settings.SettingsPane
+import com.kennyb1201.kbstream.ui.settings.LocalFlashingSetting
 import com.kennyb1201.kbstream.ui.settings.RATED_CLEAR_DESCRIPTION
 import com.kennyb1201.kbstream.ui.settings.RATED_EMPTY_TEXT
 import com.kennyb1201.kbstream.ui.settings.RatedFilter
+import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_FLASH_MS
+import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_MAX_RESULTS
+import com.kennyb1201.kbstream.ui.settings.SETTINGS_SEARCH_SCROLL_BUDGET_MS
+import com.kennyb1201.kbstream.ui.settings.SettingSearchEntry
+import com.kennyb1201.kbstream.ui.settings.SettingsSearchIndex
 import com.kennyb1201.kbstream.ui.settings.ratedGlyphRes
 import com.kennyb1201.kbstream.ui.settings.ratedList
 import com.kennyb1201.kbstream.ui.settings.ratedMetaLine
@@ -130,6 +140,7 @@ import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
 import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /*
@@ -212,6 +223,29 @@ fun SettingsScreenMobile(
     // this feature must never do (spec §8).
     var downloadsOpen by remember { mutableStateOf(false) }
 
+    // ── Settings search, the jump (settings reorg §15.2.2) ─────────────────
+    // The list hands over which row to reveal and which pane it lives in; the
+    // pane has to be the OPEN one before the anchor is attached at all, so the
+    // request loop below keys on both.
+    var searchJump by remember { mutableStateOf<SettingSearchEntry?>(null) }
+    var flashingEntry by remember { mutableStateOf<SettingSearchEntry?>(null) }
+    LaunchedEffect(searchJump, pane) {
+        val target = searchJump ?: return@LaunchedEffect
+        if (pane != target.pane) return@LaunchedEffect
+        // Time-budgeted, not frame-counted, for the TV page's reason: the
+        // freshly opened pane has not composed yet, and a bring-into-view on a
+        // requester whose node is not attached is a no-op.
+        val deadline = System.currentTimeMillis() + SETTINGS_SEARCH_SCROLL_BUDGET_MS
+        while (System.currentTimeMillis() < deadline) {
+            runCatching { target.anchor.bringIntoView() }
+            withFrameNanos { }
+        }
+        flashingEntry = target
+        delay(SETTINGS_SEARCH_FLASH_MS)
+        flashingEntry = null
+        searchJump = null
+    }
+
     BackHandler {
         when {
             downloadsOpen -> downloadsOpen = false
@@ -241,7 +275,12 @@ fun SettingsScreenMobile(
                         // Back to the list (see the note beside `pane`).
                         AppPreferences.setLastSettingsPane(context, opened.name)
                     },
-                    onOpenDownloads = { downloadsOpen = true }
+                    onOpenDownloads = { downloadsOpen = true },
+                    onSearchJump = { entry ->
+                        searchJump = entry
+                        pane = entry.pane
+                        AppPreferences.setLastSettingsPane(context, entry.pane.name)
+                    }
                 )
             } else {
                 PaneHeaderMobile(pane = open, onBack = { pane = null })
@@ -250,13 +289,15 @@ fun SettingsScreenMobile(
                         .fillMaxWidth()
                         .weight(1f)
                 ) {
+                    // The flash is a screen-level event, exactly as on TV: the
+                    // row compares this by IDENTITY against its own entry.
+                    CompositionLocalProvider(LocalFlashingSetting provides flashingEntry) {
                     when (open) {
                         SettingsPane.INTEGRATIONS -> IntegrationsPaneMobile(
                             onOpenAddons = onOpenAddons,
                             onOpenSimkl = onOpenSimkl,
                             onOpenTrakt = onOpenTrakt,
-                            onOpenProfiles = onOpenProfiles,
-                            onOpenStats = onOpenStats
+                            onOpenProfiles = onOpenProfiles
                         )
 
                         SettingsPane.COLLECTIONS -> CollectionsPaneMobile(
@@ -284,6 +325,7 @@ fun SettingsScreenMobile(
 
                         SettingsPane.SYNC -> SyncPaneMobile()
                     }
+                    }
                 }
             }
         }
@@ -303,10 +345,27 @@ fun SettingsScreenMobile(
 @Composable
 private fun SettingsHomeMobile(
     onOpen: (SettingsPane) -> Unit,
-    onOpenDownloads: () -> Unit
+    onOpenDownloads: () -> Unit,
+    /**
+     * A row result was tapped: switch to its pane and jump to the row. The
+     * parent owns the jump because the panes compose there (settings reorg
+     * §15.2.2).
+     */
+    onSearchJump: (SettingSearchEntry) -> Unit
 ) {
     val context = LocalContext.current
     val panes = remember { SettingsPane.entries }
+    // Settings search, ported (settings reorg §15, Q5): the same shared index the
+    // TV page searches, filtered to the rows THIS screen draws.
+    var query by remember { mutableStateOf("") }
+    val kidsAddonLock = ProfileManager.activeProfile
+        .collectAsStateWithLifecycle().value
+        ?.let { profile -> profile.kidsMaxAge != null && profile.kidsHideAddons }
+        ?: false
+    val results = remember(query, kidsAddonLock) {
+        SettingsSearchIndex.search(query, kidsAddonLock = kidsAddonLock, mobile = true)
+            .take(SETTINGS_SEARCH_MAX_RESULTS)
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 28.dp),
@@ -333,35 +392,67 @@ private fun SettingsHomeMobile(
         // The phone's own section, above the television's panes. The blurb is
         // the count and the storage figure the Downloads page's own header
         // states, from the same source, so the two can never disagree.
-        item(key = "downloads_section") {
-            MobileEyebrow("Downloads")
-        }
-        item(key = "downloads_row") {
-            SettingsHomeRowMobile(
-                label = "Downloads",
-                blurb = downloadsSummary(context),
-                onClick = onOpenDownloads
+        item(key = "search") {
+            KBTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "Search settings",
+                modifier = Modifier.fillMaxWidth()
             )
         }
 
-        SettingsGroup.entries.forEach { group ->
-            item(key = "group_${group.name}") {
-                Text(
-                    text = group.label.uppercase(),
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
+        if (query.isBlank()) {
+            item(key = "downloads_section") {
+                MobileEyebrow("Downloads")
+            }
+            item(key = "downloads_row") {
+                SettingsHomeRowMobile(
+                    label = "Downloads",
+                    blurb = downloadsSummary(context),
+                    onClick = onOpenDownloads
                 )
             }
-            items(
-                items = panes.filter { it.group == group },
-                key = { it.name }
-            ) { pane ->
+
+            SettingsGroup.entries.forEach { group ->
+                item(key = "group_${group.name}") {
+                    Text(
+                        text = group.label.uppercase(),
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
+                    )
+                }
+                items(
+                    items = panes.filter { it.group == group },
+                    key = { it.name }
+                ) { pane ->
+                    SettingsHomeRowMobile(
+                        label = pane.label,
+                        blurb = pane.blurb,
+                        onClick = { onOpen(pane) }
+                    )
+                }
+            }
+        } else {
+            item(key = "results_header") {
+                MobileEyebrow("Results")
+            }
+            if (results.isEmpty()) {
+                item(key = "results_empty") {
+                    SettingsCaptionMobile("No setting matches \u201c$query\u201d.")
+                }
+            }
+            items(items = results, key = { "result_${it.key}" }) { entry ->
                 SettingsHomeRowMobile(
-                    label = pane.label,
-                    blurb = pane.blurb,
-                    onClick = { onOpen(pane) }
+                    label = entry.label,
+                    // Where the row lives, so a result is also an answer to
+                    // "which page was I thinking of".
+                    blurb = entry.pane.label,
+                    onClick = {
+                        query = ""
+                        onSearchJump(entry)
+                    }
                 )
             }
         }
@@ -450,6 +541,15 @@ internal fun SettingsSectionMobile(title: String, first: Boolean = false) {
     MobileEyebrow(title, first = first)
 }
 
+/**
+ * The index entry a row answers to: by explicit key when the labels differ,
+ * else by its own label (settings reorg §15.2.4/§15.2.5). Null - not a crash -
+ * when the row is deliberately unsearchable (a caption, a one-off card).
+ */
+private fun searchEntryFor(label: String, searchKey: String?): SettingSearchEntry? =
+    (searchKey?.let { SettingsSearchIndex.entryFor(it) })
+        ?: SettingsSearchIndex.entryForLabel(label)
+
 @Composable
 private fun SettingsCaptionMobile(text: String) {
     Text(
@@ -474,12 +574,33 @@ internal fun SettingsToggleMobile(
     // row still shows the state, it just cannot be moved to one that could not
     // be honoured.
     enabled: Boolean = true,
+    /**
+     * The index key for a row whose label on this screen differs from the one
+     * the index names (settings reorg §15.2.5). Omitted, the row is found by
+     * its own [label] - which is the normal case, because the index is keyed
+     * once and the TV row's spelling is what it records.
+     */
+    searchKey: String? = null,
     onChange: (Boolean) -> Unit
 ) {
+    val searchEntry = searchEntryFor(label, searchKey)
+    val flash = LocalFlashingSetting.current
+    val isFlashing = searchEntry != null && flash === searchEntry
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (searchEntry != null) {
+                    Modifier.bringIntoViewRequester(searchEntry.anchor)
+                } else {
+                    Modifier
+                }
+            )
+            .background(
+                if (isFlashing) KBAccent.copy(alpha = 0.16f) else Color.Transparent,
+                KBShapeCard
+            )
             .padding(vertical = 6.dp)
     ) {
         Column(
@@ -522,10 +643,33 @@ private fun SettingsNavRowMobile(
      * unchanged; the Rated Titles footer arms its clear-all with it (the same
      * `danger` flag KBButton carries for the Clear Eye Badges confirm).
      */
-    danger: Boolean = false
+    danger: Boolean = false,
+    /** See [SettingsToggleMobile]'s `searchKey` (settings reorg §15.2.5). */
+    searchKey: String? = null
 ) {
-    KBCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+    val searchEntry = searchEntryFor(label, searchKey)
+    val flash = LocalFlashingSetting.current
+    val isFlashing = searchEntry != null && flash === searchEntry
+    KBCard(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (searchEntry != null) {
+                    Modifier.bringIntoViewRequester(searchEntry.anchor)
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    if (isFlashing) KBAccent.copy(alpha = 0.16f) else Color.Transparent,
+                    KBShapeCard
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
             Text(
                 text = label,
                 color = if (danger) KBDanger else KBTextHi,
@@ -559,13 +703,30 @@ private fun <T> SettingsChoiceMobile(
     options: List<Pair<String, T>>,
     selected: T,
     onSelect: (T) -> Unit,
-    description: String? = null
+    description: String? = null,
+    /** See [SettingsToggleMobile]'s `searchKey` (settings reorg §15.2.5). */
+    searchKey: String? = null
 ) {
+    val searchEntry = searchEntryFor(label, searchKey)
+    val flash = LocalFlashingSetting.current
+    val isFlashing = searchEntry != null && flash === searchEntry
     Text(
         text = label,
         color = KBTextHi,
         style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+        modifier = Modifier
+            .then(
+                if (searchEntry != null) {
+                    Modifier.bringIntoViewRequester(searchEntry.anchor)
+                } else {
+                    Modifier
+                }
+            )
+            .background(
+                if (isFlashing) KBAccent.copy(alpha = 0.16f) else Color.Transparent,
+                KBShapeCard
+            )
+            .padding(top = 4.dp, bottom = 4.dp)
     )
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(MobileSpacing.chip),
@@ -632,8 +793,7 @@ private fun IntegrationsPaneMobile(
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
-    onOpenProfiles: () -> Unit,
-    onOpenStats: () -> Unit
+    onOpenProfiles: () -> Unit
 ) {
     val context = LocalContext.current
     val activeProfile by ProfileManager.activeProfile.collectAsStateWithLifecycle()
@@ -686,11 +846,9 @@ private fun IntegrationsPaneMobile(
                 onClick = onOpenAddons
             )
         }
-        SettingsNavRowMobile(
-            label = "Viewing stats",
-            description = "Finished episodes, movies, runtime and your streak",
-            onClick = onOpenStats
-        )
+        // The duplicate "Viewing stats" row that used to sit here is gone
+        // (settings reorg §3.1, D4): the DATA pane's copy is its only home, so
+        // one read-only screen has one door.
 
         // ── Trackers ─────────────────────────────────────────────
         // The three services that hold this account's viewing state, plus the
@@ -706,15 +864,33 @@ private fun IntegrationsPaneMobile(
             description = "Connect your Trakt account to scrobble playback and sync watched state",
             onClick = onOpenTrakt
         )
-        // m11 as amended (2026-10-22): the card is COMPOSED on a kids profile
-        // so a key can be entered or replaced there. Nothing on it can be read:
-        // the phone's field is masked on every profile - there is no reveal
-        // chip here, unlike the TV pane's - and the value only ever draws as
-        // dots. The card used to be dropped entirely, and because that branch
-        // ran on to the end of the pane it took the Subtitles & Debrid and
-        // Badges sections with it (they are outside it now; see their own
-        // note below). The caption says why the field arrives prefilled: a
-        // saved key still works, and a new one can be pasted over it.
+        // Resume Source closes the trackers' section (settings reorg §3.2): it is
+        // the tie-break the two trackers above feed, so it belongs with them -
+        // it used to sit AFTER the MDBList key card, which put it on the far side
+        // of a different concern. A behaviour preference, not a secret, so it
+        // re-seeds on the sync revision and is never gated by keysHidden.
+        ResumeAuthorityMobile(
+            selected = resumeAuthority,
+            onPick = { authority ->
+                resumeAuthority = authority
+                AppPreferences.setResumeAuthority(context, authority)
+            }
+        )
+
+        // ── API Keys ─────────────────────────────────────────────
+        // ONE contiguous block (settings reorg §3.3): the four key surfaces used
+        // to be split by the MDBList card and by the TorBox machinery, so "where
+        // do I paste a key" had three answers. The MDBList card leads, then
+        // OMDb, OpenSubtitles and the TorBox field; what a TorBox key enables
+        // has its own section below.
+        SettingsSectionMobile("API Keys")
+        // m11 as amended (2026-10-22): every key card is COMPOSED on a kids
+        // profile so a key can be entered or replaced there. Nothing on them can
+        // be read: the phone's field is masked on every profile - there is no
+        // reveal chip here, unlike the TV pane's - and the value only ever draws
+        // as dots. This caption is the block's ONE copy, over the first card,
+        // and it says why a key arrives prefilled: a saved key still works, and
+        // a new one can be pasted over it.
         if (keysHidden) {
             SettingsCaptionMobile(
                 "Keys are masked on a kids profile: a saved key still works, and " +
@@ -732,24 +908,6 @@ private fun IntegrationsPaneMobile(
             savedHint = "Connected as",
             savedDescription = "Key saved — ratings appear on the next title you open."
         )
-        ResumeAuthorityMobile(
-            selected = resumeAuthority,
-            onPick = { authority ->
-                resumeAuthority = authority
-                AppPreferences.setResumeAuthority(context, authority)
-            }
-        )
-
-        SettingsSectionMobile("API Keys")
-        // The same rule as the MDBList card above: composed everywhere, read
-        // nowhere. These three fields were inside the keys-hidden branch, so a
-        // kids profile could not add or correct any of them.
-        if (keysHidden) {
-            SettingsCaptionMobile(
-                "Keys are masked on a kids profile: a saved key still works, and " +
-                    "a new one can be pasted here."
-            )
-        }
         KeyCardMobile(
             title = "OMDb API Key",
             description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +
@@ -795,18 +953,15 @@ private fun IntegrationsPaneMobile(
             savedDescription = "Saved — cached sources are badged, and the library sync uses this key."
         )
 
-        // ── Subtitles & Debrid ──────────────────────────────────────────
-        // Behaviour preferences, not credentials: they were inside the
-        // keys-hidden branch, so a kids profile had neither the auto-fetch
-        // subtitle toggle nor the TorBox library toggle - and no badge-pack
-        // section under it either. Unconditional now, matching the TV pane.
-        SettingsSectionMobile("Subtitles & Debrid")
-        SyncedToggleMobile(
-            label = "Auto-fetch subtitles",
-            description = "Look for a matching subtitle when a title starts without one.",
-            get = AppPreferences::getAutoFetchSubtitles,
-            set = AppPreferences::setAutoFetchSubtitles
-        )
+        // ── TorBox & Library ────────────────────────────────────────────
+        // (settings reorg §3.4): this replaces the deleted "Subtitles & Debrid"
+        // header, which named a concern contributing exactly one row - and that
+        // row (Auto-fetch subtitles) now lives in the Subtitles pane. What is
+        // left is one question, in the order the viewer needs it: the switch
+        // that turns the round on, what the last round did plus the manual
+        // resync, the rows no rule can attribute, then the one switch that lets
+        // the app WRITE to the account.
+        SettingsSectionMobile("TorBox & Library")
         // Turning the sync OFF is the only moment its own writes can honestly
         // be taken back: it adds titles to THIS profile's My List, and
         // untoggling used to leave every one of them behind with nothing saying
@@ -999,97 +1154,9 @@ private fun IntegrationsPaneMobile(
             set = AppPreferences::setTorboxResolveCreate
         )
 
-        // ── Stream badges ────────────────────────────────────────────────
-        // The same pack URL field and import/remove calls the TV pane uses; the
-        // only change is that the field sits beside the keyboard here, so it
-        // does not need the TV's tap-the-card-to-focus dance.
-        SettingsSectionMobile("Badges")
-        // Per profile, like every device-local row (see rememberProfileRowKey):
-        // the pack URL another profile imported is not this one's.
-        var badgePackInput by remember(activeProfile?.id) {
-            mutableStateOf(StreamBadgeEngine.getPackUrl(context))
-        }
-        var badgeStatus by remember(activeProfile?.id) {
-            mutableStateOf(
-                if (StreamBadgeEngine.hasPack(context)) {
-                    "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} " +
-                        "filters active"
-                } else {
-                    null
-                }
-            )
-        }
-        var badgeImporting by remember { mutableStateOf(false) }
-        val badgeScope = rememberCoroutineScope()
-
-        fun importBadgePack() {
-            if (badgePackInput.isNotBlank() && !badgeImporting) {
-                badgeImporting = true
-                badgeScope.launch {
-                    badgeStatus = StreamBadgeEngine.importFromUrl(context, badgePackInput)
-                        ?: "Badge pack imported — " +
-                        "${StreamBadgeEngine.filterCount(context)} filters active"
-                    badgeImporting = false
-                }
-            }
-        }
-
-        Text(
-            text = "Stream badges",
-            color = KBTextHi,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        SettingsCaptionMobile(
-            "Import a KB-compatible badge pack JSON — matched badges show on " +
-                "sources and in the player overlay."
-        )
-        KBTextField(
-            value = badgePackInput,
-            onValueChange = {
-                badgePackInput = it.trim()
-                badgeStatus = null
-            },
-            placeholder = "https://…/stream-badges.json",
-            modifier = Modifier.fillMaxWidth(),
-            onDone = { importBadgePack() }
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            KBPasteChip(onPaste = { pasted ->
-                badgePackInput = pasted.trim()
-                badgeStatus = null
-            })
-            KBButton(
-                label = if (badgeImporting) "IMPORTING…" else "IMPORT",
-                enabled = !badgeImporting && badgePackInput.isNotBlank(),
-                onClick = { importBadgePack() }
-            )
-            if (StreamBadgeEngine.hasPack(context)) {
-                KBButton(
-                    label = "REMOVE",
-                    onClick = {
-                        StreamBadgeEngine.clearPack(context)
-                        badgeStatus = "Badge pack removed"
-                    }
-                )
-            }
-        }
-        badgeStatus?.let { text ->
-            Text(
-                text = text,
-                color = if (text.startsWith("Badge pack imported")) KBAccent else KBTextLo,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-        SyncedToggleMobile(
-            label = "Badges above the file name",
-            description = "Show a source's badge chips over its name instead of under it, " +
-                "in the player's source picker and on the streams screen.",
-            get = AppPreferences::getBadgesAboveFile,
-            set = AppPreferences::setBadgesAboveFile
-        )
+        // Stream badges moved to the Playback pane (settings reorg §4.5, Q2):
+        // they decorate the rows in the stream picker, so a viewer finds them
+        // where playback is configured, not among accounts.
     }
 }
 
@@ -1454,21 +1521,9 @@ private fun PlaybackPaneMobile() {
         mutableStateOf(AppPreferences.getCellularDataSaver(context))
     }
 
-    var audioDecoder by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getAudioDecoder(context))
-    }
-    var audioOutput by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getAudioOutput(context))
-    }
-    var audioDownmix by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getAudioDownmix(context))
-    }
-    var audioDialogueBoost by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getAudioDialogueBoost(context))
-    }
-    var audioVolumeBoost by remember(profileRowKey) {
-        mutableStateOf(AppPreferences.getAudioVolumeBoostDb(context))
-    }
+    // The audio rows' state holders moved with them to VideoPaneMobile
+    // (settings reorg §5.1): a moved block keeps its own holder, and each pane
+    // declares its own.
 
     // External engine, device-local like the engine itself: which video apps are
     // installed is a property of this phone, not of the account.
@@ -1502,6 +1557,17 @@ private fun PlaybackPaneMobile() {
     val kidsProfile = ProfileManager.activeProfile
         .collectAsStateWithLifecycle().value
         ?.kidsMaxAge != null
+    // What the engine rows are actually set to. A kids profile coerces a stored
+    // External choice to ExoPlayer, so every gate below reads this instead of
+    // the raw pref - the subsection's two toggles would otherwise look live on
+    // an engine the profile cannot run.
+    val shownEngine = if (
+        kidsProfile && playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
+    ) {
+        AppPreferences.PLAYER_ENGINE_EXO
+    } else {
+        playerEngine
+    }
 
     PaneScroll {
         SettingsSectionMobile("Player Engine", first = true)
@@ -1515,13 +1581,7 @@ private fun PlaybackPaneMobile() {
             ).filterNot { (_, value) ->
                 kidsProfile && value == AppPreferences.PLAYER_ENGINE_EXTERNAL
             },
-            selected = if (
-                kidsProfile && playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
-            ) {
-                AppPreferences.PLAYER_ENGINE_EXO
-            } else {
-                playerEngine
-            },
+            selected = shownEngine,
             onSelect = { value ->
                 playerEngine = value
                 AppPreferences.setPlayerEngine(context, value)
@@ -1542,6 +1602,9 @@ private fun PlaybackPaneMobile() {
         SettingsToggleMobile(
             label = "Open anime in MPV",
             description = "Use MPV for anime even when the engine above is ExoPlayer.",
+            // This screen's wording for the TV page's "Play Anime in MPV" row:
+            // one index entry, found here by key (settings reorg §15.2.5).
+            searchKey = "playback.anime-mpv",
             checked = mpvForAnime,
             onChange = {
                 mpvForAnime = it
@@ -1568,6 +1631,118 @@ private fun PlaybackPaneMobile() {
                     "device; if MPV plays sound over a black picture, try MediaCodec " +
                     "or Vulkan. Applies the next time a title opens in MPV."
             )
+        }
+
+        // The external-player subsection appears when there is a player to
+        // pick, a hand-picked app to show, or the engine IS External.
+        //
+        // It comes AFTER the MPV video output (settings reorg §4.1.4): the
+        // engine picked at the top of the pane decides whether any of it
+        // matters, so the MPV settings that engine owns come first and this is
+        // the last word on "which app plays". Its two toggles are gated on the
+        // engine for the same reason - they describe a hand-off that does not
+        // happen on ExoPlayer. Dimmed and inert, never hidden, and the stored
+        // answers are kept for when the engine goes back.
+        if (!kidsProfile &&
+            (externalPlayers.isNotEmpty() ||
+                customExternalPackage != null ||
+                playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL)
+        ) {
+            SettingsSectionMobile("External player")
+            Text(
+                text = "Which app plays a title when the engine above is External. " +
+                    "KBStream keeps the session either way: watch history, Continue " +
+                    "Watching, scrobbling and the end-of-episode cards still work.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                externalPlayers.forEach { player ->
+                    SettingsPillMobile(
+                        label = player.label,
+                        selected = customExternalPackage == null &&
+                            externalPackage == player.packageName,
+                        onClick = {
+                            externalPackage = player.packageName
+                            // A hand-picked app outranks the probe, so touching a
+                            // detected chip drops it - otherwise the chip would
+                            // stay unselected after the press.
+                            customExternalPackage = null
+                            customExternalLabel = null
+                            AppPreferences.setCustomExternalPlayer(context, null, null)
+                            externalAsk = false
+                            AppPreferences.setExternalPlayer(
+                                context,
+                                player.packageName,
+                                player.label
+                            )
+                            AppPreferences.setExternalPlayerAsk(context, false)
+                        }
+                    )
+                }
+                SettingsPillMobile(
+                    label = customExternalLabel ?: "Choose custom app…",
+                    selected = customExternalPackage != null,
+                    onClick = {
+                        showCustomPlayerPicker = true
+                        showExternalPlayerPicker = false
+                    }
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            val rememberedPlayer = externalPlayers
+                .firstOrNull { it.packageName == externalPackage }
+            val rememberedName = customExternalPackage
+                ?.let { customExternalLabel ?: it }
+                ?: rememberedPlayer?.label
+            Text(
+                text = when {
+                    externalAsk -> "Titles will ask which app to use, every time."
+                    rememberedName != null ->
+                        "Remembered - titles play in $rememberedName with no prompt."
+                    else ->
+                        "Nothing picked yet: the first title opens the system chooser, " +
+                            "and whatever you pick there is remembered."
+                },
+                color = if (externalAsk) KBTextLo else KBAccent,
+                style = MaterialTheme.typography.labelSmall
+            )
+            SettingsToggleMobile(
+                label = "Ask every time",
+                description = "Show the system's own chooser for each title instead of " +
+                    "going straight to the app picked above.",
+                checked = externalAsk,
+                enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
+                onChange = {
+                    externalAsk = it
+                    AppPreferences.setExternalPlayerAsk(context, it)
+                }
+            )
+            SettingsToggleMobile(
+                label = "Treat coming back as the end",
+                description = "Your player usually cannot say where you stopped, so " +
+                    "KBStream measures the playhead while it is in front. With this " +
+                    "on, returning from the player counts as finishing the title.",
+                checked = externalTrustReturn,
+                enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
+                onChange = {
+                    externalTrustReturn = it
+                    AppPreferences.setExternalTrustReturn(context, it)
+                }
+            )
+
+            if (externalPlayers.isEmpty() && customExternalPackage == null) {
+                Text(
+                    text = "No video player app was detected, so ExoPlayer plays " +
+                        "instead. Install VLC, MX Player or Kodi, or pick the app by hand.",
+                    color = KBDanger,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
 
         SettingsSectionMobile("Dolby Vision & HDR")
@@ -1637,6 +1812,20 @@ private fun PlaybackPaneMobile() {
         // that could only ever be a no-op.
 
         SettingsSectionMobile("Stream Picks & Auto-play")
+        // The master first (settings reorg §4.3.1, O5): auto-play is what this
+        // section is about, and it used to sit five rows below its own
+        // qualifiers. The rows under it are deliberately NOT gated on it - they
+        // also feed the manual "play next" paths, so gating would invent a rule
+        // the player does not have.
+        SettingsToggleMobile(
+            label = "Auto-play next episode",
+            description = "Start the next episode when one finishes.",
+            checked = autoPlayNext,
+            onChange = {
+                autoPlayNext = it
+                AppPreferences.setAutoPlayNext(context, it)
+            }
+        )
         SettingsToggleMobile(
             label = "Auto-select a source",
             description = "Start the best source without opening the picker.",
@@ -1736,15 +1925,6 @@ private fun PlaybackPaneMobile() {
             }
         )
         SettingsToggleMobile(
-            label = "Auto-play next episode",
-            description = "Start the next episode when one finishes.",
-            checked = autoPlayNext,
-            onChange = {
-                autoPlayNext = it
-                AppPreferences.setAutoPlayNext(context, it)
-            }
-        )
-        SettingsToggleMobile(
             label = "Next-episode popup",
             description = "Offer the next episode before the current one ends.",
             checked = nextEpisodePopup,
@@ -1798,6 +1978,10 @@ private fun PlaybackPaneMobile() {
             label = "Reuse the binge group",
             description = "Keep using that source's release group for the next episode.",
             checked = bingeReuse,
+            // Gated on the master above (settings reorg §4.3.10, O1b): a fallback
+            // for a preference that is off changes nothing, and it was writable
+            // while off. Dimmed and inert, value kept.
+            enabled = bingePrefer,
             onChange = {
                 bingeReuse = it
                 AppPreferences.setBingeGroupReuse(context, it)
@@ -1807,6 +1991,8 @@ private fun PlaybackPaneMobile() {
             label = "Binge-group fallback",
             description = "Fall back to the ordinary ranking when the group has no link.",
             checked = bingeFallback,
+            // Same master, same reason (§4.3.11, O1b).
+            enabled = bingePrefer,
             onChange = {
                 bingeFallback = it
                 AppPreferences.setBingeGroupFallback(context, it)
@@ -1832,20 +2018,32 @@ private fun PlaybackPaneMobile() {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf(2L, 3L, 5L, 8L).forEach { count ->
-                SettingsPillMobile(
-                    label = "$count eps",
-                    selected = stillThereEpisodes == count,
-                    onClick = {
-                        stillThereEpisodes = count
-                        AppPreferences.setStillThereEpisodes(context, count)
-                    }
-                )
+                // Gated on the prompt above (settings reorg §4.3.13, O1a): the
+                // chips used to write while the prompt was off, so a count could
+                // be "set" for a prompt that never fires. Dimmed + inert rather
+                // than hidden, and the stored count is kept.
+                Box(modifier = if (stillThere) Modifier else Modifier.alpha(0.4f)) {
+                    SettingsPillMobile(
+                        label = "$count eps",
+                        selected = stillThereEpisodes == count,
+                        onClick = {
+                            if (!stillThere) return@SettingsPillMobile
+                            stillThereEpisodes = count
+                            AppPreferences.setStillThereEpisodes(context, count)
+                        }
+                    )
+                }
             }
         }
         SettingsCaptionMobile(
             "How many back-to-back auto-played episodes may run before the prompt " +
                 "asks whether anyone is still there."
         )
+
+        // Skipping is its own concern (settings reorg §4.4), not a continuation of
+        // auto-play: these two rows answer "what do I skip", not "what plays
+        // next".
+        SettingsSectionMobile("Skipping & Frame Rate")
         SettingsToggleMobile(
             label = "Auto-skip intros",
             description = "Skip intro segments when a matching marker exists.",
@@ -1865,63 +2063,106 @@ private fun PlaybackPaneMobile() {
             }
         )
 
-        SettingsSectionMobile("Audio")
-        SettingsChoiceMobile(
-            label = "Decoder priority",
-            options = listOf(
-                "Device only" to AppPreferences.AUDIO_DECODER_DEVICE_ONLY,
-                "Prefer device" to AppPreferences.AUDIO_DECODER_PREFER_DEVICE,
-                "Prefer app" to AppPreferences.AUDIO_DECODER_PREFER_APP
-            ),
-            selected = audioDecoder,
-            onSelect = { value ->
-                audioDecoder = value
-                AppPreferences.setAudioDecoder(context, value)
-            },
-            description = "Prefer app decoding for formats the device refuses."
-        )
-        SettingsChoiceMobile(
-            label = "Output",
-            // The shared option lists, not a second copy of the values: this is
-            // the same list the TV row and the in-player panel draw.
-            options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
-            selected = audioOutput,
-            onSelect = { value ->
-                audioOutput = value
-                AppPreferences.setAudioOutput(context, value)
-            },
-            description = "Passthrough sends the bitstream to an AVR; decode lets the " +
-                "device mix it."
-        )
-        SettingsChoiceMobile(
-            label = "Downmix",
-            options = PlayerAudioTuning.DOWNMIX_OPTIONS,
-            selected = audioDownmix,
-            onSelect = { value ->
-                audioDownmix = value
-                AppPreferences.setAudioDownmix(context, value)
-            },
-            description = "Stereo folds surround into two channels for a TV's own speakers."
-        )
-        DialogueBoostMobile(
-            level = audioDialogueBoost,
-            onLevelChange = {
-                audioDialogueBoost = it
-                AppPreferences.setAudioDialogueBoost(context, it)
+        // ── Stream badges ────────────────────────────────────────────────
+        // Moved out of Integrations (settings reorg §4.5, Q2): stream badges
+        // decorate the rows in the stream picker, so a viewer finds them where
+        // playback is configured, not among accounts. The eye badge went the
+        // other way - it decorates posters, so it lives under Posters.
+        //
+        // The same pack URL field and import/remove calls the TV pane uses; the
+        // only change is that the field sits beside the keyboard here, so it
+        // does not need the TV's tap-the-card-to-focus dance.
+        SettingsSectionMobile("Stream Badges")
+        // Per profile, like every device-local row (see rememberProfileRowKey):
+        // the pack URL another profile imported is not this one's.
+        var badgePackInput by remember(profileRowKey) {
+            mutableStateOf(StreamBadgeEngine.getPackUrl(context))
+        }
+        var badgeStatus by remember(profileRowKey) {
+            mutableStateOf(
+                if (StreamBadgeEngine.hasPack(context)) {
+                    "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} " +
+                        "filters active"
+                } else {
+                    null
+                }
+            )
+        }
+        var badgeImporting by remember { mutableStateOf(false) }
+        val badgeScope = rememberCoroutineScope()
+
+        fun importBadgePack() {
+            if (badgePackInput.isNotBlank() && !badgeImporting) {
+                badgeImporting = true
+                badgeScope.launch {
+                    badgeStatus = StreamBadgeEngine.importFromUrl(context, badgePackInput)
+                        ?: "Badge pack imported — " +
+                        "${StreamBadgeEngine.filterCount(context)} filters active"
+                    badgeImporting = false
+                }
             }
+        }
+
+        Text(
+            text = "Stream badges",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodyMedium
         )
-        SettingsChoiceMobile(
-            label = "Volume boost",
-            options = PlayerAudioTuning.VOLUME_OPTIONS,
-            selected = audioVolumeBoost,
-            onSelect = { value ->
-                audioVolumeBoost = value
-                AppPreferences.setAudioVolumeBoostDb(context, value)
+        SettingsCaptionMobile(
+            "Import a KB-compatible badge pack JSON — matched badges show on " +
+                "sources and in the player overlay."
+        )
+        KBTextField(
+            value = badgePackInput,
+            onValueChange = {
+                badgePackInput = it.trim()
+                badgeStatus = null
             },
-            description = "Extra gain for quiet mixes, with a limiter so loud scenes " +
-                "do not distort. Applies to the app's PCM path; a title can override " +
-                "it from the player's panel."
+            placeholder = "https://…/stream-badges.json",
+            modifier = Modifier.fillMaxWidth(),
+            onDone = { importBadgePack() }
         )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            KBPasteChip(onPaste = { pasted ->
+                badgePackInput = pasted.trim()
+                badgeStatus = null
+            })
+            KBButton(
+                label = if (badgeImporting) "IMPORTING…" else "IMPORT",
+                enabled = !badgeImporting && badgePackInput.isNotBlank(),
+                onClick = { importBadgePack() }
+            )
+            if (StreamBadgeEngine.hasPack(context)) {
+                KBButton(
+                    label = "REMOVE",
+                    onClick = {
+                        StreamBadgeEngine.clearPack(context)
+                        badgeStatus = "Badge pack removed"
+                    }
+                )
+            }
+        }
+        badgeStatus?.let { text ->
+            Text(
+                text = text,
+                color = if (text.startsWith("Badge pack imported")) KBAccent else KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        SyncedToggleMobile(
+            label = "Badges above the file name",
+            description = "Show a source's badge chips over its name instead of under it, " +
+                "in the player's source picker and on the streams screen.",
+            get = AppPreferences::getBadgesAboveFile,
+            set = AppPreferences::setBadgesAboveFile
+        )
+
+        // The Audio section left this pane (settings reorg §5.1): the pane is
+        // called "Video & Audio" and now has both halves. Its rows live in
+        // VideoPaneMobile, in the same order, as that pane's first section.
 
         if (kidsProfile && playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL) {
             Spacer(modifier = Modifier.height(6.dp))
@@ -1934,108 +2175,9 @@ private fun PlaybackPaneMobile() {
             )
         }
 
-        // The external-player choices appear when there is a player to pick, a
-        // hand-picked app to show, or the engine IS External. Same rule as the
-        // TV subsection, so the two screens offer it in the same states.
-        if (!kidsProfile &&
-            (externalPlayers.isNotEmpty() ||
-                customExternalPackage != null ||
-                playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL)
-        ) {
-            SettingsSectionMobile("External player")
-            Text(
-                text = "Which app plays a title when the engine above is External. " +
-                    "KBStream keeps the session either way: watch history, Continue " +
-                    "Watching, scrobbling and the end-of-episode cards still work.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.labelSmall
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                externalPlayers.forEach { player ->
-                    SettingsPillMobile(
-                        label = player.label,
-                        selected = customExternalPackage == null &&
-                            externalPackage == player.packageName,
-                        onClick = {
-                            externalPackage = player.packageName
-                            // A hand-picked app outranks the probe, so touching a
-                            // detected chip drops it - otherwise the chip would
-                            // stay unselected after the press.
-                            customExternalPackage = null
-                            customExternalLabel = null
-                            AppPreferences.setCustomExternalPlayer(context, null, null)
-                            externalAsk = false
-                            AppPreferences.setExternalPlayer(
-                                context,
-                                player.packageName,
-                                player.label
-                            )
-                            AppPreferences.setExternalPlayerAsk(context, false)
-                        }
-                    )
-                }
-                SettingsPillMobile(
-                    label = customExternalLabel ?: "Choose custom app…",
-                    selected = customExternalPackage != null,
-                    onClick = {
-                        showCustomPlayerPicker = true
-                        showExternalPlayerPicker = false
-                    }
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            val rememberedPlayer = externalPlayers
-                .firstOrNull { it.packageName == externalPackage }
-            val rememberedName = customExternalPackage
-                ?.let { customExternalLabel ?: it }
-                ?: rememberedPlayer?.label
-            Text(
-                text = when {
-                    externalAsk -> "Titles will ask which app to use, every time."
-                    rememberedName != null ->
-                        "Remembered - titles play in $rememberedName with no prompt."
-                    else ->
-                        "Nothing picked yet: the first title opens the system chooser, " +
-                            "and whatever you pick there is remembered."
-                },
-                color = if (externalAsk) KBTextLo else KBAccent,
-                style = MaterialTheme.typography.labelSmall
-            )
-            SettingsToggleMobile(
-                label = "Ask every time",
-                description = "Show the system's own chooser for each title instead of " +
-                    "going straight to the app picked above.",
-                checked = externalAsk,
-                onChange = {
-                    externalAsk = it
-                    AppPreferences.setExternalPlayerAsk(context, it)
-                }
-            )
-            SettingsToggleMobile(
-                label = "Treat coming back as the end",
-                description = "Your player usually cannot say where you stopped, so " +
-                    "KBStream measures the playhead while it is in front. With this " +
-                    "on, returning from the player counts as finishing the title.",
-                checked = externalTrustReturn,
-                onChange = {
-                    externalTrustReturn = it
-                    AppPreferences.setExternalTrustReturn(context, it)
-                }
-            )
-
-            if (externalPlayers.isEmpty() && customExternalPackage == null) {
-                Text(
-                    text = "No video player app was detected, so ExoPlayer plays " +
-                        "instead. Install VLC, MX Player or Kodi, or pick the app by hand.",
-                    color = KBDanger,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-        }
+        // The external-player subsection moved up into Player Engine, after the
+        // MPV video output (settings reorg §4.1.4) - it is the last word on
+        // "which app plays", which only matters after the engine rows above it.
 
         if (showExternalPlayerPicker) {
             ExternalPlayerPickerMobile(
@@ -2127,8 +2269,90 @@ private fun VideoPaneMobile() {
         mutableStateOf(AppPreferences.getDefaultAspectRatio(context))
     }
 
+    // The audio rows' own state holders, declared here because the block that
+    // reads them lives here now (settings reorg §5.1) - a moved block keeps its
+    // holder, it does not reach into another pane's.
+    var audioDecoder by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioDecoder(context))
+    }
+    var audioOutput by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioOutput(context))
+    }
+    var audioDownmix by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioDownmix(context))
+    }
+    var audioDialogueBoost by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioDialogueBoost(context))
+    }
+    var audioVolumeBoost by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAudioVolumeBoostDb(context))
+    }
+
     PaneScroll {
-        SettingsSectionMobile("Buffering & Playback", first = true)
+        // Audio leads (settings reorg §5.1): the pane is called "Video & Audio",
+        // and half of that name used to be a promise about a different pane.
+        SettingsSectionMobile("Audio", first = true)
+        SettingsChoiceMobile(
+            label = "Decoder priority",
+            options = listOf(
+                "Device only" to AppPreferences.AUDIO_DECODER_DEVICE_ONLY,
+                "Prefer device" to AppPreferences.AUDIO_DECODER_PREFER_DEVICE,
+                "Prefer app" to AppPreferences.AUDIO_DECODER_PREFER_APP
+            ),
+            selected = audioDecoder,
+            onSelect = { value ->
+                audioDecoder = value
+                AppPreferences.setAudioDecoder(context, value)
+            },
+            description = "Prefer app decoding for formats the device refuses."
+        )
+        SettingsChoiceMobile(
+            label = "Output",
+            // The shared option lists, not a second copy of the values: this is
+            // the same list the TV row and the in-player panel draw.
+            options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
+            selected = audioOutput,
+            onSelect = { value ->
+                audioOutput = value
+                AppPreferences.setAudioOutput(context, value)
+            },
+            description = "Passthrough sends the bitstream to an AVR; decode lets the " +
+                "device mix it."
+        )
+        SettingsChoiceMobile(
+            label = "Downmix",
+            options = PlayerAudioTuning.DOWNMIX_OPTIONS,
+            selected = audioDownmix,
+            onSelect = { value ->
+                audioDownmix = value
+                AppPreferences.setAudioDownmix(context, value)
+            },
+            description = "Stereo folds surround into two channels for a TV's own speakers."
+        )
+        DialogueBoostMobile(
+            level = audioDialogueBoost,
+            onLevelChange = {
+                audioDialogueBoost = it
+                AppPreferences.setAudioDialogueBoost(context, it)
+            }
+        )
+        SettingsChoiceMobile(
+            label = "Volume boost",
+            options = PlayerAudioTuning.VOLUME_OPTIONS,
+            selected = audioVolumeBoost,
+            onSelect = { value ->
+                audioVolumeBoost = value
+                AppPreferences.setAudioVolumeBoostDb(context, value)
+            },
+            description = "Extra gain for quiet mixes, with a limiter so loud scenes " +
+                "do not distort. Applies to the app's PCM path; a title can override " +
+                "it from the player's panel."
+        )
+        // No tunneling footnote here: this screen has no tunneled-playback row to
+        // point at (that toggle is TV-only), so the audio-tuning note stays on
+        // the TV page where the interaction actually exists.
+
+        SettingsSectionMobile("Buffering & Playback")
         SettingsChoiceMobile(
             label = "Network buffer",
             options = listOf("Auto" to 2, "Balanced (4K-ready)" to 0, "Low latency" to 1),
@@ -2183,9 +2407,6 @@ private fun LanguagePaneMobile() {
     var audioLang by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPreferredAudioLanguage(context))
     }
-    var subtitleLang by remember(syncedRevision) {
-        mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context))
-    }
 
     PaneScroll {
         SettingsSectionMobile("Audio Language", first = true)
@@ -2198,17 +2419,9 @@ private fun LanguagePaneMobile() {
                 AppPreferences.setPreferredAudioLanguage(context, code)
             }
         )
-
-        SettingsSectionMobile("Subtitles")
-        SettingsChoiceMobile(
-            label = "Preferred subtitle language",
-            options = PlayerTrackBridge.LANGUAGE_OPTIONS,
-            selected = subtitleLang,
-            onSelect = { code ->
-                subtitleLang = code
-                AppPreferences.setPreferredSubtitleLanguage(context, code)
-            }
-        )
+        // The subtitle language left this pane (settings reorg §7.1, M1): it is
+        // a subtitle setting, and it now opens the Subtitles pane. The pane
+        // keeps its name and its rail position, and is audio-only now.
     }
 }
 
@@ -2231,9 +2444,37 @@ private fun SubtitlesPaneMobile() {
     var cleanSdh by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getCleanSdhCaptions(context))
     }
+    var subtitleLang by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context))
+    }
 
     PaneScroll {
-        SettingsSectionMobile("Behavior", first = true)
+        // Language and fetching lead (settings reorg §7.1): both rows answer "which
+        // subtitles, and where do they come from", which the pane's own rows
+        // below then style and gate.
+        SettingsSectionMobile("Language & Fetching", first = true)
+        SettingsChoiceMobile(
+            label = "Preferred subtitle language",
+            options = PlayerTrackBridge.LANGUAGE_OPTIONS,
+            selected = subtitleLang,
+            onSelect = { code ->
+                subtitleLang = code
+                AppPreferences.setPreferredSubtitleLanguage(context, code)
+            }
+        )
+        // Moved out of Integrations (settings reorg §7.1): it is subtitle
+        // behaviour, not an account or an API key, and it reads the language row
+        // directly above it.
+        SyncedToggleMobile(
+            label = "Auto-fetch subtitles",
+            description = "Look for a matching subtitle when a title starts without one. " +
+                "Needs an OpenSubtitles key in Integrations and a preferred subtitle " +
+                "language above.",
+            get = AppPreferences::getAutoFetchSubtitles,
+            set = AppPreferences::setAutoFetchSubtitles
+        )
+
+        SettingsSectionMobile("Behavior")
         SettingsChoiceMobile(
             label = "Mode",
             options = SubtitleModeRules.OPTIONS,
@@ -2242,9 +2483,24 @@ private fun SubtitlesPaneMobile() {
                 mode = it
                 AppPreferences.setSubtitleMode(context, it)
             },
+            // "above", not "below": the language row now opens the pane
+            // (settings reorg §7.3), so it was on the wrong side both before
+            // and after the move.
             description = "Off never shows subtitles on its own; Forced only shows " +
                 "foreign dialogue and signs when the file marks them; On follows the " +
-                "preferred language."
+                "preferred subtitle language above."
+        )
+        // Clean SDH is a content filter, not an appearance choice (settings reorg
+        // §7.2, M9): it belongs with Mode, not with size and position.
+        SettingsToggleMobile(
+            label = "Clean SDH",
+            description = "Keep dialogue and drop [sound effects], ♪ lyrics ♪ and " +
+                "SPEAKER: names from captions for the deaf and hard of hearing.",
+            checked = cleanSdh,
+            onChange = {
+                cleanSdh = it
+                AppPreferences.setCleanSdhCaptions(context, it)
+            }
         )
 
         SettingsSectionMobile("Appearance")
@@ -2276,16 +2532,6 @@ private fun SubtitlesPaneMobile() {
             },
             description = "Lifts captions above letterbox bars or burned-in signage."
         )
-        SettingsToggleMobile(
-            label = "Clean SDH",
-            description = "Keep dialogue and drop [sound effects], ♪ lyrics ♪ and " +
-                "SPEAKER: names from captions for the deaf and hard of hearing.",
-            checked = cleanSdh,
-            onChange = {
-                cleanSdh = it
-                AppPreferences.setCleanSdhCaptions(context, it)
-            }
-        )
     }
 }
 
@@ -2293,6 +2539,9 @@ private fun SubtitlesPaneMobile() {
 private fun InterfacePaneMobile() {
     val context = LocalContext.current
     val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    // The device-local rows key on the profile, not on the sync revision (see
+    // rememberProfileRowKey): the PO-token answer is one per device AND profile.
+    val profileRowKey = rememberProfileRowKey()
 
     var newEpisodeNotifications by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getNewEpisodeNotifications(context))
@@ -2318,6 +2567,12 @@ private fun InterfacePaneMobile() {
     var use24h by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUse24HourClock(context))
     }
+    // Device-local and EXCLUDED, like the TV row: some Fire OS images ship no
+    // usable WebView, so one phone's answer must never switch another device's
+    // minter off (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    var youtubePoTokens by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getYouTubePoTokenEnabled(context))
+    }
     var railType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
     }
@@ -2342,10 +2597,16 @@ private fun InterfacePaneMobile() {
     var spoilerFree by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSpoilerFree(context))
     }
-    var episodeRail by remember(syncedRevision) {
+    // O6 (settings reorg §11.3, §13.3): these four are DEVICE-LOCAL, so their
+    // readers key on the profile, not on the sync revision. Keyed on the
+    // revision they re-read only when a pushed blob arrived, so a profile
+    // switch with this pane open left the old profile's poster size and
+    // landscape answers on screen - and the next tap wrote them to the new
+    // profile.
+    var episodeRail by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getDetailEpisodeRail(context))
     }
-    var posterSize by remember(syncedRevision) {
+    var posterSize by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getPosterSize(context).toInt())
     }
     var posterBorder by remember(syncedRevision) {
@@ -2354,10 +2615,10 @@ private fun InterfacePaneMobile() {
     var posterEdge by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPosterEdge(context))
     }
-    var landscapeCards by remember(syncedRevision) {
+    var landscapeCards by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
     }
-    var landscapePosters by remember(syncedRevision) {
+    var landscapePosters by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getLandscapePosters(context))
     }
     var partialBadge by remember(syncedRevision) {
@@ -2395,6 +2656,8 @@ private fun InterfacePaneMobile() {
         )
 
         SettingsSectionMobile("Theme")
+        // The accent leads the section, as it does on the TV pane.
+        AccentColorPickerMobile()
         SettingsToggleMobile(
             label = "AMOLED black",
             description = "Use true black for the app background.",
@@ -2413,9 +2676,21 @@ private fun InterfacePaneMobile() {
                 AppPreferences.setPureBlackSurface(context, it)
             }
         )
-        AccentColorPickerMobile()
+        // 24-hour clock is a display-format choice, not a hero-trailer one
+        // (settings reorg §8.2, M8): it closes the Theme section.
+        SettingsToggleMobile(
+            label = "24-hour clock",
+            description = "Show the player overlay clock in 24-hour time.",
+            checked = use24h,
+            onChange = {
+                use24h = it
+                AppPreferences.setUse24HourClock(context, it)
+            }
+        )
 
-        SettingsSectionMobile("Hero & Clock")
+        // Renamed from "Hero & Clock" (settings reorg §8.3): the clock left, so
+        // the header names what is actually in the section.
+        SettingsSectionMobile("Hero Trailers")
         SettingsToggleMobile(
             label = "Hero trailer autoplay",
             description = "Play a trailer in the Home hero after a pause.",
@@ -2442,13 +2717,18 @@ private fun InterfacePaneMobile() {
                 AppPreferences.setHeroTrailerMuted(context, it)
             }
         )
+        // The only user-visible trailer control in Settings is this section, so
+        // the PO-token kill switch closes it (settings reorg §13.1, U1). The
+        // reader is per call, so the flip takes effect without a restart.
         SettingsToggleMobile(
-            label = "24-hour clock",
-            description = "Show the player overlay clock in 24-hour time.",
-            checked = use24h,
+            label = "YouTube PO Tokens",
+            description = "Allow the app to mint YouTube tokens for trailer " +
+                "playback. Turning this off may break trailers on some videos; it " +
+                "takes effect immediately, no restart needed.",
+            checked = youtubePoTokens,
             onChange = {
-                use24h = it
-                AppPreferences.setUse24HourClock(context, it)
+                youtubePoTokens = it
+                AppPreferences.setYouTubePoTokenEnabled(context, it)
             }
         )
 
@@ -2469,24 +2749,6 @@ private fun InterfacePaneMobile() {
             onChange = {
                 railAddon = it
                 AppPreferences.setHomeRailShowAddonName(context, it)
-            }
-        )
-        SettingsToggleMobile(
-            label = "Search rail type",
-            description = "Show each search rail's catalog type after its name.",
-            checked = searchRailType,
-            onChange = {
-                searchRailType = it
-                AppPreferences.setSearchRailShowCatalogType(context, it)
-            }
-        )
-        SettingsToggleMobile(
-            label = "Search rail add-on name",
-            description = "Show the add-on that provides each search rail.",
-            checked = searchRailAddon,
-            onChange = {
-                searchRailAddon = it
-                AppPreferences.setSearchRailShowAddonName(context, it)
             }
         )
         // The same pref the television's row sets, and now the same promise:
@@ -2513,7 +2775,32 @@ private fun InterfacePaneMobile() {
             }
         )
 
-        SettingsSectionMobile("Posters & Browsing")
+        // Search has its own rails, so it has its own section (settings reorg
+        // §8.5, M7): these two rows used to hang under the Home Rails header,
+        // which named a screen they do not touch.
+        SettingsSectionMobile("Search Rails")
+        SettingsToggleMobile(
+            label = "Search rail type",
+            description = "Show each search rail's catalog type after its name.",
+            checked = searchRailType,
+            onChange = {
+                searchRailType = it
+                AppPreferences.setSearchRailShowCatalogType(context, it)
+            }
+        )
+        SettingsToggleMobile(
+            label = "Search rail add-on name",
+            description = "Show the add-on that provides each search rail.",
+            checked = searchRailAddon,
+            onChange = {
+                searchRailAddon = it
+                AppPreferences.setSearchRailShowAddonName(context, it)
+            }
+        )
+
+        // Renamed from "Posters & Browsing" (settings reorg §8.6): the browsing
+        // rows have their own section below, so this one names what is left.
+        SettingsSectionMobile("Posters")
         SettingsToggleMobile(
             label = "Poster titles",
             description = "Draw each poster's title under it.",
@@ -2540,30 +2827,6 @@ private fun InterfacePaneMobile() {
                 captionRating = it
                 AppPreferences.setPosterCaptionRating(context, it)
             }
-        )
-        SettingsToggleMobile(
-            label = "Spoiler-free mode",
-            description = "Hide episode names and stills you have not started.",
-            checked = spoilerFree,
-            onChange = {
-                spoilerFree = it
-                AppPreferences.setSpoilerFree(context, it)
-            }
-        )
-        // The Detail page's episode area: vertical rows or the TV-style
-        // sideways rail. Device-local (see AppPreferences.getDetailEpisodeRail),
-        // but a viewing preference, so it sits with the display rows instead of
-        // as a control on every season the viewer opens.
-        SettingsChoiceMobile(
-            label = "Episode layout",
-            options = listOf("List" to 0, "Rail" to 1),
-            selected = if (episodeRail) 1 else 0,
-            onSelect = { value ->
-                val rail = value == 1
-                episodeRail = rail
-                AppPreferences.setDetailEpisodeRail(context, rail)
-            },
-            description = "Detail page: vertical episode rows, or the television's sideways rail."
         )
         SettingsChoiceMobile(
             label = "Poster size",
@@ -2623,6 +2886,34 @@ private fun InterfacePaneMobile() {
                 partialBadge = it
                 AppPreferences.setPosterPartialWatchBadge(context, it)
             }
+        )
+
+        // The browsing/content half of the old panel, in one place (settings
+        // reorg §8.7): none of these rows describes a poster, and the eye badge
+        // above closes Posters where it belongs - it decorates posters.
+        SettingsSectionMobile("Detail, Episodes & Browse")
+        SettingsToggleMobile(
+            label = "Spoiler-free mode",
+            description = "Hide episode names and stills you have not started.",
+            checked = spoilerFree,
+            onChange = {
+                spoilerFree = it
+                AppPreferences.setSpoilerFree(context, it)
+            }
+        )
+        // The Detail page's episode area: vertical rows or the TV-style
+        // sideways rail. MOBILE ONLY - the TV Detail page does not read the key,
+        // so the TV pane does not carry a dead row (settings reorg §8.7, D3).
+        SettingsChoiceMobile(
+            label = "Episode layout",
+            options = listOf("List" to 0, "Rail" to 1),
+            selected = if (episodeRail) 1 else 0,
+            onSelect = { value ->
+                val rail = value == 1
+                episodeRail = rail
+                AppPreferences.setDetailEpisodeRail(context, rail)
+            },
+            description = "Detail page: vertical episode rows, or the television's sideways rail."
         )
         SettingsToggleMobile(
             label = "English-only browse",
@@ -2713,12 +3004,31 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
             }
         )
 
-        SettingsSectionMobile("History")
+        // The outcome line reports on the two rows above, so it renders under
+        // them rather than under History (settings reorg §9.1, O4).
+        status?.let { message ->
+            Text(
+                text = message,
+                color = when {
+                    message.contains("failed", ignoreCase = true) -> KBDanger
+                    message.startsWith("Backup") -> KBAccent
+                    else -> KBTextLo
+                },
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+
+        // Its own section (settings reorg §9.2, M10): a read-only screen does
+        // not belong under a header that also holds a destructive row.
+        SettingsSectionMobile("Viewing Stats")
         SettingsNavRowMobile(
             label = "Viewing stats",
             description = "Finished episodes, movies, runtime and your streak",
             onClick = onOpenStats
         )
+
+        SettingsSectionMobile("History")
         SettingsNavRowMobile(
             label = if (clearing) "Clearing…" else "Clear Continue Watching",
             description = "Reset all resume positions and watched markers " +
@@ -2733,18 +3043,6 @@ private fun DataPaneMobile(onOpenStats: () -> Unit) {
                 color = KBAccent,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-        status?.let { message ->
-            Text(
-                text = message,
-                color = when {
-                    message.contains("failed", ignoreCase = true) -> KBDanger
-                    message.startsWith("Backup") -> KBAccent
-                    else -> KBTextLo
-                },
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(top = 6.dp)
             )
         }
     }
@@ -3444,8 +3742,101 @@ private fun SyncPaneMobile() {
     // run the same way.
     var resyncStatus by remember { mutableStateOf<String?>(null) }
 
+    // The sign-in form's own state. Kept here rather than in the section below
+    // so a forced resync does not clear what has been typed.
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var signingIn by remember { mutableStateOf(false) }
+    LaunchedEffect(authState) {
+        signingIn = authState is SupabaseSync.AuthState.SigningIn
+    }
+    val credentialsValid = email.isNotBlank() && password.length >= 6
+    val kidsProfile = activeProfile?.kidsMaxAge != null
+
     PaneScroll {
-        SettingsSectionMobile("Sync health", first = true)
+        // An account belongs beside sync health, not above Profiles (settings
+        // reorg §10.1, Q1): the phone had no account surface in Settings at all,
+        // so the pane that explains sync had nothing to sign in with.
+        SettingsSectionMobile("Account", first = true)
+        if (kidsProfile) {
+            // Kids-lock masking, unchanged (§1.5): the account controls - and
+            // signing the household out of that account - are the parent's.
+            SettingsCaptionMobile(
+                "Account controls are hidden on a kids profile. Sync keeps running " +
+                    "for the account a parent set up."
+            )
+        } else {
+            when (val state = authState) {
+                is SupabaseSync.AuthState.SignedIn -> {
+                    Text(
+                        text = "Signed in as ${state.email}",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    SettingsCaptionMobile(
+                        if (lastPull > 0L || lastPush > 0L) {
+                            "Last sync: " + syncRelativeTime(maxOf(lastPull, lastPush))
+                        } else {
+                            "Syncing…"
+                        }
+                    )
+                    KBButton(
+                        label = if (syncing) "SYNCING…" else "SYNC NOW",
+                        enabled = !syncing,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { SupabaseSync.syncNow(context) }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    KBButton(
+                        label = "SIGN OUT",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { SupabaseSync.signOut(context) }
+                    )
+                }
+
+                else -> {
+                    if (state is SupabaseSync.AuthState.Error) {
+                        SettingsCaptionMobile(state.message)
+                    }
+                    KBTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        placeholder = "Email",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Masked with a reveal chip, like every key field here: the
+                    // value can be checked before the press.
+                    KBSecretField(
+                        value = password,
+                        onValueChange = { password = it },
+                        placeholder = "Password (6+ characters)",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KBButton(
+                            label = if (signingIn) "SIGNING IN…" else "SIGN IN",
+                            enabled = !signingIn && credentialsValid,
+                            modifier = Modifier.weight(1f),
+                            onClick = { SupabaseSync.signIn(context, email, password) }
+                        )
+                        KBButton(
+                            label = "CREATE ACCOUNT",
+                            enabled = !signingIn && credentialsValid,
+                            modifier = Modifier.weight(1f),
+                            onClick = { SupabaseSync.signUp(context, email, password) }
+                        )
+                    }
+                    SettingsCaptionMobile(
+                        "One account keeps every device in step. New here? Create an " +
+                            "account with any email + password (6+ chars)."
+                    )
+                }
+            }
+        }
+
+        SettingsSectionMobile("Sync health")
         SyncStatRowMobile("ACCOUNT", account)
         SyncStatRowMobile(
             "PROFILE",

@@ -232,32 +232,38 @@ internal enum class SettingsPane(
     PLAYBACK(
         "Playback",
         SettingsGroup.PLAYBACK,
-        // Names the sections it owns that the old blurb left out: the audio
-        // tuning, the player engine and the Dolby Vision strip are all in this
-        // pane, not in the Video & Audio one it pointed at. Kept to the rail's
-        // one-line budget (see SettingsPaneTest).
-        "Auto-play, skipping, audio, engine and Dolby Vision",
+        // Names the sections it owns (settings reorg §2.5): the audio tuning
+        // MOVED OUT to Video & Audio, so the blurb no longer promises it, and the
+        // stream-badge section moved in. Kept to the rail's one-line budget (see
+        // SettingsPaneTest).
+        "Auto-play, skipping, engine, Dolby Vision and stream badges",
         Icons.Filled.PlayArrow
     ),
     VIDEO(
         "Video & Audio",
         SettingsGroup.PLAYBACK,
-        // What this pane actually holds. It used to name the player engine and
-        // Dolby Vision, which live in the PLAYBACK pane, so a viewer looking
-        // for them here was sent to the wrong page by the rail's own summary.
-        "Buffer, tunneling, aspect ratio and picture-in-picture",
+        // What this pane actually holds (settings reorg §2.1). It used to promise
+        // tunneling to every device, including the phone, which deliberately has
+        // no such row - and it did not name the audio section, which now lives
+        // here. Mobile renders this same blurb, so the tunneling promise goes with
+        // this one change.
+        "Audio tuning, buffer, aspect ratio and picture-in-picture",
         Icons.Filled.OndemandVideo
     ),
     LANGUAGE(
         "Language",
         SettingsGroup.PLAYBACK,
-        "Preferred audio and subtitle language",
+        // The subtitle language row moved to the Subtitles pane (settings reorg
+        // §2.2), so this pane is audio only now.
+        "Preferred audio language",
         Icons.Filled.Language
     ),
     SUBTITLES(
         "Subtitles",
         SettingsGroup.PLAYBACK,
-        "Caption size, background and position",
+        // The pane gained the language row, auto-fetch and the behaviour rows it
+        // used to only gesture at (settings reorg §2.3).
+        "Subtitle language, fetching, mode and appearance",
         Icons.Filled.ClosedCaption
     ),
     INTERFACE(
@@ -275,7 +281,9 @@ internal enum class SettingsPane(
     SYNC(
         "Sync",
         SettingsGroup.APP,
-        "Cloud sync health and what has been uploaded",
+        // The Account section and the destructive actions moved in (settings
+        // reorg §2.4, Q1), which the old health-only blurb did not mention.
+        "Account, sync health, resync and diagnostics",
         Icons.Filled.Sync
     ),
     ABOUT(
@@ -408,6 +416,9 @@ fun SettingsScreen(
     var matchFrameRate by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMatchFrameRate(context))
     }
+    var preferWholeFrameRate by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getPreferWholeFrameRate(context))
+    }
     var bingeGroupPrefer by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBingeGroupPrefer(context))
     }
@@ -535,6 +546,11 @@ fun SettingsScreen(
     var heroTrailerDelay by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getHeroTrailerDelayMs(context))
     }
+    // Device-local (`youtube_po_token_enabled`, EXCLUDED), so this seeds on the
+    // profile, not on the synced revision (settings reorg §13.1).
+    var youtubePoTokens by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getYouTubePoTokenEnabled(context))
+    }
     var use24hClock by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getUse24HourClock(context))
     }
@@ -565,7 +581,12 @@ fun SettingsScreen(
     var captionRating by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getPosterCaptionRating(context))
     }
-    var posterSizeIdx by remember(syncedRevision) {
+    // O6 (settings reorg §11.3, §13.3): the four device-local display rows below
+    // key on the PROFILE, not on the sync revision. Keyed on the revision they
+    // re-read only when a pushed blob arrived, so a profile switch with the pane
+    // open left the previous profile's poster size and landscape answers on
+    // screen - and the next press wrote them to the profile just entered.
+    var posterSizeIdx by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getPosterSize(context).toInt())
     }
     var railHideUpcoming by remember(syncedRevision) {
@@ -577,10 +598,10 @@ fun SettingsScreen(
     var browseEnglishOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
     }
-    var landscapeCards by remember(syncedRevision) {
+    var landscapeCards by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
     }
-    var landscapePosters by remember(syncedRevision) {
+    var landscapePosters by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getLandscapePosters(context))
     }
     var partialWatchBadge by remember(syncedRevision) {
@@ -933,14 +954,11 @@ fun SettingsScreen(
                     ?.kidsMaxAge != null
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
-                    // "(Beta)" rides on this caption rather than on a second
-                    // heading inside SyncSection, which stacked two labels on
-                    // the same section.
-                    SettingsSectionHeader("Sync (Beta)", first = true)
-
-                    com.kennyb1201.kbstream.ui.settings.SyncSection()
-
-                    SettingsSectionHeader("Profiles & Accounts")
+                    // Sign-in moved to the Sync pane (settings reorg §10.1, Q1):
+                    // an account belongs beside sync health, not above Profiles.
+                    // The "(Beta)" caption went with that header; the new Account
+                    // section is not a beta label.
+                    SettingsSectionHeader("Profiles & Accounts", first = true)
 
                     NavigationRow(
                         label = "Profiles",
@@ -1010,7 +1028,43 @@ fun SettingsScreen(
                         description = "Connect your Trakt account to scrobble playback and sync watched state",
                         onClick = onOpenTrakt
                     )
-                Spacer(modifier = Modifier.height(8.dp))
+
+                    // Resume Source closes the trackers' section (settings reorg
+                    // §3.2, M2 fallout): it is the tie-break the two trackers
+                    // above feed, so it belongs with them - it used to sit
+                    // AFTER the MDBList key card, which put it on the far side
+                    // of a different concern entirely. A behaviour preference,
+                    // not a secret, so it stays visible on a kids profile; it
+                    // must never inherit the key cards' kidsKeysHidden
+                    // treatment.
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ResumeAuthorityRow(
+                        selected = resumeAuthority,
+                        chip = { text, isSelected -> PillChip(text, isSelected) },
+                        onPick = { authority ->
+                            resumeAuthority = authority
+                            AppPreferences.setResumeAuthority(context, authority)
+                        }
+                    )
+
+                // ── API KEYS ─────────────────────────────────────────────
+                // ONE contiguous block (settings reorg §3.3, M2 + M4): the four
+                // key surfaces used to be split by the MDBList card and by the
+                // TorBox library machinery, so "where do I paste a key" had
+                // three answers. The MDBList card leads, then OMDb,
+                // OpenSubtitles and the TorBox field; what a TorBox key enables
+                // has its own section below.
+                SettingsSectionHeader("API Keys")
+                if (kidsKeysHidden) {
+                    Text(
+                        text = "Keys are masked on a kids profile and can't be revealed: a " +
+                            "saved key still works, and a new one can be pasted here.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
 
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
@@ -1161,32 +1215,6 @@ fun SettingsScreen(
                             }
                         }
                     }
-                }
-
-                // Resume Source: which tracker's resume point wins when two of
-                // them both have one. A behaviour preference, not a secret, so
-                // it stays visible on a kids profile - it must never inherit
-                // the key cards' kidsKeysHidden treatment.
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ResumeAuthorityRow(
-                    selected = resumeAuthority,
-                    chip = { text, isSelected -> PillChip(text, isSelected) },
-                    onPick = { authority ->
-                        resumeAuthority = authority
-                        AppPreferences.setResumeAuthority(context, authority)
-                    }
-                )
-
-                SettingsSectionHeader("API Keys")
-                if (kidsKeysHidden) {
-                    Text(
-                        text = "Keys are masked on a kids profile and can't be revealed: a " +
-                            "saved key still works, and a new one can be pasted here.",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
                 }
 
                 // ── OMDB KEY (awards on the detail screen) ────────────
@@ -1351,20 +1379,9 @@ fun SettingsScreen(
                     }
                 }
 
-                // ── AUTO-FETCH SUBTITLES (uses the OpenSubtitles key above) ───
-                Spacer(modifier = Modifier.height(12.dp))
-                ToggleRow(
-                    label = "Auto-fetch Subtitles",
-                    description = "When a stream carries no subtitle track, search " +
-                        "OpenSubtitles for your preferred subtitle language and attach " +
-                        "the best match automatically. Needs an OpenSubtitles key above " +
-                        "and a preferred subtitle language set in Player settings.",
-                    checked = autoFetchSubtitles,
-                    onToggle = {
-                        autoFetchSubtitles = it
-                        AppPreferences.setAutoFetchSubtitles(context, it)
-                    }
-                )
+                // Auto-fetch Subtitles moved to the Subtitles pane (settings reorg
+                // §7.1, §3.5): it is subtitle behaviour, not an account or an API
+                // key, and it reads the language row that now sits beside it.
 
                 // ── TORBOX KEY (cached-status badges in the picker) ────
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1504,7 +1521,17 @@ fun SettingsScreen(
                     }
                 }
 
-                // ── TORBOX CLOUD → LIBRARY ────────────────────────────
+                // ── TORBOX & LIBRARY ──────────────────────────────────
+                // (settings reorg §3.4, M4): this replaces the deleted
+                // "Subtitles & Debrid" header, which named a concern that
+                // contributed exactly one row - and that row (Auto-fetch
+                // Subtitles) now lives in the Subtitles pane. What is left is
+                // one question: what a working TorBox key enables. The
+                // order is the one the viewer needs it in - the switch that
+                // turns the round on, what the last round did plus the manual
+                // resync, the rows no rule can attribute, then the one switch
+                // that lets the app WRITE to the account.
+                SettingsSectionHeader("TorBox & Library")
                 Spacer(modifier = Modifier.height(12.dp))
                 // Turning the sync OFF is the only moment its own writes can
                 // honestly be taken back - it adds titles to THIS profile's My
@@ -1731,155 +1758,6 @@ fun SettingsScreen(
                     }
                 )
 
-                // ── STREAM BADGES (KB-compatible packs) ────────────────
-                SettingsSectionHeader("Badges")
-
-                val badgeFocusRequester = remember { FocusRequester() }
-                var badgesAboveFile by remember(syncedRevision) {
-                    mutableStateOf(AppPreferences.getBadgesAboveFile(context))
-                }
-                KBCard(
-                    onClick = { badgeFocusRequester.requestFocus() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(KBSurfaceRaised, KBShapeSmall)
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Text(
-                            text = "Stream Badges",
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "Import a KB-compatible badge pack JSON — matched " +
-                                "badges show on sources and in the player overlay.",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-
-                        // Persistent status: seeded from the saved pack so the
-                        // imported-state line survives leaving and re-entering
-                        // settings (the OMDb "Saved" parity). Import/remove then
-                        // update it live.
-                        // Keyed like the pack URL beside it: the status
-                        // describes THAT profile's pack, so it re-seeds with it.
-                        var badgeStatus by remember(profileRowKey) { mutableStateOf(
-                            if (StreamBadgeEngine.hasPack(context)) {
-                                "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} filters active"
-                            } else {
-                                null
-                            }
-                        ) }
-                        var badgeImporting by remember { mutableStateOf(false) }
-                        val scope = rememberCoroutineScope()
-
-                        fun importBadgePack() {
-                            if (badgePackInput.isNotBlank() && !badgeImporting) {
-                                badgeImporting = true
-                                scope.launch {
-                                    badgeStatus = StreamBadgeEngine
-                                        .importFromUrl(context, badgePackInput)
-                                        ?: "Badge pack imported — " +
-                                            "${StreamBadgeEngine.filterCount(context)} filters active"
-                                    badgeImporting = false
-                                }
-                            }
-                        }
-
-                        // Shared KB field: identical to OMDb (focus via card OK,
-                        // PASTE chip, Enter = import, D-pad escape).
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .fillMaxWidth()
-                        ) {
-                            KBTextField(
-                                value = badgePackInput,
-                                onValueChange = {
-                                    badgePackInput = it.trim()
-                                    badgeStatus = null
-                                },
-                                placeholder = "https://…/stream-badges.json",
-                                modifier = Modifier.weight(1f),
-                                focusRequester = badgeFocusRequester,
-                                onDone = { importBadgePack() }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            KBPasteChip(onPaste = { pasted ->
-                                badgePackInput = pasted.trim()
-                                badgeStatus = null
-                            })
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) {
-                            KBCard(
-                                onClick = { importBadgePack() },
-                                modifier = Modifier
-                                    .background(KBSurfaceRaised, KBShapeSmall)
-                            ) {
-                                Text(
-                                    text = if (badgeImporting) "Importing…" else "Import",
-                                    color = KBTextHi,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                                )
-                            }
-                            if (StreamBadgeEngine.hasPack(context)) {
-                                KBCard(
-                                    onClick = {
-                                        StreamBadgeEngine.clearPack(context)
-                                        badgeStatus = "Badge pack removed"
-                                    },
-                                    modifier = Modifier
-                                        .padding(start = 8.dp)
-                                        .background(KBSurfaceRaised, KBShapeSmall)
-                                ) {
-                                    Text(
-                                        text = "Remove",
-                                        color = KBTextLo,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        badgeStatus?.let {
-                            Text(
-                                text = it,
-                                color = if (it.startsWith("Badge pack imported")) KBAccent else KBTextLo,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(top = 5.dp)
-                            )
-                        }
-                    }
-                }
-
-                // One pref for both surfaces: this controls the chips in the
-                // player's source picker and in the streams screen, since both
-                // list the same sources. ON = above the file name (the default).
-                // The same 8dp beat every other ToggleRow in this pane gets:
-                // without it this row sat 4dp tighter to the one above than its
-                // neighbours did.
-                Spacer(modifier = Modifier.height(8.dp))
-                ToggleRow(
-                    label = "Badges above the file name",
-                    description = "Show a source's badge chips over its name instead of under " +
-                        "it, in the player's source picker and on the streams screen.",
-                    checked = badgesAboveFile,
-                    onToggle = {
-                        badgesAboveFile = it
-                        AppPreferences.setBadgesAboveFile(context, it)
-                    }
-                )
                 }
 
                 if (selectedPane == SettingsPane.COLLECTIONS) {
@@ -1922,7 +1800,29 @@ fun SettingsScreen(
                     }
                 )
 
-                SettingsSectionHeader("History")
+                // The outcome line reports on the two rows above, so it renders
+                // under them rather than under History (settings reorg §9.1, O4).
+                backupStatus?.let { message ->
+                    Text(
+                        text = message,
+                        // A failure is not neutral information: "Export failed: …"
+                        // rendered in the same gray as every caption. Success is
+                        // the accent, failure is the danger color, and anything
+                        // else (a count, an "Importing…") stays a caption.
+                        color = when {
+                            message.contains("failed", ignoreCase = true) -> KBDanger
+                            message.startsWith("Backup") -> KBAccent
+                            else -> KBTextLo
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    )
+                }
+
+                // Its own section (settings reorg §9.2, M10): a read-only screen
+                // does not belong under a header that also holds the destructive
+                // row.
+                SettingsSectionHeader("Viewing Stats")
 
                 NavigationRow(
                     label = "Viewing stats",
@@ -1930,6 +1830,8 @@ fun SettingsScreen(
                         "counted from this profile's history",
                     onClick = onOpenStats
                 )
+
+                SettingsSectionHeader("History")
 
                 NavigationRow(
                     label = if (clearingHistory) "Clearing…" else "Clear Continue Watching",
@@ -1951,151 +1853,12 @@ fun SettingsScreen(
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                     )
                 }
-
-                backupStatus?.let { message ->
-                    Text(
-                        text = message,
-                        // A failure is not neutral information: "Export failed: …"
-                        // rendered in the same gray as every caption. Success is
-                        // the accent, failure is the danger color, and anything
-                        // else (a count, an "Importing…") stays a caption.
-                        color = when {
-                            message.contains("failed", ignoreCase = true) -> KBDanger
-                            message.startsWith("Backup") -> KBAccent
-                            else -> KBTextLo
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                    )
-                }
                 }
 
                 if (selectedPane == SettingsPane.PLAYBACK) {
-                SettingsSectionHeader("Audio", first = true)
-
-                Text(
-                    text = "Audio Decoder",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        "Device decoders only",
-                        "Prefer device decoders",
-                        "Prefer app decoders (FFmpeg)"
-                    ).forEachIndexed { index, label ->
-                        KBCard(onClick = {
-                            audioDecoder = index
-                            AppPreferences.setAudioDecoder(context, index)
-                        }) {
-                            PillChip(label, audioDecoder == index)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = when (audioDecoder) {
-                        AppPreferences.AUDIO_DECODER_DEVICE_ONLY ->
-                            "Only built-in hardware decoders. Most compatible but may not support all formats."
-                        AppPreferences.AUDIO_DECODER_PREFER_DEVICE ->
-                            "Hardware when available, falls back to FFmpeg. Recommended for most devices."
-                        AppPreferences.AUDIO_DECODER_PREFER_APP ->
-                            "FFmpeg audio first — decodes DTS/TrueHD to PCM. Best format support but higher CPU usage."
-                        else -> ""
-                    },
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                AudioTuningRow(
-                    label = "Audio Output",
-                    description = when (audioOutput) {
-                        PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH ->
-                            "Send the original format (Dolby/DTS) to your receiver to decode. " +
-                                "Best when an AVR or soundbar handles the surround, but Downmix, " +
-                                "Dialogue boost and Volume boost are ignored while this is on."
-                        PlayerAudioTuning.AUDIO_OUTPUT_DECODE ->
-                            "Always decode in the app to PCM, so Downmix, Dialogue boost and " +
-                                "Volume boost apply. Surround plays as multichannel PCM rather " +
-                                "than a bitstream."
-                        else ->
-                            "Decode automatically when Downmix, Dialogue boost or Volume boost " +
-                                "is in use (so they apply), otherwise pass the original format " +
-                                "to your receiver. Recommended."
-                    },
-                    options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
-                    selected = audioOutput,
-                    onSelect = {
-                        audioOutput = it
-                        AppPreferences.setAudioOutput(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                AudioTuningRow(
-                    label = "Audio Downmix",
-                    description = when (audioDownmix) {
-                        PlayerAudioTuning.DOWNMIX_STEREO ->
-                            "Fold 5.1/7.1 into stereo with the center channel (dialogue) lifted and " +
-                                "the surrounds trimmed. Best for a TV's own speakers."
-                        PlayerAudioTuning.DOWNMIX_SURROUND ->
-                            "Keep 5.1 (7.1 folds into it). Use with an AVR or a device that really has " +
-                                "six channels."
-                        else ->
-                            "Fold multichannel down to what this device can carry — stereo on a TV's " +
-                                "own speakers, 5.1 kept on an AVR — lifting the center channel as it " +
-                                "folds."
-                    },
-                    options = PlayerAudioTuning.DOWNMIX_OPTIONS,
-                    selected = audioDownmix,
-                    onSelect = {
-                        audioDownmix = it
-                        AppPreferences.setAudioDownmix(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                DialogueBoostRow(
-                    level = audioDialogueBoost,
-                    onLevelChange = {
-                        audioDialogueBoost = it
-                        AppPreferences.setAudioDialogueBoost(context, it)
-                    },
-                    chip = { label, selected -> PillChip(label, selected) }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                AudioTuningRow(
-                    label = "Volume Boost",
-                    description = "Extra gain for mixes that are simply too quiet, with a limiter that " +
-                        "catches peaks so loud scenes do not distort.",
-                    options = PlayerAudioTuning.VOLUME_OPTIONS,
-                    selected = audioVolumeBoostDb,
-                    onSelect = {
-                        audioVolumeBoostDb = it
-                        AppPreferences.setAudioVolumeBoostDb(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Applies to the app's PCM audio path. Tunneled Playback is skipped while any of " +
-                        "these are on (a tunnel bypasses the audio chain). All three apply while a " +
-                        "film is playing, downmix included. Any title can override these from the " +
-                        "player's own panel.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                SettingsSectionHeader("Player Engine")
+                // First section of the pane (settings reorg §4): the engine gates
+                // the MPV video-output and Dolby Vision rows below it, so it leads.
+                SettingsSectionHeader("Player Engine", first = true)
 
                 // C8 (audit): the External engine is not offered on a kids
                 // profile, because our time locks run inside the app's own player
@@ -2213,11 +1976,91 @@ fun SettingsScreen(
                     )
                 }
 
+                if (!PlayerEngine.isMpvAvailable()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "This device runs Android ${Build.VERSION.RELEASE}. The MPV engine " +
+                            "needs Android 8 or newer, so ExoPlayer is what plays here.",
+                        color = KBDanger,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+
+                // Only meaningful where libmpv exists: on an older box the
+                // warning above already says why MPV is not an option.
+                if (PlayerEngine.isMpvAvailable()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToggleRow(
+                        label = "Play Anime in MPV",
+                        description = "Opens anime in the MPV engine even when the picker above " +
+                            "says ExoPlayer (including \"ExoPlayer only\"). Anime is what this " +
+                            "engine is for: libass renders fansub ASS/SSA typesetting the way it was " +
+                            "authored, and its FFmpeg decoders play the 10-bit and 4:4:4 profiles " +
+                            "release groups ship, which this TV's own decoders often refuse. A " +
+                            "title counts as anime when it comes from an anime catalog, carries " +
+                            "TMDB's \"anime\" keyword, or is Animation with a Japanese original " +
+                            "language.",
+                        checked = mpvForAnime,
+                        onToggle = {
+                            mpvForAnime = it
+                            AppPreferences.setMpvForAnime(context, it)
+                        }
+                    )
+
+                    // The MPV engine's video output, per device. The 6.51
+                    // mpvlibAndroid swap moved the black screen from one box to
+                    // another, so which `vo` works cannot be pinned in code -
+                    // Auto resolves it by device (see MpvVideoOutput) and the
+                    // other three let a box be cycled by hand to find a working
+                    // configuration, which is the whole point of the row.
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "MPV video output",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Text(
+                        text = "Which video output mpv opens with. Auto picks by device: the " +
+                            "MediaCodec path on boxes whose GPU output blacks out (the Fire TV " +
+                            "Stick 4K Plus after the 6.51 engine update), the OpenGL GPU path " +
+                            "everywhere else. If MPV plays sound over a black picture, try the " +
+                            "other options: MediaCodec bypasses the GPU entirely, and Vulkan is " +
+                            "the GPU path on the Vulkan API. A change applies the next time a " +
+                            "title opens in MPV, not to the one playing.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            AppPreferences.MPV_VO_AUTO to "Auto",
+                            AppPreferences.MPV_VO_GPU to "GPU",
+                            AppPreferences.MPV_VO_MEDIACODEC_EMBED to "MediaCodec",
+                            AppPreferences.MPV_VO_GPU_VULKAN to "Vulkan"
+                        ).forEach { (value, label) ->
+                            KBCard(onClick = {
+                                mpvVoMode = value
+                                AppPreferences.setMpvVoMode(context, value)
+                            }) {
+                                PillChip(label, mpvVoMode == value)
+                            }
+                        }
+                    }
+                }
+
                 // Drawn when there is a player to choose from, a hand-picked app
                 // to show the state of, or the engine above IS External - the
                 // last case because a box whose probe found nothing is exactly
                 // where the hand-picked app is the only way into this engine,
                 // and the subsection would otherwise be unreachable there.
+                //
+                // It comes AFTER the MPV rows (settings reorg §4.1.4): the engine
+                // picked at the top of the pane decides whether any of it
+                // matters, so the MPV settings that engine owns come first and
+                // this is the last word on "which app plays". The two toggles
+                // below are gated on the External engine for the same reason -
+                // they describe a hand-off that does not happen on ExoPlayer.
                 if (!kidsProfile &&
                     (externalPlayers.isNotEmpty() ||
                         customExternalPackage != null ||
@@ -2340,6 +2183,13 @@ fun SettingsScreen(
                         description = "Show the system's own chooser for each title instead of " +
                             "going straight to the app picked above.",
                         checked = externalAsk,
+                        // Gated on the engine (settings reorg §4.1.4, O1c): this
+                        // row describes a hand-off that only happens on External,
+                        // and the subsection is still drawn when players are
+                        // installed or a pick is stored under another engine.
+                        // Dimmed and inert, never hidden, and the stored answer
+                        // is kept for when the engine goes back.
+                        enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
                         onToggle = {
                             externalAsk = it
                             AppPreferences.setExternalPlayerAsk(context, it)
@@ -2348,6 +2198,8 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     ToggleRow(
                         label = "Treat coming back as the end",
+                        // Same gate, same reason (§4.1.4, O1c).
+                        enabled = shownEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL,
                         description = "Your player usually cannot say where you stopped, so " +
                             "KBStream measures the playhead against the clock while it is in " +
                             "front. Pause or scrub once and a title you watched through comes " +
@@ -2363,79 +2215,6 @@ fun SettingsScreen(
                             AppPreferences.setExternalTrustReturn(context, it)
                         }
                     )
-                }
-
-                if (!PlayerEngine.isMpvAvailable()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "This device runs Android ${Build.VERSION.RELEASE}. The MPV engine " +
-                            "needs Android 8 or newer, so ExoPlayer is what plays here.",
-                        color = KBDanger,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-
-                // Only meaningful where libmpv exists: on an older box the
-                // warning above already says why MPV is not an option.
-                if (PlayerEngine.isMpvAvailable()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    ToggleRow(
-                        label = "Play Anime in MPV",
-                        description = "Opens anime in the MPV engine even when the picker above " +
-                            "says ExoPlayer (including \"ExoPlayer only\"). Anime is what this " +
-                            "engine is for: libass renders fansub ASS/SSA typesetting the way it was " +
-                            "authored, and its FFmpeg decoders play the 10-bit and 4:4:4 profiles " +
-                            "release groups ship, which this TV's own decoders often refuse. A " +
-                            "title counts as anime when it comes from an anime catalog, carries " +
-                            "TMDB's \"anime\" keyword, or is Animation with a Japanese original " +
-                            "language.",
-                        checked = mpvForAnime,
-                        onToggle = {
-                            mpvForAnime = it
-                            AppPreferences.setMpvForAnime(context, it)
-                        }
-                    )
-
-                    // The MPV engine's video output, per device. The 6.51
-                    // mpvlibAndroid swap moved the black screen from one box to
-                    // another, so which `vo` works cannot be pinned in code -
-                    // Auto resolves it by device (see MpvVideoOutput) and the
-                    // other three let a box be cycled by hand to find a working
-                    // configuration, which is the whole point of the row.
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "MPV video output",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Text(
-                        text = "Which video output mpv opens with. Auto picks by device: the " +
-                            "MediaCodec path on boxes whose GPU output blacks out (the Fire TV " +
-                            "Stick 4K Plus after the 6.51 engine update), the OpenGL GPU path " +
-                            "everywhere else. If MPV plays sound over a black picture, try the " +
-                            "other options: MediaCodec bypasses the GPU entirely, and Vulkan is " +
-                            "the GPU path on the Vulkan API. A change applies the next time a " +
-                            "title opens in MPV, not to the one playing.",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            AppPreferences.MPV_VO_AUTO to "Auto",
-                            AppPreferences.MPV_VO_GPU to "GPU",
-                            AppPreferences.MPV_VO_MEDIACODEC_EMBED to "MediaCodec",
-                            AppPreferences.MPV_VO_GPU_VULKAN to "Vulkan"
-                        ).forEach { (value, label) ->
-                            KBCard(onClick = {
-                                mpvVoMode = value
-                                AppPreferences.setMpvVoMode(context, value)
-                            }) {
-                                PillChip(label, mpvVoMode == value)
-                            }
-                        }
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -2544,6 +2323,22 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 SettingsSectionHeader("Stream Picks & Auto-play")
+
+                // The master of this section leads it (settings reorg §4.3.1,
+                // O5). It is NOT used to gate the rows below: they also feed the
+                // manual "play next" paths, so gating them on it would switch off
+                // work no auto-play setting is involved in.
+                ToggleRow(
+                    label = "Auto-play Next Episode",
+                    description = "Continue to the next episode when one ends",
+                    checked = autoPlayNext,
+                    onToggle = {
+                        autoPlayNext = it
+                        AppPreferences.setAutoPlayNext(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
                     label = "Auto-select Stream",
@@ -2694,24 +2489,15 @@ fun SettingsScreen(
                 // not touch the picker or a hand-picked source.
                 ToggleRow(
                     label = "Cellular Data Saver",
+                    // TV has no Downloads, so the downloads clause is the phone's
+                    // alone (settings reorg §4.5, D3): this is the metered cap and
+                    // nothing else.
                     description = "On a metered connection, auto-play stays at 1080p or lower " +
-                        "and app updates wait. Downloads over cellular keep their own setting.",
+                        "and app updates wait.",
                     checked = dataSaver,
                     onToggle = {
                         dataSaver = it
                         AppPreferences.setCellularDataSaver(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ToggleRow(
-                    label = "Auto-play Next Episode",
-                    description = "Continue to the next episode when one ends",
-                    checked = autoPlayNext,
-                    onToggle = {
-                        autoPlayNext = it
-                        AppPreferences.setAutoPlayNext(context, it)
                     }
                 )
 
@@ -2785,6 +2571,11 @@ fun SettingsScreen(
                     label = "Reuse Binge Group",
                     description = "When no stream carries the previous group tag, reuse the same addon's stream anyway.",
                     checked = bingeGroupReuse,
+                    // Gated on the master above (settings reorg §4.3.10, O1b): a
+                    // fallback for a preference that is off is a switch that
+                    // changes nothing, and it was writable while off. Dimmed and
+                    // inert, value kept.
+                    enabled = bingeGroupPrefer,
                     onToggle = {
                         bingeGroupReuse = it
                         AppPreferences.setBingeGroupReuse(context, it)
@@ -2797,6 +2588,8 @@ fun SettingsScreen(
                     label = "Binge Fallback",
                     description = "When no group or addon match exists, still auto-play the top-ranked stream. Off stops autoplay and shows the source picker instead.",
                     checked = bingeGroupFallback,
+                    // Same master, same reason (§4.3.11, O1b).
+                    enabled = bingeGroupPrefer,
                     onToggle = {
                         bingeGroupFallback = it
                         AppPreferences.setBingeGroupFallback(context, it)
@@ -2823,12 +2616,22 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
+                // Gated on the prompt above (settings reorg §4.3.13, O1a): the
+                // chips wrote while the prompt was off, so a count could be "set"
+                // for a prompt that never fires. Dimmed + inert rather than hidden,
+                // and the stored count is kept so turning the prompt back on
+                // restores the viewer's own answer.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val countChipModifier = if (stillTherePrompt) Modifier else Modifier.alpha(0.4f)
                     listOf(2L, 3L, 5L, 8L).forEach { count ->
-                        KBCard(onClick = {
-                            stillThereEpisodes = count
-                            AppPreferences.setStillThereEpisodes(context, count)
-                        }) {
+                        KBCard(
+                            modifier = countChipModifier,
+                            onClick = {
+                                if (!stillTherePrompt) return@KBCard
+                                stillThereEpisodes = count
+                                AppPreferences.setStillThereEpisodes(context, count)
+                            }
+                        ) {
                             PillChip("$count eps", stillThereEpisodes == count)
                         }
                     }
@@ -2873,7 +2676,174 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                ToggleRow(
+                    label = "Prefer 24 Hz Over 23.976 Hz",
+                    description = "Only for a TV that offers both, and only while matching is on. 23.976 fps film is an exact multiple of either rate, so the app otherwise asks for the closer one, 23.976 Hz. Some panels present that mode badly and the film still judders; this asks for 24.000 Hz instead (and 30.000 over 29.970 for 29.97 fps content). If film judders with matching on, try this one, then compare the two. Set per device.",
+                    checked = preferWholeFrameRate,
+                    onToggle = {
+                        preferWholeFrameRate = it
+                        AppPreferences.setPreferWholeFrameRate(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 FrameRateDiagnosticRow(enabled = matchFrameRate)
+
+                // ── STREAM BADGES (KB-compatible packs) ────────────────
+                // Moved out of Integrations (settings reorg §4.5, §3.5, Q2):
+                // stream badges decorate the rows in the stream picker, so they
+                // are found by a viewer in playback, not in accounts. The eye
+                // badge went the other way - it decorates posters, so it lives
+                // in Interface's Posters section.
+                SettingsSectionHeader("Stream Badges")
+
+                val badgeFocusRequester = remember { FocusRequester() }
+                var badgesAboveFile by remember(syncedRevision) {
+                    mutableStateOf(AppPreferences.getBadgesAboveFile(context))
+                }
+                KBCard(
+                    onClick = { badgeFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "Stream Badges",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Import a KB-compatible badge pack JSON — matched " +
+                                "badges show on sources and in the player overlay.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+
+                        // Persistent status: seeded from the saved pack so the
+                        // imported-state line survives leaving and re-entering
+                        // settings (the OMDb "Saved" parity). Import/remove then
+                        // update it live.
+                        // Keyed like the pack URL beside it: the status
+                        // describes THAT profile's pack, so it re-seeds with it.
+                        var badgeStatus by remember(profileRowKey) { mutableStateOf(
+                            if (StreamBadgeEngine.hasPack(context)) {
+                                "Badge pack imported — ${StreamBadgeEngine.filterCount(context)} filters active"
+                            } else {
+                                null
+                            }
+                        ) }
+                        var badgeImporting by remember { mutableStateOf(false) }
+                        val scope = rememberCoroutineScope()
+
+                        fun importBadgePack() {
+                            if (badgePackInput.isNotBlank() && !badgeImporting) {
+                                badgeImporting = true
+                                scope.launch {
+                                    badgeStatus = StreamBadgeEngine
+                                        .importFromUrl(context, badgePackInput)
+                                        ?: "Badge pack imported — " +
+                                            "${StreamBadgeEngine.filterCount(context)} filters active"
+                                    badgeImporting = false
+                                }
+                            }
+                        }
+
+                        // Shared KB field: identical to OMDb (focus via card OK,
+                        // PASTE chip, Enter = import, D-pad escape).
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBTextField(
+                                value = badgePackInput,
+                                onValueChange = {
+                                    badgePackInput = it.trim()
+                                    badgeStatus = null
+                                },
+                                placeholder = "https://…/stream-badges.json",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = badgeFocusRequester,
+                                onDone = { importBadgePack() }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = { pasted ->
+                                badgePackInput = pasted.trim()
+                                badgeStatus = null
+                            })
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            KBCard(
+                                onClick = { importBadgePack() },
+                                modifier = Modifier
+                                    .background(KBSurfaceRaised, KBShapeSmall)
+                            ) {
+                                Text(
+                                    text = if (badgeImporting) "Importing…" else "Import",
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                            }
+                            if (StreamBadgeEngine.hasPack(context)) {
+                                KBCard(
+                                    onClick = {
+                                        StreamBadgeEngine.clearPack(context)
+                                        badgeStatus = "Badge pack removed"
+                                    },
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .background(KBSurfaceRaised, KBShapeSmall)
+                                ) {
+                                    Text(
+                                        text = "Remove",
+                                        color = KBTextLo,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        badgeStatus?.let {
+                            Text(
+                                text = it,
+                                color = if (it.startsWith("Badge pack imported")) KBAccent else KBTextLo,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // One pref for both surfaces: this controls the chips in the
+                // player's source picker and in the streams screen, since both
+                // list the same sources. ON = above the file name (the default).
+                // The same 8dp beat every other ToggleRow in this pane gets:
+                // without it this row sat 4dp tighter to the one above than its
+                // neighbours did.
+                Spacer(modifier = Modifier.height(8.dp))
+                ToggleRow(
+                    label = "Badges above the file name",
+                    description = "Show a source's badge chips over its name instead of under " +
+                        "it, in the player's source picker and on the streams screen.",
+                    checked = badgesAboveFile,
+                    onToggle = {
+                        badgesAboveFile = it
+                        AppPreferences.setBadgesAboveFile(context, it)
+                    }
+                )
 
                 }
 
@@ -2987,7 +2957,23 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                SettingsSectionHeader("Hero & Clock")
+                // A display-format choice, not a hero-trailer one: moved here
+                // from the Hero section (settings reorg §8.2, M8).
+                ToggleRow(
+                    label = "24-Hour Clock",
+                    description = "Show the player clock in 24-hour format (off = 12-hour AM/PM).",
+                    checked = use24hClock,
+                    onToggle = {
+                        use24hClock = it
+                        AppPreferences.setUse24HourClock(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Renamed with that move (settings reorg §8.3): the clock left,
+                // so the header names what is actually in the section.
+                SettingsSectionHeader("Hero Trailers")
 
                 ToggleRow(
                     label = "Hero Trailer Autoplay",
@@ -3025,13 +3011,19 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // The only user-visible trailer control in Settings is this
+                // section, so the PO-token kill switch lives at its end (settings
+                // reorg §13.1, U1). Device-local and EXCLUDED: some Fire OS images
+                // ship no usable WebView, so one box's answer must never switch
+                // another's minter off. The reader is per call, so the flip takes
+                // effect without a restart - which is what the line below says.
                 ToggleRow(
-                    label = "24-Hour Clock",
-                    description = "Show the player clock in 24-hour format (off = 12-hour AM/PM).",
-                    checked = use24hClock,
+                    label = "YouTube PO Tokens",
+                    description = "Allow the app to mint YouTube tokens for trailer playback. Turning this off may break trailers on some videos; it takes effect immediately, no restart needed.",
+                    checked = youtubePoTokens,
                     onToggle = {
-                        use24hClock = it
-                        AppPreferences.setUse24HourClock(context, it)
+                        youtubePoTokens = it
+                        AppPreferences.setYouTubePoTokenEnabled(context, it)
                     }
                 )
 
@@ -3063,6 +3055,40 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Both hide switches join the rails they filter (settings reorg
+                // §8.4, M7): they act on the Home catalog rails, not on how a
+                // poster is drawn, so they no longer sit under Posters.
+                ToggleRow(
+                    label = "Hide Unreleased Titles",
+                    description = "Hides movies that are still in theaters or not yet digitally released, across all screens.",
+                    checked = railHideUpcoming,
+                    onToggle = {
+                        railHideUpcoming = it
+                        AppPreferences.setHomeRailHideUpcoming(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Only the catalog rails: Continue Watching, Up Next and the
+                // Upcoming schedule stay, because a title that is finished is
+                // exactly the one whose next episode someone came home for.
+                ToggleRow(
+                    label = "Hide Watched Titles on Home Rails",
+                    description = "Removes titles you have finished from the Home catalog rails. Continue Watching, Up Next and Upcoming keep them.",
+                    checked = railHideWatched,
+                    onToggle = {
+                        railHideWatched = it
+                        AppPreferences.setHomeRailHideWatched(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Their own section (settings reorg §8.5, M7): these two shape
+                // add-on SEARCH rails, which is a different surface from Home.
+                SettingsSectionHeader("Search Rails")
+
                 ToggleRow(
                     label = "Show Catalog Type on Search Rails",
                     description = "Append Movies / Series / All after add-on search rail names (e.g. \"AIOMetadata · AI Search · Movie\"). Add-on search only.",
@@ -3087,7 +3113,9 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                SettingsSectionHeader("Posters & Browsing")
+                // Renamed with the split (settings reorg §8.6): the browsing rows
+                // that gave it half its name left for their own section below.
+                SettingsSectionHeader("Posters")
 
                 ToggleRow(
                     label = "Poster Titles",
@@ -3120,21 +3148,6 @@ fun SettingsScreen(
                     onToggle = {
                         captionRating = it
                         AppPreferences.setPosterCaptionRating(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ToggleRow(
-                    label = "Spoiler-free Episodes",
-                    description = "In a series' episode list, hide the title, still and " +
-                        "synopsis of episodes you have not started yet, so browsing a " +
-                        "season cannot give away a plot you have not reached. Watched " +
-                        "episodes and the one you are part-way through are unaffected.",
-                    checked = spoilerFree,
-                    onToggle = {
-                        spoilerFree = it
-                        AppPreferences.setSpoilerFree(context, it)
                     }
                 )
 
@@ -3214,45 +3227,6 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
-                    label = "Hide Unreleased Titles",
-                    description = "Hides movies that are still in theaters or not yet digitally released, across all screens.",
-                    checked = railHideUpcoming,
-                    onToggle = {
-                        railHideUpcoming = it
-                        AppPreferences.setHomeRailHideUpcoming(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Only the catalog rails: Continue Watching, Up Next and the
-                // Upcoming schedule stay, because a title that is finished is
-                // exactly the one whose next episode someone came home for.
-                ToggleRow(
-                    label = "Hide Watched Titles on Home Rails",
-                    description = "Removes titles you have finished from the Home catalog rails. Continue Watching, Up Next and Upcoming keep them.",
-                    checked = railHideWatched,
-                    onToggle = {
-                        railHideWatched = it
-                        AppPreferences.setHomeRailHideWatched(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ToggleRow(
-                    label = "English-Only Browse & Discover",
-                    description = "Limits the Search browse chips (genres, keywords, services, networks, studios, decades) to English-language catalogs. Turn off for anime, Spanish-language networks, and other non-English catalogs.",
-                    checked = browseEnglishOnly,
-                    onToggle = {
-                        browseEnglishOnly = it
-                        AppPreferences.setBrowseEnglishOnly(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ToggleRow(
                     label = "Landscape Cards on Home Rails",
                     description = "Show 16:9 backdrop cards with a small clearlogo instead of posters. Also applies to collection folder items in Rows and Follow Home (Grid keeps posters).",
                     checked = landscapeCards,
@@ -3285,6 +3259,37 @@ fun SettingsScreen(
                         AppPreferences.setPosterPartialWatchBadge(context, it)
                     }
                 )
+
+                // New section (settings reorg §8.7, M8): content and browsing
+                // behaviour, grouped separately from how a poster is drawn. TV
+                // carries no episode-layout row here - TV Detail does not read
+                // that key, and a row that changes nothing is worse than none.
+                SettingsSectionHeader("Detail, Episodes & Browse")
+
+                ToggleRow(
+                    label = "Spoiler-free Episodes",
+                    description = "In a series' episode list, hide the title, still and " +
+                        "synopsis of episodes you have not started yet, so browsing a " +
+                        "season cannot give away a plot you have not reached. Watched " +
+                        "episodes and the one you are part-way through are unaffected.",
+                    checked = spoilerFree,
+                    onToggle = {
+                        spoilerFree = it
+                        AppPreferences.setSpoilerFree(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "English-Only Browse & Discover",
+                    description = "Limits the Search browse chips (genres, keywords, services, networks, studios, decades) to English-language catalogs. Turn off for anime, Spanish-language networks, and other non-English catalogs.",
+                    checked = browseEnglishOnly,
+                    onToggle = {
+                        browseEnglishOnly = it
+                        AppPreferences.setBrowseEnglishOnly(context, it)
+                    }
+                )
                 }
 
                 if (selectedPane == SettingsPane.HIDDEN) {
@@ -3296,7 +3301,137 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.VIDEO) {
-                SettingsSectionHeader("Buffering & Playback", first = true)
+                // The audio section moved here from Playback (settings reorg §5,
+                // M3): the pane is called "Video & Audio", and the tuning lived in
+                // the pane that plays the title rather than the one that configures
+                // it. Rows and their order are unchanged.
+                SettingsSectionHeader("Audio", first = true)
+
+                Text(
+                    text = "Audio Decoder",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        "Device decoders only",
+                        "Prefer device decoders",
+                        "Prefer app decoders (FFmpeg)"
+                    ).forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            audioDecoder = index
+                            AppPreferences.setAudioDecoder(context, index)
+                        }) {
+                            PillChip(label, audioDecoder == index)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = when (audioDecoder) {
+                        AppPreferences.AUDIO_DECODER_DEVICE_ONLY ->
+                            "Only built-in hardware decoders. Most compatible but may not support all formats."
+                        AppPreferences.AUDIO_DECODER_PREFER_DEVICE ->
+                            "Hardware when available, falls back to FFmpeg. Recommended for most devices."
+                        AppPreferences.AUDIO_DECODER_PREFER_APP ->
+                            "FFmpeg audio first — decodes DTS/TrueHD to PCM. Best format support but higher CPU usage."
+                        else -> ""
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                AudioTuningRow(
+                    label = "Audio Output",
+                    description = when (audioOutput) {
+                        PlayerAudioTuning.AUDIO_OUTPUT_PASSTHROUGH ->
+                            "Send the original format (Dolby/DTS) to your receiver to decode. " +
+                                "Best when an AVR or soundbar handles the surround, but Downmix, " +
+                                "Dialogue boost and Volume boost are ignored while this is on."
+                        PlayerAudioTuning.AUDIO_OUTPUT_DECODE ->
+                            "Always decode in the app to PCM, so Downmix, Dialogue boost and " +
+                                "Volume boost apply. Surround plays as multichannel PCM rather " +
+                                "than a bitstream."
+                        else ->
+                            "Decode automatically when Downmix, Dialogue boost or Volume boost " +
+                                "is in use (so they apply), otherwise pass the original format " +
+                                "to your receiver. Recommended."
+                    },
+                    options = PlayerAudioTuning.AUDIO_OUTPUT_OPTIONS,
+                    selected = audioOutput,
+                    onSelect = {
+                        audioOutput = it
+                        AppPreferences.setAudioOutput(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                AudioTuningRow(
+                    label = "Audio Downmix",
+                    description = when (audioDownmix) {
+                        PlayerAudioTuning.DOWNMIX_STEREO ->
+                            "Fold 5.1/7.1 into stereo with the center channel (dialogue) lifted and " +
+                                "the surrounds trimmed. Best for a TV's own speakers."
+                        PlayerAudioTuning.DOWNMIX_SURROUND ->
+                            "Keep 5.1 (7.1 folds into it). Use with an AVR or a device that really has " +
+                                "six channels."
+                        else ->
+                            "Fold multichannel down to what this device can carry — stereo on a TV's " +
+                                "own speakers, 5.1 kept on an AVR — lifting the center channel as it " +
+                                "folds."
+                    },
+                    options = PlayerAudioTuning.DOWNMIX_OPTIONS,
+                    selected = audioDownmix,
+                    onSelect = {
+                        audioDownmix = it
+                        AppPreferences.setAudioDownmix(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                DialogueBoostRow(
+                    level = audioDialogueBoost,
+                    onLevelChange = {
+                        audioDialogueBoost = it
+                        AppPreferences.setAudioDialogueBoost(context, it)
+                    },
+                    chip = { label, selected -> PillChip(label, selected) }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                AudioTuningRow(
+                    label = "Volume Boost",
+                    description = "Extra gain for mixes that are simply too quiet, with a limiter that " +
+                        "catches peaks so loud scenes do not distort.",
+                    options = PlayerAudioTuning.VOLUME_OPTIONS,
+                    selected = audioVolumeBoostDb,
+                    onSelect = {
+                        audioVolumeBoostDb = it
+                        AppPreferences.setAudioVolumeBoostDb(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+                // The footnote travelled with the section (settings reorg §5.2) and
+                // now points at the toggle in this pane rather than across panes.
+                Text(
+                    text = "Applies to the app's PCM audio path. Tunneled playback, below, is " +
+                        "skipped while any of these are on (a tunnel bypasses the audio chain). " +
+                        "All three apply while a film is playing, downmix included. Any title " +
+                        "can override these from the player's own panel.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                SettingsSectionHeader("Buffering & Playback")
 
                 Text(
                     text = "Network Buffer",
@@ -3465,9 +3600,16 @@ fun SettingsScreen(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // The subtitle language row left this pane for Subtitles
+                // (settings reorg §6.1, §7.1, M1): this pane is audio only now,
+                // which is what its new blurb says.
+                }
 
-                SettingsSectionHeader("Subtitles")
+                if (selectedPane == SettingsPane.SUBTITLES) {
+                // New first section (settings reorg §7.1): the language came over
+                // from Language and auto-fetch from Integrations, so the pane opens
+                // with "what to show and where to get it" before how it is drawn.
+                SettingsSectionHeader("Language & Fetching", first = true)
 
                 Text(
                     text = "Preferred Subtitle Language",
@@ -3482,10 +3624,26 @@ fun SettingsScreen(
                         AppPreferences.setPreferredSubtitleLanguage(context, code)
                     }
                 )
-                }
 
-                if (selectedPane == SettingsPane.SUBTITLES) {
-                SettingsSectionHeader("Behavior", first = true)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Auto-fetch Subtitles",
+                    // Citation fixed with the move (settings reorg §7.3): it named
+                    // a "Player settings" pane that does not exist, and the language
+                    // it depends on is now the row directly above.
+                    description = "When a stream carries no subtitle track, search " +
+                        "OpenSubtitles for your preferred subtitle language and attach " +
+                        "the best match automatically. Needs an OpenSubtitles key in " +
+                        "Integrations and a preferred subtitle language above.",
+                    checked = autoFetchSubtitles,
+                    onToggle = {
+                        autoFetchSubtitles = it
+                        AppPreferences.setAutoFetchSubtitles(context, it)
+                    }
+                )
+
+                SettingsSectionHeader("Behavior")
 
                 Text(
                     text = "Mode",
@@ -3507,7 +3665,38 @@ fun SettingsScreen(
                 Text(
                     text = "Off never shows subtitles on its own; Forced only shows " +
                         "foreign dialogue and signs when the file marks them; On follows " +
-                        "the preferred language below.",
+                        "the preferred subtitle language above.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Moved down from Appearance (settings reorg §7.2, M9): this is a
+                // content filter, not appearance - it drops invented sound
+                // descriptions, it does not draw anything differently.
+                Text(
+                    text = "Clean SDH",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Off", "On").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            cleanSdh = index == 1
+                            AppPreferences.setCleanSdhCaptions(context, index == 1)
+                        }) {
+                            PillChip(label, cleanSdh == (index == 1))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "A caption track for the deaf and hard of hearing also " +
+                        "describes the soundtrack and names who is speaking. On " +
+                        "keeps the dialogue and drops [sound effects], ♪ lyrics ♪ " +
+                        "and SPEAKER: names.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -3578,38 +3767,20 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Clean SDH",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Off", "On").forEachIndexed { index, label ->
-                        KBCard(onClick = {
-                            cleanSdh = index == 1
-                            AppPreferences.setCleanSdhCaptions(context, index == 1)
-                        }) {
-                            PillChip(label, cleanSdh == (index == 1))
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "A caption track for the deaf and hard of hearing also " +
-                        "describes the soundtrack and names who is speaking. On " +
-                        "keeps the dialogue and drops [sound effects], ♪ lyrics ♪ " +
-                        "and SPEAKER: names.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelSmall
-                )
                 }
 
                 if (selectedPane == SettingsPane.SYNC) {
-                    // Anchored as a whole pane, not as a row: the sync pane has
-                    // no setting of its own, so its index entry is the pane.
+                    // Sign-in leads the pane (settings reorg §10.1, Q1). Only the
+                    // CALL moved: SyncSection's fields, credentialsValid rule,
+                    // busy/error state, signed-in block and kids-profile hiding are
+                    // unchanged.
+                    SettingsSectionHeader("Account", first = true)
+
+                    com.kennyb1201.kbstream.ui.settings.SyncSection()
+
+                    // Anchored as a whole pane, not as a row: the health block is
+                    // live status, so its index entry is the block itself - and it
+                    // stays on the health block, not on the new Account section.
                     SyncHealthSection(
                         modifier = Modifier.searchAnchor(
                             SettingsSearchIndex.entryFor("${SECTION_KEY_PREFIX}sync-health")
@@ -4527,6 +4698,48 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
+        // The benign action comes before the destructive one (settings reorg
+        // §10.1, O2): a diagnostics copy is what a report needs, and it should
+        // not sit behind a two-tap row that deletes progress.
+        val diagnosticsScope = rememberCoroutineScope()
+        var diagnosticsStatus by remember { mutableStateOf<String?>(null) }
+        KBCard(
+            onClick = {
+                diagnosticsScope.launch {
+                    runCatchingCancellable {
+                        val report = com.kennyb1201.kbstream.data.reporting.Diagnostics.build(context)
+                        com.kennyb1201.kbstream.data.reporting.Diagnostics
+                            .copyToClipboard(context, report)
+                        diagnosticsStatus = "copied \u00b7 also logged as DIAGNOSTICS"
+                    }.onFailure {
+                        diagnosticsStatus = "failed: ${it.message}"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, KBShapeSmall)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "COPY DIAGNOSTICS",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = diagnosticsStatus
+                        ?: "Build, device, account, sync health, pending uploads " +
+                        "and this session's caught errors — copied to the clipboard " +
+                        "and written to logcat (tag DIAGNOSTICS).",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
         // Deterministic escape hatch for the eye badges. The automatic cleanup
         // can only delete rows it can PROVE were copied between profiles, which
         // leaves the phantom whose twin was already removed on another device;
@@ -4578,45 +4791,6 @@ private fun SyncHealthSection(modifier: Modifier = Modifier) {
                             "this profile only. Use this when a badge survives the " +
                             "cleanup above."
                     },
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-        val diagnosticsScope = rememberCoroutineScope()
-        var diagnosticsStatus by remember { mutableStateOf<String?>(null) }
-        KBCard(
-            onClick = {
-                diagnosticsScope.launch {
-                    runCatchingCancellable {
-                        val report = com.kennyb1201.kbstream.data.reporting.Diagnostics.build(context)
-                        com.kennyb1201.kbstream.data.reporting.Diagnostics
-                            .copyToClipboard(context, report)
-                        diagnosticsStatus = "copied \u00b7 also logged as DIAGNOSTICS"
-                    }.onFailure {
-                        diagnosticsStatus = "failed: ${it.message}"
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(KBSurfaceRaised, KBShapeSmall)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    text = "COPY DIAGNOSTICS",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelSmall
-                )
-                Text(
-                    text = diagnosticsStatus
-                        ?: "Build, device, account, sync health, pending uploads " +
-                        "and this session's caught errors — copied to the clipboard " +
-                        "and written to logcat (tag DIAGNOSTICS).",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodySmall
                 )

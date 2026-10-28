@@ -57,6 +57,14 @@ class SportsNotificationWorker(
     }
 
     private suspend fun run() {
+        // The hub's master switch, read HERE as well as by the scheduler
+        // (settings reorg Q4). The switch follows the profile now, and a value
+        // that arrives from the account cannot rearm THIS box's WorkManager: the
+        // scheduler was armed (or cancelled) on the device the viewer toggled.
+        // Without this read, turning reminders off on the TV would leave the
+        // phone's already-armed round posting until someone touched the switch
+        // on the phone itself - which is the opposite of what syncing it is for.
+        if (!AppPreferences.getSportsGameReminders(applicationContext)) return
         val favorites = AppPreferences.getSportsFavoriteTeams(applicationContext)
         // Following a team OR asking for one game is the opt-in (audit: sports
         // F3). This is the belt to the scheduler's braces: a stale request that

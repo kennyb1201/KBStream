@@ -341,11 +341,15 @@ class SettingsSearchContractTest {
     fun `every content pane is broken into clusters by a heading`() {
         val text = screen()
         listOf(
-            "SettingsSectionHeader(\"Sync (Beta)\", first = true)",
+            // Sign-in moved to the Sync pane (settings reorg §10.1, Q1) and the
+            // "Sync (Beta)" caption went with its old Integrations header.
+            "SettingsSectionHeader(\"Account\", first = true)",
             "SettingsSectionHeader(\"Backup & Restore\", first = true)",
             "SettingsSectionHeader(\"Audio\", first = true)",
             "SettingsSectionHeader(\"Notifications\", first = true)",
-            "SettingsSectionHeader(\"Buffering & Playback\", first = true)",
+            // "Buffering & Playback" used to open the Video & Audio pane; the
+            // audio section moved in above it (settings reorg §5), so Audio is
+            // that pane's opener now and this list follows.
             "SettingsSectionHeader(\"Behavior\", first = true)"
         ).forEach { opener ->
             assertTrue("missing pane-opening heading: $opener", text.contains(opener))
@@ -360,10 +364,16 @@ class SettingsSearchContractTest {
             .toSet()
         assertTrue("headings were not found at all", headings.isNotEmpty())
         val labels = SettingsSearchIndex.entries.map { it.label.lowercase() }.toSet()
+        // One documented exception (settings reorg §9.2): the "Viewing Stats"
+        // section heading and its single row read the same, and the index entry is
+        // the ROW - it jumps to the NavigationRow that opens the stats screen, not
+        // to the heading. What this test guards is a heading carrying an entry of
+        // its own that jumps nowhere, and that is still true of every heading here.
+        val namedLikeItsOnlyRow = setOf("viewing stats")
         assertEquals(
             "a heading text is also an index label, so the heading would show up as a result",
             emptySet<String>(),
-            headings intersect labels
+            (headings intersect labels) - namedLikeItsOnlyRow
         )
     }
 

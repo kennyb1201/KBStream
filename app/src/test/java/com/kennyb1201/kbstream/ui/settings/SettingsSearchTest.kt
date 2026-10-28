@@ -201,13 +201,51 @@ class SettingsSearchTest {
                 SettingsPane.INTEGRATIONS,
                 SettingsPane.COLLECTIONS,
                 SettingsPane.PLAYBACK,
+                SettingsPane.SUBTITLES,
                 SettingsPane.INTERFACE,
                 SettingsPane.DATA,
                 SettingsPane.SYNC,
                 SettingsPane.ABOUT
             ),
+            // SUBTITLES joined when the language and auto-fetch rows moved in
+            // (settings reorg §14.4): a pane that gained the rows a viewer goes
+            // looking for stops being "the one with only chip groups".
             SettingsSearchIndex.entries.map { it.pane }.toSet()
         )
+    }
+
+    @Test
+    fun `each surface hides the rows it does not draw`() {
+        // One entry per row, excluded by surface rather than duplicated or
+        // renamed (settings reorg §15.2.6/§15.2.7): a result that names a row
+        // the current screen does not draw could only switch the pane and jump
+        // nowhere.
+        // The query is the entry's own label: the filter searches labels and
+        // keywords, not keys - the surface rule is what is under test here.
+        TV_ONLY_SEARCH_KEYS.forEach { key ->
+            val label = SettingsSearchIndex.entryFor(key)?.label
+            assertNotNull("$key is not in the index at all", label)
+            assertTrue(
+                "$key is a TV row, so the phone must not offer it",
+                SettingsSearchIndex.search(label!!, mobile = true).none { it.key == key }
+            )
+            assertNotNull(
+                "$key is a TV row, so the TV must offer it",
+                SettingsSearchIndex.search(label).firstOrNull { it.key == key }
+            )
+        }
+        MOBILE_ONLY_SEARCH_KEYS.forEach { key ->
+            val label = SettingsSearchIndex.entryFor(key)?.label
+            assertNotNull("$key is not in the index at all", label)
+            assertTrue(
+                "$key is a phone row, so the TV must not offer it",
+                SettingsSearchIndex.search(label!!).none { it.key == key }
+            )
+            assertNotNull(
+                "$key is a phone row, so the phone must offer it",
+                SettingsSearchIndex.search(label, mobile = true).firstOrNull { it.key == key }
+            )
+        }
     }
 
     @Test

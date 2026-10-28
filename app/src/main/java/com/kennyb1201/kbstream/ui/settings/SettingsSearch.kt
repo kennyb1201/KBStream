@@ -44,6 +44,26 @@ import androidx.compose.runtime.compositionLocalOf
 internal const val SECTION_KEY_PREFIX = "section."
 
 /**
+ * Entries whose row is drawn on the TV page only.
+ *
+ * Match Content Frame Rate switches the HDMI panel's display mode and the
+ * "Prefer 24 Hz" row refines that switch, so neither has a phone row that could
+ * do anything (settings reorg §4.6, D2). The phone's search filters these out.
+ */
+internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
+    "playback.match-frame-rate",
+    "playback.prefer-whole-frame-rate"
+)
+
+/**
+ * Entries whose row is drawn on the phone only (settings reorg §8.7).
+ *
+ * The TV Detail page does not read the episode-layout key, so the TV page draws
+ * no such row - and must not offer it in search either.
+ */
+internal val MOBILE_ONLY_SEARCH_KEYS: Set<String> = setOf("interface.episode-layout")
+
+/**
  * One searchable settings row.
  *
  * @property key the row's stable identity; also how the pane-level sections
@@ -128,12 +148,9 @@ internal object SettingsSearchIndex {
             "Add-ons",
             "addon add-on extension repository manifest collection import"
         ),
-        SettingSearchEntry(
-            "integrations.trakt",
-            SettingsPane.INTEGRATIONS,
-            "Trakt",
-            "scrobble tracker account connect watched history sync"
-        ),
+        // Index order follows composition order (settings reorg §14.2, U3): the
+        // pane draws Simkl first and Trakt second, and this list had them the
+        // other way round.
         SettingSearchEntry(
             "integrations.simkl",
             SettingsPane.INTEGRATIONS,
@@ -141,8 +158,17 @@ internal object SettingsSearchIndex {
             "scrobble tracker account connect"
         ),
         SettingSearchEntry(
-            "integrations.autofetch-subs",
+            "integrations.trakt",
             SettingsPane.INTEGRATIONS,
+            "Trakt",
+            "scrobble tracker account connect watched history sync"
+        ),
+        // Moved to the Subtitles pane (settings reorg §7.1, §14.1). The key stays
+        // `integrations.*` because it is the row's identity, not its address; the
+        // pane field is what a result groups under and jumps to.
+        SettingSearchEntry(
+            "integrations.autofetch-subs",
+            SettingsPane.SUBTITLES,
             "Auto-fetch Subtitles",
             "subtitle subtitles opensubtitles automatic attach language download"
         ),
@@ -298,6 +324,13 @@ internal object SettingsSearchIndex {
             "Match Content Frame Rate",
             "frame rate refresh hz judder match content"
         ),
+        SettingSearchEntry(
+            "playback.prefer-whole-frame-rate",
+            SettingsPane.PLAYBACK,
+            "Prefer 24 Hz Over 23.976 Hz",
+            "frame rate refresh hz judder 23.976 24 panel mode fractional " +
+                "whole rate"
+        ),
 
         // ── Interface ─────────────────────────────────────────────────────────
         SettingSearchEntry(
@@ -335,6 +368,15 @@ internal object SettingsSearchIndex {
             SettingsPane.INTERFACE,
             "Mute Hero Trailers",
             "hero trailer mute muted silent audio"
+        ),
+        // The new kill switch (settings reorg §13.1, U1): the key had a getter,
+        // a setter and no UI anywhere, so "PO" and "webview" are the words a
+        // viewer with broken trailers would actually type.
+        SettingSearchEntry(
+            "interface.youtube-po-tokens",
+            SettingsPane.INTERFACE,
+            "YouTube PO Tokens",
+            "po token youtube trailer mint webview"
         ),
         SettingSearchEntry(
             "interface.24h-clock",
@@ -432,6 +474,16 @@ internal object SettingsSearchIndex {
             "Eye Badge for In-Progress Shows",
             "eye badge in progress resume started watching"
         ),
+        // MOBILE ONLY (settings reorg §8.7, §15.2.7): the TV Detail page does
+        // not read the key, so the TV pane carries no such row and the TV search
+        // must never offer it. Its pane is the same one, so the entry is shared
+        // and the surface filter below does the excluding.
+        SettingSearchEntry(
+            "interface.episode-layout",
+            SettingsPane.INTERFACE,
+            "Episode layout",
+            "episode layout list rail vertical sideways detail season"
+        ),
 
         // ── Data & Backup ─────────────────────────────────────────────────────
         SettingSearchEntry(
@@ -501,11 +553,23 @@ internal object SettingsSearchIndex {
      */
     fun search(
         query: String,
-        kidsAddonLock: Boolean = false
-    ): List<SettingSearchEntry> = filterSettingsSearch(
-        if (kidsAddonLock) entries.filterNot { it.key == ADDONS_ENTRY_KEY } else entries,
-        query
-    )
+        kidsAddonLock: Boolean = false,
+        mobile: Boolean = false
+    ): List<SettingSearchEntry> {
+        var candidates = entries
+        if (kidsAddonLock) candidates = candidates.filterNot { it.key == ADDONS_ENTRY_KEY }
+        // One entry per row, keyed once - so a row that exists on only ONE of
+        // the two screens is excluded by surface here rather than by a second
+        // entry or a renamed label (settings reorg §15.2.6/§15.2.7). A result
+        // that names a row the current screen does not draw could only switch
+        // the pane and jump nowhere.
+        candidates = if (mobile) {
+            candidates.filterNot { it.key in TV_ONLY_SEARCH_KEYS }
+        } else {
+            candidates.filterNot { it.key in MOBILE_ONLY_SEARCH_KEYS }
+        }
+        return filterSettingsSearch(candidates, query)
+    }
 
     /** The search key of the Integrations "Add-ons" row (see [search]). */
     internal const val ADDONS_ENTRY_KEY = "integrations.addons"

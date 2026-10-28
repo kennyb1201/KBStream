@@ -25,7 +25,12 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
 /**
- * Settings → Sync section: Supabase-backed cross-device sync.
+ * Settings → Sync → Account: Supabase-backed cross-device sign-in.
+ *
+ * It used to render in the Integrations pane under a "Sync (Beta)" heading the
+ * pane above drew. Both moved: the pane above no longer draws a heading for it,
+ * and the SYNC pane draws "Account" as its first section (settings reorg §10.1,
+ * Q1) - an account belongs beside sync health, not above Profiles.
  *
  * TV input model: the sign-in fields use the app's [KBTextField] (bright
  * text, leanback-keyboard friendly, D-pad up/down between fields) and the

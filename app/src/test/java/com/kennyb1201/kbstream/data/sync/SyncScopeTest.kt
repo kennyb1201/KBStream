@@ -100,10 +100,14 @@ class SyncScopeTest {
         excluded.forEach { key ->
             assertFalse("$key must stay local", key in synced)
         }
-        // The sample the old test pinned by hand, kept as a canary.
+        // The sample the old test pinned by hand, kept as a canary. It used to
+        // name `force_software_decoder`, which was removed from the list with
+        // the other dead entries (settings reorg U4): it had no accessor in the
+        // app, so it was protecting a key nothing could reach. The canary now sits
+        // on a real per-device key.
         assertTrue(
-            "force_software_decoder must be excluded",
-            "force_software_decoder" in excluded
+            "enable_tunneling must be excluded",
+            "enable_tunneling" in excluded
         )
         assertTrue(
             "max_auto_play_quality must be excluded too: a decode ceiling is " +
@@ -159,5 +163,41 @@ class SyncScopeTest {
             "match_frame_rate must not sync",
             "match_frame_rate" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
         )
+        // The refinement beside it (audit AFR S1) answers which of two equally
+        // exact rates THIS panel presents properly. One TV's observation must
+        // never become another TV's request, so it is device-local too - and a
+        // key missing from both lists is the silently-synced preference this
+        // class exists to catch.
+        assertTrue(
+            "prefer_whole_frame_rate must be excluded",
+            "prefer_whole_frame_rate" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+        assertFalse(
+            "prefer_whole_frame_rate must not sync",
+            "prefer_whole_frame_rate" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+    }
+
+    @Test
+    fun `the sports reminder switch follows the profile, unlike the decoders beside it`() {
+        // Settings reorg Q4 (Kenny, 2026-10-28): a viewer who turned game
+        // reminders off on the TV does not want the phone buzzing about the same
+        // game, so this one joins its three sports siblings in the payload. It is
+        // a per-profile viewing choice, not a device capability - which is why it
+        // must NOT be excluded, and why the key is pinned in both directions
+        // rather than trusted to the block comment that lists it.
+        assertTrue(
+            "sports_game_reminders must sync",
+            "sports_game_reminders" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+        assertFalse(
+            "and must not be excluded",
+            "sports_game_reminders" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+        // The set-valued siblings are normalised through the builder's private
+        // SPORTS_SET_KEYS; this one is a Boolean and rides the generic arm, so it
+        // is deliberately absent from that set (a Boolean has no StringSet to
+        // normalise). Not asserted here because that set is private - the payload
+        // test in this file covers what actually leaves the device.
     }
 }
