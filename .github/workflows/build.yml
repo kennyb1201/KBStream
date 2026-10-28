@@ -790,7 +790,18 @@ jobs:
           # sorts before '.', `head -n1` picked the UNSIGNED one - so this gate
           # could come up green on a run whose shipped APK it never opened.
           # The metadata step below filters unsigned output the same way.
-          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -n1)"
+          #
+          # A loop over the glob, not `ls | grep | head -n1`: this step runs
+          # under `set -o pipefail`, where a consumer that stops reading early
+          # (head) turns into SIGPIPE on the producer and a 141 that fails the
+          # step. That is exactly how the v0.9.94 publish died in the notes step.
+          APK=""
+          for f in app/build/outputs/apk/release/*.apk; do
+            [ -e "$f" ] || continue
+            case "$f" in *unsigned*) continue ;; esac
+            APK="$f"
+            break
+          done
           if [ -z "$APK" ]; then
             echo "::error::no signed release APK found; this check would be vacuous"
             exit 1
@@ -803,7 +814,12 @@ jobs:
           # zip of base/lib/<abi>/*.so, and Play is stricter than the APK
           # path - an unaligned library there is a rejected upload, and it is
           # the only artifact that reaches Play at all.
-          AAB="$(ls app/build/outputs/bundle/release/*.aab 2>/dev/null | head -n1 || true)"
+          AAB=""
+          for f in app/build/outputs/bundle/release/*.aab; do
+            [ -e "$f" ] || continue
+            AAB="$f"
+            break
+          done
           if [ -n "$AAB" ]; then
             echo "Checking native libraries in $AAB"
             rm -rf /tmp/aab-libs && mkdir -p /tmp/aab-libs
@@ -998,18 +1014,29 @@ jobs:
             # its first ": " (the colon introduces the detail), and a subject
             # with no such break is clamped at a readable width on a word
             # boundary. The colon-only break keeps "1:1" and URLs intact.
-            CHANGES="$(git log --no-merges --pretty=format:'%s' "$PREVIOUS_SHA..$HEAD_SHA" \
-              | head -n "$LIMIT" \
-              | awk '
-                  {
-                    sub(/: .*/, "")
-                    if (length($0) > 120) {
-                      $0 = substr($0, 1, 120)
-                      sub(/[^ ]*$/, "", $0)
-                      $0 = $0 "…"
-                    }
-                    print "- " $0
-                  }')"
+            #
+            # The subjects go to a FILE, and the cap is awk's own NR test, rather
+            # than `git log … | head -n "$LIMIT" | awk …`. Under `set -o
+            # pipefail` that pipeline's status is the earliest command to fail,
+            # and `head` closing the pipe makes `git log` die of SIGPIPE - exit
+            # 141. It only bit once a release spanned more commits than LIMIT:
+            # v0.9.94 built, tested, linted and uploaded both artifacts, then
+            # this step aborted the job and nothing was published. awk reading a
+            # file has no upstream to break, and its `exit` is success.
+            SUBJECTS_FILE=/tmp/release-subjects.txt
+            git log --no-merges --pretty=format:'%s' "$PREVIOUS_SHA..$HEAD_SHA" \
+              > "$SUBJECTS_FILE"
+            CHANGES="$(awk -v limit="$LIMIT" '
+                NR > limit { exit }
+                {
+                  sub(/: .*/, "")
+                  if (length($0) > 120) {
+                    $0 = substr($0, 1, 120)
+                    sub(/[^ ]*$/, "", $0)
+                    $0 = $0 "…"
+                  }
+                  print "- " $0
+                }' "$SUBJECTS_FILE")"
             if (( TOTAL > LIMIT )); then
               CHANGES="${CHANGES}"$'\n'"...and $(( TOTAL - LIMIT )) more."
             fi
@@ -1031,7 +1058,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           # The APK the app will download, excluding any unsigned output.
-          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)"
+          APK=""
+          for f in app/build/outputs/apk/release/*.apk; do
+            [ -e "$f" ] || continue
+            case "$f" in *unsigned*) continue ;; esac
+            APK="$f"
+            break
+          done
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
           # gitSha is for CI, not for the app: AppUpdater reads the fields it
           # names (versionCode / versionName / sha256) and ignores the rest, so
@@ -1059,7 +1092,16 @@ jobs:
           # so a release could carry an unsigned APK beside the signed one, and
           # what the app's updater downloads is whichever asset it asks for by
           # name. Same filter the metadata step uses.
-          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -n1)"
+          # No `ls … | grep … | head -n1` here either: same SIGPIPE-under-pipefail
+          # trap as the release notes, and this is the step that publishes. A
+          # loop over the glob cannot break a pipe.
+          APK=""
+          for f in app/build/outputs/apk/release/*.apk; do
+            [ -e "$f" ] || continue
+            case "$f" in *unsigned*) continue ;; esac
+            APK="$f"
+            break
+          done
           if [ -z "$APK" ]; then
             echo "::error::no signed release APK to publish"
             exit 1
