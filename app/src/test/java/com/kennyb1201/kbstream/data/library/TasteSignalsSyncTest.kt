@@ -91,11 +91,24 @@ class TasteSignalsSyncTest {
         year: Int? = YEAR
     ) = TasteSignals.signalFor(context, TYPE, title, year, ids)
 
+    /**
+     * How many titles the store holds, read from its own blob.
+     *
+     * The store's StateFlow is a singleton's cache and outlives a test's
+     * cleared preferences, so counting rows through it would count the previous
+     * test's. The blob is what the merge actually wrote.
+     */
+    private fun storedEntryCount(): Int {
+        val encoded = TasteSignals.encodedForSync(context) ?: return 0
+        val root = Json.parseToJsonElement(encoded) as JsonObject
+        return (root["entries"] as? JsonArray)?.size ?: 0
+    }
+
     // ── arrival ────────────────────────────────────────────────────────────
 
     @Test
     fun `a title rated on another device arrives with its verdict`() {
-        assertEquals(0, TasteSignals.entries.value.size)
+        assertEquals("nothing stored to begin with", 0, storedEntryCount())
 
         val changed = TasteSignals.mergeFromSync(context, blobOf(entry()))
 
@@ -105,7 +118,7 @@ class TasteSignalsSyncTest {
             TasteSignals.LIKE,
             signal()
         )
-        assertEquals(1, TasteSignals.entries.value.size)
+        assertEquals(1, storedEntryCount())
     }
 
     @Test
@@ -118,8 +131,10 @@ class TasteSignalsSyncTest {
             signal()
         )
         assertEquals(
+            "and the number itself survives the trip",
             9,
-            TasteSignals.entries.value.single().rating
+            TasteSignals.snapshot(context)
+                .ratingFor(TasteSignals.keysFor(TYPE, TMDB_IDS, TITLE, YEAR))
         )
     }
 
@@ -143,11 +158,11 @@ class TasteSignalsSyncTest {
             TasteSignals.DISLIKE,
             signal()
         )
-        assertEquals("and it is still ONE row", 1, TasteSignals.entries.value.size)
-        val keys = TasteSignals.entries.value.single().keys
-        assertTrue(
+        assertEquals("and it is still ONE row", 1, storedEntryCount())
+        assertEquals(
             "the merged row answers both devices' spellings",
-            keys.any { it.contains("tt0137523") } && keys.any { it.contains("tmdb:603") }
+            TasteSignals.DISLIKE,
+            signal(ids = IMDB_IDS)
         )
     }
 
@@ -180,7 +195,7 @@ class TasteSignalsSyncTest {
 
         TasteSignals.mergeFromSync(context, blobOf(remote))
 
-        assertEquals("both titles are here", 2, TasteSignals.entries.value.size)
+        assertEquals("both titles are here", 2, storedEntryCount())
         assertEquals(TasteSignals.LIKE, signal())
         assertEquals(
             TasteSignals.DISLIKE,

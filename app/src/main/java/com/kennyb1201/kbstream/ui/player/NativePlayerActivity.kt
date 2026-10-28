@@ -4232,7 +4232,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         infoFile = findViewById(R.id.info_file)
         infoVideo = findViewById(R.id.info_video)
         infoAudio = findViewById(R.id.info_audio)
-        infoSubtitles = findViewById(R.id.info_subtitles)
+        // The MPV panel's own ids: the two layouts are id-for-id the same
+        // panel (see MpvInfoPanelContractTest), so a row added here is a row
+        // there and the names must not drift by a plural.
+        infoSubtitles = findViewById(R.id.info_subtitle)
         btnSettings = findViewById(R.id.chrome_btn_settings)
         pickerContainer = findViewById(R.id.picker_container)
         pickerTitle = findViewById(R.id.picker_title)

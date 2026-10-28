@@ -228,8 +228,13 @@ object DownloadsStore {
         droppedIds: Set<String> = emptySet()
     ): Boolean {
         val target = prefs(context)
-        if (wouldLoseRecords(target, records, droppedIds)) return false
+        // Kept BEFORE the loss guard decides: the copy under
+        // [KEY_RECORDS_UNREADABLE] is what a repair would read, so a REFUSED
+        // write has to leave it behind too - otherwise the one blob a build
+        // that cannot parse it would have needed is the blob this build just
+        // declined to keep.
         preserveUnreadableBlob(target)
+        if (wouldLoseRecords(target, records, droppedIds)) return false
         runCatching {
             target.edit()
                 .putString(KEY_RECORDS, json.encodeToString(serializer, records))

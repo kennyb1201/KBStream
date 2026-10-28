@@ -108,7 +108,7 @@ class NumericRatingContractTest {
     }
 
     @Test
-    fun `no endpoint, no sync key and no preference is invented`() {
+    fun `no endpoint and no preference is invented, and ratings travel with the store`() {
         listOf(TASTE_SIGNALS, DIALOG).forEach { path ->
             val text = source(path)
             assertFalse("$path must issue no request", text.contains("api."))
@@ -116,8 +116,14 @@ class NumericRatingContractTest {
         }
         val sync = source(SYNC_PAYLOAD)
         assertFalse(
-            "ratings are local-only: the sync payload carries no rating field",
-            sync.contains("ratingsByKey") || sync.contains("TasteSignals")
+            "a rating is not exported as its own field: the entry it lives in " +
+                "travels whole (see TasteSignals.encodedForSync), so a number and " +
+                "the thumb it derives cannot part company across devices",
+            sync.contains("ratingsByKey")
+        )
+        assertTrue(
+            "what DOES travel is the store's blob, through its one key",
+            sync.contains("KEY_TASTE_SIGNALS") && sync.contains("TasteSignals")
         )
         val prefs = source(PREFS)
         assertFalse(

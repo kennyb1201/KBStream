@@ -1007,7 +1007,7 @@
                  playing, and is the offset mine or the file's" had no answer
                  on the engine most sessions run (audit U-F6). -->
             <TextView
-                android:id="@+id/info_subtitles_header"
+                android:id="@+id/info_subtitle_header"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
@@ -1017,7 +1017,7 @@
                 android:textSize="12sp" />
 
             <TextView
-                android:id="@+id/info_subtitles"
+                android:id="@+id/info_subtitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"

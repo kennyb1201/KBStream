@@ -235,9 +235,15 @@ class TasteRatingSubmissionContractTest {
             assertTrue("$path drops its own leg on disconnect",
                 src.contains("TasteRatingSubmission.onTrackerDisconnected("))
         }
+        // A carrier DOES exist since the taste-signals sync landed - and the
+        // submission spec added none of its own: the signals blob travels
+        // whole, and the queue that talks to the trackers never reaches the
+        // sync payload.
         assertFalse(
-            "no sync carrier: the v1 taste payload is untouched by the submission spec",
-            source(SYNC_PREFS).contains("taste")
+            "the submission spec adds no sync carrier of its own: the signals " +
+                "blob is the only taste payload, and it is not this queue's",
+            source(SUBMISSION).contains("KEY_TASTE_SIGNALS") ||
+                source(SUBMISSION).contains("encodedForSync")
         )
         assertFalse(
             "and no new preference exists, because ratings are always on like thumbs",

@@ -503,23 +503,37 @@ class DetailAuditContractTest {
     /**
      * The READ-ONLY half of the v1 promise, which still holds.
      *
-     * "Local-only" was superseded for the two trackers that have a ratings write:
-     * the tracker-submission follow-up landed `POST sync/ratings` (+ the remove
-     * twin) on Simkl and Trakt, and its own contract test pins those two
-     * endpoints and nothing more (TasteRatingSubmissionContractTest). What is
-     * still true - and still worth pinning, because each half would be a silent
-     * new write path - is that MDBList gains nothing, the sync payload carries no
-     * carrier for the signals, and there is no preference gating them.
+     * "Local-only" was superseded twice, deliberately: the tracker-submission
+     * follow-up landed `POST sync/ratings` (+ the remove twin) on Simkl and
+     * Trakt (pinned by TasteRatingSubmissionContractTest), and the taste-signals
+     * sync landed ONE payload key for the store's own blob. What is still worth
+     * pinning, because each half would be a silent new write path, is that
+     * MDBList gains nothing, that the payload carries the signals through that
+     * one key and no rating field of its own, and that there is no preference
+     * gating them.
      */
     @Test
-    fun `MDBList stays read-only, and there is no taste sync key or preference`() {
+    fun `MDBList stays read-only, and the signals travel through one key only`() {
         val mdbList = normalized(source(MDBLIST))
         listOf("sync/ratings", "@POST(", "/rate").forEach { write ->
             assertFalse("MDBList is read-only here; it gained $write", mdbList.contains(write))
         }
+        val payload = normalized(source(SYNC_PAYLOAD))
+        assertEquals(
+            "the signals are carried by exactly ONE payload key, so a second " +
+                "carrier is a second opinion about the same store",
+            1,
+            payload.split("const val KEY_TASTE_SIGNALS").size - 1
+        )
+        assertTrue(
+            "and that key carries the store's own encoded blob, not a re-shaped rating field",
+            payload.contains("TasteSignals") &&
+                payload.contains("encodedForSync") &&
+                payload.contains("mergeFromSync")
+        )
         assertFalse(
-            "the signals are device-local in v1: a sync key means a carrier was added",
-            normalized(source(SYNC_PAYLOAD)).contains("taste")
+            "no rating is exported as its own field: the entries travel whole",
+            payload.contains("ratingsByKey")
         )
         assertFalse(
             "and there is no taste preference to switch them off with",

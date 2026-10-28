@@ -488,7 +488,7 @@ fun SettingsScreen(
     // Device-local (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): keyed on the
     // profile only, like the decoder toggles above and below, so another
     // device's display push never re-reads a ceiling it does not share.
-    var dataSaver by remember(syncedRevision) {
+    var dataSaver by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getCellularDataSaver(context))
     }
     var maxAutoPlayQuality by remember(profileRowKey) {
