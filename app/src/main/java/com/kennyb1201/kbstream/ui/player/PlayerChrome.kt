@@ -675,7 +675,27 @@ class PlayerChrome(
         clockView.text = DateFormats.now(formatter)
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
         val endsAtTime = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
-        endsView.text = "Ends at $endsAtTime"
+        endsView.text = "Ends at $endsAtTime${sleepSuffix()}"
+    }
+
+    /**
+     * An armed sleep timer, on the bar beside the "Ends at" estimate.
+     *
+     * The countdown used to exist only inside the Settings panel's Sleep row, so
+     * a viewer who armed "20 minutes" had no way to see it running - and no way
+     * to tell a timer that was about to stop playback from one that had never
+     * been armed. [refreshClock] runs on the bar's own per-second tick, so this
+     * needs no clock of its own; it reads the shared [SleepTimer] state.
+     */
+    private fun sleepSuffix(): String {
+        val sleep = SleepTimer.state.value
+        if (!sleep.isArmed) return ""
+        // An end-of-item timer has no deadline to count down: it fires when the
+        // episode does, so the bar names the moment rather than a number.
+        if (sleep.stopsAtEndOfItem) return " \u00b7 Sleep at end"
+        val remaining = sleep.deadlineMs?.minus(System.currentTimeMillis())
+        if (remaining != null) return " \u00b7 Sleep in ${sleepCountdownText(remaining)}"
+        return if (sleep.label.isNotBlank()) " \u00b7 Sleep: ${sleep.label}" else " \u00b7 Sleep on"
     }
 
     companion object {
