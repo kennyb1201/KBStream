@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBFilters
 import com.kennyb1201.kbstream.data.kb.KBRail
 import com.kennyb1201.kbstream.data.kb.kbMostVotedSort
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -510,13 +511,31 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     private val _profileEpoch = MutableStateFlow(0)
     val profileEpoch: StateFlow<Int> = _profileEpoch.asStateFlow()
 
-    /** "Open in Grid" for [folderId]; null restores the manifest's layout. */
+    /**
+     * "Open in Grid" for [folderId]; null restores the manifest's layout.
+     *
+     * Recorded in preferences, not just here (audit KBFolder I1): the press
+     * used to last as long as this ViewModel did, so leaving the folder - Back
+     * to Browse, or a relaunch - brought the rails layout back, and the same
+     * folder had to be asked for the grid again. The pin is the viewer's
+     * choice for that folder, so it is written on every press and read on every
+     * load ([load]); clearing it is the viewer turning it off.
+     */
     fun setGridOverride(folderId: String?) {
         gridOverrideFolderId = folderId
+        AppPreferences.setKbFolderGridPin(getApplication(), folderId)
     }
 
-    /** Whether the grid override is on for the folder the screen is showing. */
-    fun gridOverrideActive(folderId: String): Boolean = gridOverrideFolderId == folderId
+    /**
+     * Whether the grid override is on for the folder the screen is showing.
+     *
+     * Falls back to the STORE when memory holds nothing: the screen seeds its
+     * layout from this on its first composition, which can run before [load]
+     * has read the pin - and a remembered choice that only arrives after the
+     * first frame is a folder that draws its rails and then flips to the grid.
+     */
+    fun gridOverrideActive(folderId: String): Boolean =
+        (gridOverrideFolderId ?: AppPreferences.getKbFolderGridPin(getApplication())) == folderId
 
     /**
      * Route entry: resolve the folder by id (survives process-death restore
@@ -567,6 +586,10 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         if (!force && isSameRoute && !_state.value.isLoading) return
 
         currentFolderId = folderKey
+        // Read the stored pin BEFORE the first publish: the screen reads
+        // gridOverrideActive on its first frame, so a pin restored after the
+        // rails landed would draw the rails layout and then flip to the grid.
+        gridOverrideFolderId = AppPreferences.getKbFolderGridPin(getApplication())
         tmdbRailSources.clear()
         _selectedSourceId.value = null
         _landscapeArt.value = emptyMap()
@@ -1023,6 +1046,8 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         heroResolveJob?.cancel()
         tmdbRailSources.clear()
         currentFolderId = null
+        // Cleared in memory only: the pin belongs to the profile being left, so
+        // the next load reads the incoming profile's own value (see [load]).
         gridOverrideFolderId = null
         _profileEpoch.value = _profileEpoch.value + 1
         _selectedSourceId.value = null

@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -393,5 +394,66 @@ class EpisodeMatchTest {
 
         assertFalse(EpisodeMatch.onlyOtherEpisodes(listOf(urlOther, hashAsked), 3, 30))
         assertEquals(hashAsked, EpisodeMatch.autoplayPick(listOf(urlOther, hashAsked), 3, 30))
+    }
+
+    // ── continuing the same provider (audit S-F4) ────────────────────────────
+
+    private fun grouped(title: String, group: String, url: String) = Stream(
+        title = title,
+        url = url,
+        behaviorHints = StreamBehaviorHints(bingeGroup = group)
+    )
+
+    private val preferGroup: (Stream) -> Boolean = { it.bingeGroup == "torrentio|4k" }
+
+    @Test
+    fun `the binge identity decides between two copies of the same episode`() {
+        val other = grouped("Paw Patrol S03E30 1080p", "aio|1080p", "https://host/a.mkv")
+        val same = grouped("Paw Patrol S03E30 1080p", "torrentio|4k", "https://host/b.mkv")
+
+        // The reorder alone would leave this to list order; the pick reads the
+        // identity, so the provider this session has been continuing with wins
+        // wherever it sits in the list.
+        assertEquals(
+            same,
+            EpisodeMatch.autoplayPick(listOf(other, same), 3, 30, preferBinge = preferGroup)
+        )
+        assertEquals(
+            other,
+            EpisodeMatch.autoplayPick(listOf(other, same), 3, 30)
+        )
+    }
+
+    @Test
+    fun `a declared episode still beats a silent file from the same provider`() {
+        // The decided limit (S-F4): continuity is a tie-break INSIDE a tier. A
+        // same-provider file that names no episode is still an unknown file, and
+        // a file that names this very episode is not - so the declared row wins
+        // even though it belongs to the provider the session was leaving.
+        val declared = grouped("Paw Patrol S03E30 1080p", "aio|1080p", "https://host/a.mkv")
+        val silent = grouped("Paw Patrol 1080p WEB-DL", "torrentio|4k", "https://host/b.mkv")
+
+        assertEquals(
+            declared,
+            EpisodeMatch.autoplayPick(listOf(declared, silent), 3, 30, preferBinge = preferGroup)
+        )
+    }
+
+    @Test
+    fun `between two silent rows the identity still decides`() {
+        // Neither names an episode, so the tier is the same and the tie-break is
+        // all that is left: the provider being continued wins.
+        val silentOther = grouped("Paw Patrol 1080p WEB-DL", "aio|1080p", "https://host/a.mkv")
+        val silentSame = grouped("Paw Patrol 2160p WEB-DL", "torrentio|4k", "https://host/b.mkv")
+
+        assertEquals(
+            silentSame,
+            EpisodeMatch.autoplayPick(
+                listOf(silentOther, silentSame),
+                3,
+                30,
+                preferBinge = preferGroup
+            )
+        )
     }
 }

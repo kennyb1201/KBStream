@@ -273,6 +273,22 @@ object EpisodeMatch {
      * a size: without one, a pack is recognized by the way it names itself
      * instead (see [isSeasonPack]).
      *
+     * [preferBinge] is the identity this session is continuing with — the
+     * previous episode's bingeGroup, or failing that its add-on (see
+     * BingeGroupMemory) — and it is a TIE-BREAK INSIDE a tier, never across
+     * one (audit S-F4, decided here rather than left open). The reorder the
+     * resolver already makes puts the same provider first in the list, but the
+     * tier scan below does not read list order once a row declares the episode:
+     * a same-provider file that names no episode used to lose to another
+     * provider's file that does, and the binge jumped provider for one episode.
+     * Making the identity outrank the declaration would fix that and break
+     * something worse — the whole reason the tiers exist is that a file which
+     * says it is another episode must never start by itself, and "it came from
+     * the same add-on" is not evidence about which episode it holds. So the
+     * declared episode still wins outright; the identity decides between two
+     * rows that stand equally well (two declared matches, two silent rows, two
+     * other-season rows), which is where continuity costs nothing.
+     *
      * With no episode in the request (a movie, a live channel) this is the
      * first playable source, exactly as before.
      */
@@ -280,14 +296,15 @@ object EpisodeMatch {
         streams: List<Stream>,
         season: Int?,
         episode: Int?,
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        preferBinge: (Stream) -> Boolean = { false }
     ): Stream? {
         val candidates = streams.filter { isAutoplayCandidate(it) }
         if (season == null || episode == null) return candidates.firstOrNull()
 
         val (honest, sunk) = candidates.partition { !StreamRanker.isKnownBadStream(it) }
-        return pickAmong(honest, season, episode, runtimeMinutes)
-            ?: pickAmong(sunk, season, episode, runtimeMinutes)
+        return pickAmong(honest, season, episode, runtimeMinutes, preferBinge)
+            ?: pickAmong(sunk, season, episode, runtimeMinutes, preferBinge)
     }
 
     /**
@@ -298,22 +315,42 @@ object EpisodeMatch {
      * source whose declaration cannot be compared with the request (a different
      * season — see [verdict]). A whole season is skipped at every step: a pack
      * declares no episode and would otherwise read as "says nothing".
+     *
+     * Within each of those three tiers [preferBinge] decides, and the FIRST
+     * identity match in a tier is kept while the scan continues: a later
+     * declared match still beats an earlier silent row, so no tier is ever
+     * crossed for continuity (see [autoplayPick]).
      */
     private fun pickAmong(
         candidates: List<Stream>,
         season: Int,
         episode: Int,
-        runtimeMinutes: Int?
+        runtimeMinutes: Int?,
+        preferBinge: (Stream) -> Boolean
     ): Stream? {
+        var matched: Stream? = null
         var undeclared: Stream? = null
+        var undeclaredPreferred: Stream? = null
         var otherSeason: Stream? = null
+        var otherSeasonPreferred: Stream? = null
         for (stream in candidates) {
+            val preferred = preferBinge(stream)
             when (verdict(stream, season, episode)) {
-                Verdict.MATCHES -> return stream
+                Verdict.MATCHES -> {
+                    if (preferred) return stream
+                    if (matched == null) matched = stream
+                }
+
                 Verdict.UNKNOWN -> {
                     if (isSeasonPack(stream, runtimeMinutes)) continue
                     if (declared(stream) == null) {
-                        if (undeclared == null) undeclared = stream
+                        if (preferred) {
+                            if (undeclaredPreferred == null) undeclaredPreferred = stream
+                        } else if (undeclared == null) {
+                            undeclared = stream
+                        }
+                    } else if (preferred) {
+                        if (otherSeasonPreferred == null) otherSeasonPreferred = stream
                     } else if (otherSeason == null) {
                         otherSeason = stream
                     }
@@ -322,7 +359,9 @@ object EpisodeMatch {
                 Verdict.DIFFERENT -> Unit
             }
         }
-        return undeclared ?: otherSeason
+        return matched
+            ?: undeclaredPreferred ?: undeclared
+            ?: otherSeasonPreferred ?: otherSeason
     }
 
     /**

@@ -77,10 +77,11 @@ fun KBFolderScreen(
 
     var menuTarget by remember { mutableStateOf<KBContentItem?>(null) }
 
-    // Long-press "Open in Grid": force the folder into its GRID layout for
-    // this visit, whatever its manifest viewMode says. Back returns to the
-    // folder's own layout first, then exits — same feel as Home's
-    // "Open in Grid" returning to the rails.
+    // Long-press "Open in Grid": show this folder as a GRID whatever its
+    // manifest viewMode says. The choice is recorded against the folder (see
+    // [KBFolderViewModel.setGridOverride]), so it survives Back and a relaunch
+    // and the folder opens the way it was left; the menu carries the way back
+    // ("Show as Rails"), which is the only thing that clears it.
     //
     // Seeded from the ViewModel, which outlives the trip into a title's Detail
     // page: this composable does not, so a `remember` alone lost the override on
@@ -362,16 +363,21 @@ fun KBFolderScreen(
             ),
             actions = listOf(
                 PosterContextAction(
-                    label = "Open in Grid",
-                    description = "Browse this whole collection as a poster grid"
+                    label = if (showAsGrid) "Show as Rails" else "Open in Grid",
+                    description = if (showAsGrid) {
+                        "Use this collection's own layout again"
+                    } else {
+                        "Browse this whole collection as a poster grid"
+                    }
                 ) {
                     // Nothing is leaving the rail here, so the D-pad goes back
                     // on the card that was pressed.
                     closeMenu(menuCardKey)
-                    showAsGrid = true
+                    showAsGrid = !showAsGrid
                     // Recorded outside the composition, so the trip into a title's
                     // Detail page comes back to the grid (see the declaration).
-                    viewModel.setGridOverride(folderId)
+                    // null here is the viewer turning the pin off.
+                    viewModel.setGridOverride(if (showAsGrid) folderId else null)
                 },
                 PosterContextAction(
                     label = "Go to Details",
@@ -424,15 +430,10 @@ fun KBFolderScreen(
     }
 
     BackHandler {
-        // Grid override is a visit-level view: Back first restores the
-        // folder's own layout, and only a second Back exits the folder.
-        if (showAsGrid) {
-            showAsGrid = false
-            // Cleared with it, so the folder is not still pinned to the grid on
-            // its next open (see [KBFolderViewModel.setGridOverride]).
-            viewModel.setGridOverride(null)
-        } else {
-            onBack()
-        }
+        // One press, one outcome: the layout is a recorded choice, so Back just
+        // leaves the folder. It used to restore the folder's own layout first
+        // and exit on a second press, which is what threw the pin away - and
+        // the menu's own "Show as Rails" is now where that choice is made.
+        onBack()
     }
 }

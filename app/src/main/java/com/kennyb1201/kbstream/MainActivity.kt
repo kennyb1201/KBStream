@@ -152,6 +152,7 @@ import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
+import com.kennyb1201.kbstream.ui.player.addonLookup
 import com.kennyb1201.kbstream.ui.player.addonsFor
 import com.kennyb1201.kbstream.ui.player.sourceAddonsJson
 import com.kennyb1201.kbstream.ui.player.toPlayer
@@ -1652,13 +1653,28 @@ fun AppRoot(
         // link. This path is Continue Watching and the next-episode advance, and
         // it used to launch its pick straight to the player with no resolve step
         // at all - an unresolved head there was a launch that showed nothing.
+        // The identity this launch is continuing with, read the same way the
+        // ordering above reads it, and handed to the pick as a tie-break INSIDE
+        // an episode tier (audit S-F4): the reorder alone could put the same
+        // provider first and still be passed over, because the tier scan takes
+        // a declared episode ahead of a silent file from that provider. A
+        // declared match still wins outright - the identity never crosses a
+        // tier (see EpisodeMatch.autoplayPick).
+        val bingeGroupWanted = pending.bingeGroup ?: continuedFrom?.bingeGroup
+        val addonWanted = pending.addonName ?: continuedFrom?.addonName
+        val addonOf = addonLookup(resolved.streams, resolved.addons)
+        val preferBinge: (Stream) -> Boolean = { stream ->
+            (bingeGroupWanted != null && stream.bingeGroup == bingeGroupWanted) ||
+                (addonWanted != null && addonOf(stream) == addonWanted)
+        }
         val autoplayPick: (List<Stream>) -> Stream? = { remaining ->
             AutoPlayQuality.cappedPick(
                 pick = EpisodeMatch.autoplayPick(
                     remaining,
                     pending.target.season,
                     pending.target.episode,
-                    pending.target.runtimeMinutes
+                    pending.target.runtimeMinutes,
+                    preferBinge = preferBinge
                 ),
                 candidates = remaining,
                 season = pending.target.season,

@@ -140,6 +140,13 @@ object AppPreferences {
     private const val KEY_HIDE_WATCHED_ON_HOME = "home_rail_hide_watched"
     // The cellular data saver (see getCellularDataSaver). Device-local.
     private const val KEY_CELLULAR_DATA_SAVER = "cellular_data_saver"
+    // The KB folder whose "Open in Grid" layout pin is on (see
+    // getKbFolderGridPin). ONE folder at a time on purpose: the press means
+    // "show me THIS folder as a grid", and a set of pinned folders would make
+    // the next one silently inherit a layout nobody asked for. Device-local,
+    // like the decode ceiling beside it: a layout that suits a television is
+    // not a statement about the phone in the same profile.
+    private const val KEY_KB_FOLDER_GRID_PIN = "kb_folder_grid_pin"
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_LANDSCAPE_POSTERS = "landscape_posters"
@@ -472,6 +479,29 @@ object AppPreferences {
 
     fun setCellularDataSaver(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_CELLULAR_DATA_SAVER, enabled).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    // ── KB folder layout pin ────────────────────────────────────────
+    //
+    // "Open in Grid" on a KB folder used to be visit-level state held by the
+    // screen's ViewModel, so it survived a trip to a title's Detail page but
+    // not leaving the folder: press Back and the same folder came back in the
+    // layout its manifest asks for, which reads as the app forgetting a choice
+    // the viewer had just made. The pin is the same press recorded against the
+    // folder id, so the next visit opens the way the last one was left -
+    // until the viewer turns it off, which is the only thing that clears it.
+    fun getKbFolderGridPin(context: Context): String? =
+        prefs(context).getString(KEY_KB_FOLDER_GRID_PIN, null)
+
+    fun setKbFolderGridPin(context: Context, folderId: String?) {
+        val editor = prefs(context).edit()
+        if (folderId.isNullOrBlank()) {
+            editor.remove(KEY_KB_FOLDER_GRID_PIN)
+        } else {
+            editor.putString(KEY_KB_FOLDER_GRID_PIN, folderId)
+        }
+        editor.apply()
         notifyDisplayPrefChanged()
     }
 
