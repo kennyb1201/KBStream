@@ -202,15 +202,35 @@ class ExoScrubFollowContractTest {
     }
 
     @Test
-    fun `mpv does not opt into the scrub hooks, so its own seek handling stands`() {
-        // The hooks are defaults on the shared host; an engine that does not
-        // override them is untouched. This spec is Exo only.
-        assertFalse(
-            "mpv must not take the Exo engine's scrub pause",
-            readSource(MPV).contains("onChromeScrub")
+    fun `mpv answers the same drag with its own pause and follow`() {
+        // This pin used to say the opposite - that mpv opted out of the hooks,
+        // so its own seek handling stood. That WAS the defect (U-F3): a finger
+        // drag on the mpv bar moved the thumb and asked for preview frames
+        // while the picture carried on playing underneath. The engine takes the
+        // hooks now, and with its own surface calls rather than Exo's helpers.
+        val mpv = normalized(MPV)
+        assertTrue(
+            "the drag pauses for this engine too",
+            mpv.contains("override fun onChromeScrubStart() {")
         )
         assertTrue(
-            "and the defaults really are empty",
+            "the thumb is followed while dragging",
+            mpv.contains("override fun onChromeScrubProgress(positionMs: Long) {")
+        )
+        assertTrue(
+            "and the play state comes back on release",
+            mpv.contains("override fun onChromeScrubEnd() {")
+        )
+        assertTrue(
+            "at the main player's own throttle",
+            mpv.contains("private val TOUCH_FOLLOW_SEEK_MS = 150L")
+        )
+        assertFalse(
+            "and it never borrows ExoPlayer's engine helpers",
+            mpv.contains("beginScrubPause()") || mpv.contains("endScrubPause()")
+        )
+        assertTrue(
+            "the hooks are still defaults on the shared host",
             readSource(CHROME).contains("fun onChromeScrubStart() {}") &&
                 readSource(CHROME).contains("fun onChromeScrubProgress(positionMs: Long) {}") &&
                 readSource(CHROME).contains("fun onChromeScrubEnd() {}")
