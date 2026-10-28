@@ -1307,8 +1307,13 @@ class TraktRepository private constructor(private val context: Context?) {
      * [tmdbId] is the resolved twin when the app only knew an IMDb/other id. A
      * title with neither id cannot be addressed by Trakt and is refused by the
      * caller before a request is made (the id object would be empty).
+     *
+     * Internal rather than private for one reason: the ratings writes live in
+     * their own file ([TraktRatingWrites]) for the same reason Simkl's history
+     * writes do, and re-parsing these id spellings there would put the app's id
+     * grammar in two homes where it can drift.
      */
-    private fun idsFor(parentId: String, tmdbId: Int?): TraktIds {
+    internal fun idsFor(parentId: String, tmdbId: Int?): TraktIds {
         val trimmed = parentId.trim()
         val imdb = when {
             trimmed.startsWith("imdb:") -> trimmed.substringAfter(':')
@@ -1323,8 +1328,14 @@ class TraktRepository private constructor(private val context: Context?) {
         return TraktIds(imdb = imdb, tmdb = tmdb)
     }
 
-    /** A 429 parks the next call for its `Retry-After`, or a minute by default. */
-    private fun noteRetryAfter(response: Response<*>?) {
+    /**
+     * A 429 parks the next call for its `Retry-After`, or a minute by default.
+     *
+     * Internal alongside [idsFor]: every write, ratings included, has to honor
+     * the same pause, and a second copy of this rule in the ratings file would
+     * be a copy that can fall out of step with the guard it feeds.
+     */
+    internal fun noteRetryAfter(response: Response<*>?) {
         if (response?.code() != 429) return
         val seconds = response.headers()["Retry-After"]?.toLongOrNull() ?: 60L
         guard.noteRetryAfter(seconds)

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.library
 
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -173,5 +174,121 @@ class LibrarySortTest {
         val ratings = mapOf("movie:tt1:-" to 7.0, "movie:tt2:-" to 7.0)
         val sorted = sortLibraryItems(listOf(b, a), LibrarySort.RATING, ratings)
         assertEquals(listOf(b, a), sorted)
+    }
+
+    // ── LIKED ────────────────────────────────────────────────────────
+
+    /**
+     * The STORE'S OWN spelling for one signalled title - the same function the
+     * store writes its entries with, so a test cannot accidentally pin a key
+     * the real store never produces.
+     */
+    private fun signalled(mediaType: String, vararg ids: String) =
+        TasteSignals.keysFor(mediaType, ids.toList(), null, null)
+
+    @Test
+    fun `LIKED groups liked first, un-signalled in the middle, disliked last`() {
+        val a = item("A", tmdb = 1)
+        val b = item("B", tmdb = 2)
+        val c = item("C", tmdb = 3)
+        val d = item("D", tmdb = 4)
+        val taste = TasteSignals.Snapshot(
+            liked = signalled("movie", "tmdb:1", "tmdb:3"),
+            disliked = signalled("movie", "tmdb:4")
+        )
+        val sorted = sortLibraryItems(
+            listOf(a, b, c, d), LibrarySort.LIKED, emptyMap(), taste = taste
+        )
+        // Input order survives INSIDE a group: A and C are both liked and
+        // nothing re-sorts them (no recency, no rating, no secondary key).
+        assertEquals(listOf("A", "C", "B", "D"), sorted.map { it.title })
+    }
+
+    @Test
+    fun `LIKED lists the new chip last so the existing strip is undisturbed`() {
+        assertEquals(LibrarySort.LIKED, LibrarySort.entries.last())
+    }
+
+    @Test
+    fun `LIKED ignores the direction flag, deliberately`() {
+        val a = item("A", tmdb = 1)
+        val b = item("B", tmdb = 2)
+        val c = item("C", tmdb = 3)
+        val taste = TasteSignals.Snapshot(
+            liked = signalled("movie", "tmdb:3"),
+            disliked = signalled("movie", "tmdb:1")
+        )
+        val descending = sortLibraryItems(
+            listOf(a, b, c), LibrarySort.LIKED, emptyMap(), ascending = false, taste = taste
+        )
+        val ascending = sortLibraryItems(
+            listOf(a, b, c), LibrarySort.LIKED, emptyMap(), ascending = true, taste = taste
+        )
+        assertEquals(listOf("C", "B", "A"), descending.map { it.title })
+        assertEquals(
+            "tapping the LIKED chip twice must yield the identical list",
+            descending,
+            ascending
+        )
+    }
+
+    @Test
+    fun `LIKED reads the add-on id flavor, so a twin-flavor signal lands`() {
+        // Signalled from an add-on rail, which only knew the IMDB spelling:
+        // that is stored untyped ("id::tt..."), not as "movie::tt...".
+        val taste = TasteSignals.Snapshot(
+            liked = TasteSignals.keysFor("movie", listOf("tt0133093"), null, null)
+        )
+        val sorted = sortLibraryItems(
+            listOf(item("Plain", tmdb = 1), item("ByAddon", imdb = "tt0133093", tmdb = 603)),
+            LibrarySort.LIKED, emptyMap(), taste = taste
+        )
+        assertEquals(listOf("ByAddon", "Plain"), sorted.map { it.title })
+    }
+
+    @Test
+    fun `LIKED puts a row with no id in the middle group, never last`() {
+        val noIds = item("NoIds")
+        val disliked = item("Disliked", tmdb = 2)
+        val taste = TasteSignals.Snapshot(
+            liked = signalled("movie", "tmdb:1"),
+            disliked = signalled("movie", "tmdb:2")
+        )
+        val sorted = sortLibraryItems(
+            listOf(disliked, noIds, item("Liked", tmdb = 1)),
+            LibrarySort.LIKED, emptyMap(), taste = taste
+        )
+        // An unknown key is not a small one: the id-less row is un-signalled,
+        // so it sits between the liked row and the disliked one.
+        assertEquals(listOf("Liked", "NoIds", "Disliked"), sorted.map { it.title })
+    }
+
+    @Test
+    fun `LIKED with no signals is the input order`() {
+        val items = listOf(item("C", tmdb = 3), item("A", tmdb = 1), item("B", tmdb = 2))
+        assertEquals(
+            items,
+            sortLibraryItems(items, LibrarySort.LIKED, emptyMap())
+        )
+    }
+
+    @Test
+    fun `the other four sorts never read taste`() {
+        val a = item("A", year = 2001, imdb = "tt1")
+        val b = item("B", year = 2002, imdb = "tt2")
+        val ratings = mapOf("movie:tt1:-" to 5.0, "movie:tt2:-" to 9.0)
+        val taste = TasteSignals.Snapshot(
+            liked = TasteSignals.keysFor("movie", listOf("tt1"), null, null),
+            disliked = TasteSignals.keysFor("movie", listOf("tt2"), null, null)
+        )
+        LibrarySort.entries.filterNot { it == LibrarySort.LIKED }.forEach { sort ->
+            listOf(false, true).forEach { ascending ->
+                assertEquals(
+                    "$sort must be untouched by taste",
+                    sortLibraryItems(listOf(a, b), sort, ratings, ascending),
+                    sortLibraryItems(listOf(a, b), sort, ratings, ascending, taste)
+                )
+            }
+        }
     }
 }

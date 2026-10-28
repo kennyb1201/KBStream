@@ -227,7 +227,9 @@ class CompletionFiledWiringContractTest {
             )
             // The note belongs to the panel showing, not to some later path: it
             // has to be inside the function that raises it.
-            val showAt = panel.indexOf("ui.show(itemName)")
+            // The raise carries the finished title's identity with it (the BYW
+            // thumbs spec), so the needle is the call shape all three players use.
+            val showAt = panel.indexOf(".show(itemName, plan.finished)")
             val noteAt = panel.indexOf("\"byw shown filed=false")
             assertTrue("$path: note must precede the raise", noteAt >= 0)
             if (showAt >= 0) {

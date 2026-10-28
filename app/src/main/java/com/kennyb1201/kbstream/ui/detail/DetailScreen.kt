@@ -53,6 +53,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
@@ -161,6 +163,8 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.TvTitleRatingDialog
+import com.kennyb1201.kbstream.ui.components.rememberTasteRating
 import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
@@ -2904,6 +2908,17 @@ fun DetailScreen(
                 year = tasteYear,
                 ids = tasteIds
             )
+            // The number, from the same store and repainted with the thumbs: a
+            // rating set from a poster menu shows here without a revisit.
+            val tasteRating = rememberTasteRating(
+                mediaType = normalizedType,
+                title = libraryButtonTarget.title,
+                year = tasteYear,
+                ids = tasteIds
+            )
+            // The rating dialog is a flag, like the play and library menus: it
+            // is not a destination and carries no route.
+            var ratingDialog by remember { mutableStateOf(false) }
 
             // The press: the thumb that was pressed decides the next signal
             // (the active one clears it, the other flips it), the store
@@ -2940,6 +2955,49 @@ fun DetailScreen(
                         else -> "Disliked: ${libraryButtonTarget.title}"
                     },
                     isError = !stored
+                )
+            }
+
+            // The numeric rating's writers. One press on a plate IS the
+            // commit; the dialog's answer is painted from the store, so a write
+            // that failed is reported instead of claimed.
+            fun pressRating(number: Int) {
+                val stored = TasteSignals.setRating(
+                    context = context,
+                    mediaType = normalizedType,
+                    title = libraryButtonTarget.title,
+                    posterUrl = viewModel.currentPosterUrl(),
+                    year = tasteYear,
+                    ids = tasteIds,
+                    rating = number
+                )
+                ratingDialog = false
+                feedback.show(
+                    text = if (stored) {
+                        "Rated $number/10: ${libraryButtonTarget.title}"
+                    } else {
+                        "Couldn't save your rating"
+                    },
+                    isError = !stored
+                )
+            }
+
+            fun removeTaste() {
+                val cleared = TasteSignals.clearSignal(
+                    context = context,
+                    mediaType = normalizedType,
+                    title = libraryButtonTarget.title,
+                    year = tasteYear,
+                    ids = tasteIds
+                )
+                ratingDialog = false
+                feedback.show(
+                    text = if (cleared) {
+                        "Rating removed: ${libraryButtonTarget.title}"
+                    } else {
+                        "Couldn't save your rating"
+                    },
+                    isError = !cleared
                 )
             }
 
@@ -3854,6 +3912,33 @@ fun DetailScreen(
                                         "Dislike this title"
                                     }
                             )
+                        }
+
+                        // The numeric rating, beside the thumbs. Icon-plus-text
+                        // rather than icon-only: the pill carries the state it
+                        // would change, and a glyph cannot say "8/10".
+                        KBCard(
+                            onClick = { ratingDialog = true },
+                            shape = KBShapePill,
+                            focusedScale = KBFocusButton,
+                            modifier = Modifier.padding(start = 8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .semantics {
+                                        contentDescription = tasteRating?.let {
+                                            "Rated $it out of 10 — tap to change your rating"
+                                        } ?: "Rate this title"
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = tasteRating?.let { "$it/10" } ?: "RATE",
+                                    color = KBTextHi,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
                         }
                     }
 
@@ -6448,6 +6533,17 @@ fun DetailScreen(
                 // - and its own Add to Library / In Library row is this
                 // button's long form. Nothing is spelled out again: the menu
                 // builds both library rows itself from the target.
+                if (ratingDialog) {
+                    TvTitleRatingDialog(
+                        title = libraryButtonTarget.title,
+                        rating = tasteRating,
+                        hasSignal = tasteRating != null || tasteSignal != null,
+                        onPick = ::pressRating,
+                        onRemove = ::removeTaste,
+                        onCancel = { ratingDialog = false }
+                    )
+                }
+
                 if (libraryButtonMenu) {
                     PosterContextMenu(
                         title = displayName.ifBlank { "Untitled" },

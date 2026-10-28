@@ -38,6 +38,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.contextMenuSectionRank
 import com.kennyb1201.kbstream.ui.components.isSeriesType
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
+import com.kennyb1201.kbstream.ui.components.TouchTitleRatingDialog
 import com.kennyb1201.kbstream.ui.components.tasteMenuActions
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -104,6 +105,11 @@ fun PosterContextMenu(
     val librarySaved = libraryTarget != null && LibraryAdds.inMyList(context, libraryTarget)
     var libraryPickTarget by remember { mutableStateOf<LibraryAddTarget?>(null) }
 
+    // The title the rating dialog is open for, if any. The dialog is hosted
+    // here rather than at each caller for the same reason the list picker is:
+    // the "Rate this title" row and its dialog cannot be composed apart.
+    var ratingTarget by remember { mutableStateOf<HideTarget?>(null) }
+
     val reminderShowId = libraryTarget
         ?.takeIf { isSeriesType(it.mediaType) }
         ?.let { AirReminderRules.showIdFor(it.imdbId, it.tmdbId) }
@@ -152,7 +158,11 @@ fun PosterContextMenu(
         // [contextMenuSectionRank] drops them into the taste section on both
         // surfaces. Only menus about a title carry them (see the hide target).
         hideTarget?.let { target ->
-            addAll(tasteMenuActions(context, target, feedback, onDismiss))
+            addAll(
+                tasteMenuActions(context, target, feedback, onDismiss) {
+                    ratingTarget = target
+                }
+            )
         }
 
         if (reminderShowId != null) {
@@ -275,6 +285,71 @@ fun PosterContextMenu(
             // are not the same line on a tall menu.
             Spacer(modifier = Modifier.height(12.dp))
         }
+    }
+
+    // The rating dialog behind "Rate this title", hosted here so the row can
+    // never be offered without it. Committing or cancelling closes the dialog
+    // AND the menu: the viewer asked for the dialog, and lands on the screen
+    // behind it rather than back in the menu.
+    ratingTarget?.let { target ->
+        val rating = TasteSignals.ratingFor(
+            context = context,
+            mediaType = target.mediaType,
+            title = target.title,
+            year = target.year,
+            ids = target.ids
+        )
+        val signal = TasteSignals.signalFor(
+            context = context,
+            mediaType = target.mediaType,
+            title = target.title,
+            year = target.year,
+            ids = target.ids
+        )
+        fun close() {
+            ratingTarget = null
+            onDismiss()
+        }
+        TouchTitleRatingDialog(
+            title = target.title,
+            rating = rating,
+            hasSignal = rating != null || signal != null,
+            onPick = { number ->
+                val stored = TasteSignals.setRating(
+                    context = context,
+                    mediaType = target.mediaType,
+                    title = target.title,
+                    posterUrl = target.posterUrl,
+                    year = target.year,
+                    ids = target.ids,
+                    rating = number
+                )
+                close()
+                feedback.show(
+                    text = if (stored) {
+                        "Rated $number/10"
+                    } else {
+                        "Couldn't save your rating"
+                    },
+                    isError = !stored
+                )
+            },
+            onRemove = {
+                val cleared = TasteSignals.clearSignal(
+                    context = context,
+                    mediaType = target.mediaType,
+                    title = target.title,
+                    year = target.year,
+                    ids = target.ids
+                )
+                close()
+                feedback.show(
+                    text = if (cleared) "Rating removed" else "Couldn't save your rating",
+                    isError = !cleared
+                )
+            },
+            onCancel = { close() }
+        )
     }
 
     // The picker behind "Add to list…", hosted here so a menu can never offer

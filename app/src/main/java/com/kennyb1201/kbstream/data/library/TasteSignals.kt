@@ -16,10 +16,12 @@ import kotlinx.serialization.json.Json
  * because neither tracker API this app talks to exposes a rating write
  * (Simkl's service has no rating endpoint, Trakt's has no `sync/ratings` POST,
  * and MDBList is read-only) — so a thumb press never claims a tracker action it
- * did not take. Sync is a separate follow-up as well: the sync payload carries
+ * did not take - and the same holds for the numeric rating, which is local-only
+ * until a submission spec lands (see [submissionValue] for the shape that spec
+ * would use). Sync is a separate follow-up as well: the sync payload carries
  * named blobs only, and inventing a carrier for this one is not part of the
- * taste work. What the thumb buys today is a real signal the recommendation
- * blend consumes (see [Snapshot]) plus a mark the viewer can see.
+ * taste work. What the two surfaces buy today is a real signal the
+ * recommendation blend consumes (see [Snapshot]) plus a mark the viewer can see.
  *
  * Identity follows the hidden-titles rule, because it is the same problem: a
  * title arrives as `tmdb:603` from a TMDB rail and as `tt0133093` from an
@@ -46,10 +48,42 @@ object TasteSignals {
     /** Thumbs down. */
     const val DISLIKE = "DISLIKE"
 
+    /** Neither: a mid-range numeric rating (4-6), or an entry with no signal. */
+    const val NONE = "NONE"
+
+    /** The numeric scale is 1-10, the scale the trackers a submission would write to use. */
+    const val RATING_MIN = 1
+    const val RATING_MAX = 10
+
+    /**
+     * Where a numeric rating stops being neutral and becomes a verdict.
+     *
+     * Pinned in exactly this one place: a rating of [RATING_LIKE_FLOOR] and above
+     * IS a like, a rating of [RATING_DISLIKE_CEIL] and below IS a dislike, and
+     * 4-6 is neither - a genuine mid-range rating that is stored, displayed and
+     * submitted like any other, but steers nothing.
+     */
+    const val RATING_LIKE_FLOOR = 7
+    const val RATING_DISLIKE_CEIL = 3
+
+    /**
+     * [clearAll]'s answer when the stored blob will not parse: NOTHING changed.
+     *
+     * A real return value rather than throwing, because the manager's only
+     * possible reactions are "report what went" and "report the refusal" - and
+     * a cleared-everything answer would be indistinguishable from success.
+     */
+    const val CLEAR_ALL_REFUSED = -1
+
     private const val TAG = "TASTE_SIGNALS"
 
     private const val PREFS_BASE = "kbstream_taste_signals"
-    private const val KEY_ENTRIES = "entries_v1"
+
+    /** The blob this build writes. */
+    private const val KEY_ENTRIES = "entries_v2"
+
+    /** The blob the thumbs-only build wrote; read once, then migrated on write. */
+    private const val KEY_ENTRIES_V1 = "entries_v1"
 
     /** Prefix of a derived name key (never matched alone, see [keysFor]). */
     private const val TITLE_KEY_PREFIX = "title::"
@@ -64,9 +98,12 @@ object TasteSignals {
      *
      * [keys] is every identity spelling (see [keysFor]); [title] and [posterUrl]
      * are carried for diagnostics and for a future manager surface only — v1 has
-     * no list UI and no Settings row. There is no rating field: a 1-10 number
-     * would have no endpoint to submit to and no rule consuming it, and a field
-     * nothing reads is a field that quietly disagrees with the signal beside it.
+ * no list UI and no Settings row. The numeric 1-10 rating lives here too, as a
+ * second field of the same entry and never as a rival opinion: when a number is
+ * present the signal is DERIVED from it (see [deriveSignal]), and a thumb
+ * pressed over a number edits that one entry through the truth table in
+ * [setSignal]. A stored rating always means the viewer picked a number - no
+ * thumb press writes one.
      */
     @Serializable
     data class Entry(
@@ -74,10 +111,57 @@ object TasteSignals {
         val title: String = "",
         val mediaType: String = "",
         val posterUrl: String? = null,
-        /** [LIKE] or [DISLIKE]. */
+        /**
+         * [LIKE], [DISLIKE] or [NONE] - and when [rating] is present it is
+         * DERIVED from it ([deriveSignal]), never independent. There is no
+         * state in which a title holds a thumb and a rating that disagree: the
+         * thumb controls and the rating dialog are two editors of this one
+         * entry, and every writer keeps the invariant.
+         */
         val signal: String = LIKE,
+        /**
+         * The viewer's own 1-10 rating, or null when they never picked a
+         * number. A thumb press never writes one (no "LIKE means 8"): a stored
+         * rating always means the viewer chose it.
+         */
+        val rating: Int? = null,
         val updatedAt: Long = 0L
     )
+
+    /**
+     * The signal a rating implies. The whole of the thumbs/rating link.
+     *
+     * A rating of 4-6 derives [NONE]: it is a real rating, and for every
+     * consumer it behaves exactly like no signal at all - it neither seeds, nor
+     * boosts, nor drops. Nothing else in the app re-derives this.
+     */
+    fun deriveSignal(rating: Int?): String = when {
+        rating == null -> NONE
+        rating >= RATING_LIKE_FLOOR -> LIKE
+        rating <= RATING_DISLIKE_CEIL -> DISLIKE
+        else -> NONE
+    }
+
+    /**
+     * What this entry MEANS, which is what every consumer reads: the rating's
+     * own verdict when there is one, the thumb otherwise.
+     */
+    fun effectiveSignal(entry: Entry): String =
+        if (entry.rating != null) deriveSignal(entry.rating) else entry.signal
+
+    /**
+     * The value a tracker submission would write, when the submission spec
+     * lands: the viewer's own number when they picked one - 4-6 included, it is
+     * a real rating - and the thumb fallback otherwise. Null means there is
+     * nothing to submit. Local-only until then; nothing in the app calls this
+     * against a tracker today.
+     */
+    fun submissionValue(signal: String, rating: Int?): Int? = rating
+        ?: when (signal) {
+            LIKE -> 8
+            DISLIKE -> 2
+            else -> null
+        }
 
     @Serializable
     private data class Store(
@@ -92,9 +176,18 @@ object TasteSignals {
     data class Snapshot(
         val liked: Set<String> = emptySet(),
         val disliked: Set<String> = emptySet(),
-        val likedTitles: List<Entry> = emptyList()
+        val likedTitles: List<Entry> = emptyList(),
+        /**
+         * Both-flavor keys to 1-10 ratings, for the entries that carry one - the
+         * strength the blend's seed order and the affinity profile read. A
+         * title absent here has no numeric rating, however it is signalled.
+         */
+        val ratingsByKey: Map<String, Int> = emptyMap()
     ) {
         val isEmpty: Boolean get() = liked.isEmpty() && disliked.isEmpty()
+
+        /** The rating for one title, asked with the keys a reading surface knows. */
+        fun ratingFor(keys: Set<String>): Int? = keys.firstNotNullOfOrNull { ratingsByKey[it] }
     }
 
     /**
@@ -176,8 +269,85 @@ object TasteSignals {
         ensureLoaded(app)
         val keys = matchKeys(mediaType, ids, title, year)
         if (keys.isEmpty()) return null
-        return matching(read(app), keys, mediaType, title, year)?.signal
+        return matching(read(app), keys, mediaType, title, year)
+            ?.let(::effectiveSignal)
             ?.takeIf { it == LIKE || it == DISLIKE }
+    }
+
+    /**
+     * The numeric rating this title carries, or null when it carries none.
+     *
+     * Asked with the same key rule as [signalFor], so a rating set from a TMDB
+     * rail reads back from an add-on rail's `tt...` copy - the rating is a
+     * property of the title, not of the surface that recorded it.
+     */
+    fun ratingFor(
+        context: Context,
+        mediaType: String?,
+        title: String?,
+        year: Int?,
+        ids: List<String?>
+    ): Int? {
+        val app = context.applicationContext
+        ensureLoaded(app)
+        val keys = matchKeys(mediaType, ids, title, year)
+        if (keys.isEmpty()) return null
+        return matching(read(app), keys, mediaType, title, year)?.rating
+    }
+
+    /**
+     * Records [rating] for one title, as a numeric edit of the SAME entry the
+     * thumbs write.
+     *
+     * Out of range is a refusal, not a clamp: 0, 11 and anything else outside
+     * 1-10 never persist and report failure through the caller's feedback (the
+     * dialog's own rule - a rating is never claimed that did not persist).
+     */
+    @Synchronized
+    fun setRating(
+        context: Context,
+        mediaType: String?,
+        title: String?,
+        posterUrl: String?,
+        year: Int?,
+        ids: List<String?>,
+        rating: Int
+    ): Boolean {
+        if (rating !in RATING_MIN..RATING_MAX) return false
+        val app = context.applicationContext
+        ensureLoaded(app)
+
+        val keys = keysFor(mediaType, ids, title, year)
+        if (keys.isEmpty()) return false
+        val matchOn = matchKeys(mediaType, ids, title, year)
+        val current = readOrNull(app) ?: return false
+        val existing = matching(current, matchOn, mediaType, title, year)
+        val kept = current.filterNot { entry -> entry.keys.any { it in matchOn } }
+        val merged = Entry(
+            keys = (keys + existing?.keys.orEmpty()).distinct(),
+            title = title?.trim()?.takeIf { it.isNotBlank() } ?: existing?.title.orEmpty(),
+            mediaType = HiddenTitles.normalizedType(mediaType),
+            posterUrl = posterUrl?.takeIf { it.isNotBlank() } ?: existing?.posterUrl,
+            signal = deriveSignal(rating),
+            rating = rating,
+            updatedAt = System.currentTimeMillis()
+        )
+        publish(app, Store(kept + merged))
+        TasteProfileStore.markDirty(app)
+        Log.i(TAG, "rating $rating (${merged.signal}): ${merged.title}")
+        // The tracker write rides along, local-first as always: the number the
+        // viewer picked IS the submitted value (4-6 included, it is a real
+        // rating), and the local write is already done whatever happens next.
+        enqueueSubmission(
+            app = app,
+            keys = merged.keys,
+            mediaType = merged.mediaType,
+            title = merged.title,
+            rating = rating,
+            lastRating = null,
+            signal = merged.signal
+        )
+        return true
     }
 
     /**
@@ -212,16 +382,102 @@ object TasteSignals {
         val current = readOrNull(app) ?: return false
         val existing = matching(current, matchOn, mediaType, title, year)
         val kept = current.filterNot { entry -> entry.keys.any { it in matchOn } }
+
+        // A rating and a thumb are one signal (the entry's own truth table).
+        // With a number present the press edits it:
+        //  - pressing the thumb the number already earned clears the whole
+        //    signal, number included (the active-thumb rule, applied to the
+        //    derived state);
+        //  - pressing the other thumb drops the number and sets the thumb, so
+        //    "liked AND rated 2" is not a state this store can hold.
+        val existingRating = existing?.rating
+        if (existingRating != null && existing != null) {
+            if (deriveSignal(existingRating) == signal) {
+                publish(app, Store(kept))
+                TasteProfileStore.markDirty(app)
+                Log.i(TAG, "signal cleared with its rating: ${existing.title}")
+                // A clear is the viewer taking their rating back: the tracker
+                // hears a REMOVE, not a low rating.
+                enqueueSubmission(
+                    app = app,
+                    keys = existing.keys,
+                    mediaType = existing.mediaType,
+                    title = existing.title,
+                    rating = null,
+                    lastRating = existingRating,
+                    signal = effectiveSignal(existing)
+                )
+                return true
+            }
+            val merged = Entry(
+                keys = (keys + existing.keys).distinct(),
+                title = title?.trim()?.takeIf { it.isNotBlank() } ?: existing.title,
+                mediaType = HiddenTitles.normalizedType(mediaType),
+                posterUrl = posterUrl?.takeIf { it.isNotBlank() } ?: existing.posterUrl,
+                signal = signal,
+                rating = null,
+                updatedAt = System.currentTimeMillis()
+            )
+            publish(app, Store(kept + merged))
+            TasteProfileStore.markDirty(app)
+            Log.i(TAG, "signal $signal drops the rating: ${merged.title}")
+            enqueueSubmission(
+                app = app,
+                keys = merged.keys,
+                mediaType = merged.mediaType,
+                title = merged.title,
+                rating = TasteRatingMapping.thumbToRating(signal),
+                lastRating = existingRating,
+                signal = signal
+            )
+            return true
+        }
+
+        // Thumb-only: the v1 rule - the active thumb clears, the other flips.
+        val next = nextSignal(effectiveSignalOrNull(existing), signal)
+        if (next == null) {
+            publish(app, Store(kept))
+            TasteProfileStore.markDirty(app)
+            Log.i(TAG, "signal cleared: ${existing?.title}")
+            existing?.let { cleared ->
+                enqueueSubmission(
+                    app = app,
+                    keys = cleared.keys,
+                    mediaType = cleared.mediaType,
+                    title = cleared.title,
+                    rating = null,
+                    lastRating = cleared.rating,
+                    signal = effectiveSignal(cleared)
+                )
+            }
+            return true
+        }
         val merged = Entry(
             keys = (keys + existing?.keys.orEmpty()).distinct(),
             title = title?.trim()?.takeIf { it.isNotBlank() } ?: existing?.title.orEmpty(),
             mediaType = HiddenTitles.normalizedType(mediaType),
             posterUrl = posterUrl?.takeIf { it.isNotBlank() } ?: existing?.posterUrl,
-            signal = signal,
+            signal = next,
             updatedAt = System.currentTimeMillis()
         )
         publish(app, Store(kept + merged))
+        // The affinity profile is built from these signals, so a press makes it
+        // stale. Marked here rather than detected later: a flip keeps the count
+        // the same, and only the stamp proves it changed.
+        TasteProfileStore.markDirty(app)
         Log.i(TAG, "signal $signal: ${merged.title} (${merged.keys.size} keys)")
+        // Thumb-only: the mapping is the submitted number (LIKE 8 / DISLIKE 2),
+        // and it is applied HERE rather than stored - no thumb press ever writes
+        // a rating into the entry.
+        enqueueSubmission(
+            app = app,
+            keys = merged.keys,
+            mediaType = merged.mediaType,
+            title = merged.title,
+            rating = TasteRatingMapping.thumbToRating(next),
+            lastRating = null,
+            signal = next
+        )
         return true
     }
 
@@ -248,8 +504,113 @@ object TasteSignals {
             entry.keys.any { it in keys } ||
                 matching(listOf(entry), emptySet(), mediaType, title, year) != null
         }
-        if (kept.size != current.size) publish(app, Store(kept))
+        if (kept.size != current.size) {
+            publish(app, Store(kept))
+            TasteProfileStore.markDirty(app)
+            // Whatever was cleared is taken back from the trackers too, with the
+            // entry's own keys so the removal supersedes any pending submit for
+            // this title (see TasteRatingQueueRules.coalesce).
+            current.firstOrNull { entry -> kept.none { it === entry } }?.let { cleared ->
+                enqueueSubmission(
+                    app = app,
+                    keys = cleared.keys,
+                    mediaType = cleared.mediaType,
+                    title = cleared.title,
+                    rating = null,
+                    lastRating = cleared.rating,
+                    signal = effectiveSignal(cleared)
+                )
+            }
+        }
         return true
+    }
+
+    /**
+     * Removes exactly the entry [keys] name - the Rated Titles pane's per-row
+     * press, where the pressed row IS the entry and its published key set is its
+     * identity.
+     *
+     * NO name fallback, deliberately, and that is the whole reason this is not
+     * the five-argument [clearSignal]: a press on one row must never take a
+     * same-named title beside it, and here it cannot - the entry's key set
+     * already carries every spelling it was written under (both id flavors, plus
+     * its derived name key), so an overlap IS this title. The other overload
+     * exists for the surfaces that hold an identity rather than an entry, and
+     * matches permissively on purpose because the viewer explicitly pressed a
+     * thumb there.
+     *
+     * True when the store no longer holds that entry - including the case where
+     * it held none, because the press asked for exactly that. False only when the
+     * stored blob will not parse, so nothing changed.
+     */
+    @Synchronized
+    fun clearSignal(context: Context, keys: List<String>): Boolean {
+        val app = context.applicationContext
+        ensureLoaded(app)
+        val on = keys.filter { key -> key.isNotBlank() }.toSet()
+        if (on.isEmpty()) return false
+        val current = readOrNull(app) ?: return false
+        val removed = current.filter { entry -> entry.keys.any { it in on } }
+        if (removed.isEmpty()) return true
+        publish(app, Store(current.filterNot { entry -> entry.keys.any { it in on } }))
+        TasteProfileStore.markDirty(app)
+        removed.forEach { cleared ->
+            enqueueSubmission(
+                app = app,
+                keys = cleared.keys,
+                mediaType = cleared.mediaType,
+                title = cleared.title,
+                rating = null,
+                lastRating = cleared.rating,
+                signal = effectiveSignal(cleared)
+            )
+        }
+        return true
+    }
+
+    /**
+     * Clears EVERY signal this profile holds, and reports how many rows went.
+     *
+     * The Rated Titles pane's clear-all: one blob write and one version bump,
+     * through the same [publish] path every other write takes, so the manager's
+     * own list and every other taste surface repaint from the same bump.
+     *
+     * ONE PROFILE, ONE DEVICE. Another profile's signals are another file and
+     * are untouched, and nothing here reaches the network directly - each
+     * removed entry is handed to the tracker queue exactly as a single clear is
+     * (see [enqueueSubmission], a no-op while no tracker leg is open).
+     *
+     * A blob this build cannot read is a REFUSAL ([CLEAR_ALL_REFUSED]), never a
+     * reset to empty. This is where it deliberately does NOT copy
+     * [HiddenTitles.unhideAll]: for hiding, resetting an unreadable blob fails
+     * OPEN (nothing stays hidden), but for signals the same reset would silently
+     * delete the viewer's whole taste - and the manager, the one surface built
+     * to show it, would read as "nothing was ever rated".
+     */
+    @Synchronized
+    fun clearAll(context: Context): Int {
+        val app = context.applicationContext
+        ensureLoaded(app)
+        val current = readOrNull(app) ?: return CLEAR_ALL_REFUSED
+        if (current.isEmpty()) return 0
+        publish(app, Store(emptyList()))
+        TasteProfileStore.markDirty(app)
+        // Each removed entry is a clear of its own title, so the trackers are
+        // told the same thing they are told by a per-title clear - with the
+        // entry's OWN keys, so a bulk clear supersedes any pending submit for
+        // each title (TasteRatingQueueRules.coalesce).
+        current.forEach { cleared ->
+            enqueueSubmission(
+                app = app,
+                keys = cleared.keys,
+                mediaType = cleared.mediaType,
+                title = cleared.title,
+                rating = null,
+                lastRating = cleared.rating,
+                signal = effectiveSignal(cleared)
+            )
+        }
+        return current.size
     }
 
     /** The active profile's signals, without Android in the way (the blend's view). */
@@ -257,14 +618,27 @@ object TasteSignals {
         val app = context.applicationContext
         ensureLoaded(app)
         val all = read(app)
+        val ratings = LinkedHashMap<String, Int>()
+        all.forEach { entry ->
+            entry.rating?.let { rating -> entry.keys.forEach { ratings[it] = rating } }
+        }
         return Snapshot(
-            liked = all.filter { it.signal == LIKE }
+            // The EFFECTIVE signal everywhere: a 9-rating is a like and a
+            // 4-rating is nothing, whatever the stored thumb says (and the
+            // writer keeps the stored thumb in step with the number anyway).
+            liked = all.filter { effectiveSignal(it) == LIKE }
                 .flatMapTo(LinkedHashSet()) { it.keys },
-            disliked = all.filter { it.signal == DISLIKE }
+            disliked = all.filter { effectiveSignal(it) == DISLIKE }
                 .flatMapTo(LinkedHashSet()) { it.keys },
-            likedTitles = all.filter { it.signal == LIKE }.sortedByDescending { it.updatedAt }
+            likedTitles = all.filter { effectiveSignal(it) == LIKE }
+                .sortedByDescending { it.updatedAt },
+            ratingsByKey = ratings
         )
     }
+
+    /** The effective signal of an entry, or null when it carries none. */
+    private fun effectiveSignalOrNull(entry: Entry?): String? =
+        entry?.let(::effectiveSignal)?.takeIf { it == LIKE || it == DISLIKE }
 
     /**
      * Publishes the active profile's set. Cheap and idempotent, so any screen may
@@ -286,6 +660,40 @@ object TasteSignals {
      */
     fun nextSignal(current: String?, pressed: String): String? =
         if (current == pressed) null else pressed
+
+    /**
+     * Hands a just-written signal to the tracker-submission queue.
+     *
+     * This store is the ONLY thing that enqueues (see [TasteRatingSubmission]):
+     * no thumbs row, menu, dialog or ViewModel talks to a tracker about taste, so
+     * a surface added later gets submission for free by writing through here, and
+     * the local write has already happened whatever the tracker does next.
+     *
+     * The ENTRY's own key set travels, never the calling surface's: it holds
+     * every spelling the store knows for this title, which is what lets a clear
+     * from an add-on rail supersede a submit from a TMDB rail for the same title
+     * (see TasteRatingQueueRules.coalesce). A blank set is refused by the queue
+     * itself, and the whole call is a no-op while no leg is open.
+     */
+    private fun enqueueSubmission(
+        app: Context,
+        keys: List<String>,
+        mediaType: String?,
+        title: String?,
+        rating: Int?,
+        lastRating: Int?,
+        signal: String
+    ) {
+        TasteRatingSubmission.onSignalWritten(
+            context = app,
+            keys = keys,
+            mediaType = HiddenTitles.normalizedType(mediaType),
+            title = title.orEmpty(),
+            rating = rating,
+            lastRating = lastRating,
+            signal = signal
+        )
+    }
 
     /** The name key a surface STORES: its year, or the `*` form when it had none. */
     private fun nameKey(mediaType: String?, title: String?, year: Int?): String? {
@@ -343,25 +751,52 @@ object TasteSignals {
      * which is a refusal to write rather than an empty set to add to.
      */
     private fun readOrNull(context: Context): List<Entry>? {
-        val raw = prefs(context).getString(KEY_ENTRIES, null) ?: return emptyList()
-        val parsed = runCatching {
-            json.decodeFromString(Store.serializer(), raw).entries
+        val store = prefs(context)
+        val raw = store.getString(KEY_ENTRIES, null)
+        if (raw != null) {
+            val parsed = runCatching {
+                json.decodeFromString(Store.serializer(), raw).entries
+            }.getOrNull()
+            if (parsed == null) {
+                Log.w(
+                    TAG,
+                    "taste blob will not parse; serving the last good copy and refusing to " +
+                        "write over it"
+                )
+                return null
+            }
+            lastGood[cacheKey(context)] = parsed
+            return parsed
+        }
+
+        // Migration from the thumbs-only blob: read once, serve it with no
+        // ratings, and persist v2 lazily on the first successful write (which
+        // removes v1 only after the v2 blob is written). A v1 blob that will
+        // not parse is NOT "migrated" into an empty v2 blob - it refuses, so the
+        // last readable copy survives for a build that can read it.
+        val legacy = store.getString(KEY_ENTRIES_V1, null) ?: return emptyList()
+        val migrated = runCatching {
+            json.decodeFromString(Store.serializer(), legacy).entries
         }.getOrNull()
-        if (parsed == null) {
+        if (migrated == null) {
             Log.w(
                 TAG,
-                "taste blob will not parse; serving the last good copy and refusing to " +
-                    "write over it"
+                "thumbs-only taste blob will not parse; serving the last good copy and " +
+                    "refusing to write over it"
             )
             return null
         }
-        lastGood[cacheKey(context)] = parsed
-        return parsed
+        lastGood[cacheKey(context)] = migrated
+        return migrated
     }
 
     private fun publish(context: Context, store: Store) {
         prefs(context).edit()
             .putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), store))
+            // The migration's second half: the thumbs-only blob goes only after
+            // a readable v2 blob is on disk, so no crash between the two can
+            // leave the store with neither.
+            .remove(KEY_ENTRIES_V1)
             .apply()
         loadedFor = ProfileStorage.prefsName(context, PREFS_BASE)
         _entries.value = store.entries.sortedByDescending { it.updatedAt }
@@ -404,4 +839,41 @@ internal fun TasteSignals.Snapshot.isDisliked(
         year = year
     )
     return keys.any { it in disliked }
+}
+
+/**
+ * Where the viewer's taste puts one title, for the consumers OUTSIDE the blend
+ * - search's merged order and the Library's LIKED sort: liked first, everything
+ * un-signalled in the middle, disliked last.
+ *
+ * Declared as an enum in sort order rather than as a 0/1/2 rank, so a consumer
+ * says what it means ([TastePlacement.LIKED]) instead of carrying magic numbers
+ * around, and `compareBy` / `sortedBy` order a group without a lookup table.
+ */
+enum class TastePlacement { LIKED, NONE, DISLIKED }
+
+/**
+ * The [TastePlacement] of one title, asked with the ID spellings the reading
+ * surface knows - and NOTHING else. No name fallback: a surface holding no id
+ * reads as [TastePlacement.NONE] rather than borrowing another title's signal
+ * off a shared name.
+ *
+ * The spellings are the store's own key rule ([HiddenTitles.keysFor]), which is
+ * NOT the watched-badge rule: a TMDB id is stored typed (`"movie::tmdb:603"`,
+ * because movie 603 and series 603 are different titles) while an add-on's
+ * `"tt0133093"` is stored untyped (`"id::tt0133093"`). Asking with
+ * `type::tt...` would miss every signal recorded from an add-on rail, which is
+ * why the raw id spellings are handed over here and the key rule is applied in
+ * one place instead of at each consumer.
+ */
+fun TasteSignals.Snapshot.placementOf(
+    mediaType: String?,
+    ids: List<String?>
+): TastePlacement {
+    val keys = HiddenTitles.keysFor(mediaType, ids)
+    return when {
+        keys.any { it in liked } -> TastePlacement.LIKED
+        keys.any { it in disliked } -> TastePlacement.DISLIKED
+        else -> TastePlacement.NONE
+    }
 }

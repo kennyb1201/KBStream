@@ -113,6 +113,7 @@ class SettingsScreenMobileContractTest {
             "SettingsPane.INTEGRATIONS ->",
             "SettingsPane.COLLECTIONS ->",
             "SettingsPane.HIDDEN ->",
+            "SettingsPane.RATED ->",
             "SettingsPane.PLAYBACK ->",
             "SettingsPane.VIDEO ->",
             "SettingsPane.LANGUAGE ->",

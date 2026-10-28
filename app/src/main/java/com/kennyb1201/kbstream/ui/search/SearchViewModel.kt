@@ -15,6 +15,9 @@ import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
+import com.kennyb1201.kbstream.data.library.TastePlacement
+import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
@@ -163,6 +166,61 @@ internal data class TmdbDedupIndex(
         ): String = "${type.trim().lowercase()}:${id.trim()}"
     }
 }
+
+/**
+ * How well [name] matches the already-lowercased search query: 100 for an exact
+ * name, 80 for a prefix, 60 for a substring, 0 otherwise.
+ *
+ * Extracted from [SearchViewModel.mergeTitles] so the merged order can be
+ * pinned without the ViewModel (see [searchTitleOrder]).
+ */
+internal fun searchMatchScore(lowerQuery: String, name: String?): Int {
+    val n = name?.trim()?.lowercase().orEmpty()
+    if (n.isEmpty()) return 0
+    return when {
+        n == lowerQuery -> 100
+        n.startsWith(lowerQuery) -> 80
+        n.contains(lowerQuery) -> 60
+        else -> 0
+    }
+}
+
+/**
+ * Where the viewer's taste puts one search hit: liked first, disliked last,
+ * everything else between.
+ *
+ * A search hit is named by its TMDB id ([SearchTitleResult.id] is always
+ * `"tmdb:<n>"`, built in [SearchViewModel.mergeTitles]), so the lookup is
+ * direct - no id resolution, no lookup, and nothing to fetch. An empty snapshot
+ * places every hit at [TastePlacement.NONE], which is what makes the taste-free
+ * order and the pre-taste order identical.
+ */
+internal fun searchTastePlacement(
+    result: SearchTitleResult,
+    taste: TasteSignals.Snapshot
+): TastePlacement = taste.placementOf(result.type, listOf(result.id))
+
+/**
+ * The merged TMDB waves' order: match quality, then newest first, then the
+ * viewer's own taste, then the name.
+ *
+ * Taste sits AFTER the year on purpose, and the position is the whole rule: a
+ * liked hit never jumps a better-matching one (an exact-name match the viewer
+ * disliked is still the first card in its band) and never jumps a newer one in
+ * the same band (year outranks taste, exactly as it did before taste existed).
+ * It breaks equal-band, equal-year ties only, so no cap is needed - the
+ * comparator's position IS the bound. With an empty snapshot every hit is
+ * [TastePlacement.NONE] and this is the pre-taste comparator verbatim.
+ */
+internal fun searchTitleOrder(
+    lowerQuery: String,
+    taste: TasteSignals.Snapshot = TasteSignals.Snapshot()
+): Comparator<SearchTitleResult> = compareByDescending<SearchTitleResult> {
+    searchMatchScore(lowerQuery, it.name)
+}
+    .thenByDescending { it.year ?: 0 }
+    .thenBy { searchTastePlacement(it, taste) }
+    .thenBy { it.name.lowercase() }
 
 class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -765,7 +823,14 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 val mergedTitles = mergeTitles(
                     query = normalized,
                     movies = tmdbMovies,
-                    tv = tmdbTv
+                    tv = tmdbTv,
+                    // The viewer's own signals, read once per search and in
+                    // memory from there on (the store's snapshot is a prefs
+                    // read, no network and no new call): the merged waves
+                    // break equal-band, equal-year ties on it. An empty
+                    // snapshot leaves this order byte-identical to the
+                    // pre-taste one.
+                    taste = TasteSignals.snapshot(app)
                 )
                 _results.value =
                     if (tmdbRepository.kidsMaxAge() == null) {
@@ -1397,27 +1462,21 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /*
      * Merge TMDB movie + series results into one ranked title list, sorted
-     * by match quality, then newest first. Add-on/AI results are published
-     * separately (see launchAddonSearch) so they keep their source label.
+     * by match quality, then newest first, then the viewer's taste (see
+     * [searchTitleOrder]). Add-on/AI results are published separately (see
+     * launchAddonSearch) so they keep their source label - and their catalog
+     * order, deliberately: reordering a catalog rail by taste would defeat the
+     * echo guard's exact-list comparison, which is what keeps an echoing "Top
+     * Ten" rail out of search.
      */
     private fun mergeTitles(
         query: String,
         movies: List<TmdbSearchTitleResult>,
-        tv: List<TmdbSearchTitleResult>
+        tv: List<TmdbSearchTitleResult>,
+        taste: TasteSignals.Snapshot = TasteSignals.Snapshot()
     ): List<SearchTitleResult> {
 
         val lowerQuery = query.trim().lowercase()
-
-        fun matchScore(name: String?): Int {
-            val n = name?.trim()?.lowercase().orEmpty()
-            if (n.isEmpty()) return 0
-            return when {
-                n == lowerQuery -> 100
-                n.startsWith(lowerQuery) -> 80
-                n.contains(lowerQuery) -> 60
-                else -> 0
-            }
-        }
 
         fun tmdbItem(
             result: TmdbSearchTitleResult,
@@ -1465,14 +1524,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        return tmdbItems
-            .sortedWith(
-                compareByDescending<SearchTitleResult> {
-                    matchScore(it.name)
-                }
-                    .thenByDescending { it.year ?: 0 }
-                    .thenBy { it.name.lowercase() }
-            )
+        return tmdbItems.sortedWith(searchTitleOrder(lowerQuery, taste))
     }
 
     // ------------------------------------------------------------------

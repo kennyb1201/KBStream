@@ -2,9 +2,11 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import android.content.ActivityNotFoundException
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -47,7 +49,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +61,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
@@ -69,6 +74,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
@@ -96,6 +102,12 @@ import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.settings.SettingsGroup
 import com.kennyb1201.kbstream.ui.settings.SettingsPane
+import com.kennyb1201.kbstream.ui.settings.RATED_CLEAR_DESCRIPTION
+import com.kennyb1201.kbstream.ui.settings.RATED_EMPTY_TEXT
+import com.kennyb1201.kbstream.ui.settings.RatedFilter
+import com.kennyb1201.kbstream.ui.settings.ratedGlyphRes
+import com.kennyb1201.kbstream.ui.settings.ratedList
+import com.kennyb1201.kbstream.ui.settings.ratedMetaLine
 import com.kennyb1201.kbstream.ui.settings.rememberProfileRowKey
 import com.kennyb1201.kbstream.ui.settings.syncRelativeTime
 import com.kennyb1201.kbstream.ui.theme.CUSTOM_ACCENT_INDEX
@@ -176,7 +188,7 @@ fun SettingsScreenMobile(
 ) {
     val context = LocalContext.current
     // Reopen on the pane last read, exactly as the TV rail does (device-local,
-    // deliberately not synced): eleven panes is a scroll to walk every time, and
+    // deliberately not synced): twelve panes is a scroll to walk every time, and
     // the one being tuned is rarely the first. The name goes through the same
     // SettingsPane.fromStored fallback the TV page uses, so a name written by a
     // build that has since dropped a pane cannot take out the screen a viewer
@@ -251,6 +263,8 @@ fun SettingsScreenMobile(
                         )
 
                         SettingsPane.HIDDEN -> HiddenTitlesPaneMobile()
+
+                        SettingsPane.RATED -> RatedTitlesPaneMobile()
 
                         SettingsPane.PLAYBACK -> PlaybackPaneMobile()
 
@@ -500,13 +514,19 @@ internal fun SettingsToggleMobile(
 private fun SettingsNavRowMobile(
     label: String,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /**
+     * Paints the label as a warning. Defaulted, so every existing call site is
+     * unchanged; the Rated Titles footer arms its clear-all with it (the same
+     * `danger` flag KBButton carries for the Clear Eye Badges confirm).
+     */
+    danger: Boolean = false
 ) {
     KBCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Text(
                 text = label,
-                color = KBTextHi,
+                color = if (danger) KBDanger else KBTextHi,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -1170,6 +1190,174 @@ private fun HiddenTitlesPaneMobile() {
                     description = "Unhide all ${entries.size} of them — hiding them " +
                         "again is one press per title",
                     onClick = { HiddenTitles.unhideAll(context) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The phone's Rated Titles pane: the TV section's list and rules, drawn with the
+ * phone's own rows and chips.
+ *
+ * Same store, same order, same filters, and the same two-tap clear-all with no
+ * dialog - the phone rows are `SettingsNavRowMobile` / `SettingsPillMobile`
+ * (the shapes the rest of this page uses), so the two surfaces differ in widget
+ * and not in behaviour. Rows are built from the store's own fields, so nothing
+ * here resolves an id or makes a request to draw a row.
+ */
+@Composable
+private fun RatedTitlesPaneMobile() {
+    val context = LocalContext.current
+    val entries by TasteSignals.entries.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        TasteSignals.ensureLoaded(context)
+    }
+
+    var filter by remember { mutableStateOf(RatedFilter.ALL) }
+    var armed by remember { mutableStateOf(false) }
+    var clearStatus by remember { mutableStateOf<String?>(null) }
+
+    // The same list rule the TV section uses, from the same helper: newest
+    // first, then the filter.
+    val shown = ratedList(entries, filter)
+
+    LazyColumn(
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        item(key = "count") {
+            Text(
+                text = "${shown.size} rated " + if (shown.size == 1) "title" else "titles",
+                color = KBTextHi,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        // The chips stay up when the filter answers nothing, so an empty
+        // "Liked" reads as "nothing liked yet" rather than as a broken list.
+        item(key = "filters") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RatedFilter.entries.forEach { option ->
+                    SettingsPillMobile(
+                        label = option.label,
+                        selected = filter == option,
+                        onClick = {
+                            // The arm never survives a context change: clearing
+                            // "All" after arming on "Liked" would clear far more
+                            // than the press the viewer aimed at.
+                            filter = option
+                            armed = false
+                        }
+                    )
+                }
+            }
+        }
+
+        if (shown.isEmpty()) {
+            item(key = "empty") {
+                SettingsCaptionMobile(RATED_EMPTY_TEXT)
+            }
+        } else {
+            items(
+                items = shown,
+                key = { entry ->
+                    entry.updatedAt.toString() + "\u0001" + entry.keys.joinToString("\u0001")
+                }
+            ) { entry ->
+                KBCard(
+                    onClick = {
+                        // The row's OWN key set, so the press removes the row it
+                        // was pressed on and never a same-named title beside it.
+                        val removed = TasteSignals.clearSignal(context, entry.keys)
+                        Toast.makeText(
+                            context,
+                            if (removed) "Rating removed" else "Couldn't save your rating",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        // Decorative, and a row with no poster URL paints
+                        // nothing at all rather than an empty box.
+                        if (!entry.posterUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = entry.posterUrl,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .padding(end = 12.dp)
+                                    .size(width = 36.dp, height = 54.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = entry.title.ifBlank { "Untitled" },
+                                color = KBTextHi,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = ratedMetaLine(entry),
+                                color = KBTextLo,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        ratedGlyphRes(entry)?.let { glyph ->
+                            Image(
+                                painter = painterResource(glyph),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .padding(start = 12.dp)
+                                    .size(18.dp)
+                            )
+                        }
+                        Text(
+                            text = "REMOVE",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+                }
+            }
+
+            // Two taps, no dialog: the description has to be readable before the
+            // press that does it (the Clear Eye Badges rule). Unlike unhide-all,
+            // this one destroys something.
+            item(key = "clear-all") {
+                SettingsNavRowMobile(
+                    label = if (armed) "TAP AGAIN TO CONFIRM" else "CLEAR ALL RATINGS",
+                    description = if (armed) {
+                        RATED_CLEAR_DESCRIPTION
+                    } else {
+                        clearStatus?.let { outcome -> "Last run: $outcome" }
+                            ?: RATED_CLEAR_DESCRIPTION
+                    },
+                    danger = armed,
+                    onClick = {
+                        if (armed) {
+                            armed = false
+                            val cleared = TasteSignals.clearAll(context)
+                            clearStatus = when {
+                                cleared == TasteSignals.CLEAR_ALL_REFUSED ->
+                                    "couldn't read the stored ratings - nothing was cleared"
+                                cleared == 0 -> "nothing to clear"
+                                cleared == 1 -> "cleared 1 rating"
+                                else -> "cleared $cleared ratings"
+                            }
+                        } else {
+                            armed = true
+                            clearStatus = null
+                        }
+                    }
                 )
             }
         }

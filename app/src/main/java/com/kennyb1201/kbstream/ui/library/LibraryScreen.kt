@@ -831,7 +831,9 @@ private fun ChipDivider() {
 }
 
 /**
- * One pill in the Library's control strips.
+ * One pill in the Library's control strips, and the Rated Titles pane's filter
+ * row (hence `internal`: the settings surface draws the same chip rather than a
+ * second, drifting copy of it).
  *
  * Built on the TV clickable Surface, NOT a hand-rolled
  * `.focusable().clickable()` box. Two stacked focus/click modifiers make two
@@ -841,7 +843,7 @@ private fun ChipDivider() {
  * single target, so one press selects, like every other control in the app.
  */
 @Composable
-private fun LibraryFilterChip(
+internal fun LibraryFilterChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,

@@ -161,6 +161,33 @@ interface TraktApiService {
         @Body body: TraktSyncHistoryRequest
     ): Response<Unit>
 
+    // -------------------------------------------------------------------
+    // Ratings (the taste signals' outbound half)
+    // -------------------------------------------------------------------
+
+    /**
+     * `POST /sync/ratings` - one title's 1-10 rating, added or overwritten.
+     *
+     * One title per call by design: a thumb press is one title, the guard's
+     * budget is 900 calls per 5 minutes, and batching is a later optimisation
+     * rather than a landing-time ambiguity about which entry failed.
+     */
+    @POST("sync/ratings")
+    suspend fun addRatings(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktRatingsRequest
+    ): Response<TraktRatingsResponse>
+
+    /**
+     * `POST /sync/ratings/remove` - the exact inverse, sent when the viewer
+     * takes their signal back. Trakt matches the entry on its ids.
+     */
+    @POST("sync/ratings/remove")
+    suspend fun removeRatings(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktRatingsRequest
+    ): Response<TraktRatingsResponse>
+
     /** The authenticated account's personal lists. */
     @GET("users/me/lists")
     suspend fun userLists(

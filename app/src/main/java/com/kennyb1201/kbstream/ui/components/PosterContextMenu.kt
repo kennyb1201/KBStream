@@ -169,7 +169,9 @@ internal fun contextMenuSectionRank(action: PosterContextAction): Int = when {
         action.label.startsWith("Remove from Library") ||
         action.label.startsWith("Add to My List") ||
         action.label.startsWith("Remove from My List") -> 2
-    action.label.startsWith("Like") || action.label.startsWith("Dislike") -> 3
+    action.label.startsWith("Like") ||
+        action.label.startsWith("Dislike") ||
+        action.label.startsWith("Rate") -> 3
     action.label.startsWith("Remind") -> 4
     action.label.startsWith("Mark") -> 5
     else -> 6
@@ -252,6 +254,25 @@ fun rememberTasteSignal(
 }
 
 /**
+ * The numeric rating this title carries, repainted on every store change - the
+ * rating twin of [rememberTasteSignal], so a number set from a poster menu shows
+ * on the title's own page without a revisit, and vice versa.
+ */
+@Composable
+fun rememberTasteRating(
+    mediaType: String?,
+    title: String?,
+    year: Int?,
+    ids: List<String?>
+): Int? {
+    val context = LocalContext.current
+    val version by TasteSignals.version.collectAsStateWithLifecycle()
+    return remember(version, mediaType, title, year, ids) {
+        TasteSignals.ratingFor(context, mediaType, title, year, ids)
+    }
+}
+
+/**
  * The taste rows one title's menu carries: "Like this title" / "Liked ✓" and
  * the dislike pair.
  *
@@ -272,9 +293,17 @@ internal fun tasteMenuActions(
     context: android.content.Context,
     target: HideTarget,
     feedback: KBFeedbackState,
-    dismiss: () -> Unit
+    dismiss: () -> Unit,
+    onRate: () -> Unit
 ): List<PosterContextAction> {
     val current = TasteSignals.signalFor(
+        context = context,
+        mediaType = target.mediaType,
+        title = target.title,
+        year = target.year,
+        ids = target.ids
+    )
+    val rating = TasteSignals.ratingFor(
         context = context,
         mediaType = target.mediaType,
         title = target.title,
@@ -332,7 +361,20 @@ internal fun tasteMenuActions(
             } else {
                 "Keep this title out of your recommendations"
             }
-        ) { press(TasteSignals.DISLIKE) }
+        ) { press(TasteSignals.DISLIKE) },
+        // The numeric rating, in the same taste section: the row OPENS the
+        // rating dialog rather than writing, and it does not dismiss the menu -
+        // the dialog takes over the layer and the menu goes when it closes (see
+        // the two menus' own hosting). That is what makes a title rateable from
+        // a rail: no trip through Detail.
+        PosterContextAction(
+            label = if (rating != null) "Rated $rating/10 ✓" else "Rate this title",
+            description = if (rating != null) {
+                "Already rated $rating out of 10 on this profile"
+            } else {
+                "Rate this title from 1 to 10"
+            }
+        ) { onRate() }
     )
 }
 
@@ -564,6 +606,13 @@ fun PosterContextMenu(
         mutableStateOf<LibraryAddTarget?>(null)
     }
 
+    // The title the rating dialog is open for, if any. Hosted here beside the
+    // list picker, for the same reason: the "Rate this title" row and the
+    // dialog it opens must be composed together, once.
+    var ratingTarget by remember {
+        mutableStateOf<HideTarget?>(null)
+    }
+
     // The air reminder row, only for series (a movie has no air date). State is
     // kept here, above the row builder, so the label can flip in place as the
     // row is pressed without recomposing the whole menu through a reload.
@@ -717,7 +766,11 @@ fun PosterContextMenu(
         // no hide target and so offers no thumbs, which is right: a signal is
         // about a title, and those rows are about a file.
         hideTarget?.let { target ->
-            addAll(tasteMenuActions(context, target, feedback, dismiss))
+            addAll(
+                tasteMenuActions(context, target, feedback, dismiss) {
+                    ratingTarget = target
+                }
+            )
         }
 
         if (reminderShowId != null && libraryTarget != null) {
@@ -913,7 +966,7 @@ fun PosterContextMenu(
             // the menu and its scrim step out of the way rather than sitting
             // dimmed behind it. The picker is a dialog window of its own, so
             // nothing composed under here can take a press while it is up.
-            .alpha(if (libraryPickTarget == null) 1f else 0f)
+            .alpha(if (libraryPickTarget == null && ratingTarget == null) 1f else 0f)
             .focusGroup()
             .background(KBVoid.copy(alpha = 0.60f))
             .onPreviewKeyEvent { event ->
@@ -1120,6 +1173,75 @@ fun PosterContextMenu(
                 Spacer(modifier = Modifier.height(KBFocusRowInset))
             }
         }
+    }
+
+    // The rating dialog behind "Rate this title", hosted here so the row can
+    // never be offered without it (the list picker's own single-owner rule).
+    // Committing or cancelling closes the dialog AND the menu: the viewer asked
+    // for the dialog and lands on the screen behind it, not back in the menu.
+    ratingTarget?.let { target ->
+        val rating = TasteSignals.ratingFor(
+            context = context,
+            mediaType = target.mediaType,
+            title = target.title,
+            year = target.year,
+            ids = target.ids
+        )
+        val signal = TasteSignals.signalFor(
+            context = context,
+            mediaType = target.mediaType,
+            title = target.title,
+            year = target.year,
+            ids = target.ids
+        )
+        fun closeRating() {
+            ratingTarget = null
+            dismiss()
+        }
+        TvTitleRatingDialog(
+            title = target.title,
+            rating = rating,
+            hasSignal = rating != null || signal != null,
+            onPick = { number ->
+                val stored = TasteSignals.setRating(
+                    context = context,
+                    mediaType = target.mediaType,
+                    title = target.title,
+                    posterUrl = target.posterUrl,
+                    year = target.year,
+                    ids = target.ids,
+                    rating = number
+                )
+                closeRating()
+                feedback.show(
+                    text = if (stored) {
+                        "Rated $number/10: ${target.title}"
+                    } else {
+                        "Couldn't save your rating"
+                    },
+                    isError = !stored
+                )
+            },
+            onRemove = {
+                val cleared = TasteSignals.clearSignal(
+                    context = context,
+                    mediaType = target.mediaType,
+                    title = target.title,
+                    year = target.year,
+                    ids = target.ids
+                )
+                closeRating()
+                feedback.show(
+                    text = if (cleared) {
+                        "Rating removed: ${target.title}"
+                    } else {
+                        "Couldn't save your rating"
+                    },
+                    isError = !cleared
+                )
+            },
+            onCancel = { closeRating() }
+        )
     }
 
     // The picker behind the row above, hosted here so a menu can never offer

@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
+import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -143,6 +144,13 @@ object Diagnostics {
         // This is how a BotGuard change (which breaks the layer silently by
         // design) becomes visible in one field capture. Never the token itself.
         PoTokenTrace.lines().forEach { report.appendLine(it) }
+        // What the taste signals' outbound half last did: what is queued per
+        // tracker and the last submission failure each leg hit. Silent while
+        // nothing has been queued, nothing has failed and both legs are open,
+        // so a clean report stays as short as it was - and named when a leg is
+        // closed, because "my ratings never reach Simkl" is exactly the report
+        // this line exists to answer (see TasteRatingSubmission.statusLines).
+        TasteRatingSubmission.statusLines(app).forEach { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->

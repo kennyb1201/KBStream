@@ -31,6 +31,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.library.TasteProfileStore
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.tmdb.BlendParams
 import com.kennyb1201.kbstream.data.tmdb.BlendWatchedMode
@@ -1758,6 +1759,13 @@ for ((metaAddon, response, error) in probeResults) {
                     // the same posters a rail higher up.
                     val blendSeed = detail ?: return@onSuccess
                     viewModelScope.launch {
+                        // The profile's affinities for this rail, gathered
+                        // lazily and off the page's critical path (the blend
+                        // runs here precisely because nothing above waits for
+                        // it). Null when this profile has no signals at all.
+                        val profile = runCatchingCancellable {
+                            TasteProfileStore.current(app, tmdbRepository)
+                        }.getOrNull()
                         val blended = runCatchingCancellable {
                             buildRecommendationBlend(
                                 BlendParams(
@@ -1775,7 +1783,11 @@ for ((metaAddon, response, error) in probeResults) {
                                     // back to them on this rail. Local and
                                     // profile-scoped, read here rather than
                                     // pushed in.
-                                    taste = TasteSignals.snapshot(app)
+                                    taste = TasteSignals.snapshot(app),
+                                    // The affinities the signals imply, so this
+                                    // rail leans toward what this profile
+                                    // actually likes beyond the seed itself.
+                                    profile = profile
                                 )
                             )
                         }.getOrNull().orEmpty()

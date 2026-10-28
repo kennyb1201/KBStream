@@ -49,6 +49,7 @@ class SettingsDeepDiveContractTest {
     private companion object {
         const val SCREEN = "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
         const val MOBILE = "com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt"
+        const val SEARCH = "com/kennyb1201/kbstream/ui/settings/SettingsSearch.kt"
         const val PROFILE_KEY = "com/kennyb1201/kbstream/ui/settings/ProfileRowKey.kt"
         const val SYNC = "com/kennyb1201/kbstream/data/sync/SupabaseSync.kt"
         const val UPDATER = "com/kennyb1201/kbstream/data/update/AppUpdater.kt"
@@ -545,5 +546,102 @@ class SettingsDeepDiveContractTest {
                     src.contains("is one press per title")
             )
         }
+    }
+
+    // ── the Rated Titles pane ────────────────────────────────────────
+
+    private fun ratedSection(): String =
+        functionBody(
+            source(SCREEN),
+            "private fun androidx.compose.foundation.layout.ColumnScope.RatedTitlesSection("
+        )
+
+    private fun ratedPaneMobile(): String =
+        functionBody(source(MOBILE), "private fun RatedTitlesPaneMobile()")
+
+    /**
+     * The manager lists the store and deletes from it, on both surfaces, with no
+     * dialog anywhere: one press on a row IS the removal (the state is one thumb
+     * press away from coming back, so a confirm would protect nothing), and the
+     * destructive footer arms on the first tap - the description the viewer reads
+     * BEFORE the press is the one that says what it destroys.
+     */
+    @Test
+    fun `the rated pane lists the store and removes what it lists`() {
+        val tv = ratedSection()
+        listOf(
+            "TasteSignals.entries",
+            "TasteSignals.ensureLoaded(context)",
+            "ratedList(entries, filter)",
+            "TasteSignals.clearSignal(context, entry.keys)",
+            "TasteSignals.clearAll(context)",
+            "LibraryFilterChip(",
+            "RATED_EMPTY_TEXT",
+            "RATED_CLEAR_DESCRIPTION",
+            "TAP AGAIN TO CLEAR ALL RATINGS"
+        ).forEach { needle ->
+            assertTrue("the TV pane lost $needle", tv.contains(needle))
+        }
+        assertFalse(
+            "no dialog: the row press IS the removal",
+            tv.contains("AlertDialog") || tv.contains("TitleRatingDialog")
+        )
+
+        val phone = ratedPaneMobile()
+        listOf(
+            "TasteSignals.entries",
+            "TasteSignals.ensureLoaded(context)",
+            "ratedList(entries, filter)",
+            "SettingsPillMobile(",
+            "SettingsNavRowMobile(",
+            "TasteSignals.clearSignal(context, entry.keys)",
+            "TasteSignals.clearAll(context)",
+            "TAP AGAIN TO CONFIRM",
+            "danger = armed"
+        ).forEach { needle ->
+            assertTrue("the phone pane lost $needle", phone.contains(needle))
+        }
+        assertFalse(
+            "no dialog on the phone either",
+            phone.contains("AlertDialog") || phone.contains("TitleRatingDialog")
+        )
+    }
+
+    /**
+     * Rows come from the store's own fields: no id is resolved and no request is
+     * made to draw one. A rated title whose add-on is gone, or whose poster host
+     * is down, still LISTS - and a row with no poster URL paints nothing at all
+     * rather than an empty box.
+     */
+    @Test
+    fun `a rated row draws no artwork it does not have`() {
+        listOf(ratedSection() to "TV", ratedPaneMobile() to "phone").forEach { (body, name) ->
+            assertTrue(
+                "$name: the poster has to be guarded, or a title with no art draws a box",
+                body.contains("!entry.posterUrl.isNullOrBlank()")
+            )
+            assertTrue(
+                "$name: the row's own line and glyph come from the entry",
+                body.contains("ratedMetaLine(entry)") && body.contains("ratedGlyphRes(entry)")
+            )
+            assertFalse(
+                "$name: and it never draws an outline thumb - a listed signal is active",
+                body.contains("ic_detail_thumb_up_outline") ||
+                    body.contains("ic_detail_thumb_down_outline")
+            )
+        }
+    }
+
+    /**
+     * A list pane is not a row. Hidden Titles has no entry in the index, and this
+     * pane has none either: a search result that can only land on a pane (or, at
+     * best, jump nowhere) is worse than no result.
+     */
+    @Test
+    fun `the list pane is not in the settings search index`() {
+        assertFalse(
+            "a list pane cannot be a search row - do not add one for Rated Titles",
+            source(SEARCH).contains("Rated Titles")
+        )
     }
 }

@@ -160,6 +160,30 @@ interface SimklApiService {
         @Body body: SimklAddToListRequest
     ): Response<SimklAddToListResponse>
 
+    /*
+     * Ratings (the taste signals' outbound half): POST /sync/ratings adds or
+     * overwrites one title's 1-10 rating, POST /sync/ratings/remove takes it
+     * back. One title per call, same as Trakt's leg - a thumb press is one
+     * title and batching is a later optimisation.
+     *
+     * The response is parsed rather than merely status-checked: Simkl's sync
+     * endpoints answer 2xx even for an item its resolver could not match, so
+     * the body is the only thing that tells a save from a miss (the same
+     * reason SimklAddToListResponse is parsed). The bucket key names are what
+     * the landing probe confirms.
+     */
+    @POST("sync/ratings")
+    suspend fun addRatings(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklRatingsRequest
+    ): Response<SimklRatingsResponse>
+
+    @POST("sync/ratings/remove")
+    suspend fun removeRatings(
+        @Header("Authorization") authorization: String,
+        @Body body: SimklRatingsRequest
+    ): Response<SimklRatingsResponse>
+
     @POST("scrobble/start")
     suspend fun scrobbleStart(
         @Header("Authorization") authorization: String,

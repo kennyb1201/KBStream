@@ -195,6 +195,19 @@ internal data class BlendParams(
      */
     val taste: TasteSignals.Snapshot = TasteSignals.Snapshot(),
     /**
+     * The profile's affinity snapshot, when the caller has one.
+     *
+     * Default-null, so a build that knows nothing about affinities ranks exactly
+     * as it did before the profile existed - and a profile with no explicit
+     * signal is [TasteProfile.EMPTY], which the bonus treats the same way
+     * (byte-identical picks, order and reasons). Where it does have entries its
+     * one effect is [affinityBonus]: a bounded bonus per candidate, applied to
+     * the score that ranks and before the per-tier cap selects. The snapshot's
+     * seed leave-out belongs to the BUILDER, not the caller, so no surface can
+     * forget it (see the note in [buildRecommendationBlend]).
+     */
+    val profile: TasteProfile? = null,
+    /**
      * The certification lookup the kids gate injects, so this file stays free
      * of Android and of the repository's caching policy.
      */
@@ -300,6 +313,27 @@ internal fun BlendCandidate.strongestTier(): BlendTier? =
     tiers.maxByOrNull { it.weight }
 
 /**
+ * The blend's score PLUS whatever the taste profile is worth to this candidate -
+ * the number that actually ranks, and the number [BlendCandidate.score] carries
+ * once a build has set it.
+ *
+ * A null [affinity] is the pre-profile build, unchanged. The floor at zero is
+ * the profile's own rule: a negative affinity is a demotion, never a veto, so a
+ * candidate the profile leans away from sinks in the row and is never dropped
+ * by it (the only vetoes remain the watched drop, the disliked-title drop, the
+ * hidden drop and the kids ceiling).
+ */
+internal fun blendTotalScore(
+    candidate: BlendCandidate,
+    seedGenreIds: Set<Int>,
+    affinity: ((BlendCandidate) -> Int)? = null
+): Int {
+    val base = blendScore(candidate, seedGenreIds)
+    if (affinity == null) return base
+    return (base + affinity(candidate)).coerceAtLeast(0)
+}
+
+/**
  * Highest score first; ties go to the candidate whose strongest tier is
  * earlier, then to source order (first seen wins).
  *
@@ -307,12 +341,19 @@ internal fun BlendCandidate.strongestTier(): BlendTier? =
  * equal scores keep the "next entry first" order without a special case - and
  * an additive bonus may legitimately move a later entry ahead when it really
  * does share more signals with the seed.
+ *
+ * [affinity] is the profile bonus (see [blendTotalScore]). It ranks, and that
+ * is all it does here: the tier a candidate belongs to is untouched, so the
+ * per-tier cap in [blendSelect] still cuts the row exactly as before - the
+ * profile reorders candidates within the cap rather than breaking it. The
+ * bonus is applied before that cut, because the cap walks the ranked list.
  */
 internal fun blendRank(
     candidates: List<BlendCandidate>,
-    seedGenreIds: Set<Int>
+    seedGenreIds: Set<Int>,
+    affinity: ((BlendCandidate) -> Int)? = null
 ): List<BlendCandidate> = candidates.sortedWith(
-    compareByDescending<BlendCandidate> { blendScore(it, seedGenreIds) }
+    compareByDescending<BlendCandidate> { blendTotalScore(it, seedGenreIds, affinity) }
         .thenByDescending { it.strongestTier()?.weight ?: 0 }
         .thenBy { it.order }
 )
@@ -712,6 +753,17 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
         emptySet()
     }
 
+    // The profile as THIS build sees it: the seed's own evidence is left out
+    // before anything is scored, which is the builder's job rather than the
+    // caller's so no surface can forget it. A seed is a TMDB detail, so the
+    // leave-out is an equality check on the canonical evidence key.
+    val profile = params.profile?.withoutEvidence(
+        setOf(affinityEvidenceKey(mediaType, detail.id))
+    )
+    val affinity: ((BlendCandidate) -> Int)? = profile?.let { snapshot ->
+        { candidate: BlendCandidate -> affinityBonus(candidate, snapshot) }
+    }
+
     val taste = params.taste
     val scored = candidates.values
         .filter { candidate ->
@@ -738,10 +790,12 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
                 imdbId = candidate.pick.imdbId
             )
         }
-        .map { it.copy(score = blendScore(it, seedGenreIds)) }
+        // The score that ranks: the tiers plus the profile's own bonus, floored
+        // at zero. A candidate whose strongest tier is full stays cap-limited
+        // exactly as before - the bonus is not tier membership.
+        .map { it.copy(score = blendTotalScore(it, seedGenreIds, affinity)) }
 
-    val ranked = blendRank(scored, seedGenreIds)
-
+    val ranked = blendRank(scored, seedGenreIds, affinity)
     // What this profile has already watched, in the two shapes the app stores
     // it in: the local history rows (which name whatever flavor started
     // playback) and the merged tracker/menu state the rest of the app badges

@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.library.TasteProfileStore
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -44,6 +45,7 @@ import com.kennyb1201.kbstream.data.tmdb.BlendParams
 import com.kennyb1201.kbstream.data.tmdb.BlendPick
 import com.kennyb1201.kbstream.data.tmdb.BlendWatchedMode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TasteProfile
 import com.kennyb1201.kbstream.data.tmdb.buildRecommendationBlend
 import com.kennyb1201.kbstream.data.tmdb.mergeTopPicksSeeds
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
@@ -651,13 +653,18 @@ class HomeViewModel(
 
         val taste = runCatchingCancellable { TasteSignals.snapshot(app) }
             .getOrDefault(TasteSignals.Snapshot())
+        // The profile's affinities, gathered ONCE for the whole row: every seed's
+        // blend gets the same snapshot and leaves its own evidence out itself
+        // (see the blend's leave-the-seeds-out rule). Null/empty changes nothing.
+        val profile = runCatchingCancellable { TasteProfileStore.current(app, repo) }
+            .getOrNull()
         val seeds = pickTopPicksSeeds(rows, taste, repo)
         if (seeds.isEmpty()) return emptyList()
 
         val perSeed = coroutineScope {
             seeds.map { seed ->
                 async(Dispatchers.IO) {
-                    runCatchingCancellable { picksForSeed(app, seed, repo, taste) }
+                    runCatchingCancellable { picksForSeed(app, seed, repo, taste, profile) }
                         .getOrDefault(emptyList())
                 }
             }.awaitAll()
@@ -726,11 +733,16 @@ class HomeViewModel(
                 mediaType = mediaType,
                 name = row.name,
                 completedAt = row.completedAt ?: 0L,
-                likedAt = likedAt(taste, mediaType, row.name, tmdbId, imdbId)
+                likedAt = likedAt(taste, mediaType, row.name, tmdbId, imdbId),
+                rating = ratingAt(taste, mediaType, row.name, tmdbId, imdbId)
             )
         }
         return chosen.sortedWith(
             compareByDescending<TopPicksSeed> { it.likedAt > 0L }
+                // Among the liked seeds, the STRENGTH of the verdict decides:
+                // a hand-picked 10 leads, a thumb-only like sits where an 8
+                // would, and like recency breaks the ties that remain.
+                .thenByDescending { it.strength }
                 .thenByDescending { it.likedAt }
                 .thenByDescending { it.completedAt }
         )
@@ -741,7 +753,8 @@ class HomeViewModel(
         app: Application,
         seed: TopPicksSeed,
         repo: TmdbRepository,
-        taste: TasteSignals.Snapshot
+        taste: TasteSignals.Snapshot,
+        profile: TasteProfile?
     ): List<BlendPick> {
         val detail = repo.getDetailByTmdbId(seed.tmdbId, seed.mediaType) ?: return emptyList()
         return buildRecommendationBlend(
@@ -760,7 +773,8 @@ class HomeViewModel(
                 // in the row (badged), because they are still watching it.
                 watchedMode = BlendWatchedMode.DROP_COMPLETED,
                 dropHidden = true,
-                taste = taste
+                taste = taste,
+                profile = profile
             )
         )
     }
@@ -790,6 +804,30 @@ class HomeViewModel(
      * When this seed was LIKED, or 0 when it carries no like - the seed order's
      * first key (see [pickTopPicksSeeds]).
      */
+    /**
+     * The numeric rating this title carries, or null - the seed order's own
+     * strength key. A rating of 4-6 is not a liked seed at all (its derived
+     * signal is NONE), so it is the thumbs' liked set that decides membership
+     * and this only ranks within it.
+     */
+    private fun ratingAt(
+        taste: TasteSignals.Snapshot,
+        mediaType: String,
+        title: String?,
+        tmdbId: Int,
+        imdbId: String?
+    ): Int? {
+        if (taste.ratingsByKey.isEmpty()) return null
+        val keys = TasteSignals.matchKeys(
+            mediaType = mediaType,
+            ids = listOfNotNull("tmdb:$tmdbId", imdbId),
+            title = title,
+            year = null
+        )
+        if (keys.isEmpty()) return null
+        return taste.ratingFor(keys)
+    }
+
     private fun likedAt(
         taste: TasteSignals.Snapshot,
         mediaType: String,
@@ -815,8 +853,28 @@ class HomeViewModel(
         val mediaType: String,
         val name: String,
         val completedAt: Long,
-        val likedAt: Long
-    )
+        val likedAt: Long,
+        /** The profile's 1-10 rating, when it picked a number rather than a thumb. */
+        val rating: Int? = null
+    ) {
+        /**
+         * The ordering strength of a liked seed: the number when there is one,
+         * and 8 - the middle of the liked band - for a thumb-only like.
+         *
+         * 8 is used HERE and nowhere else: the thumb never writes a rating, so
+         * this is an ordering question ("is a hand-picked 10 a stronger pull
+         * than a thumb?"), not a stored default.
+         *
+         * Rating strength lands as SEED ORDER, which is the shape this row has:
+         * the seeds' blends are merged round-robin ([mergeTopPicksSeeds]), so a
+         * 10-rated seed's neighbourhood opens the rail ahead of a 7's and ahead
+         * of a thumb-only like's. There is no per-additional-liked-seed score
+         * bonus here to scale - the row interleaves its seeds, it does not score
+         * merged candidates - so the number steers by position, and the drop for
+         * a disliked title (1-3) stays the store's binary veto.
+         */
+        val strength: Int get() = rating ?: 8
+    }
 
     private val _isLoading =
         MutableStateFlow(true)

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.settings
 
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -59,12 +60,32 @@ class SettingsPaneTest {
     fun `the rail reads top to bottom the way it is declared`() {
         assertEquals(
             listOf(
-                "INTEGRATIONS", "COLLECTIONS", "HIDDEN",
+                "INTEGRATIONS", "COLLECTIONS", "HIDDEN", "RATED",
                 "PLAYBACK", "VIDEO", "LANGUAGE", "SUBTITLES",
                 "INTERFACE", "DATA", "SYNC", "ABOUT"
             ),
             SettingsPane.entries.map { it.name }
         )
+    }
+
+    /**
+     * The two per-profile title lists sit beside each other, in the LIBRARY
+     * group, in this order.
+     *
+     * Pinned by VALUE and not only by name, because the rail itself is drawn
+     * from the enum: a label or blurb edited here reaches the rail, the phone's
+     * list and the pane header at once, and the manager's own contract test
+     * knows this pane by the label pinned here.
+     */
+    @Test
+    fun `the rated titles pane is declared right after hidden titles`() {
+        assertEquals(
+            SettingsPane.HIDDEN,
+            SettingsPane.entries[SettingsPane.entries.indexOf(SettingsPane.RATED) - 1]
+        )
+        assertEquals(SettingsGroup.LIBRARY, SettingsPane.RATED.group)
+        assertEquals("Rated Titles", SettingsPane.RATED.label)
+        assertEquals("Titles you liked or disliked", SettingsPane.RATED.blurb)
     }
 
     @Test
@@ -108,5 +129,78 @@ class SettingsPaneTest {
         // Whitespace survives a SharedPreferences round-trip awkwardly; it must
         // not turn a valid name into a fallback.
         assertEquals(SettingsPane.ABOUT, SettingsPane.fromStored("  ABOUT  "))
+    }
+
+    // -- the Rated Titles pane's list rule -----------------------------------
+
+    private fun entry(
+        title: String,
+        signal: String,
+        updatedAt: Long,
+        rating: Int? = null
+    ) = TasteSignals.Entry(
+        keys = listOf("movie::tmdb:1"),
+        title = title,
+        mediaType = "movie",
+        signal = signal,
+        rating = rating,
+        updatedAt = updatedAt
+    )
+
+    /**
+     * The order and the groups, both pure: the store's list is sorted HERE (one
+     * sort, in the one place both surfaces read), and the chips keep the group
+     * each names. Newest means the last signal write, which is what puts a
+     * just-flipped title at the top of the manager.
+     */
+    @Test
+    fun `the rated list is newest first, and each filter keeps its own group`() {
+        val entries = listOf(
+            entry("old like", TasteSignals.LIKE, 10L),
+            entry("new dislike", TasteSignals.DISLIKE, 30L),
+            entry("middle like", TasteSignals.LIKE, 20L)
+        )
+
+        assertEquals(
+            listOf("new dislike", "middle like", "old like"),
+            ratedList(entries, RatedFilter.ALL).map { it.title }
+        )
+        assertEquals(
+            listOf("middle like", "old like"),
+            ratedList(entries, RatedFilter.LIKED).map { it.title }
+        )
+        assertEquals(
+            listOf("new dislike"),
+            ratedList(entries, RatedFilter.DISLIKED).map { it.title }
+        )
+    }
+
+    /**
+     * A number IS a verdict: 7-10 is a like and 1-3 is a dislike, whatever thumb
+     * was pressed before the number was picked. The filter asks the store's
+     * effective signal, so the manager agrees with the detail page, the poster
+     * menus and the blend about the same entry.
+     */
+    @Test
+    fun `the filter reads a numeric rating as the verdict it means`() {
+        val entries = listOf(
+            entry("nine", TasteSignals.NONE, 1L, rating = 9),
+            entry("two", TasteSignals.NONE, 2L, rating = 2),
+            entry("five", TasteSignals.NONE, 3L, rating = 5)
+        )
+
+        assertEquals(
+            listOf("nine"),
+            ratedList(entries, RatedFilter.LIKED).map { it.title }
+        )
+        assertEquals(
+            listOf("two"),
+            ratedList(entries, RatedFilter.DISLIKED).map { it.title }
+        )
+        assertEquals(
+            "a mid-range rating is rated, and belongs to neither verdict group",
+            listOf("five", "two", "nine"),
+            ratedList(entries, RatedFilter.ALL).map { it.title }
+        )
     }
 }

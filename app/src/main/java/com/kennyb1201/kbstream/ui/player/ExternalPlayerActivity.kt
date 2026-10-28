@@ -1306,7 +1306,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         // session simply ends, where the old code raised a panel and took it
         // straight back down.
         lifecycleScope.launch {
-            val picks: List<BywPick> = withContext(Dispatchers.IO) {
+            val plan: BywPanelPlan = withContext(Dispatchers.IO) {
                 val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
                 // The panel used to vanish without a trace in this case (an
                 // addon-only title TMDB cannot map). Say so, so a missing row
@@ -1316,19 +1316,30 @@ class ExternalPlayerActivity : ComponentActivity() {
                         TAG,
                         "byw: no TMDB id for parent=$parentId type=$parentType - no row"
                     )
+                    return@withContext BywPanelPlan(null, emptyList())
                 }
-                tmdb
-                    ?: return@withContext emptyList()
-                buildBecauseYouWatchedPicks(
-                    this@ExternalPlayerActivity,
-                    tmdb,
-                    bywMediaType(parentType),
-                    // The profile's own ceiling (null on an ordinary profile):
-                    // a kids profile's credits row is held to it, exactly like
-                    // every rail behind the player.
-                    activeKidsMaxAge()
+                BywPanelPlan(
+                    // The finished title's identity, resolved with the picks: the
+                    // panel's thumbs write for it, and its IMDB flavor is the one
+                    // lookup this adds (bounded - see finishedTitleFor).
+                    finished = finishedTitleFor(
+                        this@ExternalPlayerActivity,
+                        tmdb,
+                        bywMediaType(parentType),
+                        itemName
+                    ),
+                    picks = buildBecauseYouWatchedPicks(
+                        this@ExternalPlayerActivity,
+                        tmdb,
+                        bywMediaType(parentType),
+                        // The profile's own ceiling (null on an ordinary profile):
+                        // a kids profile's credits row is held to it, exactly like
+                        // every rail behind the player.
+                        activeKidsMaxAge()
+                    )
                 )
             }
+            val picks = plan.picks
 
             if (picks.isEmpty() || bywDismissed) {
                 withContext(Dispatchers.Main) { finish() }
@@ -1360,7 +1371,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                         "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
                     )
                 }
-                ui.show(itemName)
+                ui.show(itemName, plan.finished)
                 scrim?.visibility = View.VISIBLE
                 // Built in the same turn as the raise, so the panel is never on
                 // screen without its row; focus lands on the first pick.

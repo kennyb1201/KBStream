@@ -199,6 +199,85 @@ data class TraktWatchedMovie(
 )
 
 /**
+ * Body of `POST /sync/ratings` and `/sync/ratings/remove`.
+ *
+ * One entry per title, typed by the bucket it sits in - Trakt has no
+ * all-types write here, so the caller puts the entry under `movies` or
+ * `shows` and leaves the other null. `seasons`/`episodes` buckets exist on
+ * Trakt's side and are deliberately NOT modelled: this app's signal is
+ * show-level only, and per-episode ratings are a separate commission.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktRatingsRequest(
+    @Json(name = "movies") val movies: List<TraktRatingEntry>? = null,
+    @Json(name = "shows") val shows: List<TraktRatingEntry>? = null
+)
+
+/**
+ * One rated title.
+ *
+ * [rating] is the same integer 1-10 scale the local store uses, which is why
+ * one mapping serves both trackers (see the taste mapping). [ratedAt] is the
+ * signal's own timestamp, ISO-8601 UTC; null is allowed and means "now" to
+ * Trakt. On a REMOVE the entry still carries a rating because the request
+ * shape is shared and Trakt matches on [ids] alone - the value is never read
+ * as an opinion (see the ratings impl).
+ */
+@JsonClass(generateAdapter = true)
+data class TraktRatingEntry(
+    @Json(name = "rating") val rating: Int,
+    @Json(name = "rated_at") val ratedAt: String? = null,
+    @Json(name = "ids") val ids: TraktIds
+)
+
+/**
+ * The answer to a ratings write.
+ *
+ * Trakt answers these sync endpoints with per-type COUNTS rather than an echo
+ * of the items, one bucket per outcome. `added` is a fresh rating, `updated` an
+ * overwrite of one that already existed, `deleted` a successful remove, and
+ * `not_found` the entries its resolver could not match. A remove answers
+ * `deleted`; a first rating answers `added`; rating the same title twice
+ * answers `updated`. All four are read, so the success rule does not depend on
+ * which one this particular write produced (see [landed]) - the exact key
+ * names are what the landing probe confirms.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktRatingsResponse(
+    @Json(name = "added") val added: TraktRatingCounts? = null,
+    @Json(name = "updated") val updated: TraktRatingCounts? = null,
+    @Json(name = "deleted") val deleted: TraktRatingCounts? = null,
+    @Json(name = "not_found") val notFound: TraktRatingCounts? = null
+) {
+
+    /** True when any landing bucket counted the title. */
+    val anyLanded: Boolean
+        get() = added?.hasAny == true || updated?.hasAny == true || deleted?.hasAny == true
+
+    /** True when the server held the title in its not-found bucket. */
+    val anyNotFound: Boolean get() = notFound?.hasAny == true
+
+    /**
+     * The tree's own rule for these 2xx-even-when-unmatched endpoints
+     * (`SimklAddToListResponse.landed` is the same shape): true unless the
+     * server POSITIVELY said it could not match the item. An empty or
+     * unreadable body is taken at its word - the 2xx already said so.
+     */
+    val landed: Boolean get() = anyLanded || !anyNotFound
+}
+
+/** Per-type counts in one ratings-response bucket. */
+@JsonClass(generateAdapter = true)
+data class TraktRatingCounts(
+    @Json(name = "movies") val movies: Int = 0,
+    @Json(name = "shows") val shows: Int = 0,
+    @Json(name = "seasons") val seasons: Int = 0,
+    @Json(name = "episodes") val episodes: Int = 0
+) {
+    val hasAny: Boolean get() = movies > 0 || shows > 0 || seasons > 0 || episodes > 0
+}
+
+/**
  * One row of `GET /sync/playback/{movies,episodes}`.
  *
  * [progress] is a percentage of the runtime, not a millisecond position -

@@ -387,6 +387,68 @@ data class SimklHistoryShow(
 )
 
 /*
+ * POST /sync/ratings request (and /sync/ratings/remove, which shares the
+ * shape): per-type arrays of id-bearing entries, each carrying the 1-10
+ * rating. Show-level only - the anime bucket and every episode/season
+ * bucket are deliberately absent, because the local signal is a show-level
+ * thumb (per-episode thumbs are a separate commission).
+ *
+ * On a REMOVE the entry still carries a rating: the request shape is shared
+ * and Simkl matches the entry on its ids, so the value is presence only and
+ * is never read as an opinion (see the ratings impl).
+ */
+@JsonClass(generateAdapter = true)
+data class SimklRatingsRequest(
+    @Json(name = "movies") val movies: List<SimklRatingEntry> = emptyList(),
+    @Json(name = "shows") val shows: List<SimklRatingEntry> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SimklRatingEntry(
+    @Json(name = "ids") val ids: SimklPlaybackIdsRef,
+    @Json(name = "rating") val rating: Int,
+    @Json(name = "rated_at") val ratedAt: String? = null
+)
+
+/*
+ * POST /sync/ratings response. Same discipline as SimklAddToListResponse:
+ * the server answers 201/200 even when it could not match the item, with
+ * `added` holding what its resolver took and `not_found` holding what it did
+ * not, so the body - not the status code - decides success.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklRatingsResponse(
+    @Json(name = "added") val added: SimklRatingBuckets? = null,
+    @Json(name = "not_found") val notFound: SimklRatingBuckets? = null
+) {
+    /**
+     * True unless the server positively said it could not match the item.
+     * An unparsed or empty body is taken at its word: the 2xx already said so.
+     */
+    val landed: Boolean
+        get() {
+            val addedAny = added?.hasAny == true
+            val notFoundAny = notFound?.hasAny == true
+            return addedAny || !notFoundAny
+        }
+}
+
+@JsonClass(generateAdapter = true)
+data class SimklRatingBuckets(
+    @Json(name = "movies") val movies: List<SimklRatingBucketItem> = emptyList(),
+    @Json(name = "shows") val shows: List<SimklRatingBucketItem> = emptyList()
+) {
+    val hasAny: Boolean get() = movies.isNotEmpty() || shows.isNotEmpty()
+}
+
+/** One entry of a ratings `added`/`not_found` bucket; only its presence matters. */
+@JsonClass(generateAdapter = true)
+data class SimklRatingBucketItem(
+    @Json(name = "rating") val rating: Int? = null,
+    @Json(name = "type") val type: String? = null
+)
+
+/*
  * Live scrobble payloads for POST /scrobble/start|pause|stop.
  * progress is a float 0-100 (Simkl extrapolates between events).
  * Sending every identifier we have (imdb + tmdb + title) maximizes

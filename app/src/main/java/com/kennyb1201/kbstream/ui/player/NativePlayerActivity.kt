@@ -12140,18 +12140,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // credits simply keep playing full screen - so the panel can never be
         // seen as an empty box.
         scope?.launch {
-            val picks: List<BywPick> = withContext(Dispatchers.IO) {
-                val tmdbId = resolveParentTmdbId() ?: return@withContext emptyList()
-                buildBecauseYouWatchedPicks(
-                    this@NativePlayerActivity,
-                    tmdbId,
-                    bywMediaType(parentType),
-                    // The profile's own ceiling (null on an ordinary profile):
-                    // a kids profile's credits row is held to it, exactly like
-                    // every rail behind the player.
-                    activeKidsMaxAge()
+            val plan: BywPanelPlan = withContext(Dispatchers.IO) {
+                val tmdbId = resolveParentTmdbId()
+                    ?: return@withContext BywPanelPlan(null, emptyList())
+                BywPanelPlan(
+                    // The finished title's identity, resolved with the picks: the
+                    // panel's thumbs write for it, and its IMDB flavor is the one
+                    // lookup this adds (bounded, so a slow TMDB cannot delay the
+                    // raise - see finishedTitleFor).
+                    finished = finishedTitleFor(
+                        this@NativePlayerActivity,
+                        tmdbId,
+                        bywMediaType(parentType),
+                        itemName
+                    ),
+                    picks = buildBecauseYouWatchedPicks(
+                        this@NativePlayerActivity,
+                        tmdbId,
+                        bywMediaType(parentType),
+                        // The profile's own ceiling (null on an ordinary profile):
+                        // a kids profile's credits row is held to it, exactly like
+                        // every rail behind the player.
+                        activeKidsMaxAge()
+                    )
                 )
             }
+            val picks = plan.picks
 
             // This session's own scope is not lifecycle-bound (it owns the clock
             // and the IntroDB read too), so a fetch that lands after the viewer
@@ -12186,7 +12200,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
                     )
                 }
-                bywUi.show(itemName)
+                bywUi.show(itemName, plan.finished)
                 // Credits are rolling: shrink the video into the corner so the
                 // picks own the screen while the credits keep playing.
                 enterCreditsMode()

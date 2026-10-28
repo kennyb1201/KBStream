@@ -474,16 +474,21 @@ class DetailAuditContractTest {
     /**
      * Nothing else grows a thumb. Every rail reaches the signal through the
      * poster menu's rows, not through a glyph on the card - the watched
-     * checkmark/eye badge family owns card corners - so the only sources that
-     * may name these drawables are the two Detail screens.
+     * checkmark/eye badge family owns card corners - so the only sources that may
+     * name these drawables are the two Detail screens plus the ONE surface a later
+     * spec put a pair on: the Because-You-Watched end-credits header, whose thumbs
+     * are for the just-finished title (the BYW thumbs spec, which supersedes the
+     * taste spec's BYW exclusion for that surface only). Its pick cards, like
+     * every other card in the app, still carry none.
      */
     @Test
-    fun `the thumbs exist only in the two Detail action rows`() {
+    fun `the thumbs exist only in the two Detail action rows and the BYW header`() {
         assertEquals(
-            "a thumb anywhere else is a surface the spec did not put one on",
+            "a thumb anywhere else is a surface no spec put one on",
             listOf(
                 "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
-                "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt"
+                "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt",
+                "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt"
             ),
             productionSources()
                 .filter { (_, text) -> text.contains("ic_detail_thumb") }
@@ -493,21 +498,18 @@ class DetailAuditContractTest {
     }
 
     /**
-     * v1 is local, and that is a property of the code, not a promise: neither
-     * tracker API this app talks to has a rating write, the sync payload has no
-     * carrier for the signals, and there is no preference gating them. Any of the
-     * three appearing means the feature grew an endpoint, a carrier or a switch
-     * nobody asked for.
+     * The READ-ONLY half of the v1 promise, which still holds.
+     *
+     * "Local-only" was superseded for the two trackers that have a ratings write:
+     * the tracker-submission follow-up landed `POST sync/ratings` (+ the remove
+     * twin) on Simkl and Trakt, and its own contract test pins those two
+     * endpoints and nothing more (TasteRatingSubmissionContractTest). What is
+     * still true - and still worth pinning, because each half would be a silent
+     * new write path - is that MDBList gains nothing, the sync payload carries no
+     * carrier for the signals, and there is no preference gating them.
      */
     @Test
-    fun `no tracker rating write, no sync key and no preference for taste`() {
-        listOf(SIMKL_API, TRAKT_API).forEach { path ->
-            assertFalse(
-                "$path gained a rating call - a thumb press must not claim a " +
-                    "tracker action it did not take",
-                normalized(source(path)).contains("rating")
-            )
-        }
+    fun `MDBList stays read-only, and there is no taste sync key or preference`() {
         val mdbList = normalized(source(MDBLIST))
         listOf("sync/ratings", "@POST(", "/rate").forEach { write ->
             assertFalse("MDBList is read-only here; it gained $write", mdbList.contains(write))
@@ -619,8 +621,6 @@ class DetailAuditContractTest {
     }
 
     private companion object {
-        const val SIMKL_API = "com/kennyb1201/kbstream/data/simkl/SimklApiService.kt"
-        const val TRAKT_API = "com/kennyb1201/kbstream/data/trakt/TraktApiService.kt"
         const val MDBLIST = "com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt"
         const val SYNC_PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
         const val APP_PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"

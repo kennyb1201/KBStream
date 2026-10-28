@@ -4352,19 +4352,31 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // credits simply keep playing full screen - so the panel can never be
         // seen as an empty box.
         lifecycleScope.launch {
-            val picks: List<BywPick> = withContext(Dispatchers.IO) {
+            val plan: BywPanelPlan = withContext(Dispatchers.IO) {
                 val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
-                    ?: return@withContext emptyList()
-                buildBecauseYouWatchedPicks(
-                    this@MpvPlayerActivity,
-                    tmdb,
-                    bywMediaType(parentType),
-                    // The profile's own ceiling (null on an ordinary profile):
-                    // a kids profile's credits row is held to it, exactly like
-                    // every rail behind the player.
-                    activeKidsMaxAge()
+                    ?: return@withContext BywPanelPlan(null, emptyList())
+                BywPanelPlan(
+                    // The finished title's identity, resolved with the picks: the
+                    // panel's thumbs write for it, and its IMDB flavor is the one
+                    // lookup this adds (bounded - see finishedTitleFor).
+                    finished = finishedTitleFor(
+                        this@MpvPlayerActivity,
+                        tmdb,
+                        bywMediaType(parentType),
+                        itemName
+                    ),
+                    picks = buildBecauseYouWatchedPicks(
+                        this@MpvPlayerActivity,
+                        tmdb,
+                        bywMediaType(parentType),
+                        // The profile's own ceiling (null on an ordinary profile):
+                        // a kids profile's credits row is held to it, exactly like
+                        // every rail behind the player.
+                        activeKidsMaxAge()
+                    )
                 )
             }
+            val picks = plan.picks
 
             if (picks.isEmpty() || bywDismissed) return@launch
 
@@ -4393,7 +4405,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                         "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
                     )
                 }
-                ui.show(itemName)
+                ui.show(itemName, plan.finished)
                 // The credits themselves are still rolling: shrink the video
                 // into the corner so the picks get the screen, and take the
                 // chrome down with it - the panel owns the remote while it is

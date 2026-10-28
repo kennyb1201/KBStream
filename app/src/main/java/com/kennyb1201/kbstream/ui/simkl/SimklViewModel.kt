@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+import com.kennyb1201.kbstream.data.library.TasteRatingTracker
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
@@ -286,6 +288,14 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                             loadAccountInfo()
                             loadContinueWatching()
                             loadWatchedCounts()
+                            // A connect is one of the three drain triggers for
+                            // the queued taste signals (see
+                            // TasteRatingSubmission): the fresh grant re-opens
+                            // the leg and this profile's pending ratings are due.
+                            TasteRatingSubmission.onTrackerConnected(
+                                appContext,
+                                TasteRatingTracker.SIMKL
+                            )
                             pollJob?.cancel()
                             return@launch
                         } else {
@@ -428,6 +438,17 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             val stillConnected = repository.hasToken()
+
+            if (!stillConnected) {
+                // The session is gone, so the pending SIMKL ratings go with it:
+                // they must not fire into whatever grant a later re-link
+                // produces. The TRAKT leg's entries and the local thumbs are
+                // untouched, and ratings already on Simkl stand.
+                TasteRatingSubmission.onTrackerDisconnected(
+                    appContext,
+                    TasteRatingTracker.SIMKL
+                )
+            }
 
             _uiState.value = when {
                 stillConnected -> SimklUiState(

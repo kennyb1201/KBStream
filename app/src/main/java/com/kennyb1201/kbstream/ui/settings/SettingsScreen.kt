@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -65,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.debrid.TorBoxReview
 import com.kennyb1201.kbstream.data.debrid.TorBoxSyncStatus
 import com.kennyb1201.kbstream.data.format.DateFormats
@@ -73,6 +75,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import androidx.compose.ui.Alignment
@@ -90,6 +93,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -125,6 +129,8 @@ import com.kennyb1201.kbstream.ui.components.KBSecretField
 import com.kennyb1201.kbstream.ui.components.KB_EASE
 import com.kennyb1201.kbstream.ui.components.KB_PANEL_ENTER_MS
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
+import com.kennyb1201.kbstream.ui.library.LibraryFilterChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
@@ -211,6 +217,17 @@ internal enum class SettingsPane(
         SettingsGroup.LIBRARY,
         "Titles you hid from every screen",
         Icons.Filled.VisibilityOff
+    ),
+    // The other per-profile title list, declared beside the first one so the
+    // LIBRARY group stays contiguous (a pane out of group order prints its
+    // heading twice - see SettingsPaneTest). It lists the signals the thumbs
+    // write from Detail, the poster menus and the credits panel, and it is the
+    // only place every one of them can be SEEN at once.
+    RATED(
+        "Rated Titles",
+        SettingsGroup.LIBRARY,
+        "Titles you liked or disliked",
+        Icons.Filled.ThumbUp
     ),
     PLAYBACK(
         "Playback",
@@ -873,7 +890,8 @@ fun SettingsScreen(
         SettingsContentHost(
             title = selectedPane.label,
             blurb = selectedPane.blurb,
-            scrollable = selectedPane != SettingsPane.HIDDEN,
+            scrollable = selectedPane != SettingsPane.HIDDEN &&
+                selectedPane != SettingsPane.RATED,
             flashing = flashingSetting,
             modifier = Modifier.graphicsLayer {
                 alpha = paneProgress.value
@@ -3164,6 +3182,10 @@ fun SettingsScreen(
 
                 if (selectedPane == SettingsPane.HIDDEN) {
                     HiddenTitlesSection()
+                }
+
+                if (selectedPane == SettingsPane.RATED) {
+                    RatedTitlesSection()
                 }
 
                 if (selectedPane == SettingsPane.VIDEO) {
@@ -5751,6 +5773,325 @@ private fun androidx.compose.foundation.layout.ColumnScope.HiddenTitlesSection()
                     "is one press per title",
                 onClick = { HiddenTitles.unhideAll(context) }
             )
+        }
+    }
+}
+
+/**
+ * The three filter chips above the Rated Titles list, in the order they draw.
+ *
+ * Shared by both surfaces (the phone imports this enum), so the labels and what
+ * each one keeps can never drift between the TV page and the phone page.
+ *
+ * [matches] asks the store's EFFECTIVE signal - the derived one when a numeric
+ * rating exists - because that is the verdict the app acts on: a title rated 9
+ * is a like everywhere, including here, whatever thumb was pressed before the
+ * number was.
+ */
+internal enum class RatedFilter(val label: String) {
+    ALL("All"),
+    LIKED("Liked"),
+    DISLIKED("Disliked");
+
+    fun matches(entry: TasteSignals.Entry): Boolean = when (this) {
+        ALL -> true
+        LIKED -> TasteSignals.effectiveSignal(entry) == TasteSignals.LIKE
+        DISLIKED -> TasteSignals.effectiveSignal(entry) == TasteSignals.DISLIKE
+    }
+}
+
+/**
+ * The pane's empty state, both surfaces.
+ *
+ * One sentence for every filter: an empty "Liked" means nothing is liked yet,
+ * which is the same fact as an empty list, and it names the two places a signal
+ * is made (a title's page, and a poster menu) rather than inventing a third.
+ */
+internal const val RATED_EMPTY_TEXT =
+    "Nothing rated yet. Like or dislike a title from its page or a poster menu " +
+        "and it shows up here."
+
+/**
+ * What clear-all destroys, stated before the press that does it - the row's
+ * description while the footer is armed.
+ *
+ * It names the two things the viewer cannot see from here: the scope (this
+ * profile, this device) and the cost (the steering the blend derived from these
+ * signals goes with them, until they are rated again).
+ */
+internal const val RATED_CLEAR_DESCRIPTION =
+    "Removes every like and dislike for this profile, on this device only. " +
+        "Re-rating is one press per title, and anything the recommendations " +
+        "learned from these ratings is lost until then."
+
+/**
+ * A rated row's one meta line: type, verdict, and when it was signalled.
+ *
+ * ONE string, not three labels: it is what lets a numeric rating slot in later
+ * without restructuring the row. A mid-range numeric rating (4-6) has an entry
+ * but no verdict, so the line says the number instead of claiming a thumb the
+ * viewer never pressed - and the row then draws no thumb glyph at all, exactly
+ * as Detail draws none for a rating that is neither a like nor a dislike.
+ */
+internal fun ratedMetaLine(entry: TasteSignals.Entry): String {
+    val type = if (HiddenTitles.normalizedType(entry.mediaType) == "series") {
+        "Series"
+    } else {
+        "Movie"
+    }
+    val verdict = when (TasteSignals.effectiveSignal(entry)) {
+        TasteSignals.LIKE -> "Liked"
+        TasteSignals.DISLIKE -> "Disliked"
+        else -> entry.rating?.let { rating -> "Rated $rating/10" } ?: "Rated"
+    }
+    return "$type · $verdict · ${syncRelativeTime(entry.updatedAt)}"
+}
+
+/**
+ * The listed rows: the store's entries, newest first, kept by [filter].
+ *
+ * Sorted HERE rather than trusted from the store - one sort, in the one place
+ * both surfaces read, so a store-side reorder cannot shuffle the manager
+ * silently. Newest means the last signal WRITE, so flipping a thumb moves that
+ * title to the top: the list answers "what did I just say", which is the order
+ * a viewer re-checking their own presses wants.
+ */
+internal fun ratedList(
+    entries: List<TasteSignals.Entry>,
+    filter: RatedFilter
+): List<TasteSignals.Entry> = entries
+    .sortedByDescending { entry -> entry.updatedAt }
+    .filter { entry -> filter.matches(entry) }
+
+/**
+ * The filled thumb a row repeats its verdict with, or null when it has no
+ * verdict to repeat (a mid-range numeric rating).
+ *
+ * The FILLED pair only: a listed signal is always active, so the outline
+ * variants have no state to draw here.
+ */
+internal fun ratedGlyphRes(entry: TasteSignals.Entry): Int? =
+    when (TasteSignals.effectiveSignal(entry)) {
+        TasteSignals.LIKE -> R.drawable.ic_detail_thumb_up_filled
+        TasteSignals.DISLIKE -> R.drawable.ic_detail_thumb_down_filled
+        else -> null
+    }
+
+/**
+ * The rated titles: every signal this profile has, in one list.
+ *
+ * The thumbs write from Detail, from a poster menu and from the end-credits
+ * panel, and until this pane there was nowhere in the app that could show what
+ * they had added up to. Rows are built from the store's OWN fields - its title,
+ * media type, poster and verdict - so a rated title lists even when its add-on
+ * is gone or its poster host is down: nothing is resolved to draw a row, and no
+ * network call is made. The store merges one title's spellings into one row, so
+ * a title rated from a TMDB rail and again from an add-on rail lists ONCE.
+ *
+ * One press on a row removes that signal. No confirm and no undo, like the
+ * hidden-titles row it is modelled on: the state is one thumb press away from
+ * coming back, so a dialog would be friction with no protection. The clear-all
+ * footer is the destructive one, and it takes two taps - no dialog, because the
+ * description has to be readable BEFORE the press that does it (the Clear Eye
+ * Badges rule); unlike unhide-all, something IS lost there.
+ *
+ * The filter is pane-local: it is not a preference and not synced, so leaving
+ * the pane disposes it and coming back starts at All. Device-local v1, like
+ * every other signal surface - this is the active profile's store on this
+ * device, and the sync spec is what will carry it further.
+ */
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.RatedTitlesSection() {
+    val context = LocalContext.current
+    val feedback = rememberKBFeedback()
+    val entries by TasteSignals.entries.collectAsStateWithLifecycle()
+
+    // The store publishes the active profile's set and re-reads it when the
+    // profile changes (its own ensureLoaded compares the prefs name), so a
+    // switch with this pane open cannot leave the previous profile's list up.
+    LaunchedEffect(Unit) {
+        TasteSignals.ensureLoaded(context)
+    }
+
+    var filter by remember { mutableStateOf(RatedFilter.ALL) }
+    var armed by remember { mutableStateOf(false) }
+    var clearStatus by remember { mutableStateOf<String?>(null) }
+
+    val shown = ratedList(entries, filter)
+
+    Text(
+        text = "${shown.size} rated " + if (shown.size == 1) "title" else "titles",
+        color = KBTextHi,
+        style = MaterialTheme.typography.bodySmall
+    )
+
+    // The chips stay up when the filter answers nothing, so an empty "Liked"
+    // reads as "nothing liked yet" rather than as a broken list.
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)
+    ) {
+        RatedFilter.entries.forEach { option ->
+            LibraryFilterChip(
+                label = option.label,
+                selected = filter == option,
+                onClick = {
+                    // The arm never survives a context change: clearing "All"
+                    // after arming on "Liked" would clear far more than the
+                    // press the viewer aimed at.
+                    filter = option
+                    armed = false
+                }
+            )
+        }
+    }
+
+    if (shown.isEmpty()) {
+        Text(
+            text = RATED_EMPTY_TEXT,
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+        return
+    }
+
+    // Lazy, and weight(1f): a heavy rater's list is hundreds of rows, and the
+    // count and chips above it stay put while it scrolls under them (this pane
+    // opts out of the host's scroll for the same reason Hidden Titles does).
+    LazyColumn(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = 2.dp, bottom = 8.dp)
+    ) {
+        items(
+            items = shown,
+            // One title is one entry (the store merges spellings on overlap), so
+            // this is already unique; the timestamp is the tie-break if a
+            // hand-edited blob ever repeats a key set, because a duplicate key
+            // is a hard crash in a lazy list.
+            key = { entry ->
+                entry.updatedAt.toString() + "\u0001" + entry.keys.joinToString("\u0001")
+            }
+        ) { entry ->
+            KBCard(
+                onClick = {
+                    // The row's OWN key set, so the press removes the row it was
+                    // pressed on and never a same-named title beside it.
+                    val removed = TasteSignals.clearSignal(context, entry.keys)
+                    feedback.show(
+                        text = if (removed) {
+                            "Rating removed: ${entry.title.ifBlank { "Untitled" }}"
+                        } else {
+                            "Couldn't save your rating"
+                        },
+                        isError = !removed
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, KBShapeSmall)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // The thumb is decorative - the title carries the row's
+                    // identity - and a row with no poster URL paints nothing at
+                    // all rather than an empty box.
+                    if (!entry.posterUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = entry.posterUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .padding(end = 12.dp)
+                                .size(width = 36.dp, height = 54.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = entry.title.ifBlank { "Untitled" },
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            text = ratedMetaLine(entry),
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    ratedGlyphRes(entry)?.let { glyph ->
+                        Image(
+                            painter = painterResource(glyph),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .padding(start = 12.dp)
+                                .size(18.dp)
+                        )
+                    }
+                    Text(
+                        text = "REMOVE",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
+            }
+        }
+
+        // Rides the list rather than sitting under it, so the one door out of
+        // "rated" can never be pushed off the bottom of a list that only grows.
+        item(key = "clear-all") {
+            KBCard(
+                onClick = {
+                    if (armed) {
+                        armed = false
+                        val cleared = TasteSignals.clearAll(context)
+                        clearStatus = when {
+                            cleared == TasteSignals.CLEAR_ALL_REFUSED ->
+                                "couldn't read the stored ratings - nothing was cleared"
+                            cleared == 0 -> "nothing to clear"
+                            cleared == 1 -> "cleared 1 rating"
+                            else -> "cleared $cleared ratings"
+                        }
+                    } else {
+                        armed = true
+                        clearStatus = null
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, KBShapeSmall)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        text = if (armed) {
+                            "TAP AGAIN TO CLEAR ALL RATINGS"
+                        } else {
+                            "CLEAR ALL RATINGS"
+                        },
+                        color = if (armed) KBAccent else KBAccent.copy(alpha = 0.85f),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Text(
+                        text = if (armed) {
+                            RATED_CLEAR_DESCRIPTION
+                        } else {
+                            clearStatus?.let { outcome -> "Last run: $outcome" }
+                                ?: RATED_CLEAR_DESCRIPTION
+                        },
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
     }
 }

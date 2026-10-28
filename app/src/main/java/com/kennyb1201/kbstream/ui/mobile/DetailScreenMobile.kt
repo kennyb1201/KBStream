@@ -46,6 +46,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -100,6 +102,8 @@ import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.TouchTitleRatingDialog
+import com.kennyb1201.kbstream.ui.components.rememberTasteRating
 import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
@@ -378,6 +382,14 @@ fun DetailScreenMobile(
             year = tasteYear,
             ids = tasteIds
         )
+        // The number, repainted with the thumbs from the same store.
+        val tasteRating = rememberTasteRating(
+            mediaType = normalizedType,
+            title = libraryTarget.title,
+            year = tasteYear,
+            ids = tasteIds
+        )
+        var ratingDialog by remember { mutableStateOf(false) }
         // Same action as the TV row and the poster menus' rows, reported
         // through this surface's channel: a toast, because the phone has no
         // app-wide feedback banner.
@@ -410,6 +422,40 @@ fun DetailScreenMobile(
                     next == TasteSignals.LIKE -> "Liked"
                     else -> "Disliked"
                 },
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        // The rating's writers, reported the same way (a toast, no name).
+        fun pressRating(number: Int) {
+            val stored = TasteSignals.setRating(
+                context = context,
+                mediaType = normalizedType,
+                title = libraryTarget.title,
+                posterUrl = posterUrl,
+                year = tasteYear,
+                ids = tasteIds,
+                rating = number
+            )
+            ratingDialog = false
+            Toast.makeText(
+                context,
+                if (stored) "Rated $number/10" else "Couldn't save your rating",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+
+        fun removeTaste() {
+            val cleared = TasteSignals.clearSignal(
+                context = context,
+                mediaType = normalizedType,
+                title = libraryTarget.title,
+                year = tasteYear,
+                ids = tasteIds
+            )
+            ratingDialog = false
+            Toast.makeText(
+                context,
+                if (cleared) "Rating removed" else "Couldn't save your rating",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -1341,6 +1387,44 @@ fun DetailScreenMobile(
                                     )
                                 }
                             }
+
+                            // The numeric rating: the same second row the
+                            // thumbs live in, and text rather than a glyph -
+                            // the plate has to carry the number it would
+                            // change.
+                            KBCard(
+                                onClick = { ratingDialog = true },
+                                shape = KBShapePill,
+                                modifier = Modifier.height(48.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .padding(horizontal = 16.dp)
+                                        .semantics {
+                                            contentDescription = tasteRating?.let {
+                                                "Rated $it out of 10 — tap to change your rating"
+                                            } ?: "Rate this title"
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = tasteRating?.let { "$it/10" } ?: "RATE",
+                                        color = KBTextHi,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                        if (ratingDialog) {
+                            TouchTitleRatingDialog(
+                                title = libraryTarget.title,
+                                rating = tasteRating,
+                                hasSignal = tasteRating != null || tasteSignal != null,
+                                onPick = ::pressRating,
+                                onRemove = ::removeTaste,
+                                onCancel = { ratingDialog = false }
+                            )
                         }
                         if (
                             normalizedType == "movie" &&

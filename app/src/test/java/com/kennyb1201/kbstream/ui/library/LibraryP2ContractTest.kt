@@ -38,7 +38,7 @@ class LibraryP2ContractTest {
             functionBody(LIBRARY_VM, "private fun pushDisplay(")
                 .contains("val ascending = state.sortAscending") &&
                 source(LIBRARY_VM)
-                    .contains("sortLibraryItems(items, sort, ratings, ascending)")
+                    .contains("sortLibraryItems(items, sort, ratings, ascending, taste)")
         )
         assertTrue(
             "and it has to be visible, or the second tap looks like nothing",

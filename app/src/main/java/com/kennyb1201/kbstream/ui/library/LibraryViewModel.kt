@@ -11,6 +11,9 @@ import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.TastePlacement
+import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -78,7 +81,22 @@ enum class LibrarySort(val label: String) {
     ADDED("ADDED"),
     TITLE("TITLE"),
     RELEASE_DATE("DATE"),
-    RATING("RATING")
+    RATING("RATING"),
+
+    /**
+     * Liked first, everything un-signalled in the middle, disliked last - the
+     * viewer's own signals as a group sort.
+     *
+     * THE DIRECTION FLAG IS IGNORED FOR THIS CHIP, deliberately. Inverting the
+     * groups would put the titles the viewer disliked FIRST, which is a footgun
+     * with no reader who wants it (DATE and RATING are the chips whose two
+     * directions both mean something). The chip still draws the shared
+     * direction arrow, but tapping it twice yields the identical list - see
+     * [sortLibraryItems]. It is listed LAST so the existing chip order (ADDED /
+     * TITLE / DATE / RATING) is undisturbed and the new chip appears at the end
+     * of the strip on both screens, which draw one chip per enum entry.
+     */
+    LIKED("LIKED")
 }
 
 /**
@@ -1124,12 +1142,16 @@ class LibraryViewModel(
         val hide = state.hideWatched
         val posters = state.posters
         val years = state.years
+        // The viewer's own signals, read once per rebuild and in memory from
+        // there on: the LIKED chip's three groups, the same snapshot for all
+        // four views, and an empty one leaves every sort exactly as it was.
+        val taste = TasteSignals.snapshot(getApplication())
         // Years are applied BEFORE the sort: the DATE chip orders on the row's
         // own year, so a backfilled one has to be on the row the sort reads.
         _uiState.value = state.copy(
             allItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalAll, years), sort, ratings, ascending),
+                    sortItems(applyYears(canonicalAll, years), sort, ratings, ascending, taste),
                     posters
                 ),
                 watched,
@@ -1137,7 +1159,7 @@ class LibraryViewModel(
             ),
             localItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalLocal, years), sort, ratings, ascending),
+                    sortItems(applyYears(canonicalLocal, years), sort, ratings, ascending, taste),
                     posters
                 ),
                 watched,
@@ -1145,7 +1167,7 @@ class LibraryViewModel(
             ),
             watchlistItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings, ascending),
+                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings, ascending, taste),
                     posters
                 ),
                 watched,
@@ -1153,7 +1175,7 @@ class LibraryViewModel(
             ),
             selectedListItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalListItems, years), sort, ratings, ascending),
+                    sortItems(applyYears(canonicalListItems, years), sort, ratings, ascending, taste),
                     posters
                 ),
                 watched,
@@ -1217,8 +1239,9 @@ class LibraryViewModel(
         items: List<LibraryItem>,
         sort: LibrarySort,
         ratings: Map<String, Double>,
-        ascending: Boolean
-    ): List<LibraryItem> = sortLibraryItems(items, sort, ratings, ascending)
+        ascending: Boolean,
+        taste: TasteSignals.Snapshot
+    ): List<LibraryItem> = sortLibraryItems(items, sort, ratings, ascending, taste)
 
     companion object {
         private const val TAG = "LIBRARY"
@@ -1254,7 +1277,8 @@ internal fun sortLibraryItems(
     items: List<LibraryItem>,
     sort: LibrarySort,
     ratings: Map<String, Double>,
-    ascending: Boolean = false
+    ascending: Boolean = false,
+    taste: TasteSignals.Snapshot = TasteSignals.Snapshot()
 ): List<LibraryItem> = when (sort) {
     // The store's own order is newest-first (inserts go to index 0), so
     // ascending is the reverse of it.
@@ -1283,7 +1307,40 @@ internal fun sortLibraryItems(
         }
         ordered + unrated
     }
+    // A GROUP sort, not a score: liked rows first, everything un-signalled in
+    // the middle, disliked rows last. Each group keeps its input order - a
+    // partition is stable - so the caller's own ordering (the store's
+    // newest-first, or the source priority the merge set) survives inside a
+    // group and there is no second key to argue about. `ascending` is
+    // deliberately unread here; see [LibrarySort.LIKED].
+    LibrarySort.LIKED -> {
+        val (liked, others) = items.partition {
+            libraryTastePlacement(it, taste) == TastePlacement.LIKED
+        }
+        val (disliked, unSignalled) = others.partition {
+            libraryTastePlacement(it, taste) == TastePlacement.DISLIKED
+        }
+        liked + unSignalled + disliked
+    }
 }
+
+/**
+ * Where the viewer's taste puts one library row: liked first, un-signalled in
+ * the middle, disliked last (the LIKED sort's three groups).
+ *
+ * The row's own id flavors are handed over, so a title signalled from a TMDB
+ * rail and the same title signalled from an add-on rail answer the same way
+ * wherever the row came from. A row with NEITHER id reads as un-signalled and
+ * sinks into the middle group - it is never dropped and never floated, which is
+ * the unknown-key rule the DATE and RATING chips already follow.
+ */
+internal fun libraryTastePlacement(
+    item: LibraryItem,
+    taste: TasteSignals.Snapshot
+): TastePlacement = taste.placementOf(
+    mediaType = item.mediaType,
+    ids = listOf(item.imdbId, item.tmdbId?.let { WatchedStatusKeys.tmdbKeyId(it) })
+)
 
 /**
  * Cross-source merge for the ALL view: the first occurrence of a title wins

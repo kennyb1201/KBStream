@@ -78,14 +78,22 @@ class TasteSignalsTest {
     private fun profilesPrefs() =
         context.getSharedPreferences(PROFILES, Context.MODE_PRIVATE)
 
-    private fun signal(ids: List<String?> = TMDB_IDS, year: Int? = YEAR) =
-        TasteSignals.signalFor(context, TYPE, TITLE, year, ids)
+    private fun signal(
+        ids: List<String?> = TMDB_IDS,
+        year: Int? = YEAR,
+        title: String = TITLE
+    ) = TasteSignals.signalFor(context, TYPE, title, year, ids)
 
-    private fun like(ids: List<String?> = TMDB_IDS) =
-        TasteSignals.setSignal(context, TYPE, TITLE, null, YEAR, ids, TasteSignals.LIKE)
+    // [title] is defaulted, so every existing call reads as it did; the rated
+    // list needs a SECOND title to tell one row's deletion from a whole-list
+    // clear.
+    private fun like(ids: List<String?> = TMDB_IDS, title: String = TITLE) =
+        TasteSignals.setSignal(context, TYPE, title, null, YEAR, ids, TasteSignals.LIKE)
 
-    private fun dislike(ids: List<String?> = TMDB_IDS) =
-        TasteSignals.setSignal(context, TYPE, TITLE, null, YEAR, ids, TasteSignals.DISLIKE)
+    private fun dislike(ids: List<String?> = TMDB_IDS, title: String = TITLE) =
+        TasteSignals.setSignal(context, TYPE, title, null, YEAR, ids, TasteSignals.DISLIKE)
+
+    private fun dislikeOther() = dislike(ids = OTHER_IDS, title = OTHER_TITLE)
 
     // ── one title, one row ─────────────────────────────────────────────────
 
@@ -240,11 +248,117 @@ class TasteSignalsTest {
         store(guestId).edit().clear().commit()
     }
 
+    // -- the Rated Titles pane's two store operations -----------------------
+
+    /**
+     * The pane deletes from the list by pressing a row, and that press must take
+     * exactly the row it named. The entry's own key set is the identity here (the
+     * store published it), so no same-named title beside it is caught - which is
+     * what the five-argument clear's name fallback would do.
+     */
+    @Test
+    fun `a row press removes exactly the entry it names`() {
+        like()
+        dislikeOther()
+        assertEquals(2, TasteSignals.entries.value.size)
+
+        val pressed = TasteSignals.entries.value.first { entry -> entry.title == TITLE }
+        assertTrue(TasteSignals.clearSignal(context, pressed.keys))
+
+        assertEquals(
+            "the row beside it stays",
+            listOf(OTHER_TITLE),
+            TasteSignals.entries.value.map { entry -> entry.title }
+        )
+        assertNull("and its own signal is gone", signal())
+        assertEquals(
+            "while the other title still answers",
+            TasteSignals.DISLIKE,
+            signal(ids = OTHER_IDS, title = OTHER_TITLE)
+        )
+    }
+
+    @Test
+    fun `a row press for a title the store does not hold is a no-op, not a failure`() {
+        like()
+        assertTrue(TasteSignals.clearSignal(context, listOf("movie::tmdb:999")))
+        assertEquals("nothing else was touched", 1, TasteSignals.entries.value.size)
+    }
+
+    @Test
+    fun `clear all empties this profile and reports the count`() {
+        useProfile(PROFILE_ONE)
+        like()
+        dislikeOther()
+
+        assertEquals(2, TasteSignals.entries.value.size)
+        assertEquals(
+            "the count is what the pane's status line reports",
+            2,
+            TasteSignals.clearAll(context)
+        )
+        assertTrue(TasteSignals.entries.value.isEmpty())
+        assertNull("and the title really carries no signal now", signal())
+        assertEquals(
+            "a second press has nothing left to do",
+            0,
+            TasteSignals.clearAll(context)
+        )
+    }
+
+    @Test
+    fun `clear all takes only the active profile's signals`() {
+        useProfile(PROFILE_ONE)
+        like()
+        useProfile(PROFILE_TWO)
+        like()
+
+        assertEquals(1, TasteSignals.clearAll(context))
+        assertTrue(TasteSignals.entries.value.isEmpty())
+
+        useProfile(PROFILE_ONE)
+        assertEquals(
+            "the profile that was not active keeps its rating",
+            1,
+            TasteSignals.entries.value.size
+        )
+        assertEquals(TasteSignals.LIKE, signal())
+    }
+
+    /**
+     * The one place this must NOT copy HiddenTitles.unhideAll: resetting an
+     * unreadable blob to empty would delete the whole profile's taste and show
+     * the manager as if nothing had ever been rated. It refuses instead, and the
+     * blob a readable build will want is left exactly where it was.
+     */
+    @Test
+    fun `clear all refuses a blob it cannot read, and changes nothing`() {
+        like()
+        store().edit().putString(BLOB, CORRUPT).commit()
+
+        assertEquals(TasteSignals.CLEAR_ALL_REFUSED, TasteSignals.clearAll(context))
+        assertEquals(
+            "the blob is still there for a build that can read it",
+            CORRUPT,
+            store().getString(BLOB, null)
+        )
+        assertEquals(
+            "and the list still shows the last good copy",
+            1,
+            TasteSignals.entries.value.size
+        )
+    }
+
     private companion object {
         const val BASE = "kbstream_taste_signals"
 
-        /** The store's own blob key; written directly to make it unreadable. */
-        const val BLOB = "entries_v1"
+        /**
+         * The store's own blob key; written directly to make it unreadable. The
+         * numeric-rating landing moved the written blob to v2 (v1 is read once
+         * and migrated on the next write), so the corrupt-blob case has to
+         * corrupt the blob this build actually writes.
+         */
+        const val BLOB = "entries_v2"
         const val PROFILES = "kbstream_profiles"
         const val PROFILE_ONE = "profile-one"
         const val PROFILE_TWO = "profile-two"
@@ -253,6 +367,8 @@ class TasteSignalsTest {
         const val YEAR = 1999
         val TMDB_IDS = listOf<String?>("tmdb:603")
         val IMDB_IDS = listOf<String?>("tt0137523")
+        const val OTHER_TITLE = "The Matrix"
+        val OTHER_IDS = listOf<String?>("tmdb:604")
         const val CORRUPT = """{"entries":["""
     }
 }

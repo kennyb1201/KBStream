@@ -5,6 +5,8 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+import com.kennyb1201.kbstream.data.library.TasteRatingTracker
 import com.kennyb1201.kbstream.data.sync.KidsTimeGuard
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.trakt.TraktConfig
@@ -319,6 +321,14 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                             statusMessage = "Connected to Trakt.",
                             errorMessage = null
                         )
+                        // A connect is one of the three drain triggers for the
+                        // queued taste signals (see TasteRatingSubmission): the
+                        // new grant re-opens the leg and anything this profile
+                        // left pending is due now.
+                        TasteRatingSubmission.onTrackerConnected(
+                            appContext,
+                            TasteRatingTracker.TRAKT
+                        )
                         // No counts call here: the screen's entry effect sees
                         // isConnected flip and fetches the pair exactly once.
                         return@launch
@@ -426,6 +436,15 @@ class TraktViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 return@launch
             }
+
+            // The session is genuinely gone, so the pending TRAKT ratings go
+            // with it: a queued rating must not fire into whatever grant a
+            // later re-link produces. Ratings already on the tracker stand -
+            // disconnecting never takes a rating back.
+            TasteRatingSubmission.onTrackerDisconnected(
+                appContext,
+                TasteRatingTracker.TRAKT
+            )
 
             _uiState.value = TraktUiState(
                 isConfigured = repository.isConfigured(),
