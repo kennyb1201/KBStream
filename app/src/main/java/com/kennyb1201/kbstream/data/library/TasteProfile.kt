@@ -106,8 +106,14 @@ object TasteProfileStore {
 
     private val _profile = MutableStateFlow<TasteProfile?>(null)
 
-    /** The profile a diagnostics surface or a future viewer reads. */
-    val profile: StateFlow<TasteProfile?> = _profile.asStateFlow()
+    /**
+     * The profile a diagnostics surface or a future viewer reads.
+     *
+     * `internal` like the profile type itself: [TasteProfile] is the taste
+     * subsystem's own shape (`TasteProfileBuilder`), not a published one, and a
+     * public `StateFlow` of it would be the leak that declares it.
+     */
+    internal val profile: StateFlow<TasteProfile?> = _profile.asStateFlow()
 
     /** Bumped on every change, the HiddenTitles/TasteSignals pattern. */
     private val _version = MutableStateFlow(0)
@@ -133,7 +139,10 @@ object TasteProfileStore {
      * and with none stored the caller blends with an empty profile - which is
      * byte-identical to blending with no profile at all.
      */
-    suspend fun current(context: Context, repo: TmdbRepository): TasteProfile? =
+    internal suspend fun current(
+        context: Context,
+        repo: TmdbRepository
+    ): TasteProfile? =
         withContext(Dispatchers.IO) {
             val app = context.applicationContext
             val name = ProfileStorage.prefsName(app, PREFS_BASE)

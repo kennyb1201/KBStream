@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.notifications.AirReminderRules
 import com.kennyb1201.kbstream.data.notifications.AirReminderStore
 import com.kennyb1201.kbstream.ui.components.HideTarget

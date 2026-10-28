@@ -53,7 +53,7 @@ data class TasteRatingQueueEntry(
     val lastError: String? = null
 ) {
     /** The tracker this entry names, or null when the blob outlived a rename. */
-    val trackerOrNull: TasteRatingTracker get() = TasteRatingTracker.from(tracker)
+    val trackerOrNull: TasteRatingTracker? get() = TasteRatingTracker.from(tracker)
 
     /** True when this entry names the same title as [other] on the same tracker. */
     fun sameTargetAs(other: TasteRatingQueueEntry): Boolean =
