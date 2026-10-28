@@ -163,7 +163,7 @@ class PlaybackOrchestrationContractTest {
             "autoSkippedSegments.clear()"
         ).forEach { line ->
             assertTrue(
-                "Exo has to reset \`$line\` per source, as MPV always has (spec C5/C22)",
+                "Exo has to reset '$line' per source, as MPV always has (spec C5/C22)",
                 source.contains(line)
             )
         }
@@ -199,7 +199,7 @@ class PlaybackOrchestrationContractTest {
         listOf("next_binge_group", "next_addon_name", "next_overview").forEach { extra ->
             assertTrue(
                 "the advance is a resolver launch, not a replay (spec C6/D3): " +
-                    "\`$extra\` must ride the result extras",
+                    "'$extra' must ride the result extras",
                 source.contains("putExtra(\"$extra\"")
             )
         }
