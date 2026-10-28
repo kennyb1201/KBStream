@@ -137,6 +137,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     internal fun exoSwitchIntent(base: Intent): Intent =
         Intent(base).apply {
             setClass(this@MpvPlayerActivity, NativePlayerActivity::class.java)
+            // The speed this session is playing at goes with the switch, or the
+            // successor starts at 1x (see EXTRA_PLAYBACK_SPEED).
+            putExtra(EXTRA_PLAYBACK_SPEED, playbackSpeed)
             // Disarm this session's own Up Next countdown as playback leaves: it
             // is a Handler tick, so it fires whether or not this surface is the
             // one on screen. Left armed behind ExoPlayer it would chain an
@@ -883,6 +886,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var startFromBeginning = false
     private var historyId = ""
 
+    /** The speed a handoff launched this session at, or null for a fresh start. */
+    private var handoffPlaybackSpeed: Float? = null
+
     /** True when ExoPlayer handed this session over (see [EXTRA_MPV_FALLBACK]). */
     private var isFallbackSession = false
     private var fallbackReason: String? = null
@@ -1516,6 +1522,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         launchRuntimeMinutes = intent.getIntExtra("runtime_minutes", -1).takeIf { it > 0 }
         historyParentIdOverride = intent.getStringExtra(EXTRA_HISTORY_PARENT_ID)
         isFallbackSession = intent.getBooleanExtra(EXTRA_MPV_FALLBACK, false)
+        // The speed ExoPlayer was playing at, when this session is its handoff
+        // (see EXTRA_PLAYBACK_SPEED). Null means a fresh start at 1x.
+        handoffPlaybackSpeed = intent.getFloatExtra(EXTRA_PLAYBACK_SPEED, -1f)
+            .takeIf { it > 0f }
         fallbackReason = intent.getStringExtra(EXTRA_MPV_FALLBACK_REASON)
         // Random-episode mode rides the session: the handoff starts a NEW
         // player, which would otherwise read its intent as a normal
@@ -3550,7 +3560,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         audioDialogueBoost = remembered?.audioDialogueBoost ?: -1
         audioVolumeBoostDb = remembered?.audioVolumeBoostDb ?: -1
 
-        playbackSpeed = 1f
+        // Speed is a session setting, so it comes from the handoff rather than
+        // from the per-title memory: a launch that carried one keeps it, and a
+        // fresh session starts at 1x.
+        playbackSpeed = handoffPlaybackSpeed ?: 1f
         // Aspect is per-title now: this show's own override wins, and every
         // title without one keeps following Settings' default.
         resizeModeIndex = remembered?.aspectRatio?.takeIf { it >= 0 }

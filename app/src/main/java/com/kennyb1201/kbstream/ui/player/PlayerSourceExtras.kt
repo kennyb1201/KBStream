@@ -165,6 +165,19 @@ internal fun parseSourceAddonsJson(raw: String?): List<String?> {
 }
 
 /**
+ * The playback speed an engine handoff carries.
+ *
+ * Speed is a session setting, not a per-title one (PlayerTitlePrefs deliberately
+ * does not carry it), so before this extra existed a switch between engines
+ * put the new session back at 1x - the viewer's 1.5x silently ended at the
+ * handoff, with no cue beyond the video suddenly being the right length.
+ *
+ * A launch without the extra is a fresh start and keeps 1x: the reader is a
+ * `takeIf { it > 0f }` onto the engine's own default.
+ */
+internal const val EXTRA_PLAYBACK_SPEED = "playback_speed"
+
+/**
  * The addon name for each stream in [streams], given the payload the list
  * arrived with.
  *

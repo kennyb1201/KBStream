@@ -3563,6 +3563,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (restoredPositionMs > startPositionMs) startPositionMs = restoredPositionMs
         fromActorReturn = intent.getBooleanExtra("from_actor_return", false)
         startFromBeginning = intent.getBooleanExtra("from_beginning", false)
+        // A handoff from MPV carries the speed that session was playing at;
+        // a fresh launch carries none and keeps 1x (see EXTRA_PLAYBACK_SPEED).
+        intent.getFloatExtra(EXTRA_PLAYBACK_SPEED, -1f).takeIf { it > 0f }?.let {
+            playbackSpeed = it
+        }
         randomEpisodes = intent.getBooleanExtra("random_episodes", false)
         // A launch handed over by another engine carries the parent id that
         // engine already canonicalized, so both sessions write the same
@@ -13027,6 +13032,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
             putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, true)
             putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK_REASON, reason)
+            // Speed does not survive in PlayerTitlePrefs, so it travels in the
+            // launch - otherwise the switch silently put playback back at 1x.
+            putExtra(EXTRA_PLAYBACK_SPEED, playbackSpeed)
             // Only when it has already been resolved: otherwise the MPV
             // session resolves it with the same rules (PlaybackHistoryIds).
             historyParentIdOverride?.let {
