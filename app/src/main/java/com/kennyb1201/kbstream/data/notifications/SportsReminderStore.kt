@@ -22,6 +22,20 @@ object SportsReminderStore {
     private const val FILE = "sports_reminders"
     private const val KEY_NOTIFIED = "sports_reminder_notified"
 
+    /**
+     * Games the viewer asked to be reminded about BY NAME, whatever teams they
+     * follow (audit: sports F3 - the reminder was global, keyed on favourites,
+     * so a one-off game between two teams nobody follows could not be asked
+     * for at all).
+     *
+     * Kept beside the announced record and in the same per-profile file: "remind
+     * me about this game" is a choice about whose hub it is, exactly like
+     * following a team is. Stored as the same `gameId=timestamp` lines, where
+     * the timestamp is the game's own kick-off, so a request for a game that
+     * has since been played can be dropped rather than kept forever.
+     */
+    private const val KEY_REQUESTED = "sports_reminder_requested"
+
     /** The store for the profile in use. */
     fun prefsFor(context: Context): SharedPreferences =
         context.getSharedPreferences(
@@ -30,8 +44,11 @@ object SportsReminderStore {
         )
 
     /** Every remembered game id and when it was announced, epoch millis. */
-    fun load(prefs: SharedPreferences): Map<String, Long> {
-        val raw = prefs.getString(KEY_NOTIFIED, null) ?: return emptyMap()
+    fun load(prefs: SharedPreferences): Map<String, Long> = readMap(prefs, KEY_NOTIFIED)
+
+    /** The `id=value` line format both records share. */
+    private fun readMap(prefs: SharedPreferences, key: String): Map<String, Long> {
+        val raw = prefs.getString(key, null) ?: return emptyMap()
         return raw.lineSequence()
             .mapNotNull { line ->
                 val separator = line.indexOf('=')
@@ -41,6 +58,48 @@ object SportsReminderStore {
                 id.takeIf { it.isNotBlank() }?.let { it to at }
             }
             .toMap()
+    }
+
+    /**
+     * The games asked for individually, as `gameId -> kick-off millis`.
+     *
+     * A kick-off of 0 means the hub did not know it when the request was made;
+     * such a row is kept until the ordinary clean-up drops it, which is the
+     * honest outcome for a request with no expiry attached.
+     */
+    fun loadRequested(prefs: SharedPreferences): Map<String, Long> =
+        readMap(prefs, KEY_REQUESTED)
+
+    /**
+     * Adds or removes one game's individual reminder.
+     *
+     * [startsAtMs] is stored with it so the clean-up can tell a request for a
+     * game that has started from one still ahead; 0 when unknown.
+     */
+    fun setRequested(
+        prefs: SharedPreferences,
+        gameId: String,
+        startsAtMs: Long,
+        requested: Boolean
+    ) {
+        if (gameId.isBlank()) return
+        val current = loadRequested(prefs)
+        val next = if (requested) current + (gameId to startsAtMs) else current - gameId
+        write(requestedPrefsKey = KEY_REQUESTED, prefs = prefs, values = next)
+    }
+
+    /**
+     * Drops requests whose game started more than the dedupe TTL ago, and any
+     * whose kick-off the hub never knew once its announced record has aged out.
+     */
+    fun pruneRequested(prefs: SharedPreferences, nowMs: Long) {
+        val current = loadRequested(prefs)
+        val kept = current.filterValues { startMs ->
+            startMs <= 0L || nowMs - startMs < SportsGameReminderRules.DEDUPE_TTL_MS
+        }
+        if (kept.size != current.size) {
+            write(requestedPrefsKey = KEY_REQUESTED, prefs = prefs, values = kept)
+        }
     }
 
     /** Remembers one game as announced. */
@@ -57,7 +116,15 @@ object SportsReminderStore {
     }
 
     private fun write(prefs: SharedPreferences, notified: Map<String, Long>) {
-        val raw = notified.entries.joinToString("\n") { (id, at) -> "$id=$at" }
-        prefs.edit().putString(KEY_NOTIFIED, raw).apply()
+        write(requestedPrefsKey = KEY_NOTIFIED, prefs = prefs, values = notified)
+    }
+
+    private fun write(
+        requestedPrefsKey: String,
+        prefs: SharedPreferences,
+        values: Map<String, Long>
+    ) {
+        val raw = values.entries.joinToString("\n") { (id, at) -> "$id=$at" }
+        prefs.edit().putString(requestedPrefsKey, raw).apply()
     }
 }

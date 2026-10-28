@@ -247,6 +247,9 @@ fun SportsHubScreen(
     val standingsLoading by viewModel.standingsLoading.collectAsStateWithLifecycle()
     val standingsFailed by viewModel.standingsFailed.collectAsStateWithLifecycle()
     val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
+    // The per-game reminders (audit: sports F3), read here so the sheet can
+    // show its own row's state rather than re-reading the store per frame.
+    val gameReminderRequests by viewModel.gameReminderRequests.collectAsStateWithLifecycle()
     val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
     val matchingDone by viewModel.matchingDone.collectAsStateWithLifecycle()
     // The open sheet's live stats - team stats, win probability, the last play.
@@ -912,6 +915,8 @@ fun SportsHubScreen(
                 // correcting the matcher; record it so the next game with
                 // either team opens there. See [SportsChannelMemory].
                 onManualPick = { chosen -> viewModel.rememberChannel(game, chosen.id) },
+                reminderRequested = game.id in gameReminderRequests,
+                onToggleReminder = { viewModel.toggleGameReminder(game) },
                 // The launch carries this game with it, so a Back from the
                 // player lands on this sheet again rather than on the bare hub.
                 // See Screen.Sports / the reopen effect above.
@@ -3687,6 +3692,9 @@ private fun TournamentDetailSheet(
 @Composable
 private fun GameDetailSheet(
     game: SportsGame,
+    /** Whether this game has its own reminder armed (audit: sports F3). */
+    reminderRequested: Boolean = false,
+    onToggleReminder: () -> Unit = {},
     channels: List<IptvChannel>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
@@ -3843,6 +3851,18 @@ private fun GameDetailSheet(
                     topAnchor = topAnchor,
                     onManualPick = onManualPick,
                     onPlay = onPlay
+                )
+
+                // ---- PINNED FOOTER: REMIND and WATCH, always visible ----
+                // The reminder is a per-GAME choice, not the hub-wide switch: a
+                // one-off game between two teams nobody follows had no way to
+                // ask for a heads-up at all (audit: sports F3). In the pinned
+                // footer it is reachable whatever the stats body is scrolled
+                // to, beside the sheet's one action.
+                GameReminderRow(
+                    requested = reminderRequested,
+                    upcoming = game.state == GameState.UPCOMING,
+                    onToggle = onToggleReminder
                 )
 
                 // ---- PINNED FOOTER: the WATCH action, always visible ----
@@ -4755,6 +4775,70 @@ private fun ReminderToggleRow(
                 color = if (checked) KBVoid else KBTextLo,
                 modifier = Modifier
                     .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The per-GAME reminder row on a game's sheet (audit: sports F3).
+ *
+ * The hub's toggle is about followed teams. This is the one-off case the same
+ * report names: a game between two teams nobody follows had no control at all,
+ * so the only reminder the sheet could offer was a global switch that did not
+ * apply to what was on screen.
+ *
+ * Only an UPCOMING game is offered: the round announces games before kick-off
+ * (see SportsGameReminderRules.dueGames), so arming one that has started would
+ * be a switch that can never fire. The row says which it is instead of hiding,
+ * so the fact is on screen rather than implied by an absent control.
+ */
+@Composable
+private fun GameReminderRow(
+    requested: Boolean,
+    upcoming: Boolean,
+    onToggle: () -> Unit,
+) {
+    if (!upcoming) {
+        // Not a D-pad stop: there is nothing to press, and a focusable row that
+        // does nothing is worse than a line of text saying so.
+        Text(
+            text = if (requested) {
+                "Reminder set \u2014 this game has started."
+            } else {
+                "Reminders are for games that have not started yet."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = KBTextLo,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        return
+    }
+    KBCard(onClick = onToggle, focusedScale = KBFocusRow, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, KBShapeChip)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Remind me when this game starts",
+                style = MaterialTheme.typography.bodyMedium,
+                color = KBTextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (requested) "ON" else "OFF",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (requested) KBVoid else KBTextLo,
+                modifier = Modifier
+                    .background(if (requested) KBAccent else KBSurfaceRaised, KBShapePill)
                     .padding(horizontal = 10.dp, vertical = 3.dp)
             )
         }

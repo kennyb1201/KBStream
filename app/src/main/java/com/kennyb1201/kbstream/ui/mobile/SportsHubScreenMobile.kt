@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -150,6 +151,8 @@ fun SportsHubScreenMobile(
     val standingsLoading by viewModel.standingsLoading.collectAsStateWithLifecycle()
     val standingsFailed by viewModel.standingsFailed.collectAsStateWithLifecycle()
     val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
+    // The per-game reminders (audit: sports F3).
+    val gameReminderRequests by viewModel.gameReminderRequests.collectAsStateWithLifecycle()
     val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
     val matchingDone by viewModel.matchingDone.collectAsStateWithLifecycle()
     val detailSummary by viewModel.detailSummary.collectAsStateWithLifecycle()
@@ -527,6 +530,8 @@ fun SportsHubScreenMobile(
                 matchingDone = matchingDone,
                 summary = detailSummary,
                 onManualPick = { chosen -> viewModel.rememberChannel(game, chosen.id) },
+                reminderRequested = game.id in gameReminderRequests,
+                onToggleReminder = { viewModel.toggleGameReminder(game) },
                 onPlay = { feeds ->
                     detailGame = null
                     onPlayChannels(game.id, null, feeds)
@@ -1722,6 +1727,47 @@ private fun standingsTextMobile(value: String): String = value.takeIf { it.isNot
 // ── Detail sheets ──────────────────────────────────────────────────────
 
 @Composable
+/**
+ * One labelled ON/OFF row, shaped like the hub's other phone toggles.
+ *
+ * Used by the game sheet's per-game reminder (audit: sports F3): the phone
+ * sheet has no pinned footer, so the row sits at the top of the body where
+ * the thumb already is when the sheet opens.
+ */
+@Composable
+private fun MobileReminderToggleRow(
+    label: String,
+    checked: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(KBShapeChip)
+            .background(KBSurfaceRaised)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = KBTextHi,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = if (checked) "ON" else "OFF",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (checked) KBVoid else KBTextLo,
+            modifier = Modifier
+                .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
+                .padding(horizontal = 10.dp, vertical = 3.dp)
+        )
+    }
+}
+
+@Composable
 private fun GameDetailSheetMobile(
     game: SportsGame,
     channels: List<IptvChannel>,
@@ -1729,6 +1775,9 @@ private fun GameDetailSheetMobile(
     matchingDone: Boolean,
     summary: EspnGameSummary?,
     onManualPick: (IptvChannel) -> Unit,
+    /** Whether this game has its own reminder armed (audit: sports F3). */
+    reminderRequested: Boolean = false,
+    onToggleReminder: () -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit
 ) {
@@ -1742,6 +1791,22 @@ private fun GameDetailSheetMobile(
             modifier = Modifier.fillMaxHeight(0.92f)
         ) {
             DetailHeaderMobile(game = game)
+
+            // The per-game reminder: the hub's switch is about followed teams,
+            // so a one-off game had no control at all (audit: sports F3).
+            if (game.state == GameState.UPCOMING) {
+                MobileReminderToggleRow(
+                    label = "Remind me when this game starts",
+                    checked = reminderRequested,
+                    onToggle = onToggleReminder
+                )
+            } else if (reminderRequested) {
+                Text(
+                    text = "Reminder set \u2014 this game has started.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextLo
+                )
+            }
 
             Column(
                 modifier = Modifier

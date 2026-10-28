@@ -5,7 +5,9 @@ import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -56,10 +58,13 @@ class SportsNotificationWorker(
 
     private suspend fun run() {
         val favorites = AppPreferences.getSportsFavoriteTeams(applicationContext)
-        // Following is the opt-in. This is the belt to the scheduler's braces: a
-        // stale request that outlived an unfollow must do nothing rather than
-        // buzz about teams nobody follows.
-        if (!SportsGameReminderRules.shouldSchedule(favorites)) return
+        // Following a team OR asking for one game is the opt-in (audit: sports
+        // F3). This is the belt to the scheduler's braces: a stale request that
+        // outlived an unfollow must do nothing rather than buzz about teams
+        // nobody follows.
+        val prefs = SportsReminderStore.prefsFor(applicationContext)
+        val requested = SportsReminderStore.loadRequested(prefs)
+        if (!SportsGameReminderRules.shouldSchedule(favorites, requested.keys)) return
 
         val leagues = SportsLeagues.enabled(
             AppPreferences.getSportsEnabledLeagues(applicationContext)
@@ -84,10 +89,15 @@ class SportsNotificationWorker(
         if (games.isEmpty()) return
 
         val now = System.currentTimeMillis()
-        val due = SportsGameReminderRules.dueGames(games, favorites, now)
-        if (due.isEmpty()) return
+        val due = SportsGameReminderRules.dueGames(games, favorites, now, requested.keys)
+        if (due.isEmpty()) {
+            // Even with nothing due, a request for a game that has started is
+            // past its use: drop it here so the store keeps describing games
+            // that are still ahead.
+            SportsReminderStore.pruneRequested(prefs, now)
+            return
+        }
 
-        val prefs = SportsReminderStore.prefsFor(applicationContext)
         val notified = SportsReminderStore.load(prefs).toMutableMap()
         due.forEach { game ->
             if (!SportsGameReminderRules.shouldNotify(game.id, notified[game.id], now)) {
@@ -100,8 +110,10 @@ class SportsNotificationWorker(
             }
         }
         // Expired records are dropped here, so the store tracks the games it
-        // describes instead of growing for the life of the install.
+        // describes instead of growing for the life of the install. Individual
+        // requests are pruned by their kick-off, not by when they were armed.
         SportsReminderStore.prune(prefs, now)
+        SportsReminderStore.pruneRequested(prefs, now)
     }
 
     companion object {
@@ -118,18 +130,46 @@ class SportsNotificationWorker(
         private const val INTERVAL_MINUTES = 30L
 
         /**
-         * Arms the round from the current prefs: the toggle is on AND at least
-         * one team is followed. A viewer who follows nobody never gets a
-         * schedule, and unfollowing the last team cancels the one that was
-         * there.
+         * Arms the round from the current prefs: the toggle is on AND there is
+         * something to remind about - a followed team, or a game the viewer
+         * asked for by name (audit: sports F3). Unfollowing the last team with
+         * no individual request cancels the schedule that was there.
          */
         fun syncScheduleForPrefs(context: Context) {
+            val requested = SportsReminderStore.loadRequested(
+                SportsReminderStore.prefsFor(context)
+            )
             syncSchedule(
                 context,
                 enabled = AppPreferences.getSportsGameReminders(context) &&
                     SportsGameReminderRules.shouldSchedule(
-                        AppPreferences.getSportsFavoriteTeams(context)
+                        AppPreferences.getSportsFavoriteTeams(context),
+                        requested.keys
                     )
+            )
+        }
+
+        /**
+         * Runs one round now, as a one-shot.
+         *
+         * Used when a viewer arms an INDIVIDUAL game reminder: the periodic
+         * round may be up to half an hour away, and a game asked for ten minutes
+         * out would otherwise be announced after it started - or not at all.
+         * The round reads the same store the toggle writes, so this cannot
+         * announce anything the periodic run would not have.
+         */
+        fun enqueueImmediate(context: Context) {
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "${PERIODIC_WORK_NAME}_now",
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<SportsNotificationWorker>()
+                    .setConstraints(
+                        Constraints.Builder()
+                            .setRequiredNetworkType(NetworkType.CONNECTED)
+                            .build()
+                    )
+                    .addTag(TAG)
+                    .build()
             )
         }
 

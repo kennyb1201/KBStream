@@ -3,7 +3,13 @@ package com.kennyb1201.kbstream.ui.player
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
- * Which video output the MPV engine opens with, by device.
+ * Which video output the MPV engine opens with.
+ *
+ * It was a per-device table while two boxes needed the MediaCodec workaround by
+ * default; the 2026-10-28 field test confirmed the GPU path on both of them, so
+ * `auto` is one output for every device and the workaround is a manual choice
+ * only (see [resolve]). The history below is kept because it is why the table
+ * existed at all, and because a regression on either box would re-open it.
  *
  * The 6.51 mpvlibAndroid swap moved the black screen rather than removing it:
  * the Fire TV Stick 4K Plus (MediaTek, `karat`) lost its picture — audio plays,
@@ -69,11 +75,11 @@ internal object MpvVideoOutput {
      * limitation the swap was made to remove. `gpu-context=android` and
      * `android-surface-size` are the same for both outputs.
      *
-     * The device table ([resolve]) still sends Fire TV Stick 4K Plus and Onn
-     * 4K Plus to `mediacodec_embed`, so an install that is not using the manual
-     * `gpu` override behaves exactly as it did before — this output is reached
-     * through that override, and the table is re-pointed to it only after the
-     * GPU path is confirmed working on the field boxes.
+     * This is what `auto` resolves to on EVERY box since the 2026-10-28 field
+     * confirmation: the two boxes the 6.51/library swap had stalling on this
+     * path (Fire TV Stick 4K Plus and Onn 4K Plus) now deliver frames on it, so
+     * the MediaCodec workaround is no longer a default and is reached only when
+     * the viewer picks it (see [resolve] and [MEDIACODEC_EMBED]).
      */
     private val OPENGL = Settings(
         vo = AppPreferences.MPV_VO_GPU_NEXT,
@@ -102,8 +108,10 @@ internal object MpvVideoOutput {
      * `mediacodec`; a copy-back or software fallback leaves nothing to show.
      *
      * That is why this is a workaround and not a fix: it trades a black screen
-     * for no subtitles, and the field test cycles away from it the moment a
-     * GPU configuration is confirmed working on the box.
+     * for no subtitles. Since the 2026-10-28 field confirmation it is reached
+     * only when the viewer selects it; `auto` no longer resolves to it anywhere
+     * (see [resolve]), and the player says on screen what the choice costs
+     * (MpvPlayerActivity.maybeWarnNoSubtitleRendering).
      */
     private val MEDIACODEC_EMBED = Settings(
         vo = AppPreferences.MPV_VO_MEDIACODEC_EMBED,
@@ -123,42 +131,23 @@ internal object MpvVideoOutput {
     )
 
     /**
-     * The Fire TV Stick 4K Plus (2nd gen), the box the 6.51 swap black-screened.
-     *
-     * Matched on manufacturer AND (model or device): "Amazon" alone is every
-     * Fire TV ever made, and the workaround is only known-correct for this one.
-     */
-    fun isFireTvStick4kPlus(manufacturer: String, model: String, device: String): Boolean =
-        manufacturer.equals("Amazon", ignoreCase = true) &&
-            (model == "AFTKRT" || device == "karat")
-
-    /**
-     * The Onn 4K Plus — the box whose OpenGL path the library swap was believed
-     * to have fixed, and which the 11 October field test found black-screening
-     * on that same path.
-     */
-    fun isOnn4kPlus(manufacturer: String, model: String): Boolean =
-        manufacturer.contains("onn", ignoreCase = true) ||
-            model.contains("onn", ignoreCase = true)
-
-    /**
-     * The video output for [mode] on the device named by the three `Build`
-     * fields.
+     * The video output for [mode].
      *
      * An explicit mode is obeyed as-is, so the settings row can put any of them
-     * on any box while the field test looks for a working configuration. The
-     * `auto` mode is the device table below, which is what a default install
-     * gets:
+     * on any box. `auto` - what a default install gets - is the GPU path on
+     * every device: the 2026-10-28 field test confirmed it delivers frames on
+     * the two boxes the library swap had left stalling (Fire TV Stick 4K Plus,
+     * `karat`, and the Onn 4K Plus), which is the condition the old per-device
+     * table said it was waiting for. Those two entries and the workaround they
+     * selected are gone from this decision; `mediacodec_embed` remains an
+     * explicit choice for a box that ever needs it, and the player's own
+     * settings panel still says what it costs (no subtitles, hardware decoding
+     * only).
      *
-     *  - the Fire TV Stick 4K Plus, whose GPU output never delivers a frame
-     *    since 6.51, goes to MediaCodec;
-     *  - the Onn 4K Plus goes there too: OpenGL stopped delivering a frame on it
-     *    as well (the 11 October field test), so the "known good" entry it used
-     *    to have is not one anymore and the workaround is the best default
-     *    until a GPU configuration is confirmed working on the box on-device;
-     *  - every other box keeps that same OpenGL path, which is what this app
-     *    configured before the library swap, so nothing else changes behavior
-     *    on an upgrade.
+     * [manufacturer], [model] and [device] are kept in the signature because
+     * they are what the field report names, and because a future device-specific
+     * entry would have to be read from these three again - a caller that already
+     * has them should not have to change.
      *
      * A mode that is none of [AppPreferences.MPV_VO_MODES] resolves as `auto`,
      * so a corrupt or older stored value can never hand mpv a `vo` it has no
@@ -173,16 +162,6 @@ internal object MpvVideoOutput {
         AppPreferences.MPV_VO_MEDIACODEC_EMBED -> MEDIACODEC_EMBED
         AppPreferences.MPV_VO_GPU_VULKAN -> VULKAN
         AppPreferences.MPV_VO_GPU -> OPENGL
-        else -> if (isFireTvStick4kPlus(manufacturer, model, device)) {
-            MEDIACODEC_EMBED
-        } else if (isOnn4kPlus(manufacturer, model)) {
-            // Kept as its own branch rather than folded into the one above: it
-            // is a different box with a different history, and this is the one
-            // line to change if a working GPU configuration is ever confirmed
-            // on it (the settings row can put any output on it meanwhile).
-            MEDIACODEC_EMBED
-        } else {
-            OPENGL
-        }
+        else -> OPENGL
     }
 }

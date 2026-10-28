@@ -233,6 +233,12 @@ internal object SettingsSearchIndex {
             "stream ranker ranking order score sources"
         ),
         SettingSearchEntry(
+            "playback.autoplay-wait",
+            SettingsPane.PLAYBACK,
+            "Auto-play Wait",
+            "autoplay auto play wait seconds delay slow addon source pick best start"
+        ),
+        SettingSearchEntry(
             "playback.autoplay-next",
             SettingsPane.PLAYBACK,
             "Auto-play Next Episode",

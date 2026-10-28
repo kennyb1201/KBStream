@@ -169,9 +169,8 @@ private const val SUBTITLE_POSITION_HIGH = 2
 // far the two size steps scale it. The step is a fraction of the viewport
 // (0.36 of the SubtitleView's height per step, about a line and a half) so it
 // reads the same on a phone and a 4K panel.
-private const val BITMAP_CUE_POSITION_STEP = 40f
-private const val BITMAP_CUE_SCALE_SMALL = 0.85f
-private const val BITMAP_CUE_SCALE_LARGE = 1.2f
+// The bitmap cue's scale and lift live in SubtitleOverlayStyle now: one rule
+// shared by every picture-based subtitle path (audit U-F14).
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -9491,6 +9490,44 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // Cues are rendered by SubtitleCueHandler; re-rendering applies the
         // new size/background to whatever is on screen now.
         subtitleCueHandler?.refreshStyle()
+        // The libass overlay is a second renderer with its own picture, so it
+        // needs the same treatment: size and position reach it as a view scale
+        // and a lift (audit U-F14 - these settings used to reach text cues
+        // only, and this path did not exist at all).
+        applyAssOverlayStyle()
+    }
+
+    /**
+     * Applies the size and position settings to the libass overlay.
+     *
+     * An ASS script typesets itself: font sizes, margins and \\pos values are
+     * authored in the file, so the app cannot restyle the line the way
+     * [SubtitleCueHandler.renderText] restyles a caption. What it CAN do - and
+     * what the bitmap path does with the same two settings - is scale the whole
+     * picture and lift it into the chosen band. The background setting has no
+     * equivalent here for the same reason: the script's own BackColour is the
+     * authored box, and painting the app's plate over the frame would cover the
+     * picture rather than the text.
+     */
+    private fun applyAssOverlayStyle() {
+        if (!::subtitleAssImage.isInitialized) return
+        val view = subtitleAssImage
+        val size = SubtitleOverlayStyle.scaleForSize(
+            AppPreferences.getDefaultSubtitleSize(applicationContext)
+        )
+        val lift = SubtitleOverlayStyle.liftPxForPosition(
+            AppPreferences.getDefaultSubtitlePosition(applicationContext),
+            view.height
+        )
+        if (view.scaleX == size && view.translationY == lift) return
+        // Bottom-centre pivot: the baseline a subtitle rests on stays put, so a
+        // larger line grows upward instead of dropping off the surface.
+        view.pivotX = view.width / 2f
+        view.pivotY = view.height.toFloat()
+        view.scaleX = size
+        view.scaleY = size
+        view.translationY = lift
+        view.invalidate()
     }
 
     /**
@@ -9594,11 +9631,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 handler.removeCallbacks(delayedShow)
                 currentCues = emptyList()
                 renderText("")
-                // No offset and no size/background: an authored image has no
-                // "appear earlier", and Media3 has no bitmap-delay API. These
-                // settings are text-only, and these tracks drew nothing at all
-                // before this path existed, so this is a gain, not a
-                // regression.
+                // No offset: an authored image has no "appear earlier", and
+                // Media3 has no bitmap-delay API. Size and position DO apply
+                // (as a view scale and a lift, see [applyBitmapCueGeometry]);
+                // the background setting stays text-only, because the plate is
+                // a text box and an authored image has none to fill.
                 showBitmapCues(cueGroup)
                 return
             }
@@ -9723,19 +9760,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          * pushes up from the same baseline instead of sinking off screen.
          */
         private fun applyBitmapCueGeometry(view: android.view.View) {
-            val size = when (AppPreferences.getDefaultSubtitleSize(applicationContext)) {
-                SUBTITLE_SIZE_SMALL -> BITMAP_CUE_SCALE_SMALL
-                SUBTITLE_SIZE_LARGE -> BITMAP_CUE_SCALE_LARGE
-                else -> 1f
-            }
-            // The position setting is an index into low / mid / high, the same
-            // three the text renderer's own gravity uses.
-            val liftFraction = when (AppPreferences.getDefaultSubtitlePosition(applicationContext)) {
-                SUBTITLE_POSITION_HIGH -> -BITMAP_CUE_POSITION_STEP * 2f
-                SUBTITLE_POSITION_MID -> -BITMAP_CUE_POSITION_STEP
-                else -> 0f
-            }
-            val lift = liftFraction * (view.height.takeIf { it > 0 }?.toFloat() ?: 0f) / 360f
+            // One rule for both picture paths: see [SubtitleOverlayStyle].
+            val size = SubtitleOverlayStyle.scaleForSize(
+                AppPreferences.getDefaultSubtitleSize(applicationContext)
+            )
+            val lift = SubtitleOverlayStyle.liftPxForPosition(
+                AppPreferences.getDefaultSubtitlePosition(applicationContext),
+                view.height
+            )
             view.scaleX = size
             view.scaleY = size
             view.pivotX = view.width / 2f
@@ -9765,6 +9797,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         /** Re-renders with the new size/background (offset unchanged). */
         fun refreshStyle() {
+            // A bitmap cue on screen is a picture, not text: its "re-render" is
+            // re-applying the geometry. Doing it here is what makes a size or
+            // position change land mid-cue instead of waiting for the next cue
+            // group (audit U-F14).
+            if (bitmapCuesDrawn) {
+                playerView.subtitleView?.let { applyBitmapCueGeometry(it) }
+                return
+            }
             if (assOwned()) return
             if (positionDriven) {
                 updateFromPosition()
@@ -10141,7 +10181,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // needs the draw regardless of what libass says about this tick.
         val becomingVisible = subtitleAssImage.visibility != View.VISIBLE
         subtitleAssImage.setImageBitmap(frame.bitmap)
+        applyAssOverlayStyle()
         if (becomingVisible) subtitleAssImage.visibility = View.VISIBLE
+        // Size/position are applied to the view, not the script: a fresh frame
+        // is exactly when a rebuilt view has lost them (and when a first one
+        // has a height to scale against).
         // Audit P5: only repaint when the picture actually changed. The buffer
         // is reused and re-rendered every tick, so this flag is the only way a
         // static cue avoids a full-frame GPU composite at 30 fps.

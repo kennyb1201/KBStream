@@ -820,6 +820,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var openFailureSourcesTried = 0
 
     /**
+     * Sources this session has walked past because their DECODER would not
+     * start (see [PlaybackRecoveryRules.shouldAdvancePastDecoderFailure]).
+     *
+     * A third budget, beside the open-failure and no-video ones, and for the
+     * same reason: a decoder refusal is evidence about this box and this
+     * encode, not about the link, so it must not spend the attempts that exist
+     * for a dead link - nor be spent by them (audit S-F13).
+     */
+    private var decoderFailureSourcesTried = 0
+
+    /**
      * Sources this session has walked past for producing no video frame (see
      * [noVideoCheck]). Its own budget, because "no picture" and "will not open"
      * are different failures and one must not spend the other's attempts.
@@ -1133,7 +1144,43 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 )
             }
         }
-        view.onPlaybackError = { message ->
+        view.onPlaybackError = playbackError@{ message ->
+            // A decoder that will not start is this BOX's limit, not the link's
+            // problem, and the same list almost always holds a smaller encode
+            // that does decode. mpv ends the file with the reason on its log
+            // line, so that line is what decides: walk to the next source, on
+            // its own bounded budget, before the open-failure ladder spends the
+            // dead-link attempts on it (audit S-F13). Checked first because the
+            // two failures arrive through the same callback and the decoder is
+            // the more specific answer.
+            if (PlaybackRecoveryRules.isMpvDecoderFailure(message)) {
+                decoderFailureSourcesTried += 1
+                val canAdvance = PlaybackRecoveryRules.shouldAdvancePastDecoderFailure(
+                    sourcesTried = decoderFailureSourcesTried,
+                    hasAnotherSource = nextSourceOrNull(tab = null) != null
+                )
+                com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+                    com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                        cause = "MPV decoder refused the file",
+                        detail = "${message.take(120)} " +
+                            "($decoderFailureSourcesTried of " +
+                            "${PlaybackRecoveryRules.MAX_MPV_DECODER_FAILURE_SOURCES})" +
+                            " advance=$canAdvance"
+                    )
+                )
+                if (canAdvance) {
+                    Log.w(
+                        TAG,
+                        "Decoder could not start (${decoderFailureSourcesTried}/" +
+                            "${PlaybackRecoveryRules.MAX_MPV_DECODER_FAILURE_SOURCES})" +
+                            " \u2014 trying the next source"
+                    )
+                    showToast("This box can't decode that file. Trying the next one\u2026")
+                    SourceAddonSession.markDead(sessionDeadAddons, currentAddonName)
+                    tryNextSource(tab = null)
+                    return@playbackError
+                }
+            }
             // A cached link that never opened is dead: forget it now, so the
             // next replay resolves fresh instead of looping back into this card.
             invalidateCachedLinkBeforeFirstFrame()
@@ -3704,6 +3751,46 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * nothing at all) and it cannot draw subtitles. Both facts are properties of
      * the RESOLVED output, hence this reader rather than a stored preference.
      */
+    /**
+     * Set once the "this output draws no subtitles" line has been shown.
+     *
+     * The workaround output is a per-box default (see [MpvVideoOutput]), and
+     * the one thing it costs the viewer is every subtitle setting on this
+     * engine - silently, because the panel that explains it is two presses
+     * away. A session shows the line once, on the first file that actually
+     * carries a subtitle track, and never again.
+     */
+    private var subtitleRenderWarningShown = false
+
+    /**
+     * Says, on screen, that this output cannot draw subtitles (audit M-F4).
+     *
+     * The disclosure used to live in the settings panel only, so the viewer who
+     * needed it - one watching a film with a subtitle track selected and
+     * nothing on screen - was the one least likely to find it. Only when the
+     * file HAS a subtitle track: a box on this output playing a film with no
+     * subs has nothing missing, and a warning there would be noise.
+     */
+    private fun maybeWarnNoSubtitleRendering() {
+        if (subtitleRenderWarningShown) return
+        if (!videoOutputIsMediaCodecEmbed()) return
+        val hasSubtitleTrack = runCatching {
+            surface?.subtitleTracks()?.isNotEmpty() == true
+        }.getOrDefault(false)
+        if (!hasSubtitleTrack) return
+        subtitleRenderWarningShown = true
+        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                cause = "MPV output draws no subtitles",
+                detail = "vo=mediacodec_embed with a subtitle track present"
+            )
+        )
+        showToast(
+            "This video output can't draw subtitles \u2014 switch Video output to " +
+                "gpu-next in the player settings for subtitles on this box."
+        )
+    }
+
     internal fun videoOutputIsMediaCodecEmbed(): Boolean =
         MpvVideoOutput.resolve(
             AppPreferences.getMpvVoMode(this),
@@ -4875,10 +4962,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The file is open, so mpv can report its chapters; resync (and hide
         // the strip for a file that has none) before the first frame.
         syncChapters()
+        // ...and now that its tracks exist, say so if this box's video output
+        // cannot draw them (audit M-F4).
+        runOnUiThread { maybeWarnNoSubtitleRendering() }
         // Something opened, so the open-failure budget starts over: a source
         // that fails later in the session gets the same tolerance as the first
         // one, and the ladder only ever bounds a RUN of dead sources.
         openFailureSourcesTried = 0
+        // ...and a decoder that DID start proves the box can decode this list,
+        // so the decoder walk's budget starts over with it.
+        decoderFailureSourcesTried = 0
         runOnUiThread {
             loadingContainer?.visibility = View.GONE
             updateNowPlayingText()

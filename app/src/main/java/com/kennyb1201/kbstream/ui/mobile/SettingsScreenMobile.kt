@@ -1364,6 +1364,7 @@ private fun RatedTitlesPaneMobile() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlaybackPaneMobile() {
     val context = LocalContext.current
@@ -1439,6 +1440,11 @@ private fun PlaybackPaneMobile() {
     // must not re-read it here. The picker's own tap updates the state.
     var qualityCap by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
+    }
+    // Device-local like the cap above: the wait is about this phone's add-ons
+    // and its connection, not the account's.
+    var autoPlayWaitSec by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAutoPlayWaitSec(context))
     }
     // Device-local too, and for the same reason: it is about THIS phone's
     // connection.
@@ -1647,6 +1653,57 @@ private fun PlaybackPaneMobile() {
                 AppPreferences.setUseStreamRanker(context, it)
             }
         )
+        // How long Play keeps collecting sources after the first one it can
+        // start (see StreamsViewModel.resolve). A stepper plus the three old
+        // presets: the wait is a taste with no natural steps, and this is the
+        // knob for "it started a worse source than the one further down my
+        // list" (audit: streams C1).
+        Text(
+            text = "Auto-play wait",
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(MobileSpacing.chip),
+            verticalArrangement = Arrangement.spacedBy(MobileSpacing.chip)
+        ) {
+            val waitRange = AppPreferences.AUTO_PLAY_WAIT_SEC_MIN..
+                AppPreferences.AUTO_PLAY_WAIT_SEC_MAX
+            val nudgeWait: (Int) -> Unit = { delta ->
+                autoPlayWaitSec = (autoPlayWaitSec + delta).coerceIn(waitRange)
+                AppPreferences.setAutoPlayWaitSec(context, autoPlayWaitSec)
+            }
+            SettingsPillMobile(label = "\u2212", selected = false) { nudgeWait(-1) }
+            Text(
+                text = "${autoPlayWaitSec}s",
+                color = KBTextHi,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .background(KBSurfaceRaised, KBShapeChip)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            )
+            SettingsPillMobile(label = "+", selected = false) { nudgeWait(1) }
+            AppPreferences.AUTO_PLAY_WAIT_SEC_QUICK_PICKS.forEach { seconds ->
+                SettingsPillMobile(
+                    label = "${seconds}s",
+                    selected = autoPlayWaitSec == seconds,
+                    onClick = {
+                        autoPlayWaitSec = seconds
+                        AppPreferences.setAutoPlayWaitSec(context, seconds)
+                    }
+                )
+            }
+        }
+        Text(
+            text = "Longer waits can find a better source; shorter starts sooner. " +
+                "${AppPreferences.AUTO_PLAY_WAIT_SEC_MIN}\u2013" +
+                "${AppPreferences.AUTO_PLAY_WAIT_SEC_MAX} seconds, this device only.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+
         SettingsChoiceMobile(
             label = "Maximum auto-play quality",
             options = listOf(

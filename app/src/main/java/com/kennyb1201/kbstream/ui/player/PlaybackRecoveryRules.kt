@@ -263,6 +263,58 @@ internal object PlaybackRecoveryRules {
         noVideoForMs >= MPV_NO_VIDEO_GRACE_MS &&
         sourcesTried <= MAX_MPV_NO_VIDEO_SOURCES
 
+    /** How many sources the decoder-failure walk may burn before the card is the answer. */
+    const val MAX_MPV_DECODER_FAILURE_SOURCES = 2
+
+    /**
+     * The phrases mpv/FFmpeg use when the DECODER could not start, as opposed
+     * to the container or the network.
+     *
+     * This is the backup engine's half of the main player's
+     * [isDecoderResourceExhausted] (audit S-F13): ExoPlayer reports the platform
+     * code, while libmpv never surfaces one - it logs a line and ends the file.
+     * The line is the only signal there is, so the match is deliberately
+     * narrow: a decoder that will not start says so in these words, and a
+     * network or container failure uses different ones (see [MpvErrorReason],
+     * which owns those).
+     */
+    private val MPV_DECODER_FAILURE_PHRASES = listOf(
+        "could not open codec",
+        "failed to initialize a video decoder",
+        "failed to initialize a decoder",
+        "error while opening decoder",
+        "failed to create a video decoder",
+        "insufficient resources",
+        "not enough memory",
+        "out of memory",
+        "decoder init failed"
+    )
+
+    /**
+     * True when the failure text says the DECODER could not start.
+     *
+     * A decoder that will not start on this box is not a dead link: the same
+     * file may decode from a smaller encode, and a different encode may decode
+     * at all. The open path had exactly one answer - the card - so the viewer
+     * was told to switch players about a source this engine could have walked
+     * past (audit S-F13).
+     */
+    fun isMpvDecoderFailure(message: String?): Boolean {
+        val text = message?.lowercase() ?: return false
+        return MPV_DECODER_FAILURE_PHRASES.any { text.contains(it) }
+    }
+
+    /**
+     * True when the backup engine should walk past a source whose DECODER would
+     * not start.
+     *
+     * Its own budget, like the no-video ladder: a decoder refusal and a file
+     * that will not open at all are different failures, and one must not spend
+     * the other's attempts.
+     */
+    fun shouldAdvancePastDecoderFailure(sourcesTried: Int, hasAnotherSource: Boolean): Boolean =
+        hasAnotherSource && sourcesTried <= MAX_MPV_DECODER_FAILURE_SOURCES
+
     /**
      * True when the backup engine should open the NEXT ranked source instead
      * of showing the failure card.

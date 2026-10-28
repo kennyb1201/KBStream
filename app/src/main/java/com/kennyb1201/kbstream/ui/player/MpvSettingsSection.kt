@@ -117,7 +117,9 @@ internal class MpvSettingsSection(
         // from the zero-copy --hwdec=mediacodec path, so `hwdec=no` leaves
         // nothing to show: black screen, audio playing. The note below actively
         // sold it as "the way out when this box has no video decoders left" on
-        // exactly the two boxes (see MpvVideoOutput.resolve) that are sent here.
+        // exactly the boxes the old device table sent here (see
+        // MpvVideoOutput.resolve - `auto` opens the GPU path everywhere since
+        // the 2026-10-28 confirmation, so this output is now a manual choice).
         // The pill is therefore only offered when this session's output can draw
         // a copied frame, and the note says why when it cannot.
         val softwareUnavailable = activity.videoOutputIsMediaCodecEmbed()

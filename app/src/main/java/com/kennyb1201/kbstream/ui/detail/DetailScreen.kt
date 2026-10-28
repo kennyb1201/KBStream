@@ -222,7 +222,20 @@ data class StreamsTarget(
      * Opened by the Random button: the player keeps chaining into random aired
      * episodes instead of the arithmetic next one.
      */
-    val randomEpisodes: Boolean = false
+    val randomEpisodes: Boolean = false,
+    /**
+     * The binge identity this request continues from: the
+     * `behaviorHints.bingeGroup` of the stream that had just finished, carried
+     * to the PICKER as well as to auto-play (audit S-F5).
+     *
+     * Auto-play has always ordered its hand by this, and the picker did not:
+     * with source auto-select OFF the viewer was shown a list in ranker order,
+     * so the provider the binge had been continuing with was not even near the
+     * top. Null means "no context", and the list keeps the ranker's order.
+     */
+    val bingeGroup: String? = null,
+    /** The add-on the previous stream came from; the reuse tier's context. */
+    val bingeAddonName: String? = null
 )
 
 private sealed interface PeopleRowItem {

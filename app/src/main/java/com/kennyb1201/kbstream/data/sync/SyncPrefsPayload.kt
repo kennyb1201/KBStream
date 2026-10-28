@@ -311,6 +311,11 @@ object PrefsPayloadBuilder {
         // the source: a stick capped at 1080p must not cap the phone on the
         // same profile. Device-local, decided 2026-10-20.
         "max_auto_play_quality",
+        // How long auto-play waits for more add-ons is about THIS box's
+        // add-ons and connection: the TV on fibre can afford twenty seconds,
+        // the phone on a data plan wants four. Device-local, beside the ceiling
+        // it trades against (audit: streams C1).
+        "auto_play_wait_sec",
         // The cellular data saver is a statement about THIS device's
         // connection: the phone on a data plan needs it, the television on
         // fibre does not, and a synced value would either cap the TV for no

@@ -1616,7 +1616,8 @@ fun AppRoot(
         }
         // Whether every stream add-on was collected for this answer. Auto-play
         // stops collecting a grace after its first STRONG head (see
-        // StreamsViewModel.AUTOPLAY_FIRST_RESULT_GRACE_MS), so this path is the
+        // AppPreferences.getAutoPlayWaitMs - the viewer's Auto-play Wait), so
+        // this path is the
         // one caller that routinely acts on a truncated list. Acting on it is
         // the point - the viewer pressed play - but the truncation has to be
         // read here rather than discovered later: a truncated list must not be
@@ -3130,7 +3131,13 @@ fun AppRoot(
                     streamsViewModel.load(
                         current.target.contentType,
                         current.target.streamId,
-                        current.target.runtimeMinutes
+                        current.target.runtimeMinutes,
+                        // The continued binge identity, when this picker was
+                        // opened by an advance rather than by a Play press:
+                        // the list orders by it exactly as auto-play does
+                        // (audit S-F5).
+                        bingeGroup = current.target.bingeGroup,
+                        bingeAddonName = current.target.bingeAddonName
                     )
                 }
             }
@@ -3349,7 +3356,13 @@ fun AppRoot(
                         resumePositionMs = 0L,
                         totalEpisodesInSeason = current.totalEpisodesInSeason,
                         runtimeMinutes = next.runtimeMinutes,
-                        randomEpisodes = next.randomEpisodes
+                        randomEpisodes = next.randomEpisodes,
+                        // Carried on the target so the PICKER has it too: with
+                        // source auto-select OFF this hand-back opens the list,
+                        // and the list used to lose the binge identity entirely
+                        // (audit S-F5).
+                        bingeGroup = next.bingeGroup,
+                        bingeAddonName = next.addonName
                     )
                     val nextCast = current.cast.map { member ->
                         TmdbCastMember(
@@ -3419,7 +3432,11 @@ fun AppRoot(
                                 episode = nextEpisode,
                                 resumePositionMs = 0L,
                                 totalEpisodesInSeason = current.totalEpisodesInSeason,
-                                randomEpisodes = data.getBooleanExtra("next_random", false)
+                                randomEpisodes = data.getBooleanExtra("next_random", false),
+                                // Same reason as the persisted branch above:
+                                // the picker needs the identity too.
+                                bingeGroup = nextBingeGroup,
+                                bingeAddonName = nextAddonName
                             )
                             val nextCast = current.cast.map { member ->
                                 TmdbCastMember(

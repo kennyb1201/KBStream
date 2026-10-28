@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.notifications.SportsReminderStore
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
 import com.kennyb1201.kbstream.data.sports.EspnSummaryRules
@@ -209,6 +210,46 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         AppPreferences.setSportsGameReminders(getApplication(), enabled)
         _gameReminders.value = enabled
         SportsNotificationWorker.syncScheduleForPrefs(getApplication())
+    }
+
+    /**
+     * The games the viewer asked to be reminded about individually (audit:
+     * sports F3).
+     *
+     * The global toggle above is keyed on followed teams, which left a one-off
+     * game between two teams nobody follows with no way to ask for a heads-up
+     * at all - the sheet's only reminder control was the hub-wide switch. This
+     * is the per-game half: the sheet's own row, stored per profile beside the
+     * announced record (see [SportsReminderStore.loadRequested]).
+     */
+    private val _gameReminderRequests = MutableStateFlow(
+        SportsReminderStore.loadRequested(
+            SportsReminderStore.prefsFor(app)
+        ).keys.toSet()
+    )
+    val gameReminderRequests: StateFlow<Set<String>> = _gameReminderRequests.asStateFlow()
+
+    /**
+     * Adds or removes one game's own reminder and re-arms the round.
+     *
+     * Re-arming matters even when turning one OFF: the schedule exists while
+     * the toggle is on and SOMETHING is worth reminding about, so removing the
+     * last request (with nobody followed) is what cancels it.
+     */
+    fun toggleGameReminder(game: SportsGame) {
+        val app = getApplication<android.app.Application>()
+        val prefs = SportsReminderStore.prefsFor(app)
+        val wanted = game.id !in _gameReminderRequests.value
+        SportsReminderStore.setRequested(prefs, game.id, game.dateMs, wanted)
+        _gameReminderRequests.value = SportsReminderStore.loadRequested(prefs).keys.toSet()
+        SportsNotificationWorker.syncScheduleForPrefs(app)
+        if (wanted) {
+            // A game already inside the window still needs the round to run
+            // once; the periodic request may be up to half an hour away, and a
+            // viewer who asks for a game ten minutes out should not miss it
+            // because the tick just went by.
+            SportsNotificationWorker.enqueueImmediate(app)
+        }
     }
 
     /**
@@ -574,6 +615,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         _leagueOrder.value = AppPreferences.getSportsLeagueOrder(app)
         _favoriteTeamKeys.value = AppPreferences.getSportsFavoriteTeams(app)
         _gameReminders.value = AppPreferences.getSportsGameReminders(app)
+        // Per profile, like the favourites and the announced record they sit
+        // beside: whose hub it is decides whose requests these are.
+        _gameReminderRequests.value = SportsReminderStore.loadRequested(
+            SportsReminderStore.prefsFor(app)
+        ).keys.toSet()
         _selectedLeaguePath.value = null
         _view.value = LeagueView.GAMES
         _standings.value = emptyMap()

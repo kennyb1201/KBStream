@@ -45,16 +45,22 @@ class SportsGameReminderContractTest {
     }
 
     @Test
-    fun `it is never scheduled with zero followed teams`() {
+    fun `it is never scheduled with nothing to remind about`() {
         assertTrue(
-            "the schedule gate is the toggle AND at least one follow",
+            "the schedule gate is the toggle AND something to remind about - a followed team, " +
+                "or a game asked for individually (sports F3)",
             worker.contains(
-                "enabled = AppPreferences.getSportsGameReminders(context) && SportsGameReminderRules.shouldSchedule( AppPreferences.getSportsFavoriteTeams(context) )"
+                "enabled = AppPreferences.getSportsGameReminders(context) && SportsGameReminderRules.shouldSchedule( AppPreferences.getSportsFavoriteTeams(context), requested.keys )"
             )
         )
         assertTrue(
-            "and the round itself refuses to run with nobody followed, in case a stale request outlives an unfollow",
-            worker.contains("if (!SportsGameReminderRules.shouldSchedule(favorites)) return")
+            "and the round itself refuses to run with nothing requested, in case a stale request " +
+                "outlives an unfollow",
+            worker.contains("if (!SportsGameReminderRules.shouldSchedule(favorites, requested.keys)) return")
+        )
+        assertTrue(
+            "the individual requests are read from the same per-profile store the sheet writes",
+            worker.contains("SportsReminderStore.loadRequested(prefs)")
         )
     }
 

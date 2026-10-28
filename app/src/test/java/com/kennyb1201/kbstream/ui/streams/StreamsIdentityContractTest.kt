@@ -183,8 +183,11 @@ class StreamsIdentityContractTest {
             load.contains("loadJob?.cancel()")
         )
         assertTrue(
-            "the autoplay grace is still what bounds the press-of-Play resolve",
-            viewModel.contains("firstResultGraceMs = AUTOPLAY_FIRST_RESULT_GRACE_MS")
+            "the autoplay grace is still what bounds the press-of-Play resolve, and it is " +
+                "the viewer's own Auto-play Wait rather than a constant",
+            viewModel.contains(
+                "firstResultGraceMs = AppPreferences.getAutoPlayWaitMs(getApplication())"
+            )
         )
         assertTrue(
             "and the picker still shows sources per add-on as they arrive",

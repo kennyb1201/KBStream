@@ -39,6 +39,11 @@ object AppPreferences {
     // box can decode, so a stick's 1080p answer must not become the phone's
     // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
     private const val KEY_MAX_AUTO_PLAY_QUALITY = "max_auto_play_quality"
+    // How long auto-play keeps collecting stream add-ons after it already holds
+    // a source it could start, before it picks from what it has. Device-local:
+    // how long is worth waiting is a property of this box's add-ons and network,
+    // not of the profile (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    private const val KEY_AUTO_PLAY_WAIT_SEC = "auto_play_wait_sec"
     private const val KEY_BINGE_GROUP_PREFER = "binge_group_prefer"
     private const val KEY_BINGE_GROUP_REUSE = "binge_group_reuse"
     private const val KEY_BINGE_GROUP_FALLBACK = "binge_group_fallback"
@@ -457,6 +462,71 @@ object AppPreferences {
 
     fun setMaxAutoPlayQuality(context: Context, cap: Int) {
         prefs(context).edit().putInt(KEY_MAX_AUTO_PLAY_QUALITY, cap).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    /**
+     * The range [KEY_AUTO_PLAY_WAIT_SEC] may hold, in whole seconds.
+     *
+     * It used to be three fixed chips - 4 / 10 / 20 - which is one choice too
+     * few for a taste that has no natural steps: a viewer on a slow add-on wants
+     * 25, and a viewer who cannot stand waiting wants 2. Any number in this
+     * range is accepted, and the range is also what a stored value is clamped
+     * into, so it is the only thing standing between a corrupt pref and a Play
+     * press that waits minutes.
+     */
+    const val AUTO_PLAY_WAIT_SEC_MIN = 1
+    const val AUTO_PLAY_WAIT_SEC_MAX = 30
+
+    /** Ten seconds: the middle the three old chips bracketed. */
+    const val AUTO_PLAY_WAIT_SEC_DEFAULT = 10
+
+    /**
+     * The values still offered as one-press chips beside the stepper.
+     *
+     * Kept because they are what most people pick - 4 is "start now", 20 is "I
+     * would rather wait than start the wrong source", 10 is the middle - and a
+     * chip is one press where the stepper is several. They are conveniences,
+     * not the vocabulary: [getAutoPlayWaitSec] accepts any value in
+     * [AUTO_PLAY_WAIT_SEC_MIN]..[AUTO_PLAY_WAIT_SEC_MAX].
+     */
+    val AUTO_PLAY_WAIT_SEC_QUICK_PICKS = listOf(4, 10, 20)
+
+    /**
+     * How long auto-play keeps collecting add-ons after the first startable
+     * answer, in seconds.
+     *
+     * The read is clamped rather than trusted because this is a stored value: an
+     * install that downgrades, a corrupt blob or a hand-edited pref must not be
+     * able to turn the press of Play into a several-minute wait, and a zero must
+     * not disable the grace and start on the very first answer either. A value
+     * inside the range is obeyed exactly - 7 and 23 are both legal choices now,
+     * which is what makes this a setting instead of three presets.
+     */
+    fun getAutoPlayWaitSec(context: Context): Int =
+        clampAutoPlayWaitSec(
+            readIntPref(context, KEY_AUTO_PLAY_WAIT_SEC, AUTO_PLAY_WAIT_SEC_DEFAULT)
+        )
+
+    /**
+     * [seconds] brought into [AUTO_PLAY_WAIT_SEC_MIN]..[AUTO_PLAY_WAIT_SEC_MAX].
+     *
+     * Split out of the read/write pair so the domain rule is testable without a
+     * Context (see AutoPlayWaitSettingTest): it is the whole guard against a
+     * stored 0, a negative, or a value from another build turning Play into a
+     * wait nobody asked for. Values inside the range pass through unchanged -
+     * 7 and 23 are legal, which is what makes this a number and not a preset.
+     */
+    fun clampAutoPlayWaitSec(seconds: Int): Int =
+        seconds.coerceIn(AUTO_PLAY_WAIT_SEC_MIN, AUTO_PLAY_WAIT_SEC_MAX)
+
+    /** The same setting as a duration, for the resolver that spends it. */
+    fun getAutoPlayWaitMs(context: Context): Long = getAutoPlayWaitSec(context) * 1_000L
+
+    fun setAutoPlayWaitSec(context: Context, seconds: Int) {
+        prefs(context).edit()
+            .putInt(KEY_AUTO_PLAY_WAIT_SEC, clampAutoPlayWaitSec(seconds))
+            .apply()
         notifyDisplayPrefChanged()
     }
 

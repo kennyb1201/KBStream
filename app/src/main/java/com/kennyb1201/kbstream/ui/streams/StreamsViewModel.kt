@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
@@ -59,9 +60,9 @@ data class ResolvedSources(
     /**
      * Whether EVERY stream add-on was collected for this answer.
      *
-     * Auto-play stops collecting a short grace after the first add-on answers
-     * (see [StreamsViewModel.AUTOPLAY_FIRST_RESULT_GRACE_MS]), so its result can
-     * be missing add-ons entirely. A partial answer may paint the picker - it is
+     * Auto-play stops collecting after the viewer's own Auto-play Wait once a
+     * STRONG answer is in hand (see [AppPreferences.getAutoPlayWaitMs]), so its
+     * result can be missing add-ons entirely. A partial answer may paint the picker - it is
      * a true list of real sources - but it may NOT stand as the target's
      * finished load: the fallback picker opened on one and never fetched again, 
      * so a viewer with a Plex-class add-on first and AIOStreams second saw one
@@ -135,24 +136,6 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         /** One add-on's own ceiling. Unchanged; the overall wait used to be this. */
         const val ADDON_TIMEOUT_MS = 15_000L
 
-        /**
-         * How long AUTO-PLAY keeps collecting add-ons once its hand holds a row
-         * it could start with a LINK (audit P1; strengthened by the 2026-10-27
-         * weak-head amendment).
-         *
-         * The picker wants every add-on: its tabs are per add-on, and a source
-         * that arrives late still belongs in the list. Auto-play does not - it
-         * plays the head of the ranked list, and waiting out a hanging add-on
-         * costs the viewer the full 15 s before the first frame even though the
-         * top add-on answered in under a second. This is the extra time the
-         * head of the list gets to be improved by a second answer - re-decided
-         * per wait, so a row that can be started directly and arrives after a
-         * first answer of hashes still gets it (see [fetch] and
-         * [AutoPlayQuality.hasStrongHead]). A hand that is only STARTABLE -
-         * hashes the walk would have to resolve - does not earn it: the resolve
-         * is a round trip, and a slower add-on may hold a direct row.
-         */
-        const val AUTOPLAY_FIRST_RESULT_GRACE_MS = 2_500L
     }
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
@@ -214,7 +197,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private data class StreamsRequest(
         val contentType: String,
         val streamId: String,
-        val runtimeMinutes: Int?
+        val runtimeMinutes: Int?,
+        /**
+         * The binge identity the request was made with, so REFRESH keeps it.
+         *
+         * A refresh re-asks for the SAME title; dropping the context there
+         * would put the list back in ranker order on the one press a viewer
+         * makes when they are looking for the provider they were bingeing on
+         * (audit S-F5). Read only when the target matches, the same discipline
+         * that keeps refresh from replaying another title's sources.
+         */
+        val bingeGroup: String? = null,
+        val bingeAddonName: String? = null
     )
 
     /** The in-flight [load], so a second one supersedes it instead of racing it. */
@@ -251,14 +245,20 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * so a 45-minute episode's 4 GB and a two-hour film's 4 GB are not read the
      * same way (see StreamRanker).
      */
-    fun load(contentType: String, streamId: String, runtimeMinutes: Int? = null) {
+    fun load(
+        contentType: String,
+        streamId: String,
+        runtimeMinutes: Int? = null,
+        bingeGroup: String? = null,
+        bingeAddonName: String? = null
+    ) {
         // One load at a time: a second request - the picker's REFRESH, or a new
         // target - supersedes the first. Without this the two coroutines
         // interleave, and because each one appends to `_streams` through the
         // per-add-on callback, the list could end up showing a mix of the two
         // requests' sources.
         loadJob?.cancel()
-        noteRequest(contentType, streamId, runtimeMinutes)
+        noteRequest(contentType, streamId, runtimeMinutes, bingeGroup, bingeAddonName)
         val generation = ++stateGeneration
         // The fetch's own ticket, handed in rather than created inside [fetch], so
         // [resolve] can check the one its publish belongs to.
@@ -284,7 +284,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         _streams.value = _streams.value + incoming
                     }
                 },
-                runtimeMinutes = runtimeMinutes
+                runtimeMinutes = runtimeMinutes,
+                bingeGroup = bingeGroup,
+                bingeAddonName = bingeAddonName
             )
 
             // Cancellation alone does not cover this: there is no suspension
@@ -316,7 +318,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * appear per add-on as they arrive, the same as the first load.
      */
     fun refresh(contentType: String, streamId: String, runtimeMinutes: Int? = null) {
-        load(contentType, streamId, runtimeMinutes)
+        // The binge context is kept from the request for THIS target, and only
+        // from that one: the guard is the same identity check the doc above
+        // makes about the sources themselves.
+        val sameTarget = lastRequest
+            ?.takeIf { it.contentType == contentType && it.streamId == streamId }
+        load(
+            contentType = contentType,
+            streamId = streamId,
+            runtimeMinutes = runtimeMinutes,
+            bingeGroup = sameTarget?.bingeGroup,
+            bingeAddonName = sameTarget?.bingeAddonName
+        )
     }
 
     /**
@@ -326,8 +339,20 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * publishes picker state stamps both identity slots ([_loadedKey] at the
      * publish, this one here), so the two cannot split again.
      */
-    private fun noteRequest(contentType: String, streamId: String, runtimeMinutes: Int?) {
-        lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)
+    private fun noteRequest(
+        contentType: String,
+        streamId: String,
+        runtimeMinutes: Int?,
+        bingeGroup: String? = null,
+        bingeAddonName: String? = null
+    ) {
+        lastRequest = StreamsRequest(
+            contentType,
+            streamId,
+            runtimeMinutes,
+            bingeGroup,
+            bingeAddonName
+        )
     }
 
     /**
@@ -382,9 +407,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             debugLines = debugLines,
             runtimeMinutes = runtimeMinutes,
             // The press-of-Play path: this resolve is on the critical path to
-            // the first frame, so it stops collecting a short grace after the
-            // first add-on answers instead of waiting out the slowest one.
-            firstResultGraceMs = AUTOPLAY_FIRST_RESULT_GRACE_MS
+            // the first frame, so it stops collecting a grace after the first
+            // STRONG answer instead of waiting out the slowest add-on.
+            //
+            // The grace is the viewer's own setting (Settings > Stream Picks &
+            // Auto-play > Auto-play Wait), not a constant: it is the one number
+            // that decides how much of the list Play waits for, and a viewer
+            // whose add-ons are slow or whose list is deep is the one who knows
+            // whether 4 s or 30 s is right. One read per press, so a change made
+            // in Settings applies to the next Play without a restart.
+            firstResultGraceMs = AppPreferences.getAutoPlayWaitMs(getApplication())
         )
 
         // The result still goes back to the caller - auto-play needs it - but
@@ -422,7 +454,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         debugLines: MutableList<String>,
         onAddonResult: ((List<Stream>) -> Unit)? = null,
         runtimeMinutes: Int? = null,
-        firstResultGraceMs: Long? = null
+        firstResultGraceMs: Long? = null,
+        bingeGroup: String? = null,
+        bingeAddonName: String? = null
     ): ResolvedSources {
         val generation = ticket
         // A new target's groups replace the last one's as soon as this fetch
@@ -646,12 +680,42 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 null
             }
 
+        // Binge continuation in the PICKER's OWN list (audit S-F5). Auto-play
+        // has always ordered its hand by the group/addon the last episode
+        // played with; the picker did not, so with source auto-select OFF the
+        // viewer was shown ranker order and the provider they had been
+        // bingeing on was anywhere in it. Same resolver, same rule, same
+        // settings toggles - the two surfaces cannot disagree about what the
+        // binge continues with. It only reorders; nothing is hidden, and with
+        // no context handed over the list is untouched.
+        val bingeOutcomes = bingeGroup to bingeAddonName
+        val bingeOrdered =
+            if (bingeGroup.isNullOrBlank() && bingeAddonName.isNullOrBlank()) {
+                preferredStreams
+            } else {
+                BingeGroupResolver.orderedForNextEpisode(
+                    context = getApplication(),
+                    streams = preferredStreams,
+                    previousBingeGroup = bingeGroup,
+                    previousAddonName = bingeAddonName
+                )
+            }
+        if (
+            bingeOrdered.size == preferredStreams.size &&
+            bingeOrdered.indices.any { bingeOrdered[it] !== preferredStreams[it] }
+        ) {
+            debugLines.add(
+                "  binge: promoted the continued source (group=${bingeOutcomes.first ?: "-"}," +
+                    " addon=${bingeOutcomes.second ?: "-"})"
+            )
+        }
+
         // The same torrent served by several addons is ONE choice: collapse the
         // repeats into the best-placed row (see StreamDedup). Deliberately after
         // the reorder above, so the survivor is the addon the viewer would have
         // picked from anyway - the one that last worked this title - and before
         // the badges below, so the surviving row keeps them.
-        val deduped = StreamDedup.collapse(preferredStreams)
+        val deduped = StreamDedup.collapse(bingeOrdered)
 
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.

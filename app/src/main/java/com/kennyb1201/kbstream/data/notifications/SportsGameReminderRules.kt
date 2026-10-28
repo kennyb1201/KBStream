@@ -33,10 +33,20 @@ internal object SportsGameReminderRules {
     const val DEDUPE_TTL_MS = 24L * 60L * 60_000L
 
     /**
-     * Whether the reminder round should exist at all. Following is the opt-in:
-     * no followed teams, no schedule.
+     * Whether the reminder round should exist at all. Following a team OR
+     * asking for one game is the opt-in: no followed teams and no individual
+     * request, no schedule.
+     *
+     * [requestedGameIds] is the per-game half (audit: sports F3). It used to be
+     * the favourites list alone, so a viewer who follows nobody - or who wants
+     * one game between two teams they do not follow - had no path to a reminder
+     * at all. The WorkManager row is a global round either way; what changed is
+     * what may arm it.
      */
-    fun shouldSchedule(favoriteKeys: Set<String>): Boolean = favoriteKeys.isNotEmpty()
+    fun shouldSchedule(
+        favoriteKeys: Set<String>,
+        requestedGameIds: Set<String> = emptySet()
+    ): Boolean = favoriteKeys.isNotEmpty() || requestedGameIds.isNotEmpty()
 
     /**
      * The games to announce for [favoriteKeys] at [nowMs]: upcoming, involving a
@@ -47,11 +57,17 @@ internal object SportsGameReminderRules {
         games: List<SportsGame>,
         favoriteKeys: Set<String>,
         nowMs: Long,
+        requestedGameIds: Set<String> = emptySet(),
     ): List<SportsGame> =
         games.asSequence()
             .filter { it.state == GameState.UPCOMING }
             .filter { it.dateMs > nowMs && it.dateMs <= nowMs + LEAD_WINDOW_MS }
-            .filter { it.involvesFavorite(favoriteKeys) }
+            // A followed team OR the viewer's own request for this game. The
+            // window and the upcoming filter above are unchanged: a request is
+            // "remind me when it starts", not "buzz me any time".
+            .filter {
+                it.involvesFavorite(favoriteKeys) || it.id in requestedGameIds
+            }
             .sortedBy { it.dateMs }
             .toList()
 

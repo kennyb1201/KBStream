@@ -431,6 +431,10 @@ internal fun encodeTarget(target: StreamsTarget): JSONObject = JSONObject().appl
     target.runtimeMinutes?.let { put("runtimeMinutes", it) }
     if (target.startFromBeginning) put("startFromBeginning", true)
     if (target.randomEpisodes) put("randomEpisodes", true)
+    // Binge continuation survives a restore for the same reason it rides the
+    // target at all: the picker orders by it (audit S-F5).
+    target.bingeGroup?.let { put("bingeGroup", it) }
+    target.bingeAddonName?.let { put("bingeAddonName", it) }
 }
 
 internal fun decodeTarget(json: JSONObject): StreamsTarget? = try {
@@ -445,7 +449,9 @@ internal fun decodeTarget(json: JSONObject): StreamsTarget? = try {
         totalEpisodesInSeason = json.optNullableInt("totalEpisodesInSeason"),
         runtimeMinutes = json.optNullableInt("runtimeMinutes"),
         startFromBeginning = json.optBoolean("startFromBeginning", false),
-        randomEpisodes = json.optBoolean("randomEpisodes", false)
+        randomEpisodes = json.optBoolean("randomEpisodes", false),
+        bingeGroup = json.optNullableString("bingeGroup"),
+        bingeAddonName = json.optNullableString("bingeAddonName")
     )
 } catch (t: Throwable) {
     null

@@ -494,6 +494,12 @@ fun SettingsScreen(
     var maxAutoPlayQuality by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
     }
+    // Device-local, like the ceiling below it: the wait is about this box's
+    // add-ons and this viewer's patience, not the account's
+    // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    var autoPlayWaitSec by remember(profileRowKey) {
+        mutableStateOf(AppPreferences.getAutoPlayWaitSec(context))
+    }
     var enableTunneling by remember(profileRowKey) {
         mutableStateOf(AppPreferences.getEnableTunneling(context))
     }
@@ -2566,6 +2572,70 @@ fun SettingsScreen(
                         useStreamRanker = it
                         AppPreferences.setUseStreamRanker(context, it)
                     }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // How long Play keeps listening for more sources after the first
+                // one it could start (see StreamsViewModel.resolve). This is the
+                // knob for "it picked a worse source than the one further down
+                // my list": the longer the wait, the more of the list is in hand
+                // when the pick is made, and the later the first frame.
+                //
+                // A stepper with the three old presets beside it, because the
+                // value is a taste with no natural steps: 4 / 10 / 20 stay one
+                // press away, and anything from 1 to 30 is reachable (audit:
+                // streams C1 - it was three fixed chips and nothing to read
+                // them).
+                Text(
+                    text = "Auto-play Wait",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .searchAnchor(
+                            SettingsSearchIndex.entryFor("playback.autoplay-wait")
+                        )
+                        .padding(bottom = 4.dp)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val waitRange = AppPreferences.AUTO_PLAY_WAIT_SEC_MIN..
+                        AppPreferences.AUTO_PLAY_WAIT_SEC_MAX
+                    val nudgeWait: (Int) -> Unit = { delta ->
+                        autoPlayWaitSec =
+                            (autoPlayWaitSec + delta).coerceIn(waitRange)
+                        AppPreferences.setAutoPlayWaitSec(context, autoPlayWaitSec)
+                    }
+                    KBCard(onClick = { nudgeWait(-1) }) { PillChip("\u2212", false) }
+                    Text(
+                        text = "${autoPlayWaitSec}s",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                    KBCard(onClick = { nudgeWait(1) }) { PillChip("+", false) }
+                    AppPreferences.AUTO_PLAY_WAIT_SEC_QUICK_PICKS.forEach { seconds ->
+                        KBCard(onClick = {
+                            autoPlayWaitSec = seconds
+                            AppPreferences.setAutoPlayWaitSec(context, seconds)
+                        }) {
+                            PillChip("${seconds}s", autoPlayWaitSec == seconds)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "How long Play keeps collecting sources after the first one it " +
+                        "can start: longer can find a better source, shorter starts sooner. " +
+                        "${AppPreferences.AUTO_PLAY_WAIT_SEC_MIN}–" +
+                        "${AppPreferences.AUTO_PLAY_WAIT_SEC_MAX} seconds, this device only.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
