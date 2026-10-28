@@ -41,51 +41,6 @@ internal object WatchedStatusKeys {
      */
     fun key(id: String, type: String): String = "${type.lowercase()}::$id"
 
-    /**
-     * True when the ACTIVE profile marked [key]'s TITLE explicitly.
-     *
-     * The one rule every surface applying the sibling-ownership filter reads
-     * (see `WatchedStatusRepository.explicitWatchedOverrideKeys` /
-     * `...OverrideIds`): the key matches a stored mark, or its ID does. The id
-     * tier is what makes the exemption work on every rail - a title's type
-     * spelling is whatever the surface that drew the tile called it (`series`
-     * from TMDB, `anime` or blank from an add-on catalog), while the ownership
-     * rule being exempted works on the title's NAME, so the two spellings are
-     * one title to everything except this comparison.
-     *
-     * Both inputs come from the override store and nothing else, so a title
-     * whose watched state is tracker-derived is never covered however it is
-     * keyed - the kids-leak filter stays exactly as it was for those.
-     */
-    fun explicitlyMarked(
-        key: String,
-        explicitKeys: Set<String>,
-        explicitIds: Set<String>
-    ): Boolean {
-        if (key in explicitKeys) return true
-        val id = key.substringAfter("::", "").trim()
-        return id.isNotEmpty() && id in explicitIds
-    }
-}
-
-/**
- * What an explicit mark on the ACTIVE profile covers, as a predicate the
- * sibling-ownership filter can ask per key.
- *
- * `key in marks` is the whole API, so every filter reads
- * `keyOwnedByAnotherProfile(key) && key !in explicitWatched` and the rule lives
- * here rather than in ten copies ([WatchedStatusKeys.explicitlyMarked]: the
- * stored key, or the stored title id). Two sets because the store can only
- * answer keys, and a title's type spelling is per-surface (see that function).
- */
-class ExplicitWatchedMark(
-    private val keys: Set<String>,
-    private val ids: Set<String>
-) {
-    operator fun contains(candidate: String): Boolean =
-        WatchedStatusKeys.explicitlyMarked(candidate, keys, ids)
-}
-
     /** The id flavor a rail item's own TMDB id is keyed under. */
     fun tmdbKeyId(tmdbId: Int): String = "tmdb:$tmdbId"
 
