@@ -4054,6 +4054,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * once per session - this is reached from the progress tick, and a runtime
      * that is unknown now is unknown a second later too.
      */
+    /**
+     * The length to hand the NEXT episode's resolve.
+     *
+     * This engine has no next-episode object to read a runtime from (the main
+     * player's advance does), and the handoff is built synchronously, so the
+     * value carried here was simply null - which turns off the ranker's density
+     * scoring for every auto-advance this engine makes. The episode playing now
+     * is the same show's own number, and that is what the ranker divides a
+     * file's size by; null only when the session knows nothing at all.
+     */
+    private fun nextEpisodeRuntimeProxy(): Int? =
+        currentEpisodeRuntimeMinutes?.takeIf { it > 0 } ?: launchRuntimeMinutes
+
     private suspend fun currentEpisodeTmdbRuntimeMs(): Long? {
         launchRuntimeMinutes?.let { return it * 60_000L }
         val showSeason = season ?: return null
@@ -4690,6 +4703,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         surface?.seekTo(position)
     }
 
+    /** Follow-seek throttle for a bar drag, the main player's own value. */
+    private val TOUCH_FOLLOW_SEEK_MS = 150L
+
     /**
      * Adaptive source downshift for the MPV engine (see [RebufferDownshift.kt]).
      *
@@ -5086,7 +5102,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             episode = targetEpisode,
             title = "S$targetSeason\u2009E$targetEpisode",
             streamId = nextStreamId(targetSeason, nextFileEpisodeFor(targetSeason, targetEpisode)),
-            runtimeMinutes = null,
+            runtimeMinutes = nextEpisodeRuntimeProxy(),
             bingeGroup = currentBingeGroup,
             addonName = currentAddonName,
             overview = episodeOverview,
@@ -6708,6 +6724,45 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     override fun onChromeSeekTo(positionMs: Long) = seekTo(positionMs)
+
+    // ── The bar's finger drag (U-F3) ───────────────────────────────────
+    // The main player answers the chrome's drag callbacks and this engine did
+    // not, so a drag on the bar moved the thumb and asked mpv for preview frames
+    // while the picture carried on playing underneath - the bar said one thing
+    // and the video did another. The three callbacks are the whole fix: pause
+    // for the drag, follow it at the same throttle the main player uses, and put
+    // the play state back on release.
+
+    /** True between a drag's start and its release, so re-entry cannot re-capture. */
+    private var chromeScrubInFlight = false
+
+    /** Whether the drag started on a playing picture, which is what it restores. */
+    private var wasPlayingBeforeChromeScrub = false
+
+    /** The last follow-seek's uptime, throttling [TOUCH_FOLLOW_SEEK_MS]. */
+    private var lastChromeFollowSeekMs = 0L
+
+    override fun onChromeScrubStart() {
+        if (chromeScrubInFlight) return
+        chromeScrubInFlight = true
+        val playing = surface?.isPaused() != true
+        wasPlayingBeforeChromeScrub = playing
+        if (playing) surface?.togglePause()
+    }
+
+    override fun onChromeScrubProgress(positionMs: Long) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastChromeFollowSeekMs < TOUCH_FOLLOW_SEEK_MS) return
+        lastChromeFollowSeekMs = now
+        seekTo(positionMs)
+    }
+
+    override fun onChromeScrubEnd() {
+        if (!chromeScrubInFlight) return
+        chromeScrubInFlight = false
+        if (wasPlayingBeforeChromeScrub && surface?.isPaused() == true) surface?.togglePause()
+        wasPlayingBeforeChromeScrub = false
+    }
 
     override fun onChromeNext() {
         // The scheme-aware target, not `episode + 1`: on a show whose files hold
