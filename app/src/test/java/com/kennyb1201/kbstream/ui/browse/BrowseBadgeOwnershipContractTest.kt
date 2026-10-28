@@ -32,7 +32,11 @@ class BrowseBadgeOwnershipContractTest {
         "collection/CollectionViewModel.kt"
     )
 
-    private val filter = ".filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }"
+    // An explicit mark on this profile outranks the ownership rule, so the
+    // predicate is the ownership test AND the override exemption.
+    private val filter =
+        ".filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) && " +
+            "key !in explicitWatched }"
 
     @Test
     fun `both badge sets are filtered at publication`() {
@@ -50,6 +54,10 @@ class BrowseBadgeOwnershipContractTest {
                     "publication, from the sections that publication is about",
                 2,
                 occurrences(vm, "val siblingOwned = siblingOwnedMarkerIdsFor(")
+            )
+            assertTrue(
+                "$path: the exemption is the live override set, read for this publication",
+                vm.contains("watchedStatusRepository.explicitWatchedOverrideKeys()")
             )
             assertTrue(
                 "$path: the set has to be resolved BEFORE the flatMap that builds the " +

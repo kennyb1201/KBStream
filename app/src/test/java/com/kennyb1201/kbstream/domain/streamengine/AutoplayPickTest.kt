@@ -26,10 +26,16 @@ import org.junit.Test
  */
 class AutoplayPickTest {
 
-    private fun stream(title: String, bingeGroup: String? = null) = Stream(
+    private fun stream(
+        title: String,
+        bingeGroup: String? = null,
+        tag: String = ""
+    ) = Stream(
         name = "addon",
         title = title,
-        url = "https://example.invalid/${title.hashCode()}",
+        // [tag] keeps two rows of the SAME file distinct: Stream is a data
+        // class, so two rows built from one title are one map key.
+        url = "https://example.invalid/${title.hashCode()}-$tag",
         behaviorHints = bingeGroup?.let { StreamBehaviorHints(bingeGroup = it) }
     )
 
@@ -61,8 +67,8 @@ class AutoplayPickTest {
     fun `the add-on half breaks the tie when no row is tagged`() {
         // A provider that stopped tagging consecutive files: the group says
         // nothing, so the add-on it came from is the only identity left.
-        val first = stream("Show S01E02 1080p")
-        val remembered = stream("Show S01E02 1080p")
+        val first = stream("Show S01E02 1080p", tag = "a")
+        val remembered = stream("Show S01E02 1080p", tag = "b")
         val servedBy = mapOf(first to "AddonA", remembered to "AddonB")
 
         assertSame(

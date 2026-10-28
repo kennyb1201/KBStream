@@ -84,7 +84,10 @@ class TorBoxResolveCreateSettingTest {
     fun `both settings panes offer the row and the search index knows it`() {
         for (pane in listOf(TV_PANE, PHONE_PANE)) {
             val body = readSource(pane)
-            assertTrue("$pane must draw the row", body.contains("Add missing torrents on play"))
+            assertTrue(
+                "$pane must draw the row, named cached-only (spec S2/D7)",
+                body.contains("Add cached torrents to TorBox on play")
+            )
             assertTrue(
                 "$pane must write the preference",
                 body.contains("getTorboxResolveCreate") && body.contains("setTorboxResolveCreate")
@@ -93,7 +96,7 @@ class TorBoxResolveCreateSettingTest {
         val search = readSource(SEARCH)
         assertTrue(
             "a row the search cannot find is a row a ten-pane rail hides",
-            search.contains("\"Add missing torrents on play\"")
+            search.contains("\"Add cached torrents to TorBox on play\"")
         )
     }
 

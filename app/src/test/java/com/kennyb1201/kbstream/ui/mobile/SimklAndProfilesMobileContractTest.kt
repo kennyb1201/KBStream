@@ -153,10 +153,15 @@ class SimklAndProfilesMobileContractTest {
                 mobile.contains("Dialog(onDismissRequest = { showDisconnectConfirm = false })")
         )
         assertTrue(
-            "the dialog names the wipe, not just the unlink",
-            mobile.contains("clears every") &&
-                mobile.contains("watched marker") &&
-                mobile.contains("cannot be undone")
+            "the dialog says what SURVIVES the unlink, because nothing local is " +
+                "wiped any more (playback spec C4/D1)",
+            mobile.contains("Your watch history, resume positions and Continue ") &&
+                mobile.contains("stay here") &&
+                mobile.contains("cannot revoke its own access")
+        )
+        assertFalse(
+            "the wipe promise is gone, and no confirmation may name one",
+            mobile.contains("clears every")
         )
         assertTrue(
             "only the confirm calls the view model",

@@ -48,8 +48,8 @@ class TitleProfileOwnershipSetTest {
         TitleProfileOwnership.clear(context)
     }
 
-    private fun ownersOf(title: String): Set<String> =
-        TitleProfileOwnership.snapshot(context)[titleProfileKey("series", title)].orEmpty()
+    private fun ownersOf(title: String, type: String = "series"): Set<String> =
+        TitleProfileOwnership.snapshot(context)[titleProfileKey(type, title)].orEmpty()
 
     @Test
     fun `two profiles watching one title are both owners`() {
@@ -126,7 +126,11 @@ class TitleProfileOwnershipSetTest {
 
         TitleProfileOwnership.removeProfile(context, "kids")
 
-        assertEquals(setOf("profile-1"), ownersOf("Moana"))
+        assertEquals(
+            "the kids profile's claim went; profile 1 still owns the film",
+            setOf("profile-1"),
+            ownersOf("Moana", "movie")
+        )
         assertTrue("Bluey had only the deleted profile", ownersOf("Bluey").isEmpty())
     }
 

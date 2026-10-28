@@ -129,11 +129,17 @@ class StreamsScreenMobileContractTest {
         // is asserted where it is written now, and separately that this screen
         // reaches it through that call.
         val sharedPick = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
+        // One pick for the whole app now (spec C19): the episode rules, the
+        // binge tie-break and the ceiling live inside AutoplayPick.pick, and
+        // every surface - this picker, the TV picker, the background resolve -
+        // reaches them through it instead of rebuilding the chain.
+        val sharedChain = source("com/kennyb1201/kbstream/domain/streamengine/AutoplayPick.kt")
         assertTrue(
             "auto-play must use the shared episode pick and quality ceiling",
             mobile.contains("autoplayPickFor(") &&
-                sharedPick.contains("EpisodeMatch.autoplayPick(") &&
-                sharedPick.contains("AutoPlayQuality.cappedPick(")
+                sharedPick.contains("AutoplayPick.pick(") &&
+                sharedChain.contains("EpisodeMatch.autoplayPick(") &&
+                sharedChain.contains("AutoPlayQuality.cappedPick(")
         )
         assertTrue(
             "what auto-play did must still be reported",

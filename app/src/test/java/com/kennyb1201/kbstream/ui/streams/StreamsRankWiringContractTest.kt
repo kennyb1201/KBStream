@@ -281,13 +281,16 @@ class StreamsRankWiringContractTest {
     @Test
     fun `every auto-play path applies the viewer's quality ceiling`() {
         val tv = source("com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt")
+        // The chain itself lives in one object now (spec C19), and the ceiling
+        // is applied there: the effective cap - the viewer's own, narrowed by
+        // the cellular data saver on a metered connection.
+        val sharedChain = source("com/kennyb1201/kbstream/domain/streamengine/AutoplayPick.kt")
         assertTrue(
-            "StreamsScreen.kt must cap the automatic pick: without it a 1080p " +
-                "ceiling still starts a 4K head",
-            tv.contains("AutoPlayQuality.cappedPick(") &&
-                // The effective ceiling (the viewer's own cap, narrowed by the
-                // cellular data saver on a metered connection).
-                tv.contains("cap = AppPreferences.getEffectiveAutoPlayQuality(context)")
+            "StreamsScreen.kt must cap the automatic pick, through the shared pick: " +
+                "without it a 1080p ceiling still starts a 4K head",
+            tv.contains("AutoplayPick.pick(") &&
+                sharedChain.contains("AutoPlayQuality.cappedPick(") &&
+                sharedChain.contains("cap = com.kennyb1201.kbstream.data.settings.AppPreferences")
         )
 
         // The phone has one capped pick, and one caller of it: the picker's own
@@ -299,10 +302,8 @@ class StreamsRankWiringContractTest {
         // exists to prevent.
         val shared = source("com/kennyb1201/kbstream/ui/mobile/DownloadActions.kt")
         assertTrue(
-            "autoplayPickFor must cap the automatic pick: without it a 1080p " +
-                "ceiling still starts a 4K head",
-            shared.contains("AutoPlayQuality.cappedPick(") &&
-                shared.contains("cap = AppPreferences.getEffectiveAutoPlayQuality(context)")
+            "autoplayPickFor must reach the capped pick through the shared object",
+            shared.contains("AutoplayPick.pick(")
         )
         assertTrue(
             "the phone picker must reach the capped pick through autoplayPickFor, " +

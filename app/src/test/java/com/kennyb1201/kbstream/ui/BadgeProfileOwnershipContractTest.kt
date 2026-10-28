@@ -115,7 +115,7 @@ class BadgeProfileOwnershipContractTest {
         )
         assertTrue(
             "an unattributed title is not somebody else's",
-            rule.contains("val owner = ownerByTitleKey[key] ?: return false")
+            rule.contains("val owners = ownerByTitleKey[key] ?: return false")
         )
         assertTrue(
             "and a missing live profile means no rule applies",

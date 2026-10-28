@@ -144,10 +144,22 @@ class ActorDeepDiveContractTest {
             2,
             occurrences(vm, "val siblingOwned = siblingOwnedMarkerIdsFor(personDetail, resolvedMap)")
         )
+        // Collapsed to one line: the predicate is split over three lines in the
+        // source, and the shape being pinned is the conjunction, not the wrap.
+        val flattened = vm.replace(Regex("\\s+"), " ")
         assertEquals(
-            "and both apply the filter at publication, as Home does",
+            "and both apply the filter at publication, as Home does - exempting only " +
+                "a key this profile marked itself (spec 'explicit mark wins')",
             2,
-            occurrences(vm, ".filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) }")
+            occurrences(
+                flattened,
+                ".filterNot { key -> keyOwnedByAnotherProfile(key, siblingOwned) && " +
+                    "key !in explicitWatched }"
+            )
+        )
+        assertTrue(
+            "and that exemption is the live override set, read for this publication",
+            vm.contains("watchedStatusRepository.explicitWatchedOverrideKeys()")
         )
         assertTrue(
             "the ownership map and profile id are what the filter is built from",

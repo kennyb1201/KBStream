@@ -137,8 +137,10 @@ class LibraryDeepDiveContractTest {
         val enrich = functionBody(VIEW_MODEL, "private fun enrich(")
 
         assertTrue(
-            "one ownership test for the pair",
-            enrich.contains("(watched != null || partiallyWatched != null) &&") &&
+            "one ownership test for the pair - exempting a badge key this profile " +
+                "marked itself, which outranks the rule",
+            enrich.contains("val explicitBadgeKeys =") &&
+                enrich.contains("explicitBadgeKeys.any { key -> key in explicitWatchedKeys }") &&
                 enrich.contains("titleOwnedByAnotherProfile(")
         )
         assertTrue(

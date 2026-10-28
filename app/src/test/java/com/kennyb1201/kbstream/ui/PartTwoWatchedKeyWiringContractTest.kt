@@ -79,8 +79,8 @@ class PartTwoWatchedKeyWiringContractTest {
         val vm = code(DETAIL_VM)
         assertEquals(
             "the collection parts and the recommendation rail both go through the rule, " +
-                "once for each watched set",
-            2,
+                "once for each watched set, and once more for the explicit-mark exemption",
+            3,
             Regex("WatchedStatusKeys\\.watchedKeysOf\\(").findAll(vm).count()
         )
         assertTrue(

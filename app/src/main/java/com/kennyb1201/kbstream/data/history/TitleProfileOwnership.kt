@@ -249,10 +249,16 @@ internal object TitleProfileOwnership {
         }
     }
 
-    /** Forgets every owner. Used when the whole device's history is wiped. */
+    /**
+     * Forgets every owner. Used when the whole device's history is wiped.
+     *
+     * The memo is dropped rather than emptied: the file is the source of truth,
+     * and a later write (a fresh pull, or a store migrated by an older build)
+     * must be readable from it again.
+     */
     @Synchronized
     fun clear(context: Context) {
-        cache = LinkedHashMap()
+        cache = null
         runCatching {
             context.applicationContext
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)

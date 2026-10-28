@@ -271,8 +271,8 @@ class StreamRootIdWiringContractTest {
     @Test
     fun `both cloud resume rows root their episode id the same way`() {
         assertEquals(
-            "the Simkl and MDBList resume rows must both root through the resolver",
-            2,
+            "the Simkl, MDBList and Trakt resume rows must all root through the resolver",
+            3,
             Regex("rootId = vm\\.tmdbRepository\\.streamRootIdFor\\(").findAll(playbackResume).count()
         )
         assertFalse(

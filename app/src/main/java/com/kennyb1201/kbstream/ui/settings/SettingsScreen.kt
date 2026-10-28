@@ -1740,8 +1740,8 @@ fun SettingsScreen(
                         "With this on, pressing such a source registers it in your TorBox " +
                         "account first - it will appear in your library, and TorBox may count " +
                         "it against your download quota - then plays it. Off, only torrents " +
-                        "already in your account play. Nothing that is not already cached is " +
-                        "ever added.",
+                        "already in your account play. " +
+                        "Nothing that is not already cached is ever added.",
                     checked = torboxResolveCreate,
                     onToggle = {
                         torboxResolveCreate = it

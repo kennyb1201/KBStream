@@ -71,7 +71,11 @@ class MpvStallWatchdogContractTest {
         )
         assertTrue(
             "the first frame arms it (VIDEO_RECONFIG), as does the load and a resume",
-            activity.contains("view.onPictureReady = { armStallWatchdog() }") &&
+            // The handler is a block, not a one-liner: the splash comes down
+            // from the same callback (spec C21), so arming is its first line.
+            activity.substringAfter("view.onPictureReady = {")
+                .substringBefore("runOnUiThread")
+                .contains("armStallWatchdog()") &&
                 functionBody(activity, "private fun onFileLoaded(")
                     .contains("armStallWatchdog()") &&
                 functionBody(activity, "private fun onPausedChanged(")
