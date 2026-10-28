@@ -37,7 +37,10 @@ class SimklRatingGuardTest {
 
         now += 1_000
         assertTrue("two seconds on, a call may go", guard.tryAcquire())
-        assertEquals(0L, guard.blockedForMs())
+        // The window restarts on the call that just went, so the leg is held for
+        // the full spacing again - what the guard reports is time until the NEXT
+        // call may go, which is what the caller waits out.
+        assertEquals(2_000L, guard.blockedForMs())
     }
 
     @Test

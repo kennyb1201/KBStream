@@ -317,6 +317,11 @@ class TasteSignalsTest {
         assertTrue(TasteSignals.entries.value.isEmpty())
 
         useProfile(PROFILE_ONE)
+        // The re-read is explicit here because that is what the store offers: a
+        // profile switch is noticed by ensureLoaded (the HiddenTitles rule, which
+        // the rated-title pane drives from its LaunchedEffect). Reading `entries`
+        // without it answers whichever profile loaded last.
+        TasteSignals.ensureLoaded(context)
         assertEquals(
             "the profile that was not active keeps its rating",
             1,

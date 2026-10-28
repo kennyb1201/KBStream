@@ -178,7 +178,13 @@ object TasteProfileStore {
         val app = context.applicationContext
         val name = ProfileStorage.prefsName(app, PREFS_BASE)
         val blob = readOrNull(app, name) ?: return
-        if (blob.dirty) return
+        // A profile that was never written is EMPTY, not unreadable: there is
+        // nothing stored to protect, so the mark is MATERIALIZED rather than
+        // skipped because the blank blob already reads as dirty (the default a
+        // fresh blob carries for the rebuild's benefit). Only a blob that exists
+        // and will not parse refuses to be written over - readOrNull answered
+        // null for that case above, and never for this one.
+        if (blob.dirty && prefs(app, name).contains(KEY_PROFILE)) return
         publish(app, name, blob.copy(dirty = true))
     }
 

@@ -223,15 +223,16 @@ class UiUniformityBatchDContractTest {
     @Test
     fun `the detail action row is drawn as buttons`() {
         assertEquals(
-            "Play, Random, Trailer, the My List toggle and the two taste thumbs " +
-                "are buttons, not cards: the pill edge and the button step of the " +
-                "focus scale, instead of the card's 12dp corner at 1.03. My List " +
-                "joined the row when a title's own page learned to unsave it, and " +
-                "the thumbs joined it after that",
-            6,
+            "Play, Random, Trailer, the My List toggle, the two taste thumbs and " +
+                "the numeric rating pill are buttons, not cards: the pill edge and " +
+                "the button step of the focus scale, instead of the card's 12dp " +
+                "corner at 1.03. My List joined the row when a title's own page " +
+                "learned to unsave it, the thumbs joined it after that, and the " +
+                "rating pill with them",
+            7,
             count(
                 source("ui/detail/DetailScreen.kt"),
-                "shape = KBShapePill, focusedScale = KBFocusButton"
+                "focusedScale = KBFocusButton"
             )
         )
     }

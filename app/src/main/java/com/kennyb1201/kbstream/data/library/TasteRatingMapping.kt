@@ -76,9 +76,22 @@ object TasteRatingMapping {
             Instant.ofEpochMilli(epochMs).truncatedTo(ChronoUnit.SECONDS).toString()
         }
 
-    /** Whether a normalized media type is the movies bucket (otherwise shows). */
-    fun isMovie(mediaType: String?): Boolean =
-        HiddenTitles.normalizedType(mediaType.orEmpty()) == "movie"
+    /**
+     * Whether a media type is the movies bucket. Everything else is shows.
+     *
+     * Only a spelling that actually names movies lands here: a null or blank
+     * type is NOT assumed to be a film, because the assumption would send an
+     * unknown title to the movies endpoint - where the trackers answer 404 for a
+     * show - instead of leaving it in the bucket the two fit-less spellings
+     * share. The store's own identity rule (HiddenTitles.normalizedType) is
+     * deliberately not reused: it must fold an unknown type into ONE bucket so a
+     * title cannot be counted twice, which is a different question.
+     */
+    fun isMovie(mediaType: String?): Boolean {
+        val raw = mediaType?.trim()?.lowercase().orEmpty()
+        if (raw.isEmpty()) return false
+        return HiddenTitles.normalizedType(raw) == "movie"
+    }
 
     // ------------------------------------------------------------------
     // Reading the store's own key spellings back out

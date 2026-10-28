@@ -322,16 +322,18 @@ class BecauseYouWatchedKidsGateTest {
         // source order.
         assertTrue(
             "the ranking must be the blend's own",
-            body.contains("compareByDescending<BlendCandidate> { blendScore(it, seedGenreIds) }") &&
+            body.contains(
+                "compareByDescending<BlendCandidate> { " +
+                    "blendTotalScore(it, seedGenreIds, affinity) }"
+            ) &&
                 body.contains(".thenByDescending { it.strongestTier()?.weight ?: 0 }") &&
                 body.contains(".thenBy { it.order }")
         )
         // Filtering happens AFTER scoring: the gate is downstream of the sort.
         val pipeline = blendPipeline()
-        assertTrue(
-            pipeline.indexOf("blendRank(scored, seedGenreIds)") <
-                pipeline.indexOf("blendKidsGate(")
-        )
+        val rankedAt = pipeline.indexOf("blendRank(scored, seedGenreIds, affinity)")
+        assertTrue("the pipeline still ranks before it gates", rankedAt >= 0)
+        assertTrue(rankedAt < pipeline.indexOf("blendKidsGate("))
     }
 
     @Test

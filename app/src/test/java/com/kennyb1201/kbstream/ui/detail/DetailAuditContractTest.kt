@@ -475,20 +475,23 @@ class DetailAuditContractTest {
      * Nothing else grows a thumb. Every rail reaches the signal through the
      * poster menu's rows, not through a glyph on the card - the watched
      * checkmark/eye badge family owns card corners - so the only sources that may
-     * name these drawables are the two Detail screens plus the ONE surface a later
-     * spec put a pair on: the Because-You-Watched end-credits header, whose thumbs
-     * are for the just-finished title (the BYW thumbs spec, which supersedes the
-     * taste spec's BYW exclusion for that surface only). Its pick cards, like
-     * every other card in the app, still carry none.
+     * name these drawables are the two Detail screens plus the TWO surfaces a
+     * later spec each put a pair on: the Because-You-Watched end-credits header,
+     * whose thumbs are for the just-finished title (the BYW thumbs spec, which
+     * supersedes the taste spec's BYW exclusion for that surface only), and the
+     * Rated Titles pane, whose rows repeat the stored signal as a filled glyph
+     * (the manager spec's row shape). BYW's pick cards, every rail and every
+     * other card in the app still carry none.
      */
     @Test
-    fun `the thumbs exist only in the two Detail action rows and the BYW header`() {
+    fun `the thumbs exist only in the two Detail action rows, the BYW header and the rated list`() {
         assertEquals(
             "a thumb anywhere else is a surface no spec put one on",
             listOf(
                 "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt",
-                "com/kennyb1201/kbstream/ui/mobile/DetailScreenMobile.kt",
-                "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt"
+                "com/kennyb1201/kbstream/ui/detail/DetailScreenMobile.kt",
+                "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt",
+                "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
             ),
             productionSources()
                 .filter { (_, text) -> text.contains("ic_detail_thumb") }

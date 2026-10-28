@@ -62,19 +62,25 @@ class PosterContextMenuFocusInsetContractTest {
             spacerAt > rowsAt
         )
 
-        // And it must be the last thing in the menu's Column: everything between
-        // it and the picker that follows the menu is a closing brace, so no
-        // later row can be composed below the room that was made for one.
-        val afterMenu = menu.indexOf(LIBRARY_PICKER, spacerAt)
-        assertTrue("the menu must still end before its picker", afterMenu > spacerAt)
-        val tail = menu.substring(spacerAt + SPACER.length, afterMenu)
+        // And it must be the last child of the menu's Column: from the end of
+        // the clearance up to the Column's own closing brace there is nothing
+        // but the rest of that line, so no later row can be composed below the
+        // room that was made for one.
+        //
+        // The boundary is the Column's close - the first line that is a lone
+        // "}" - rather than the next sibling widget: the menu hosts the list
+        // picker and the rating dialog BEHIND the Column, and an anchor on either
+        // of those would let a row composed inside the Column go unnoticed.
+        val tail = menu.substring(spacerAt + SPACER.length)
             .lines()
+            .drop(1)
+            .takeWhile { it.trim() != "}" }
             .filterNot { it.trim().startsWith("//") }
             .joinToString("\n")
             .trim()
         assertTrue(
             "nothing may be composed after the clearance: found '${tail.take(60)}'",
-            tail.all { it == '}' || it.isWhitespace() }
+            tail.isEmpty()
         )
     }
 
@@ -108,6 +114,5 @@ class PosterContextMenuFocusInsetContractTest {
         const val MENU = "com/kennyb1201/kbstream/ui/components/PosterContextMenu.kt"
         const val THEME = "com/kennyb1201/kbstream/ui/theme/Theme.kt"
         const val SPACER = "Spacer(modifier = Modifier.height(KBFocusRowInset))"
-        const val LIBRARY_PICKER = "libraryPickTarget?.let { target ->"
     }
 }
