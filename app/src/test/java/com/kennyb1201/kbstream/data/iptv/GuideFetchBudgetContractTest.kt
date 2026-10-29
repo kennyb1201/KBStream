@@ -120,9 +120,11 @@ class GuideFetchBudgetContractTest {
             worker.contains("catch (timeout: TimeoutCancellationException)")
         )
         assertTrue(
-            "an abandoned source must not count towards a successful pass",
-            worker.contains(".onSuccess { didImport ->") &&
-                worker.contains("if (didImport) {") &&
+            "an abandoned source must not count towards a successful pass - and neither " +
+                "may a source that completed without landing a guide (a refused empty " +
+                "feed, a 304 over an empty one): see GuideImportOutcome.landed",
+            worker.contains(".onSuccess { outcome ->") &&
+                worker.contains("if (outcome != null && outcome.landed) {") &&
                 worker.contains("imported++")
         )
         // And a source that DID import is marked fresh at once, not once after

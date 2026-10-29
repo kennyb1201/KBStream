@@ -282,11 +282,28 @@ class XmltvImporter(
         // provider froze, or its generator returned an empty schedule. Swapping
         // it in replaced a guide that had programs with one that has none, and
         // the viewer got "No program data" on every channel with nothing
-        // anywhere saying why. When the live guide for this source still holds
-        // programs in the window this import covers, the import is refused: the
+        // anywhere saying why. A zero-kept import is therefore REFUSED: the
         // live rows stay exactly as they are, the staged rows are discarded,
         // and the pass ends as `EMPTY_FEED_KEPT_LIVE` - explicitly NOT an
         // error, so no exception, no watchdog retry, no failure banner.
+        //
+        // UNCONDITIONALLY, and that is the blank-guide recurrence's fix. The
+        // refusal used to also require `liveProgramsInWindow > 0` - a guide
+        // that still held programs in THIS window, i.e. one worth protecting.
+        // The state it was supposed to save the viewer from is exactly the
+        // state that disarmed it: once the stored window had expired there was
+        // nothing left in it to count, so an empty feed was PROMOTED (the live
+        // rows deleted, zero rows re-keyed), the caller saw a successful import
+        // and stamped the guide fresh, and every automatic retry stayed
+        // suppressed for another 12h - so the blank guide could not recover on
+        // its own. With an expired window there is nothing to lose by
+        // refusing: the channels stay, the marker stays honest, and the next
+        // cadence retries.
+        //
+        // A FIRST import that keeps no programs lands here too, and that is the
+        // same case: there is nothing to promote and nothing to protect. The
+        // pre-import state is what the screens already say for a guide that has
+        // never landed ("Lineup not loaded", "No program data").
         //
         // The zero-yield case only: a healthy import that keeps fewer programs
         // than the one before it is a provider's business, not a refusal.
@@ -295,7 +312,7 @@ class XmltvImporter(
         // stores its validators as usual), it is the CONTENT that is empty, and
         // when the feed regenerates its validators change and the next refresh
         // fetches it in full.
-        if (keptPrograms == 0 && liveProgramsInWindow > 0) {
+        if (keptPrograms == 0) {
             // The staged rows go, exactly as a failed attempt's are swept at
             // the start of the next one - but now, so the discarded parse
             // cannot sit in the database waiting for that next import.
@@ -315,10 +332,16 @@ class XmltvImporter(
                 liveProgramsInWindow = liveProgramsInWindow,
                 elapsedMs = System.currentTimeMillis() - startedAt
             )
+            // Both window facts are named so the two refusals are
+            // distinguishable in a capture: an expired window
+            // (`liveProgramsInWindow=0`) is the blank-guide case that used to be
+            // promoted, a populated one is the frozen-feed case the guard was
+            // built for.
             Log.w(
                 TAG,
                 "IMPORT EMPTY FEED refused source=${Redaction.url(sourceUrl)} " +
-                    "liveProgramsInWindow=$liveProgramsInWindow"
+                    "liveProgramsInWindow=$liveProgramsInWindow " +
+                    "hadLiveGuide=$hadLiveGuide"
             )
             return refused
         }
@@ -695,10 +718,15 @@ data class GuideImportStats(
     val keptPrograms: Int = 0,
     val skippedPrograms: Int = 0,
     /**
-     * True when this parse kept NO programs and the live guide had some in the
-     * window this import covered, so the swap was refused and the live guide
-     * left in place (see the empty-feed guard in [XmltvImporter.import]). Not a
-     * failure: the import completed, it just had nothing better to offer.
+     * True when this parse kept NO programs, so the swap was refused and the
+     * live guide left in place (see the empty-feed guard in
+     * [XmltvImporter.import]). Not a failure: the import completed, it just had
+     * nothing better to offer.
+     *
+     * Unconditional since the blank-guide fix: whether or not the live guide
+     * still holds programs in this window, an empty feed is never promoted - a
+     * guide with no rows in the window is precisely what a promote would make
+     * permanent.
      */
     val emptyFeedKeptLive: Boolean = false
 )

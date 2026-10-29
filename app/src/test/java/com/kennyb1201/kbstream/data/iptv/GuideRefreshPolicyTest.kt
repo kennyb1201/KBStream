@@ -67,9 +67,16 @@ class GuideRefreshPolicyTest {
 
     @Test
     fun `an empty guide falls back to the age rule`() {
-        // A feed that is empty on purpose (EmptyFeedKeptLive) writes a fresh
-        // marker and holds no programs: treating "no window" as urgent would
-        // start an import on every single entry.
+        // An empty guide holds no programs, so its window says nothing: treating
+        // "no window" as urgent would start an import on every single entry, and
+        // that is the loop the stall cooldown exists to prevent.
+        //
+        // The fallback is also the RECOVERY half of the blank-guide fix, now
+        // that markers are honest: a refused empty feed no longer stamps, so a
+        // blank guide ages to `ageStale = true` and this rule turns the next
+        // entry into a DUE import (the first case below is the fresh-marker
+        // case, which stays NONE on purpose - nobody "fixes" this into an entry
+        // loop).
         assertEquals(
             "nothing to thin, and the marker is fresh: leave it alone",
             GuideRefreshPolicy.Urgency.NONE,

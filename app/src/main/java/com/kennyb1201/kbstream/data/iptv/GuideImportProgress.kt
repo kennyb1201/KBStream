@@ -62,6 +62,33 @@ sealed interface GuideImportOutcome {
 }
 
 /**
+ * Whether this outcome actually LANDED a guide - the one rule the freshness
+ * markers are allowed to follow.
+ *
+ * Both import paths used to stamp on anything that did not throw: a `304`, an
+ * empty feed kept live and a zero-program promote all counted as "imported", so
+ * the marker said fresh for a guide that had not changed (or had just been
+ * emptied) and every automatic retry stayed suppressed for the full 12h
+ * cadence. That is how a blank guide stayed blank until someone pressed
+ * IMPORT EPG by hand.
+ *
+ * Landed means the stored guide can be read: a promoted parse that kept
+ * programs, or a `304` honored over a guide that already holds programs in the
+ * read window (the same bar as `honorNotModified`). Everything else - a
+ * refused empty feed, a zero-program promote, a `304` answered over an empty
+ * guide, a timeout, a failure, a cancelled pass - is an ANSWER but not a new
+ * guide, so it must leave the markers alone and let the cadence retry.
+ */
+internal val GuideImportOutcome.landed: Boolean
+    get() = when (this) {
+        is GuideImportOutcome.Imported -> programs > 0
+        is GuideImportOutcome.Unchanged -> programsInWindow > 0
+        is GuideImportOutcome.EmptyFeedKeptLive,
+        is GuideImportOutcome.Failed,
+        is GuideImportOutcome.Cancelled -> false
+    }
+
+/**
  * The phase of a guide import, as far as anyone outside it can tell.
  *
  * Only two, because they are the two a viewer can tell apart: the long

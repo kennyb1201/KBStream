@@ -30,6 +30,7 @@ import com.kennyb1201.kbstream.data.iptv.epgEntryImportCoolingDown
 import com.kennyb1201.kbstream.data.iptv.GuideImportState
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
+import com.kennyb1201.kbstream.data.iptv.landed
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -497,16 +498,23 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * single-source entry point (it is what the worker loop calls per URL), so
      * the spec's preferred outcome is the one implemented here - no fallback.
      *
-     * The stamp is recorded exactly as the loop records it, so Playlist Setup
-     * says when this source last succeeded, and a failure lands as that source's
-     * own failure: a non-fatal log plus no stamp, leaving its rows as they were.
+     * The stamp is recorded exactly as the loop records it - LANDED only, see
+     * [GuideImportOutcome.landed] - so Playlist Setup says when this source last
+     * stored a readable guide, and a failure lands as that source's own failure:
+     * a non-fatal log plus no stamp, leaving its rows as they were.
      */
     private fun importXumoAdapterOnly() {
         viewModelScope.launch {
             runCatchingCancellable {
-                repository.importGuide(XumoGuide.SOURCE_KEY)
-                GuideSourceStamps.recordSuccess(prefs, XumoGuide.SOURCE_KEY)
-                _guideRefreshTick.value += 1
+                val outcome = repository.importGuide(XumoGuide.SOURCE_KEY)
+                // The same rule as the pass and the worker: an import that did not
+                // land (a refused empty feed, a 304 over an empty guide) stored
+                // nothing, so it neither stamps this source nor asks the screens
+                // to re-read a window that did not move.
+                if (outcome.landed) {
+                    GuideSourceStamps.recordSuccess(prefs, XumoGuide.SOURCE_KEY)
+                    _guideRefreshTick.value += 1
+                }
             }.onFailure { error ->
                 // Cancellation is already rethrown by runCatchingCancellable;
                 // what lands here is a real source failure, and it stays one:
@@ -2054,8 +2062,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             var lastError: Throwable? = null
             var imported = 0
             val outcomes = mutableListOf<GuideImportOutcome>()
-            for (url in urls) {
-                GuideImportProgress.startSource(imported + 1)
+            // Indexed, not counted off `imported`: that now counts LANDED
+            // sources only, so deriving the progress index from it would show a
+            // refused source's number twice (and never reach the last one).
+            urls.forEachIndexed { index, url ->
+                GuideImportProgress.startSource(index + 1)
                 try {
                     // Watched: a source that stops sending data is aborted and
                     // re-opened once on a fresh connection, and a second stall
@@ -2065,7 +2076,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // behind someone else's import" from "reading": a queued
                     // source publishes nothing, and its clock must not run
                     // while it waits.
-                    outcomes += epgImportWatchdog.runWithStallRetry(url) { attempt ->
+                    val sourceOutcome = epgImportWatchdog.runWithStallRetry(url) { attempt ->
                         importGuideSource(
                             url = url,
                             freshConnection = attempt > 0,
@@ -2074,12 +2085,21 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                             forceFresh = forceFresh
                         )
                     }
-                    imported++
-                    // Per SOURCE, at once: Playlist Setup's "last imported
-                    // from" line reads these, and a source that really landed
-                    // must be credited even when a later one in the same pass
-                    // fails (§3.6).
-                    GuideSourceStamps.recordSuccess(prefs, url)
+                    outcomes += sourceOutcome
+                    // LANDED only, never merely "did not throw": a `304`, a
+                    // refused empty feed and a zero-program promote all
+                    // complete without an exception, and counting them as an
+                    // import marked the whole guide fresh for 12h on a pass
+                    // that stored nothing - the suppression that kept a blank
+                    // guide blank. See GuideImportOutcome.landed.
+                    if (sourceOutcome.landed) {
+                        imported++
+                        // Per SOURCE, at once: Playlist Setup's "last imported
+                        // from" line reads these, and a source that really
+                        // landed must be credited even when a later one in the
+                        // same pass fails (§3.6).
+                        GuideSourceStamps.recordSuccess(prefs, url)
+                    }
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
                     if (t is EpgStalledException) {
@@ -2096,6 +2116,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 // has to show what it still is rather than go blank.
                 guideEndsAtMs = guideDataEndsAt()
                 lastError?.let { throw it }
+                // The answers still get reported - an empty feed is a fact the
+                // viewer should see ("Feed returned no programs"), and so is a
+                // `304` over an empty guide. What they must NOT do is move a
+                // freshness marker, and none of them reaches the marker below
+                // because this returns first.
+                outcome = mergeOutcomes(outcomes)
                 return
             }
             if (lastError != null) {
@@ -2110,14 +2136,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             } else {
                 outcome = mergeOutcomes(outcomes)
             }
-            // The freshness marker is stamped only when EVERY source imported.
-            // It was unconditional ("at least one made it"), so one source
-            // timing out left the failed source marked fresh for the whole
-            // 12 h refresh window - its channels carried no programs until the
-            // next scheduled pass, and `refreshIfNeeded` would not retry. A
-            // partial run therefore leaves the marker alone: the next pass
-            // re-imports the set, which costs a re-download but is the only way
-            // the missing source gets another answer.
+            // The freshness marker is stamped only when no source FAILED and at
+            // least one LANDED (the `imported == 0` pass returned above, and a
+            // source that merely answered without landing counted for
+            // nothing - see GuideImportOutcome.landed). It was unconditional
+            // ("at least one made it"), so one source timing out left the
+            // failed source marked fresh for the whole 12 h refresh window -
+            // its channels carried no programs until the next scheduled pass,
+            // and `refreshIfNeeded` would not retry. A partial run therefore
+            // leaves the marker alone: the next pass re-imports the set, which
+            // costs a re-download but is the only way the missing source gets
+            // another answer.
             if (lastError == null) {
                 markUpdated(KEY_EPG_UPDATED_AT)
                 markGuideFile()

@@ -179,25 +179,121 @@ class GuideImportRecoveryTest {
     }
 
     @Test
-    fun `a first import with no programs still promotes its channels`() = runBlocking {
+    fun `a first import with no programs is refused too - nothing to promote, nothing to protect`() =
+        runBlocking {
+            // Behaviour change, pinned on purpose (kbstream-guide-blank-recurrence
+            // fix, part A): the refusal used to also require a live guide with
+            // programs in the window, so a first empty import - and every empty
+            // import after the stored window had expired - was PROMOTED. That
+            // promote deleted the live rows, re-keyed zero, and was reported to
+            // the caller as a successful import, which stamped the guide fresh
+            // and silenced every retry. The guard is zero-only now.
+            val importer = XmltvImporter(daoProvider = { dao })
+            val now = System.currentTimeMillis()
+            val xml = guideXml(withProgramme = false, nowMs = now)
+
+            val first = importer.import(guideUrl, xml.byteInputStream())
+
+            assertTrue(
+                "an empty feed is refused even with nothing stored yet - there is no " +
+                    "guide to promote",
+                first.emptyFeedKeptLive
+            )
+            assertEquals(0, first.keptPrograms)
+            assertEquals(
+                "and no live rows are created by a refused import, not even channels",
+                0,
+                dao.countChannelsForSource(guideUrl)
+            )
+            assertEquals(
+                "the discarded parse leaves nothing staged",
+                0,
+                dao.countChannelsForSource("$guideUrl@importing")
+            )
+
+            // An already-empty guide is the same answer: the import is refused
+            // rather than promoting an empty body over an empty guide.
+            val again = importer.import(guideUrl, xml.byteInputStream())
+            assertTrue(again.emptyFeedKeptLive)
+            assertEquals(0, dao.countChannelsForSource(guideUrl))
+        }
+
+    @Test
+    fun `an empty import over an EXPIRED window is refused, not promoted`() = runBlocking {
+        // The blank-guide recurrence itself: the live guide still has channels
+        // and programs, but none of them fall inside the window this import
+        // covers (the stored schedule has run out - the state the viewer sees as
+        // a blank grid). `liveProgramsInWindow` is therefore 0, which used to
+        // DISARM the guard: the empty body was promoted, the live rows were
+        // deleted and zero re-keyed, and the caller saw a success. The window
+        // can be empty and the guard must still hold.
         val importer = XmltvImporter(daoProvider = { dao })
         val now = System.currentTimeMillis()
-        val xml = guideXml(withProgramme = false, nowMs = now)
 
-        val first = importer.import(guideUrl, xml.byteInputStream())
+        val first = importer.import(guideUrl, guideXml(withProgramme = true, nowMs = now).byteInputStream())
+        assertEquals(1, first.keptPrograms)
+        val channelsBefore = dao.getChannelsBySource(guideUrl)
+        val programsBefore = programRows(guideUrl)
+        assertTrue(programsBefore.isNotEmpty())
 
-        assertFalse(
-            "there was no live schedule to protect, so this is not a refusal",
-            first.emptyFeedKeptLive
+        // A window a hundred days out: nothing the live guide holds overlaps it,
+        // so the guard's old evidence reads zero while the guide itself is intact.
+        val farStart = now + 100L * 24L * 60L * 60_000L
+        val refused = importer.import(
+            sourceUrl = guideUrl,
+            input = guideXml(withProgramme = false, nowMs = now).byteInputStream(),
+            windowStartMs = farStart,
+            windowEndMs = farStart + 6L * 60L * 60_000L
         )
-        assertEquals(0, first.keptPrograms)
-        assertEquals(2, dao.countChannelsForSource(guideUrl))
 
-        // An already-empty guide is in the same class: the channels are
-        // refreshed and the import still promotes.
-        val again = importer.import(guideUrl, xml.byteInputStream())
-        assertFalse(again.emptyFeedKeptLive)
-        assertEquals(2, dao.countChannelsForSource(guideUrl))
+        assertTrue(
+            "an empty feed over an expired window is refused, not promoted",
+            refused.emptyFeedKeptLive
+        )
+        assertEquals(0, refused.keptPrograms)
+        assertEquals(
+            "the live channels are untouched",
+            channelsBefore,
+            dao.getChannelsBySource(guideUrl)
+        )
+        assertEquals(
+            "and so is every live program row",
+            programsBefore,
+            programRows(guideUrl)
+        )
+        assertEquals(
+            "the discarded parse leaves nothing staged",
+            0,
+            dao.countChannelsForSource("$guideUrl@importing")
+        )
+    }
+
+    @Test
+    fun `a smaller but non-empty import still promotes - the guard is zero-only`() = runBlocking {
+        // The boundary is pinned rather than widened: a provider that keeps fewer
+        // programs than last time is its own business, and refusing that would
+        // stop a thinning-but-real guide from ever updating.
+        val importer = XmltvImporter(daoProvider = { dao })
+        val now = System.currentTimeMillis()
+
+        val full = importer.import(
+            guideUrl,
+            guideXml(withProgramme = true, nowMs = now, programmes = 2).byteInputStream()
+        )
+        assertEquals(2, full.keptPrograms)
+
+        val smaller = importer.import(
+            guideUrl,
+            guideXml(withProgramme = true, nowMs = now).byteInputStream()
+        )
+
+        assertFalse("a nonzero import is never a refusal", smaller.emptyFeedKeptLive)
+        assertEquals(1, smaller.keptPrograms)
+        assertEquals(
+            "and it is promoted: the live guide now holds the smaller schedule",
+            1,
+            dao.countProgramsForSourceInWindow(guideUrl, 0L, Long.MAX_VALUE)
+        )
     }
 
     @Test
@@ -513,16 +609,20 @@ class GuideImportRecoveryTest {
             }
     }
 
-    private fun guideXml(withProgramme: Boolean, nowMs: Long): String {
-        val startsAt = xmltvDate(nowMs - 15 * 60_000L)
-        val endsAt = xmltvDate(nowMs + 45 * 60_000L)
+    private fun guideXml(withProgramme: Boolean, nowMs: Long, programmes: Int = 1): String {
         return buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\"?><tv>")
             append("<channel id=\"ch0\"><display-name>Channel 0</display-name></channel>")
             append("<channel id=\"ch1\"><display-name>Channel 1</display-name></channel>")
             if (withProgramme) {
-                append("<programme channel=\"ch0\" start=\"$startsAt\" stop=\"$endsAt\">")
-                append("<title>A program</title></programme>")
+                // Distinct hour slots, so N programmes are N rows rather than
+                // one row overwritten N times.
+                repeat(programmes) { index ->
+                    val startsAt = xmltvDate(nowMs - 15 * 60_000L + index * 60L * 60_000L)
+                    val endsAt = xmltvDate(nowMs + 45 * 60_000L + index * 60L * 60_000L)
+                    append("<programme channel=\"ch0\" start=\"$startsAt\" stop=\"$endsAt\">")
+                    append("<title>A program ${index + 1}</title></programme>")
+                }
             }
             append("</tv>")
         }

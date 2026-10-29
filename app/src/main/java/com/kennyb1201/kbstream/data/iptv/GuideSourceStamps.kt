@@ -3,8 +3,14 @@ package com.kennyb1201.kbstream.data.iptv
 import android.content.SharedPreferences
 
 /**
- * When each configured guide source last imported successfully — one map, one
- * key, written by everyone who imports.
+ * When each configured guide source last LANDED an import — one map, one key,
+ * written by everyone who imports.
+ *
+ * Landed, not merely completed: a `304`, a refused empty feed and a zero-program
+ * promote all return without an exception and store nothing readable, so none of
+ * them stamps (see [GuideImportOutcome.landed]). Treating them as imports is
+ * what marked a blank guide fresh for 12h at a time and left it blank until a
+ * manual reimport.
  *
  * Both import paths stamp here: the background refresh worker (which owns the
  * pass's global freshness marker) and the in-app import (which publishes what

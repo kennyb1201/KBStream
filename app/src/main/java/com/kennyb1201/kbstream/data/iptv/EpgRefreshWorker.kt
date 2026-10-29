@@ -91,8 +91,14 @@ class EpgRefreshWorker(
             // for a guide it never stored - but it is not the run's failure
             // either: the sources after it still import.
             runCatchingCancellable { importWithinBudget(repository, url) }
-                .onSuccess { didImport ->
-                    if (didImport) {
+                .onSuccess { outcome ->
+                    // LANDED only: a `304`, a refused empty feed and a
+                    // zero-program promote all complete without throwing, and
+                    // treating them as an import is what stamped the guide
+                    // fresh on a pass that stored nothing - the suppression that
+                    // kept a blank guide blank until a manual reimport. See
+                    // GuideImportOutcome.landed.
+                    if (outcome != null && outcome.landed) {
                         imported++
                         // Recorded PER SOURCE, and the global marker is then
                         // re-derived as the OLDEST source stamp (see
@@ -105,6 +111,16 @@ class EpgRefreshWorker(
                         // fresh for the full 12 h window, so B's channels had no
                         // programs until the day's next pass.
                         stampImportedSource(prefs, url, epgUrls)
+                    } else if (outcome != null) {
+                        // Not an error - the source answered and had nothing to
+                        // store (or honoured a 304 over an empty guide). Named
+                        // so an empty run is not a silent zero: the importer's
+                        // own refusal line explains the cause.
+                        Log.i(
+                            TAG,
+                            "GUIDE REFRESH NOT LANDED source=${Redaction.url(url)} " +
+                                "outcome=${outcome.javaClass.simpleName}"
+                        )
                     }
                 }
                 .onFailure { error ->
@@ -189,27 +205,30 @@ class EpgRefreshWorker(
     /**
      * Imports one guide source, giving it the per-source time budget.
      *
-     * Returns false when the budget ran out — the caller treats that as a
-     * source that did not import, so the run's freshness marker is still only
-     * written for a guide that really was stored. Only [TimeoutCancellationException]
-     * is absorbed here: a cancellation from WorkManager stopping the job is a
-     * different exception and still propagates, which is what lets the worker
-     * shut the import down cleanly.
+     * Returns the source's [GuideImportOutcome], or null when the budget ran out
+     * - the outcome used to be discarded here, which is how a pass that stored
+     * nothing still counted as a success and wrote the freshness marker. The
+     * caller decides what to make of it through [GuideImportOutcome.landed].
+     * Only [TimeoutCancellationException] is absorbed (a timeout is not a landed
+     * guide, and the caller has always treated it as "did not import"): a
+     * cancellation from WorkManager stopping the job is a different exception and
+     * still propagates, which is what lets the worker shut the import down
+     * cleanly.
      */
-    private suspend fun importWithinBudget(repository: IptvRepository, url: String): Boolean {
-        try {
-            withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS) {
-                repository.importGuide(url)
-            }
-            return true
-        } catch (timeout: TimeoutCancellationException) {
-            Log.w(
-                TAG,
-                "GUIDE REFRESH ABANDONED source=${Redaction.url(url)} after " +
-                    "${WorkPolicies.GUIDE_SOURCE_BUDGET_MS / 60_000}min"
-            )
-            return false
+    private suspend fun importWithinBudget(
+        repository: IptvRepository,
+        url: String
+    ): GuideImportOutcome? = try {
+        withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS) {
+            repository.importGuide(url)
         }
+    } catch (timeout: TimeoutCancellationException) {
+        Log.w(
+            TAG,
+            "GUIDE REFRESH ABANDONED source=${Redaction.url(url)} after " +
+                "${WorkPolicies.GUIDE_SOURCE_BUDGET_MS / 60_000}min"
+        )
+        null
     }
 
     /**
