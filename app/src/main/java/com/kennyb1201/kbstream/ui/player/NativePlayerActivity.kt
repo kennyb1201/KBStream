@@ -288,6 +288,13 @@ private const val UHD_RESOLUTION_RANK = 5
  */
 private const val SOURCE_SWITCH_SETTLE_MS = 6_000L
 
+// How much the buffered position OR the playhead must advance between the
+// black-video watchdog's arm and its fire for the wait to count as a healthy
+// join rather than a black screen. Deliberately the stall watchdog's own
+// quantum: the same 500ms that means "still moving" there means "still
+// moving" here, and one number for both keeps the two readings comparable.
+private const val BLACK_VIDEO_PROGRESS_QUANTUM_MS = 500L
+
 // Shared with the MPV player's panel: same speeds, same labels, one list.
 internal val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
@@ -1515,15 +1522,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // The "Rebuffer stall" line alone cannot say whether the seconds went into
     // loading the source or into the decoder's first frame, and any buffering
     // policy change for heavy 4K sources has to be based on that split.
+    // Re-anchored per attempt: by createPlayer() for a rebuild, and by
+    // [lightSwitchLiveChannel] for a light zap. The light path never rebuilds
+    // the player, so without its own re-anchor the READY block below stayed
+    // spent and every zap after the first was measured against the session's
+    // opening READY - a per-zap latency that could not be read off the report.
     private var startupTraceStartMs = 0L
     private var firstReadyAtMs = 0L
 
     // Live-zap trace: set when a channel change starts (see [tuneToChannel]) and
     // consumed on the next STATE_READY, so the user-perceived zap - banner to
-    // picture - is measured separately from [startupTraceStartMs]. That one is
-    // anchored at createPlayer(), which says nothing after a light zap like the
-    // one in [lightSwitchLiveChannel], because it never rebuilds the player and
-    // so never re-enters the source-ready block.
+    // picture - is measured separately from [startupTraceStartMs]. Both spans
+    // end at that READY, but this one also covers the re-tune to the channel
+    // already playing, which drops its clock with no load and no READY at all.
     private var zapTraceStartMs = 0L
 
     // Black-video watchdog: some files reach READY with audio playing but the
@@ -1572,6 +1583,30 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var blackVideoSurfaceRetried = false
     private var blackVideoWatchdogToken = 0
     private val blackVideoWatchdogMs = 3_000L
+    // Live channels get a longer arm. The live low-latency profile's max buffer
+    // window is 10s and a progressive-TS join legitimately waits for the next
+    // IDR, so a 3s arm fires INSIDE a healthy join and rebuilds it - the stage
+    // app then pays for a decode it had already started.
+    private val blackVideoWatchdogLiveMs = 10_000L
+    // The duration the CURRENT arm was posted with (live vs VOD), so the fire
+    // logs print the wait that actually elapsed instead of the VOD constant: a
+    // line that says 3000ms on a 10s arm misleads every future reading.
+    private var blackVideoArmedMs = 0L
+    // Progress sampled when the arm was posted. A join that is still moving data
+    // is not a black screen (see the one progress re-arm).
+    private var blackVideoArmBufferedMs = 0L
+    private var blackVideoArmPositionMs = 0L
+    // True while an arm is pending, so a video track that arrives AFTER READY
+    // can arm the watchdog once without every later tracks callback pushing the
+    // deadline out from under the running arm.
+    private var blackVideoWatchdogArmed = false
+    // The progress re-arm is one per attempt: a second fire with no progress
+    // walks the ladder.
+    private var blackVideoProgressRearmDone = false
+    // Set immediately before a rebuild THIS ladder starts, so createPlayer keeps
+    // the ladder's own stage flags instead of re-arming the stage that just ran
+    // - once per zap, not once per rebuild.
+    private var blackVideoLadderRebuild = false
     private val blackVideoSurfaceRecheckMs = 2_000L
 
     // Startup watchdog: the black-video and stall watchdogs are only armed
@@ -5708,8 +5743,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         blackVideoWatchdogToken++
         p5ReroutePending = false
         // The surface reset is cheap and valid on every attempt (including the
-        // software one); only the software retry itself is once-per-session.
-        blackVideoSurfaceRetried = false
+        // software one) - unless THIS ladder started the rebuild: re-arming the
+        // stage that just ran discards the decode it was waiting on and starts
+        // the IDR wait again, so the stage re-arms per zap, not per rebuild.
+        if (!blackVideoLadderRebuild) blackVideoSurfaceRetried = false
+        // Consumed here: the flag never leaks into the next attempt.
+        blackVideoLadderRebuild = false
+        blackVideoProgressRearmDone = false
+        blackVideoWatchdogArmed = false
         // blackVideoWatchdogToken++ # delayed to allow native window recovery
         // The auto-switch budget is deliberately NOT reset here. This function
         // runs again for every rebuild, and every source switch IS a rebuild
@@ -6685,9 +6726,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 Player.STATE_READY -> {
                     // A channel change reaches its first READY here: the zap is
                     // over for the viewer. Recorded before the source-ready
-                    // block below because the light path never rebuilt the
-                    // player, so firstReadyAtMs is already spent and that block
-                    // is skipped.
+                    // block below, which the light path re-anchors per zap (see
+                    // [lightSwitchLiveChannel]) - the two spans share this end
+                    // point, but this one also covers the re-tune to the channel
+                    // already playing, which drops its clock with no load.
                     if (zapTraceStartMs > 0L) {
                         com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
                             "playback.zap_ready",
@@ -6860,7 +6902,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
                     if (group.type == C.TRACK_TYPE_VIDEO) {
+                        // Tracks can land AFTER READY (a live join whose PMT is
+                        // late), and nothing re-armed the watchdog for that: the
+                        // channel sat black with no recovery ladder at all. Arm
+                        // on the false -> true transition only, and only while no
+                        // arm is pending - every other tracks callback (a new
+                        // format, a rate change) must not push the deadline.
+                        val trackArrived = !videoTrackPresent
                         videoTrackPresent = true
+                        if (trackArrived && !firstFrameRendered && !blackVideoNoticeShown &&
+                            !blackVideoWatchdogArmed &&
+                            exoPlayer?.playbackState == Player.STATE_READY
+                        ) {
+                            armBlackVideoWatchdog()
+                        }
                         // Offer the panel the content's own rate, the earliest
                         // point it is known. A track that reports none carries
                         // media3's NO_VALUE, which the matcher refuses — so an
@@ -7972,7 +8027,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // surface-bounce -> TextureView -> notice recovery ladder as VOD.
         // Audio-only channels are already filtered by !videoTrackPresent.
         val token = ++blackVideoWatchdogToken
-        handler.postDelayed({ handleBlackVideoTimeout(token) }, blackVideoWatchdogMs)
+        // Live waits longer, for the reason stated on [blackVideoWatchdogLiveMs].
+        // VOD keeps its 3s exactly.
+        val armedMs = if (isLiveChannel) blackVideoWatchdogLiveMs else blackVideoWatchdogMs
+        blackVideoArmedMs = armedMs
+        blackVideoArmBufferedMs = exoPlayer?.bufferedPosition ?: 0L
+        blackVideoArmPositionMs = exoPlayer?.currentPosition ?: 0L
+        blackVideoWatchdogArmed = true
+        handler.postDelayed({ handleBlackVideoTimeout(token) }, armedMs)
     }
 
     /**
@@ -7991,6 +8053,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun handleBlackVideoTimeout(token: Int, requirePlaying: Boolean = true) {
         if (token != blackVideoWatchdogToken) return
+        // This fire is the arm that was posted last, so no arm is pending any
+        // more. A stale callback (its token was superseded) is NOT that fire and
+        // leaves the newer arm's flag alone, or it would let a later tracks
+        // callback push the deadline out from under the running arm.
+        val consumedArm = blackVideoWatchdogArmed
+        blackVideoWatchdogArmed = false
         if (blackVideoNoticeShown) return
         // A rendered first frame means video output works — the recovery
         // ladder is pointless and destructive (it has bounce-rebuilt the
@@ -8002,14 +8070,60 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // watchdog bypasses this gate — a session that never reached READY
         // needs the same recovery ladder, not an eternal splash.
         if (requirePlaying) {
-            if (exoPlayer?.isPlaying != true) return
-            if (exoPlayer?.playbackState != Player.STATE_READY) return
+            val playing = exoPlayer?.isPlaying == true
+            val ready = exoPlayer?.playbackState == Player.STATE_READY
+            if (!playing || !ready) {
+                // No re-arm: the next READY arms again. The line exists because a
+                // capture with no PLAYER_VIDEO lines at all could not tell a
+                // watchdog that stood down from one that never fired.
+                Log.w(
+                    "PLAYER_VIDEO",
+                    "Black video watchdog stood down: not playing/ready"
+                )
+                return
+            }
         }
         if (errorContainer.visibility == View.VISIBLE) return
+
+        // A join that is still moving data is not a black screen: the stall
+        // watchdog's own quantum (500ms of position OR buffered growth) is the
+        // line between "slow to paint" and "stalled". Re-arm once instead of
+        // intervening; a second fire with no progress walks the ladder.
+        //
+        // Only a fire that consumed a real arm qualifies - the ladder's own
+        // continuation calls (the surface recheck) are not new fires, so they
+        // cannot buy the wait another window.
+        if (consumedArm && !blackVideoProgressRearmDone) {
+            val bufferedNow = exoPlayer?.bufferedPosition ?: 0L
+            val positionNow = exoPlayer?.currentPosition ?: 0L
+            val progressed =
+                bufferedNow - blackVideoArmBufferedMs >= BLACK_VIDEO_PROGRESS_QUANTUM_MS ||
+                    positionNow - blackVideoArmPositionMs >= BLACK_VIDEO_PROGRESS_QUANTUM_MS
+            if (progressed) {
+                blackVideoProgressRearmDone = true
+                Log.w(
+                    "PLAYER_VIDEO",
+                    "Black video watchdog: progress since arm, re-arming once"
+                )
+                armBlackVideoWatchdog()
+                // The re-arm only takes with a video track present; with none
+                // there is nothing to wait for, so the ladder proceeds.
+                if (blackVideoWatchdogArmed) return
+            }
+        }
 
         val codecInfo = streamCodec?.let { codec ->
             if (streamWidth > 0) " ($codec ${streamWidth}x$streamHeight)" else " ($codec)"
         } ?: ""
+
+        // The startup watchdog can reach this ladder with no arm behind it (the
+        // session never reached READY), and a continuation call carries the arm's
+        // own duration. Either way the lines below must print the wait THIS
+        // content type is given, never a zero and never another source's arm.
+        if (!consumedArm) {
+            blackVideoArmedMs =
+                if (isLiveChannel) blackVideoWatchdogLiveMs else blackVideoWatchdogMs
+        }
 
         // Stage 1: bounce the video surface. On some boxes a frame never
         // reaches the display because the player's native window was lost
@@ -8025,7 +8139,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             blackVideoSurfaceRetried = true
             Log.w(
                 "PLAYER_VIDEO",
-                "Black video: no first frame after ${blackVideoWatchdogMs}ms$codecInfo " +
+                "Black video: no first frame after ${blackVideoArmedMs}ms$codecInfo " +
                     "mime=${streamMimeType ?: "?"} — resetting video surface"
             )
             reconnectingContainer.visibility = View.VISIBLE
@@ -8080,6 +8194,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     if (blackVideoNoticeShown) return@postDelayed
                     if (firstFrameRendered) return@postDelayed
                     errorMessageStr = null
+                    blackVideoLadderRebuild = true
                     recreatePlayer()
                 },
                 500L
@@ -8114,6 +8229,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     if (firstFrameRendered) return@postDelayed
                     errorMessageStr = null
                     forceDvStripForSession = true
+                    blackVideoLadderRebuild = true
                     recreatePlayer()
                 },
                 500L
@@ -14436,6 +14552,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         rebufferDownshiftGivenUp = false
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false
+        // The black-video ladder is per ZAP, not per attempt: a channel change
+        // starts a fresh ladder, so the surface stage, the one progress re-arm
+        // and the pending-arm flag all clear here. In createPlayer only a
+        // rebuild the ladder itself started keeps them (see
+        // [blackVideoLadderRebuild]); a non-ladder rebuild still resets per
+        // attempt.
+        blackVideoSurfaceRetried = false
+        blackVideoProgressRearmDone = false
+        blackVideoWatchdogArmed = false
+        // A ladder rebuild queued on the source being left cannot run here (the
+        // generation is bumped), so its mark would otherwise survive into this
+        // source's first build and deprive IT of the surface stage.
+        blackVideoLadderRebuild = false
         decoderResourceFallbackDone = false
         decoderFailureRetried = false
         // Per source too: left set by a previous container-parse failure, the
@@ -14549,6 +14678,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // [videoTrackPresent]).
         firstFrameRendered = false
         videoTrackPresent = false
+        // Re-anchor the startup trace for THIS zap. createPlayer() is the only
+        // other anchor site and the light path never reaches it: left alone, the
+        // READY block below stayed spent on the session's first channel, so the
+        // zap's time was recorded against an anchor from another channel - and
+        // playback.first_frame with it, which made per-zap latency unreadable.
+        startupTraceStartMs = System.currentTimeMillis()
+        firstReadyAtMs = 0L
         // The cue handler holds cues from the channel being left and is a
         // listener on the player that survives here (it does not on a rebuild).
         // Detach it and add a fresh one to the same player, mirroring how

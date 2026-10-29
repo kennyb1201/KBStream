@@ -266,9 +266,12 @@ object Diagnostics {
      * is not reachable from a TV remote. Printed here so the same figures travel
      * with the rest of the report: `source→ready` is the fill needed before
      * playback can start at all, `ready→firstFrame` the decoder's own first
-     * paint, `stalls` the buffering episodes AFTER playback began (with the
-     * worst one), and `rebuilds` whether the player was torn down and rebuilt
-     * mid-session, which discards the buffer whatever it held.
+     * paint, `zap→ready` the same fill measured from the channel change instead
+     * (a light zap never rebuilds the player, so without that leg a slow zap and
+     * a slow decoder cannot be told apart), `stalls` the buffering episodes
+     * AFTER playback began (with the worst one), and `rebuilds` whether the
+     * player was torn down and rebuilt mid-session, which discards the buffer
+     * whatever it held.
      *
      * Null on a session that never played anything, so a Home-only report stays
      * as short as it was.
@@ -276,6 +279,7 @@ object Diagnostics {
     private fun playbackLine(): String? {
         val ready = PerfTrace.latestByPrefix("playback.source_ready").firstOrNull()?.second
         val firstFrame = PerfTrace.latestByPrefix("playback.first_frame").firstOrNull()?.second
+        val zapReady = PerfTrace.latestByPrefix("playback.zap_ready").firstOrNull()?.second
         val stalls = PerfTrace.count("playback.stall")
         val rebuilds = PerfTrace.count("playback.rebuild")
         // Live zaps whose channel the guide prefetch had warmed, over all zaps
@@ -283,12 +287,16 @@ object Diagnostics {
         // every zap that recorded one.
         val zapWarm = PerfTrace.sumMs("live.prefetch_warm")
         val zapCount = PerfTrace.count("live.prefetch_warm")
-        if (ready == null && firstFrame == null && stalls == 0 && rebuilds == 0 && zapCount == 0) {
+        if (ready == null && firstFrame == null && zapReady == null &&
+            stalls == 0 && rebuilds == 0 && zapCount == 0
+        ) {
             return null
         }
         return buildString {
             append("playback: source→ready=").append(ready?.let { "${it}ms" } ?: "—")
             append(" ready→firstFrame=").append(firstFrame?.let { "${it}ms" } ?: "—")
+            // Only a zap records this; a VOD session has nothing to show.
+            if (zapReady != null) append(" zap→ready=").append(zapReady).append("ms")
             append(" stalls=").append(stalls)
             if (stalls > 0) {
                 append("/").append(PerfTrace.maxMs("playback.stall")).append("ms worst")

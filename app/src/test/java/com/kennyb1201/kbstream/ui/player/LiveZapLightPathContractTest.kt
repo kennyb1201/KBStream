@@ -124,8 +124,50 @@ class LiveZapLightPathContractTest {
         assertTrue(src.contains("\"playback.zap_ready\""))
     }
 
+    /**
+     * The light path re-anchors the startup trace, or a zap is measured against
+     * the session's FIRST channel.
+     *
+     * `startupTraceStartMs` / `firstReadyAtMs` used to reset only in
+     * `createPlayer`, and the light path never reaches it: the READY block's
+     * `firstReadyAtMs == 0L` stamp had already fired on entry channel, so
+     * `playback.first_frame` recorded every later zap against an anchor from
+     * another channel. That made per-zap latency unreadable from diagnostics.
+     */
+    @Test
+    fun `the light path re-anchors the startup trace per zap`() {
+        assertTrue(lightPath.contains("startupTraceStartMs = System.currentTimeMillis()"))
+        assertTrue(lightPath.contains("firstReadyAtMs = 0L"))
+        // It must sit beside the per-zap frame resets it complements: an anchor
+        // reset that a later reset overwrote would be no anchor at all.
+        val frameReset = lightPath.indexOf("firstFrameRendered = false")
+        val anchorReset = lightPath.indexOf("startupTraceStartMs = System.currentTimeMillis()")
+        assertTrue("the frame and anchor resets must be in the same reset block", frameReset >= 0 && anchorReset > frameReset)
+        // Still no rebuild: the anchor is reset, not the player.
+        assertFalse(lightPath.contains("recreatePlayer("))
+    }
+
+    /**
+     * The zap leg reaches the report beside the other two startup figures. The
+     * source→ready span starts when the player was BUILT, which on a light zap
+     * is not when the viewer changed channel - so without this number a slow
+     * zap and a slow decoder cannot be told apart.
+     */
+    @Test
+    fun `diagnostics report the zap to ready leg`() {
+        val diagnostics = readSource(DIAGNOSTICS)
+        val body = diagnostics.substringAfter("private fun playbackLine(): String? {")
+            .substringBefore("\n    }")
+        assertTrue(body.contains("PerfTrace.latestByPrefix(\"playback.zap_ready\")"))
+        assertTrue(body.contains("\" zap→ready=\""))
+        // A report with only a zap sample is still a report.
+        assertTrue(body.contains("zapReady == null"))
+    }
+
     private companion object {
         const val PLAYER =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
+        const val DIAGNOSTICS =
+            "com/kennyb1201/kbstream/data/reporting/Diagnostics.kt"
     }
 }
