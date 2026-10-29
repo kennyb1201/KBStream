@@ -24,8 +24,9 @@ import org.junit.Test
  *    dialog) knows the trackers exist;
  *  - a server-requested pause is not an attempt: the PAUSED branches do nothing,
  *    and only a real no-answer advances an entry;
- *  - both legs land CLOSED behind their landing-gate constant, because the live
- *    probe has not been run.
+ *  - both legs are behind their landing-gate constant, and that constant is the
+ *    only switch: the live probe has not been run, so the legs are ON by the
+ *    account owner's decision (2026-10-29) and OFF again is the same one line.
  */
 class TasteRatingSubmissionContractTest {
 
@@ -88,7 +89,11 @@ class TasteRatingSubmissionContractTest {
             src.contains("noteRetryAfter(response)"))
         assertTrue("cancellation is rethrown, never recorded as a failure",
             src.contains("runCatchingCancellable"))
-        assertTrue("the leg lands closed until the probe passes",
+        // ON without a live probe, on the owner's call (2026-10-29); flipping
+        // this one constant back to false is the whole rollback.
+        assertTrue("the landing gate is the only switch, and it is open",
+            src.contains("TRAKT_RATINGS_ENABLED = true"))
+        assertFalse("and no production code path keeps a second, closed gate",
             src.contains("TRAKT_RATINGS_ENABLED = false"))
     }
 
@@ -106,7 +111,10 @@ class TasteRatingSubmissionContractTest {
             src.contains("minSpacingMs: Long = 2_000L"))
         assertTrue("a 429 without a header waits the Trakt default",
             src.contains("DEFAULT_RETRY_AFTER_SECONDS = 60L"))
-        assertTrue("the leg lands closed until the probe passes",
+        // Same for Simkl: enabled by the owner, not by a probe verdict.
+        assertTrue("the landing gate is the only switch, and it is open",
+            src.contains("SIMKL_RATINGS_ENABLED = true"))
+        assertFalse("and no production code path keeps a second, closed gate",
             src.contains("SIMKL_RATINGS_ENABLED = false"))
     }
 

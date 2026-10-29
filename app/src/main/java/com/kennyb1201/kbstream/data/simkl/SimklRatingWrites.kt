@@ -19,18 +19,29 @@ import android.util.Log
  * could not match.
  *
  * ---------------------------------------------------------------------------
- * LANDING GATE (spec §6.4) - THE LIVE PROBE HAS NOT BEEN RUN
+ * LANDING GATE - ENABLED WITHOUT A LIVE PROBE, ON THE ACCOUNT OWNER'S CALL
  * ---------------------------------------------------------------------------
  * No official Simkl documentation page for `/sync/ratings` was located; the path
- * and body come from corroborating client implementations. Before this leg may
- * write to a real account, one probe must confirm it: a ratings read, then one
- * add and one remove on a real title, checking the response carries the
- * `added`/`not_found` buckets [SimklRatingsResponse] parses. Until then
- * [SIMKL_RATINGS_ENABLED] stays FALSE and nothing is sent. The probe did NOT run
- * in the change that added this file (no live credentials were available), which
- * is why the leg lands closed rather than assuming its own shape is right.
+ * and body come from corroborating client implementations. The procedure for
+ * proving them (`KBStream - Live-probe procedure: enabling the tracker rating
+ * legs`) still has not been executed - it needs live credentials and a title to
+ * overwrite - so the shape below is unconfirmed by a real account.
+ *
+ * [SIMKL_RATINGS_ENABLED] is nevertheless TRUE, by the owner's explicit decision
+ * (2026-10-29): ship the leg so a real release can be exercised against the real
+ * API, and pull it back out if it misbehaves. That is the whole rollback story -
+ * flip this one constant back to false. Nothing else changes: `onSignalWritten`
+ * stops enqueueing for this leg and `drain` returns before sending, so no
+ * further call leaves the device. Ratings already sent stay sent; taking one
+ * back needs an explicit un-thumb while the leg is on.
+ *
+ * What "misbehaves" looks like, since it is silent to the viewer by design: a
+ * `taste ratings:` line in COPY DIAGNOSTICS reading `Simkl: on` with a growing
+ * `queued=` count and a repeated last-failure, and `SIMKL_RATINGS` log lines
+ * carrying 404 (path wrong) or a steady `NO_ANSWER` for a title both ids
+ * resolve. `PAUSED` is a 429 and `AUTH` is the grant, neither a shape verdict.
  */
-internal const val SIMKL_RATINGS_ENABLED = false
+internal const val SIMKL_RATINGS_ENABLED = true
 
 /** What one Simkl ratings call came back as. */
 internal enum class SimklRatingOutcome {

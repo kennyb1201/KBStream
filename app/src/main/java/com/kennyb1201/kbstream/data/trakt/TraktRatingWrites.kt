@@ -23,20 +23,28 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * 429 parks every Trakt path, ratings included.
  *
  * ---------------------------------------------------------------------------
- * LANDING GATE (spec §6.4) - THE LIVE PROBE HAS NOT BEEN RUN
+ * LANDING GATE - ENABLED WITHOUT A LIVE PROBE, ON THE ACCOUNT OWNER'S CALL
  * ---------------------------------------------------------------------------
  * The path and body below come from corroborating client implementations, not
- * from an official doc page. Before this leg may write to a real account, one
- * probe must confirm it against the live API: a ratings read, then one add and
- * one remove on a real title, checking that the response carries the
- * `added`/`updated`/`deleted`/`not_found` counts [TraktRatingsResponse] parses.
- * Until that probe is run and its answer recorded, [TRAKT_RATINGS_ENABLED] stays
- * FALSE: nothing is sent, the queue holds no Trakt entries, and flipping this one
- * constant is all the probe's verdict requires. The probe did NOT run in the
- * change that added this file (no live credentials were available), which is why
- * the leg lands closed rather than assuming its own shape is right.
+ * from an official doc page. The probe that would confirm them (`KBStream -
+ * Live-probe procedure: enabling the tracker rating legs`) still has not run -
+ * it needs live credentials and a title to overwrite - so the shape below is
+ * unconfirmed by a real account.
+ *
+ * [TRAKT_RATINGS_ENABLED] is nevertheless TRUE, by the owner's explicit decision
+ * (2026-10-29): ship the leg so a real release can be exercised against the real
+ * API, and pull it back out if it misbehaves. Rollback is this one constant back
+ * to false - `onSignalWritten` stops enqueueing for this leg and `drain` returns
+ * before sending. Ratings already sent stay sent; taking one back needs an
+ * explicit un-thumb while the leg is on.
+ *
+ * What "misbehaves" looks like, since it is silent to the viewer by design: a
+ * `taste ratings:` line in COPY DIAGNOSTICS reading `Trakt: on` with a growing
+ * `queued=` count and a repeated last-failure, and `TRAKT_RATINGS` log lines
+ * carrying 404 (path wrong) or a steady `NO_ANSWER` for a title both ids resolve.
+ * `PAUSED` is a 429/budget, `AUTH` is the grant, neither a shape verdict.
  */
-internal const val TRAKT_RATINGS_ENABLED = false
+internal const val TRAKT_RATINGS_ENABLED = true
 
 /** What one Trakt ratings call came back as. */
 internal enum class TraktRatingOutcome {
