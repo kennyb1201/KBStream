@@ -15,7 +15,9 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
+import android.view.animation.AnimationUtils
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -58,6 +60,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
@@ -869,6 +872,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var episodeTitle: String? = null
     private var itemPoster: String? = null
     private var clearLogoUrl: String? = null
+    /**
+     * See [resolveClearLogoFromTmdb]: one lookup per player session.
+     *
+     * Never reset: a source switch plays the same title, so the logo resolved
+     * for the first source is the logo the next one wants too.
+     */
+    private var clearLogoLookupStarted = false
+    /** Set while a splash pulse is waiting for the image loader to deliver the
+     *  logo art, so repeated passes do not stack layout listeners on it. */
+    private var splashLogoPulseWaitAttached = false
     private var backdropUrl: String? = null
     private var overview: String? = null
     private var totalEpisodesInSeason: Int? = null
@@ -1053,12 +1066,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             runCatching { loadingBackdropView?.load(art) }
         }
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
-            runCatching {
-                loadingLogoView?.load(logo)
-                loadingLogoView?.visibility = View.VISIBLE
-                loadingTitle?.visibility = View.GONE
-            }
+            runCatching { applyClearLogo(logo) }
         }
+        // Nothing arrived with the launch: the launch extras are not the only
+        // source of the art. MainActivity forwards a logo only when the payload
+        // carries one, and the picker's add-on meta often carries none, so the
+        // engine used to fall back to the text title card for nearly every MPV
+        // launch - the same title showed its clearlogo under ExoPlayer, whose
+        // splash resolves it from TMDB when the extra is blank. Resolve it here
+        // too, so the two engines cannot disagree about what the title looks
+        // like. The intent-extra path keeps precedence (see the guard inside).
+        resolveClearLogoFromTmdb()
 
         // The settings panel is built in code from the same helpers the main
         // player's panel section uses.
@@ -1124,6 +1142,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // noVideoCheck grace is unchanged and still the escape hatch.
             runOnUiThread {
                 loadingContainer?.visibility = View.GONE
+                // The pulse dies with the splash: it must never keep running
+                // over the picture (see [startSplashLogoPulse]).
+                loadingLogoView?.clearAnimation()
                 updateNowPlayingText()
                 updateControlsInfo()
             }
@@ -3513,6 +3534,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // picture with the splash until the new file reports ready.
         if (isAutoRecovery) {
             loadingContainer?.visibility = View.GONE
+            loadingLogoView?.clearAnimation()
             bufferingView?.visibility = View.VISIBLE
         } else {
             showLoading("Switching source…")
@@ -6044,6 +6066,101 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         loadingTitle?.text = itemTitle()
         loadingSubtitle?.text = subtitle
         hideMpvBuffering()
+        // A manual source switch raises this splash again over the logo the
+        // view still holds; re-showing the container has to re-start the pulse
+        // with it (the picture-ready hide cleared it).
+        startSplashLogoPulse()
+    }
+
+    /**
+     * Puts a clearlogo on the splash in place of the name-text fallback.
+     *
+     * The image loader delivers asynchronously, which is why the pulse waits
+     * for the drawable rather than assuming it (see [startSplashLogoPulse]).
+     */
+    private fun applyClearLogo(url: String) {
+        loadingLogoView?.load(url)
+        loadingLogoView?.visibility = View.VISIBLE
+        loadingTitle?.visibility = View.GONE
+        startSplashLogoPulse()
+    }
+
+    /**
+     * Fetches the title's logo art when the launch handed the player none.
+     *
+     * The same lookup the ExoPlayer engine's splash does, for the same reason:
+     * which logo a playback gets used to depend on WHERE it was started, so the
+     * same show showed its clearlogo from the detail page and a text title card
+     * from a stream pick (whose add-on meta carries no `logo`). An MPV launch
+     * almost never carries the extra, so without this the splash was text on
+     * every title while the ExoPlayer splash pulsed the logo.
+     *
+     * One lookup per session, silent on any outcome: a title with no logo art
+     * is ordinary, and its text title is the designed no-logo state.
+     */
+    private fun resolveClearLogoFromTmdb() {
+        if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return
+        if (parentId.isBlank()) return
+        val type = parentType.lowercase()
+        if (type != "movie" && type != "series") return
+        clearLogoLookupStarted = true
+        lifecycleScope.launch {
+            val path = runCatchingCancellable {
+                withContext(Dispatchers.IO) {
+                    TmdbRepository.getInstance(this@MpvPlayerActivity)
+                        .fetchEnrichedMetaCached(parentId, type)
+                }
+            }.getOrNull()?.bestLogoPath()?.takeIf { it.isNotBlank() }
+            if (path == null) return@launch
+            val url = TmdbRepository.LOGO_BASE + path
+            // Recorded first: the guard above reads it.
+            clearLogoUrl = url
+            applyClearLogo(url)
+        }
+    }
+
+    /**
+     * Starts the splash logo's pulse - the same 1.0 -> 1.08 scale / alpha
+     * breathe the ExoPlayer splash runs, so the two engines' load screens are
+     * indistinguishable.
+     *
+     * The art may not have arrived yet: the image loader is asynchronous and
+     * the callers run before its delivery, so with no drawable this waits for
+     * one (a layout pass that finds art, plus the short fallback, exactly as
+     * the ExoPlayer splash does) instead of pulsing nothing. Starting with no
+     * art is harmless either way - the slot is empty and the animation is set
+     * on the view - so the fallback starts it unconditionally.
+     */
+    private fun startSplashLogoPulse() {
+        val logo = loadingLogoView ?: return
+        pulseSplashLogo(logo)
+        if (logo.drawable != null) {
+            // Art is here: it stands in for the name from now on.
+            loadingTitle?.visibility = View.GONE
+            return
+        }
+        if (splashLogoPulseWaitAttached) return
+        splashLogoPulseWaitAttached = true
+        logo.viewTreeObserver.addOnGlobalLayoutListener(
+            object : ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    if (logo.drawable != null) {
+                        logo.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        splashLogoPulseWaitAttached = false
+                        startSplashLogoPulse()
+                    }
+                }
+            }
+        )
+        // Fallback for the delivery that changes no layout, which the listener
+        // above would never see.
+        logo.postDelayed({ pulseSplashLogo(loadingLogoView) }, 500L)
+    }
+
+    /** The animation itself, and nothing else: see [startSplashLogoPulse]. */
+    private fun pulseSplashLogo(logo: ImageView?) {
+        if (logo == null || logo.animation != null) return
+        logo.startAnimation(AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse))
     }
 
     /**
@@ -6093,6 +6210,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             )
         }
         loadingContainer?.visibility = View.GONE
+        loadingLogoView?.clearAnimation()
         hideMpvBuffering()
         setControlsVisible(View.GONE)
         errorContainer?.visibility = View.VISIBLE

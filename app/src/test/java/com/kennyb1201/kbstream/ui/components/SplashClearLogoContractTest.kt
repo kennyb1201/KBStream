@@ -103,11 +103,162 @@ class SplashClearLogoContractTest {
         )
     }
 
+    /**
+     * The MPV engine's splash was text on EVERY title while the same title
+     * pulsed its clearlogo under ExoPlayer.
+     *
+     * Two gaps, both in `MpvPlayerActivity` alone: it read the logo only from
+     * the launch extra (`clear_logo_url`), which most launches do not carry,
+     * and it never pulsed the slot at all. So the engine has to resolve the art
+     * itself - the lookup the ExoPlayer splash already does - and breathe it the
+     * same way. Both halves are pinned here, with the no-scope-creep half.
+     */
+    @Test
+    fun `the MPV engine resolves the clearlogo the launch did not carry`() {
+        val mpv = source(MPV_PLAYER)
+        val resolve = mpv.substringAfter("private fun resolveClearLogoFromTmdb() {")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "one lookup per session, and the intent extra keeps precedence",
+            resolve.contains("if (!clearLogoUrl.isNullOrBlank() || clearLogoLookupStarted) return")
+        )
+        assertTrue(
+            "only the two tmdb parent types are looked up",
+            resolve.contains("if (type != \"movie\" && type != \"series\") return")
+        )
+        assertTrue(
+            "the cached enriched lookup the ExoPlayer splash uses",
+            resolve.contains(".fetchEnrichedMetaCached(parentId, type)") &&
+                resolve.contains("bestLogoPath()")
+        )
+        assertTrue(
+            "and the resolved path becomes an absolute TMDB logo URL",
+            resolve.contains("TmdbRepository.LOGO_BASE + path")
+        )
+    }
+
+    @Test
+    fun `the MPV resolve fills the splash slot, never the backdrop`() {
+        val mpv = source(MPV_PLAYER)
+        val apply = mpv.substringAfter("private fun applyClearLogo(url: String) {")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "the splash logo view gets the art",
+            apply.contains("loadingLogoView?.load(url)") &&
+                apply.contains("loadingLogoView?.visibility = View.VISIBLE")
+        )
+        assertTrue(
+            "and the name text stands down, the designed both-slots state",
+            apply.contains("loadingTitle?.visibility = View.GONE")
+        )
+        assertFalse(
+            "the backdrop is a different surface: the resolve must not touch it",
+            apply.contains("loadingBackdropView")
+        )
+        // Both callers - the launch extra and the resolved path - go through it.
+        assertTrue(
+            "the launch extra must apply through the same slot",
+            mpv.contains("clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->\n            runCatching { applyClearLogo(logo) }")
+        )
+    }
+
+    @Test
+    fun `the MPV splash logo pulses, and stops when the splash goes`() {
+        val mpv = source(MPV_PLAYER)
+        val pulse = mpv.substringAfter("private fun pulseSplashLogo(logo: ImageView?) {")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "the same animation resource the ExoPlayer splash pulses",
+            pulse.contains("AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)")
+        )
+        val loading = mpv.substringAfter("private fun showLoading(subtitle: String) {")
+            .substringBefore("\n    private fun ")
+        assertTrue(
+            "a manual source switch re-raises the splash, so the pulse comes back with it",
+            loading.contains("startSplashLogoPulse()")
+        )
+        val ready = mpv.substringAfter("view.onPictureReady = {")
+            .substringBefore("view.onBufferingChanged")
+        assertTrue(
+            "the picture-ready hide must stop the pulse",
+            ready.contains("loadingLogoView?.clearAnimation()")
+        )
+        assertTrue(
+            "the automatic mid-show downshift drops the splash: the pulse goes with it",
+            mpv.substringAfter("if (isAutoRecovery) {").take(300)
+                .contains("loadingLogoView?.clearAnimation()")
+        )
+        assertTrue(
+            "and so does the error card - no pulsing logo behind it",
+            mpv.substringAfter("private fun showError(message: String, hint: String) {")
+                .substringBefore("\n    private fun ")
+                .contains("loadingLogoView?.clearAnimation()")
+        )
+    }
+
+    /**
+     * The lookup is a session latch, not a per-source fetch: a source switch
+     * plays the same title, whose logo is already on screen.
+     */
+    @Test
+    fun `the MPV clearlogo lookup happens once per session`() {
+        val mpv = source(MPV_PLAYER)
+        assertEquals(
+            "the guard is set exactly once, right before the launch",
+            1,
+            Regex("clearLogoLookupStarted = true").findAll(mpv).count()
+        )
+        assertTrue(
+            "and set BEFORE the coroutine launches, or two passes race a second lookup",
+            mpv.contains("clearLogoLookupStarted = true\n        lifecycleScope.launch")
+        )
+        assertEquals(
+            "nothing may reset it outside its declaration: a reset re-looks the " +
+                "logo up on every source switch",
+            1,
+            Regex("clearLogoLookupStarted = false").findAll(mpv).count()
+        )
+    }
+
+    /**
+     * The fix lives in the MPV engine alone. ExoPlayer keeps its own resolve
+     * and pulse; the shared layout keeps its slot. The one channel between them
+     * is the launch extra, which MPV must still read exactly once (the
+     * precedence path above).
+     */
+    @Test
+    fun `the MPV logo work stays inside the MPV engine`() {
+        val mpv = source(MPV_PLAYER)
+        assertEquals(
+            "clear_logo_url is read once - the extra path keeps precedence",
+            1,
+            Regex("getStringExtra\\(\"clear_logo_url\"\\)").findAll(mpv).count()
+        )
+        val layout = resSource(MPV_LAYOUT)
+        assertTrue(
+            "the splash slot is unchanged: a capped, whole-logo slot the pulse scales inside",
+            layout.contains("@+id/mpv_loading_logo") &&
+                layout.contains("android:maxWidth=\"420dp\"") &&
+                layout.contains("android:scaleType=\"fitCenter\"")
+        )
+        assertFalse(
+            "no layout animation: the pulse is started on the view, not declared in XML",
+            layout.contains("android:animation=")
+        )
+        assertTrue(
+            "ExoPlayer's own resolve is untouched and still the reference shape",
+            source(NATIVE_PLAYER).contains("private fun resolveClearLogoFromTmdb() {")
+        )
+    }
+
     private companion object {
         const val DETAIL_SCREEN = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
         const val NATIVE_PLAYER =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
+        const val MPV_PLAYER =
+            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
+        const val MPV_LAYOUT = "layout/activity_mpv_player.xml"
 
         const val CALLBACK = "onClearLogoResolved"
         const val BACKDROP_CALLBACK = "onBackdropResolved"
@@ -143,6 +294,13 @@ class SplashClearLogoContractTest {
     private fun source(path: String): String {
         val file = File(sourceRoot, path)
         assertTrue("source missing: $file", file.isFile)
+        return file.readText()
+    }
+
+    /** A file under `src/main/res`, for the layout assertions. */
+    private fun resSource(path: String): String {
+        val file = File(File(sourceRoot.parentFile, "res"), path)
+        assertTrue("resource missing: $file", file.isFile)
         return file.readText()
     }
 
