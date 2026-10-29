@@ -155,6 +155,7 @@ import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.trakt.TraktConnectScreen
 import com.kennyb1201.kbstream.ui.player.addonLookup
 import com.kennyb1201.kbstream.ui.player.addonsFor
+import com.kennyb1201.kbstream.ui.player.putPlayerPayloads
 import com.kennyb1201.kbstream.ui.player.sourceAddonsJson
 import com.kennyb1201.kbstream.ui.player.toPlayer
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
@@ -3797,6 +3798,14 @@ fun AppRoot(
 
                     else -> NativePlayerActivity::class.java
                 }
+                // The three payloads that grow with the add-ons' answer set - the
+                // source list, the add-on beside each row, and the cast band - are
+                // collected here rather than put on the intent one at a time, so
+                // the launch can keep them out of the binder transaction when they
+                // would not fit in it (ANDROID-12: 1.5 MB of extras made every
+                // Play from a busy title a `TransactionTooLargeException`). See
+                // PlayerLaunchPayload.
+                val launchPayloads = mutableMapOf<String, String>()
                 val intent = Intent(context, playerActivity).apply {
                     putExtra("stream_url", current.url)
                     current.audioUrl?.let { putExtra("audio_url", it) }
@@ -3869,12 +3878,12 @@ fun AppRoot(
                         }
                         sourcesArray.put(obj)
                     }
-                    putExtra("sources_json", sourcesArray.toString())
+                    launchPayloads["sources_json"] = sourcesArray.toString()
                     // The add-on behind each source, parallel to sources_json:
                     // the players skip an add-on whose links are dead for the
                     // session when the viewer (or the open-failure ladder) asks
                     // for the next source (see SourceAddonSession).
-                    putExtra("source_addons", sourceAddonsJson(current.sourceAddons))
+                    launchPayloads["source_addons"] = sourceAddonsJson(current.sourceAddons)
                     // The tab the picker had selected, when the viewer pressed
                     // a row from one: the scope the player's MANUAL
                     // next-source advance stays inside (see
@@ -3894,7 +3903,7 @@ fun AppRoot(
                         }
                         castArray.put(obj)
                     }
-                    putExtra("cast_json", castArray.toString())
+                    launchPayloads["cast_json"] = castArray.toString()
                     putExtra("season_episode_label", listOfNotNull(current.season?.let { "Season $it" }, current.episode?.let { "Episode $it" }).joinToString(" • "))
                     // Pass total episodes
                     current.totalEpisodesInSeason?.let { putExtra("total_episodes_in_season", it) }
@@ -3905,6 +3914,9 @@ fun AppRoot(
                     // Continue Watching. Ignored by the two in-app engines.
                     current.runtimeMinutes?.let { putExtra("runtime_minutes", it) }
                 }
+                // After the intent is whole: the payload rides it while it fits,
+                // and is spooled beside it once it does not.
+                intent.putPlayerPayloads(context, launchPayloads)
                 // A LaunchedEffect is not a place to assume the platform will
                 // start an activity. `ActivityResultLauncher.launch` ends in
                 // Instrumentation.execStartActivity, which throws a bare

@@ -527,8 +527,10 @@ class ExternalPlayerActivity : ComponentActivity() {
         // have at the in-app engines. Reading them is what lets an advance name
         // the provider this binge is continuing with, and what keeps
         // [playInApp]'s fallback session whole.
-        sourcesJsonRaw = intent.getStringExtra("sources_json")
-        sourceAddonsJsonRaw = intent.getStringExtra("source_addons")
+        // Through playerPayload: an oversized payload arrives spooled beside
+        // the intent rather than on it (ANDROID-12).
+        sourcesJsonRaw = intent.playerPayload(this, "sources_json")
+        sourceAddonsJsonRaw = intent.playerPayload(this, "source_addons")
         val parsedSources = parseSourcesJson(sourcesJsonRaw)
         sources = parsedSources.withCurrentSource(Stream(url = currentUrl))
         sourceAddons = addonsFor(
@@ -999,11 +1001,6 @@ class ExternalPlayerActivity : ComponentActivity() {
             putExtra("start_position_ms", positionMs)
             putExtra("from_beginning", positionMs < MIN_RESUME_POSITION_MS)
             historyParentIdOverride?.let { putExtra("history_parent_id", it) }
-            // The session CONTEXT, not just the one URL (spec C26): without the
-            // source list the in-app fallback could not offer "next source",
-            // and a further hand-off out of it had nothing to carry.
-            sourcesJsonRaw?.let { putExtra("sources_json", it) }
-            sourceAddonsJsonRaw?.let { putExtra("source_addons", it) }
             // Session settings the in-app engine reads from its own extras: a
             // random-mode binge that fell back in kept chaining in order.
             putExtra("random_episodes", randomEpisodes)
@@ -1014,6 +1011,19 @@ class ExternalPlayerActivity : ComponentActivity() {
                 )
             }
         }
+        // The session CONTEXT, not just the one URL (spec C26): without the
+        // source list the in-app fallback could not offer "next source", and a
+        // further hand-off out of it had nothing to carry. Put through the
+        // payload helper rather than copied back as raw extras, so a hand-off
+        // of a 1.5 MB list cannot blow the binder transaction either
+        // (ANDROID-12).
+        launch.putPlayerPayloads(
+            this,
+            listOfNotNull(
+                sourcesJsonRaw?.let { "sources_json" to it },
+                sourceAddonsJsonRaw?.let { "source_addons" to it }
+            ).toMap()
+        )
         inAppLauncher.launch(launch)
     }
 

@@ -3855,8 +3855,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // with its own row.
         var parsedSources: List<Stream> = emptyList()
 
-        // Parse sources from JSON
-        val sourcesJson = intent.getStringExtra("sources_json")
+        // Parse sources from JSON. Read through playerPayload: an oversized list
+        // arrives spooled beside the intent rather than on it (ANDROID-12).
+        val sourcesJson = intent.playerPayload(this, "sources_json")
         if (!sourcesJson.isNullOrBlank()) {
             try {
                 val arr = JSONArray(sourcesJson)
@@ -3894,7 +3895,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         sourceAddons = addonsFor(
             streams = sources,
             parsed = parsedSources,
-            addons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
+            addons = parseSourceAddonsJson(intent.playerPayload(this, "source_addons"))
         )
         // The picker's tab, when there was one. Read so the session keeps it
         // across an engine handoff; no call site below consults it (see
@@ -3902,7 +3903,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         selectedAddon = intent.getStringExtra("selected_addon")?.takeIf { it.isNotBlank() }
 
         // Parse cast from JSON
-        val castJson = intent.getStringExtra("cast_json")
+        val castJson = intent.playerPayload(this, "cast_json")
         if (!castJson.isNullOrBlank()) {
             try {
                 val arr = JSONArray(castJson)

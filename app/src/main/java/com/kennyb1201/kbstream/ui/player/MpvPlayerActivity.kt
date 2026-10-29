@@ -1666,11 +1666,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val requestedEpisode = season?.let { requestedSeason ->
             episode?.let { requestedEpisode -> requestedSeason to requestedEpisode }
         }
-        val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
+        // Read through playerPayload: an oversized list arrives spooled beside
+        // the intent rather than on it (ANDROID-12).
+        val parsedSources = parseSourcesJson(intent.playerPayload(this, "sources_json"))
         // The add-on behind each parsed row, parallel to sources_json. Absent
         // or short reads as "unknown" for the missing entries, which are never
         // skipped and never demoted.
-        val parsedAddons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
+        val parsedAddons = parseSourceAddonsJson(intent.playerPayload(this, "source_addons"))
         // The picker's tab, when the viewer pressed a row from one: the scope a
         // MANUAL advance stays inside. Absent (All, or a launch with no picker
         // at all) reads as null, which is the merged walk.
@@ -1732,7 +1734,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         resolveAddonIdentity(currentSourceLabel)
 
         // The cast band's members, the same payload the main player renders.
-        castMembers = parseCastJson(intent.getStringExtra("cast_json"))
+        castMembers = parseCastJson(intent.playerPayload(this, "cast_json"))
 
         // A title started "from the beginning" must not become a resume.
         startFromBeginning = intent.getBooleanExtra("from_beginning", false)
