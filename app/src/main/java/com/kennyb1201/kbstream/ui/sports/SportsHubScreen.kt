@@ -103,12 +103,14 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.Leader
+import com.kennyb1201.kbstream.data.sports.PointsColumn
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.StandingEntry
 import com.kennyb1201.kbstream.data.sports.StandingGroup
+import com.kennyb1201.kbstream.data.sports.pointsCell
 import com.kennyb1201.kbstream.data.sports.standingsTeam
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.ui.components.KBButton
@@ -125,6 +127,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -1170,7 +1173,13 @@ private fun HubList(
 ) {
     val density = LocalDensity.current
     val bringIntoViewSpec = remember(density) {
-        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+        SportsCardBringIntoViewSpec(
+            insetPx = with(density) { KBFocusRowInset.toPx() },
+            glowPx = with(density) { KBFocusGlow.toPx() },
+            // The standings rows are KBCards at the row scale - the landing has
+            // to account for the card focus actually grows them to.
+            focusedScale = KBFocusRow
+        )
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
         LazyVerticalGrid(
@@ -1221,7 +1230,15 @@ private fun HubGrid(
 ) {
     val density = LocalDensity.current
     val bringIntoViewSpec = remember(density) {
-        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+        SportsCardBringIntoViewSpec(
+            insetPx = with(density) { KBFocusRowInset.toPx() },
+            glowPx = with(density) { KBFocusGlow.toPx() },
+            // Every card in the feed is a KBCard, and focus grows all but the
+            // live ones, which stay at 1f - so the grid errs on the side of the
+            // growth that is there. The over-estimate for a live card is half of
+            // 2% of its height, a couple of dp, and the deadzone absorbs it.
+            focusedScale = KBFocusRow
+        )
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
         LazyVerticalGrid(
@@ -1282,7 +1299,32 @@ private fun HubGrid(
  * case the viewer reports - gets its border and glow back.
  */
 @OptIn(ExperimentalFoundationApi::class)
-internal class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+internal class SportsCardBringIntoViewSpec(
+    private val insetPx: Float,
+    /**
+     * The focus glow's radius, in pixels - the part of the cue tv-material3
+     * draws OUTSIDE the card's layout rectangle ([KBFocusGlow] at the caller's
+     * density).
+     *
+     * The rect this spec is handed is the focused node's LAYOUT rect, and the
+     * glow is drawn past it, so a landing computed from the rect alone leaves
+     * the glow - and, on a scaled card, the grown card itself - under the
+     * container's clip. Zero for a container whose cards draw no glow.
+     */
+    private val glowPx: Float = 0f,
+    /**
+     * The scale a card in this container grows to on focus ([KBFocusRow] for
+     * the hub's cards), or 1f for one that does not grow.
+     *
+     * Verified against tv-material 1.1.0 rather than assumed: its
+     * `tvSurfaceScale` applies the scale through `graphicsLayer` with
+     * `transformOrigin` left at its default, which is the CENTER - so the
+     * growth is split evenly and each edge moves out by half of it. A future
+     * version that pivots at an edge would put the whole growth on one side and
+     * this half must become the full amount for that side.
+     */
+    private val focusedScale: Float = 1f,
+) : BringIntoViewSpec {
 
     /**
      * How much of [insetPx] a card may lose before the landing pays for it: a
@@ -1306,19 +1348,26 @@ internal class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIn
         // scrolled to somewhere it could not be seen at all.
         val margin = insetPx.coerceAtMost(containerSize / 3f)
         // The rect arrives as the focused node's leading edge plus its extent -
-        // the card that asked to be brought into view, which is also the thing
-        // carrying the cue.
-        val trailingEdge = offset + abs(size)
+        // the LAYOUT rect. What the viewer sees, and what the container clips,
+        // is that rect scaled about its centre plus the glow painted past it,
+        // so both edges are expanded by the overhang before anything is decided.
+        // Measuring the layout rect was the whole of the WNBA report: a card
+        // whose layout rect cleared the room still had its grown bottom edge
+        // (and its glow) under the clip, the landing asked for nothing, and the
+        // card that was visibly cut re-requested on every pass.
+        val overhangPx = glowPx + (focusedScale - 1f) * abs(size) / 2f
+        val drawnOffset = offset - overhangPx
+        val trailingEdge = offset + abs(size) + overhangPx
         // How much of the cue room the clip is eating at each edge. Positive
-        // means the card has that much of its border-and-glow outside the
-        // viewport, whichever edge it is.
+        // means the drawn card has that much of itself outside the viewport,
+        // whichever edge it is.
         val shortOfTrailing = trailingEdge - (containerSize - margin)
-        val shortOfLeading = margin - offset
+        val shortOfLeading = margin - drawnOffset
         // Inside the viewport this is a RE-REQUEST page (see the class note):
         // only the room the clip is actually eating is paid for, and only past
         // the deadzone, so remeasurement cannot move a card that is already
         // sitting. A card off the viewport is landed exactly as it always was.
-        val inside = offset >= 0f && trailingEdge <= containerSize
+        val inside = drawnOffset >= 0f && trailingEdge <= containerSize
         val floor = if (inside) deadzone else 0f
         return when {
             // Past the bottom room: scroll forward just far enough to clear it.
@@ -3028,6 +3077,7 @@ private fun StandingsBody(
                                     leaguePath = league.path,
                                     ties = league.hasTies,
                                     points = league.pointsTable,
+                                    columns = league.pointsColumns,
                                     conference = conference,
                                     favoriteKeys = favoriteKeys,
                                     onToggleTeam = onToggleTeam,
@@ -3048,6 +3098,7 @@ private fun StandingsBody(
                         leaguePath = league.path,
                         ties = league.hasTies,
                         points = league.pointsTable,
+                        columns = league.pointsColumns,
                         conference = conference,
                         favoriteKeys = favoriteKeys,
                         onToggleTeam = onToggleTeam,
@@ -3109,6 +3160,12 @@ private fun StandingsColumn(
     /** Whether the table is read on points - see [SportsLeague.pointsTable]. */
     points: Boolean = false,
     /**
+     * A points table's columns, in order - see [SportsLeague.pointsColumns].
+     * The header and every row are read from this ONE list, so they cannot
+     * disagree about the labels or the order.
+     */
+    columns: List<PointsColumn> = SportsLeague.DEFAULT_POINTS_COLUMNS,
+    /**
      * The conference picked above the table, or null for the whole document.
      * A different pick is a different table, and starts at its own top.
      */
@@ -3153,7 +3210,7 @@ private fun StandingsColumn(
                 StandingsGroupHeader(name = group.name, count = group.entries.size)
             }
             item(key = "$groupKey-cols") {
-                StandingsColumnHeader(points = points, ties = ties)
+                StandingsColumnHeader(points = points, ties = ties, columns = columns)
             }
             itemsIndexed(
                 group.entries,
@@ -3170,6 +3227,7 @@ private fun StandingsColumn(
                     entry = entry,
                     points = points,
                     ties = ties,
+                    columns = columns,
                     followed = followed,
                     onToggleFollow = {
                         onToggleTeam?.invoke(team, !followed)
@@ -3207,16 +3265,22 @@ private fun StandingsGroupHeader(name: String, count: Int) {
 /**
  * The column labels, drawn once above each group's rows.
  *
- * A points table (soccer) labels its own four columns instead: W-D-L-PTS is how
- * that table is read, and PCT/GB/STRK are stats the feed does not publish for it
- * - so drawing them produced three empty columns where the one number that
- * matters was missing (audit C8, 2026-10-23).
+ * A points table (soccer) labels the columns the LEAGUE declares, in its order
+ * ([SportsLeague.pointsColumns]): W-D-L-PTS is how a soccer table is read, the
+ * NHL's third figure is an OTL rather than a draw, and MLS prints W-L-D - so the
+ * labels are not one fixed list, and drawing them from the same list the rows
+ * are drawn from is what keeps a heading over the number it names.
  *
  * And a league that cannot tie drops the T column rather than labelling a column
  * of zeroes - see [SportsLeague.hasTies].
  */
 @Composable
-private fun StandingsColumnHeader(points: Boolean = false, ties: Boolean = true) {
+private fun StandingsColumnHeader(
+    points: Boolean = false,
+    ties: Boolean = true,
+    /** A points table's columns, in order - see [SportsLeague.pointsColumns]. */
+    columns: List<PointsColumn> = SportsLeague.DEFAULT_POINTS_COLUMNS,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3233,7 +3297,7 @@ private fun StandingsColumnHeader(points: Boolean = false, ties: Boolean = true)
             modifier = Modifier.weight(1f)
         )
         val labels = when {
-            points -> listOf("W", "D", "L", "PTS")
+            points -> columns.map { it.label }
             ties -> listOf("W", "L", "T", "PCT", "GB", "STRK")
             else -> listOf("W", "L", "PCT", "GB", "STRK")
         }
@@ -3255,6 +3319,8 @@ private fun StandingsRow(
     points: Boolean = false,
     /** Whether this league can tie, so the row carries a T column. */
     ties: Boolean = true,
+    /** A points table's columns, in order - see [SportsLeague.pointsColumns]. */
+    columns: List<PointsColumn> = SportsLeague.DEFAULT_POINTS_COLUMNS,
     followed: Boolean,
     onToggleFollow: () -> Unit
 ) {
@@ -3296,11 +3362,11 @@ private fun StandingsRow(
                 modifier = Modifier.weight(1f)
             )
             if (points) {
-                // Read on points: wins, draws, losses, points - in that order.
-                StandingsStat(entry.wins.toString())
-                StandingsStat(entry.ties.toString())
-                StandingsStat(entry.losses.toString())
-                StandingsStat(standingsText(entry.points))
+                // Read on points: the league's own columns, in its own order -
+                // wins/draws/losses/points where the league says so (soccer), and
+                // wins/losses/OTL/points for hockey, whose level games are
+                // decided in overtime rather than drawn.
+                columns.forEach { column -> StandingsStat(entry.pointsCell(column)) }
             } else {
                 StandingsStat(entry.wins.toString())
                 StandingsStat(entry.losses.toString())
@@ -3969,7 +4035,13 @@ private fun ColumnScope.SheetScrollBody(
 ) {
     val density = LocalDensity.current
     val bringIntoViewSpec = remember(density) {
-        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+        SportsCardBringIntoViewSpec(
+            insetPx = with(density) { KBFocusRowInset.toPx() },
+            glowPx = with(density) { KBFocusGlow.toPx() },
+            // The rows in these sheets are KBCard pills at the row scale (see
+            // the backup-feed rows), so the landing measures them grown.
+            focusedScale = KBFocusRow
+        )
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
         Column(

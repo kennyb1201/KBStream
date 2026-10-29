@@ -438,6 +438,13 @@ val KBFocusChipInset = 12.dp
 //
 // 16dp is the 12dp glow plus the ~1% of its own height that [KBFocusRow] grows
 // a card by per side; a 400dp row is still inside it.
+//
+// Read it as the room AROUND the card the viewer sees: the hub's landing
+// (SportsCardBringIntoViewSpec) expands the measured layout rect by that same
+// glow and half-growth before it reads this margin, so a tall focused card -
+// the WNBA Finals shape - is landed with its drawn bottom edge clear instead of
+// its layout edge. The value is unchanged on purpose: it is a margin, and a
+// margin measured from the wrong rect was the defect, not a margin too small.
 val KBFocusRowInset = 16.dp
 
 val OswaldFamily = FontFamily(

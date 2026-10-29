@@ -1666,6 +1666,38 @@ class EspnSportsRepositoryTest {
     }
 
     @Test
+    fun `a hockey row's third figure is an overtime loss, not a draw`() {
+        // The live hockey endpoint sends no `ties` stat at all (a level game is
+        // decided in overtime); the loss is `otLosses`. Reading only `ties` left
+        // the column at a hard 0 under a "D" heading.
+        val hockey = """
+            {
+              "children": [
+                {
+                  "name": "Eastern Conference",
+                  "standings": { "entries": [
+                    { "team": { "abbreviation": "CAR", "displayName": "Carolina Hurricanes" },
+                      "stats": [
+                        { "name": "wins", "displayValue": "10" },
+                        { "name": "losses", "displayValue": "2" },
+                        { "name": "otLosses", "displayValue": "2" },
+                        { "name": "points", "displayValue": "22" }
+                      ] }
+                  ] }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val row = parseStandings(hockey).single().entries.single()
+        assertEquals(2, row.overtimeLosses)
+        assertEquals("22", row.points)
+        // No draws exist in hockey, so the feed sends no such stat - and the
+        // row must not pretend the overtime losses are draws.
+        assertEquals(0, row.ties)
+    }
+
+    @Test
     fun `a table with no points stat reports none, so the six-column shape stays`() {
         val football = parseStandings(standings).first { it.name == "AFC West" }
         assertEquals("", football.entries.single().points)

@@ -67,6 +67,7 @@ import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.Leader
+import com.kennyb1201.kbstream.data.sports.PointsColumn
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
@@ -74,6 +75,7 @@ import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.StandingEntry
 import com.kennyb1201.kbstream.data.sports.StandingGroup
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
+import com.kennyb1201.kbstream.data.sports.pointsCell
 import com.kennyb1201.kbstream.data.sports.standingsTeam
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
@@ -1548,6 +1550,7 @@ private fun StandingsBodyMobile(
                                     entry = entry,
                                     points = league.pointsTable,
                                     ties = league.hasTies,
+                                    columns = league.pointsColumns,
                                     followed = followed,
                                     onToggleFollow = { onToggleTeam(team, !followed) }
                                 )
@@ -1624,6 +1627,8 @@ private fun StandingRowMobile(
     points: Boolean = false,
     /** Whether this league can tie, so the row carries a draws count. */
     ties: Boolean = true,
+    /** A points table's columns, in order - see [SportsLeague.pointsColumns]. */
+    columns: List<PointsColumn> = SportsLeague.DEFAULT_POINTS_COLUMNS,
     followed: Boolean,
     onToggleFollow: () -> Unit
 ) {
@@ -1657,17 +1662,17 @@ private fun StandingRowMobile(
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
-                // A POINTS table (soccer, the NHL) reads W-D-L and the points
-                // behind it; the TV's four-column shape, on one line. Anything
-                // else keeps the stats it always drew, less the T for a league
-                // that cannot tie.
+                // A POINTS table (soccer, the NHL) reads the league's own
+                // columns, in its own order, with the points behind them - the
+                // TV's four-column shape, on one line. Anything else keeps the
+                // stats it always drew, less the T for a league that cannot tie.
                 Text(
                     // The table's columns, on one line: a phone cannot hold six
                     // fixed-width columns beside a team name, and dropping any
                     // of them would make the table say less than the TV's - but
                     // a league that cannot tie has no draws count to show.
                     text = when {
-                        points -> "${entry.wins}-${entry.ties}-${entry.losses}"
+                        points -> columns.joinToString("-") { entry.pointsCell(it) }
                         ties -> "${entry.wins}-${entry.losses}-${entry.ties}"
                         else -> "${entry.wins}-${entry.losses}"
                     },

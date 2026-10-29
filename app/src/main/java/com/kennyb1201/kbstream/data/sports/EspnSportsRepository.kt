@@ -830,6 +830,10 @@ private fun espnStandingEntry(row: JSONObject): StandingEntry? {
         wins = espnStatText(stats, "wins").toIntOrNull() ?: 0,
         losses = espnStatText(stats, "losses").toIntOrNull() ?: 0,
         ties = espnStatText(stats, "ties").toIntOrNull() ?: 0,
+        // Hockey's third figure. ESPN's hockey tables carry no `ties` stat at
+        // all - the level game is decided in overtime, and the loss is reported
+        // here - so the OTL column has to be read from its own name.
+        overtimeLosses = espnStatText(stats, "otLosses").toIntOrNull() ?: 0,
         winPercent = espnStatText(stats, "winPercent"),
         gamesBehind = espnStatText(stats, "gamesBehind"),
         streak = espnStatText(stats, "streak"),

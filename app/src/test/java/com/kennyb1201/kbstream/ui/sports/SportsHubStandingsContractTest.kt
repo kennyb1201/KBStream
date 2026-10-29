@@ -86,7 +86,8 @@ class SportsHubStandingsContractTest {
         assertTrue(
             "and one column header per group, not one for the whole screen",
             hub.contains(
-                "item(key = \"\$groupKey-cols\") { StandingsColumnHeader(points = points, ties = ties) }"
+                "item(key = \"\$groupKey-cols\") { StandingsColumnHeader(points = points, " +
+                    "ties = ties, columns = columns) }"
             )
         )
         assertTrue(
@@ -94,16 +95,22 @@ class SportsHubStandingsContractTest {
             hub.contains("listOf(\"W\", \"L\", \"T\", \"PCT\", \"GB\", \"STRK\")")
         )
         assertTrue(
-            "and a POINTS table labels its own four columns - soccer is read on points, and the feed " +
-                "publishes neither a win percentage nor games behind for it",
-            hub.contains("points -> listOf(\"W\", \"D\", \"L\", \"PTS\")") &&
-                hub.contains("StandingsColumnHeader(points = points, ties = ties)") &&
+            "and a POINTS table labels the columns the LEAGUE declares - soccer is read on points, " +
+                "and the feed publishes neither a win percentage nor games behind for it",
+            hub.contains("points -> columns.map { it.label }") &&
+                hub.contains("StandingsColumnHeader(points = points, ties = ties, columns = columns)") &&
                 hub.contains("points = league.pointsTable")
         )
         assertTrue(
-            "and the row draws the points value last, behind wins, draws and losses",
+            "and the row draws the same league-declared columns, in the same order, so a heading " +
+                "can never sit over the wrong figure",
+            hub.contains("columns.forEach { column -> StandingsStat(entry.pointsCell(column)) }") &&
+                hub.contains("columns = league.pointsColumns")
+        )
+        assertTrue(
+            "the non-points row still draws wins, losses, the optional T and the three feed strings",
             hub.contains("StandingsStat(entry.ties.toString())") &&
-                hub.contains("StandingsStat(standingsText(entry.points))")
+                hub.contains("StandingsStat(standingsText(entry.winPercent))")
         )
     }
 
@@ -258,12 +265,13 @@ class SportsHubStandingsContractTest {
 
     @Test
     fun `a league that cannot tie drops the T column`() {
-        // The four that always play to a winner are marked so in the catalog:
+        // The five that always play to a winner are marked so in the catalog:
         // ESPN ships a `ties` stat on their tables and fills it with a hard 0,
-        // so a column read from the data alone was a column of zeroes.
+        // so a column read from the data alone was a column of zeroes. Hockey
+        // joins them: a level game is decided in overtime, never drawn.
         assertEquals(
-            "the NBA, MLB, the WNBA and college basketball are the four that never tie",
-            4,
+            "the NBA, MLB, the WNBA, college basketball and the NHL are the five that never tie",
+            5,
             Regex("hasTies = false").findAll(sportModels).count()
         )
         assertTrue(
@@ -341,6 +349,58 @@ class SportsHubStandingsContractTest {
             "both bodies take the flag from the selected league",
             hub.contains("points = league.pointsTable") &&
                 mobile.contains("points = league.pointsTable")
+        )
+    }
+
+    @Test
+    fun `a hockey table reads OTL where a soccer table reads draws`() {
+        // ESPN's hockey table carries no `ties` stat at all - it sends
+        // `otLosses` - so the third figure is an OVERTIME loss, and calling it
+        // "D" both mislabelled it and printed a hard 0 under the label.
+        assertTrue(
+            "the OTL column has a value of its own, parsed from ESPN's otLosses stat",
+            repository.contains("overtimeLosses = espnStatText(stats, \"otLosses\").toIntOrNull() ?: 0")
+        )
+        assertTrue(
+            "the heading is OTL, and it reads that column - never the draws count",
+            sportModels.contains("OVERTIME_LOSSES(\"OTL\")") &&
+                sportModels.contains("PointsColumn.OVERTIME_LOSSES -> overtimeLosses.toString()")
+        )
+        assertTrue(
+            "the NHL declares W-L-OTL-PTS, the order hockey records are read in",
+            sportModels.contains(
+                "pointsColumns = listOf( PointsColumn.WINS, PointsColumn.LOSSES, " +
+                    "PointsColumn.OVERTIME_LOSSES, PointsColumn.POINTS )"
+            )
+        )
+        assertFalse(
+            "and no points table is labelled with a bare draws list any more",
+            hub.contains("points -> listOf(\"W\", \"D\", \"L\", \"PTS\")")
+        )
+    }
+
+    @Test
+    fun `MLS reads W-L-D, the one soccer table that does`() {
+        // Every other soccer table here is W-D-L (the league default); MLS
+        // publishes its record W-L-D, so its columns are declared, not shared.
+        assertTrue(
+            "MLS declares W-L-D-PTS",
+            sportModels.contains(
+                "pointsColumns = listOf( PointsColumn.WINS, PointsColumn.LOSSES, " +
+                    "PointsColumn.DRAWS, PointsColumn.POINTS )"
+            )
+        )
+        assertTrue(
+            "and the other soccer tables keep the league default, W-D-L-PTS",
+            sportModels.contains(
+                "val DEFAULT_POINTS_COLUMNS: List<PointsColumn> = listOf(PointsColumn.WINS, " +
+                    "PointsColumn.DRAWS, PointsColumn.LOSSES, PointsColumn.POINTS)"
+            )
+        )
+        assertTrue(
+            "and the phone's dashed record reads the same declared columns",
+            mobile.contains("columns.joinToString(\"-\") { entry.pointsCell(it) }") &&
+                mobile.contains("columns = league.pointsColumns")
         )
     }
 

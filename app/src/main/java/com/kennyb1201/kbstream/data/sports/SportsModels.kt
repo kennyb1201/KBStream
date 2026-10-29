@@ -309,6 +309,16 @@ data class StandingEntry(
     val wins: Int,
     val losses: Int,
     val ties: Int,
+    /**
+     * Overtime (and shootout) losses, from ESPN's `otLosses` stat.
+     *
+     * The NHL is the league this exists for: a game that ends level goes to
+     * overtime, so the third figure in a hockey record is an OVERTIME loss, not
+     * a draw - and ESPN sends no `ties` stat for it at all, which is why the
+     * column used to read a hard 0 under a "D" label. Zero where the sport has
+     * no such result.
+     */
+    val overtimeLosses: Int = 0,
     /** "1.000" as ESPN sends it; blank when the feed carries none (soccer). */
     val winPercent: String,
     /** "-" for the group leader, the games-back string otherwise; blank when absent. */
@@ -410,23 +420,77 @@ data class SportsLeague(
      * Static for the same reason [hasStandings] is: the feed cannot say. ESPN
      * ships a `ties` stat on every table and fills it with a hard 0 where the
      * sport has no ties at all, so a column read from the data alone drew a
-     * column of zeroes on four leagues that can never tie - the NBA, the WNBA,
+     * column of zeroes on five leagues that can never tie - the NBA, the WNBA,
      * MLB and college basketball (a game that ends level goes to overtime until
-     * someone wins). The NFL and college football keep theirs: a tie is rare
-     * there, but it is a real result.
+     * someone wins), and the NHL (where that overtime loss is a real result in
+     * its own right, reported as OTL - see [pointsColumns]). The NFL and college
+     * football keep their T: a tie is rare there, but it is a real result.
      */
     val hasTies: Boolean = true,
     /**
      * Whether the table is read on league POINTS rather than a win percentage.
      *
      * True for soccer and the NHL, false for every other table. Static, like the
-     * other two flags, because the feed cannot be asked: ESPN sends a `points`
+     * other flags, because the feed cannot be asked: ESPN sends a `points`
      * stat for the NBA (a point differential), MLB and the WNBA (seeding
      * numbers) too, so the stat's presence drew those tables as W-D-L-PTS with a
      * meaningless number in the last column.
      */
     val pointsTable: Boolean = false,
-)
+    /**
+     * The columns a points table is drawn with, in order - the ONE place the
+     * header labels and the row's figures are read from, so they cannot drift
+     * apart (the shape that let a hockey "D" and a soccer column order be wrong
+     * in two files at once).
+     *
+     * [DEFAULT_POINTS_COLUMNS] is soccer's W-D-L-PTS. Two leagues read
+     * differently and say so here: the NHL's third figure is an OVERTIME loss
+     * (ESPN has no ties in hockey), and MLS publishes its record W-L-D. Read
+     * only where [pointsTable] is true.
+     */
+    val pointsColumns: List<PointsColumn> = DEFAULT_POINTS_COLUMNS,
+) {
+    companion object {
+        /** Soccer's table: wins, draws, losses, then points. */
+        val DEFAULT_POINTS_COLUMNS: List<PointsColumn> =
+            listOf(PointsColumn.WINS, PointsColumn.DRAWS, PointsColumn.LOSSES, PointsColumn.POINTS)
+    }
+}
+
+/**
+ * One column of a points table (see [SportsLeague.pointsColumns]).
+ *
+ * The enum, rather than a label string, is what keeps the header and the row
+ * together: each value carries both its heading and how a [StandingEntry] reads
+ * it, so a table can be re-ordered by changing the league's list alone.
+ */
+enum class PointsColumn(
+    /** The heading drawn above the column. */
+    val label: String,
+) {
+    WINS("W"),
+    LOSSES("L"),
+    /** A draw, which is what soccer calls the third figure. */
+    DRAWS("D"),
+    /** An overtime/shootout loss - hockey's third figure, never a draw. */
+    OVERTIME_LOSSES("OTL"),
+    POINTS("PTS"),
+}
+
+/**
+ * One cell of [entry]'s points table, read by column.
+ *
+ * Counts are rendered here rather than at the call sites so the TV's fixed
+ * columns and the phone's dashed line cannot disagree about which number goes
+ * where.
+ */
+fun StandingEntry.pointsCell(column: PointsColumn): String = when (column) {
+    PointsColumn.WINS -> wins.toString()
+    PointsColumn.LOSSES -> losses.toString()
+    PointsColumn.DRAWS -> ties.toString()
+    PointsColumn.OVERTIME_LOSSES -> overtimeLosses.toString()
+    PointsColumn.POINTS -> points
+}
 
 /**
  * The catalog of leagues, and the four the hub opens with.
@@ -459,7 +523,17 @@ object SportsLeagues {
             "NHL",
             SportsKind.HEAD_TO_HEAD,
             hasStandings = true,
-            pointsTable = true
+            // Hockey has no draws: a level game goes to overtime, and the third
+            // figure in the record is an OVERTIME loss. ESPN sends no `ties`
+            // stat for the table at all, so the "D" column read a hard 0.
+            hasTies = false,
+            pointsTable = true,
+            pointsColumns = listOf(
+                PointsColumn.WINS,
+                PointsColumn.LOSSES,
+                PointsColumn.OVERTIME_LOSSES,
+                PointsColumn.POINTS
+            )
         ),
         SportsLeague(
             "basketball/wnba",
@@ -511,7 +585,15 @@ object SportsLeagues {
             "MLS",
             SportsKind.HEAD_TO_HEAD,
             hasStandings = true,
-            pointsTable = true
+            pointsTable = true,
+            // MLS publishes its record W-L-D, unlike every other soccer table
+            // here (which read W-D-L, the league's own default).
+            pointsColumns = listOf(
+                PointsColumn.WINS,
+                PointsColumn.LOSSES,
+                PointsColumn.DRAWS,
+                PointsColumn.POINTS
+            )
         ),
         // Individual sports: no team table exists, so the hub never offers one.
         SportsLeague("tennis/atp", "Tennis", SportsKind.HEAD_TO_HEAD),

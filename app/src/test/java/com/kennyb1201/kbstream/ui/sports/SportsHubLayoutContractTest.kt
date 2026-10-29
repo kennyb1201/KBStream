@@ -312,9 +312,15 @@ class SportsHubLayoutContractTest {
         )
         assertTrue(
             "with the margin taken from the theme's own row inset",
-            flat.contains(
-                "SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })"
-            )
+            flat.contains("insetPx = with(density) { KBFocusRowInset.toPx() }")
+        )
+        assertTrue(
+            "and with the glow the focused card paints OUTSIDE its layout rect counted too",
+            flat.contains("glowPx = with(density) { KBFocusGlow.toPx() }")
+        )
+        assertTrue(
+            "plus the scale focus grows the card by, so the rect measured is the one on screen",
+            flat.contains("focusedScale = KBFocusRow")
         )
         assertTrue(
             "a margin that can never eat the viewport out from under a tall card",
@@ -338,6 +344,22 @@ class SportsHubLayoutContractTest {
      */
     private val spec: SportsCardBringIntoViewSpec =
         SportsCardBringIntoViewSpec(insetPx = INSET_PX)
+
+    /**
+     * The landing the hub's grids and lists actually install: the row inset,
+     * the 12dp focus glow and the row scale, as [KBFocusRow] applies them.
+     *
+     * Literal values rather than the theme's own constants for the same reason
+     * [INSET_PX] is a literal - this pins the ARITHMETIC, and a theme edit that
+     * changed the glow or the scale is exactly the kind of change that should
+     * have to come here and re-derive it.
+     */
+    private val drawnSpec: SportsCardBringIntoViewSpec
+        get() = SportsCardBringIntoViewSpec(
+            insetPx = INSET_PX,
+            glowPx = GLOW_PX,
+            focusedScale = ROW_SCALE
+        )
 
     @Test
     fun `a card inside the viewport keeps its cue room, and a resting card still asks for nothing`() {
@@ -469,6 +491,196 @@ class SportsHubLayoutContractTest {
         assertEquals("onto the same margin", INSET_PX, -100f - backOff, TOLERANCE)
     }
 
+    @Test
+    fun `the landing measures the DRAWN card - the glow and the focus growth included`() {
+        // The WNBA report (2026-10-29): a Final card is the tallest shape in the
+        // hub - series chip, note chip, venue, channel - and its LAYOUT rect can
+        // sit exactly on the room line while the card the viewer sees, grown by
+        // KBFocusRow and carrying a 12dp glow, still hangs under the clip. The
+        // spec then asked for nothing, the card stayed cut, and every pass over
+        // it re-requested the same zero-scroll - a card that is clipped and
+        // bouncing, only while focused, in exactly one tab's card shape.
+        val overhang = GLOW_PX + (ROW_SCALE - 1f) * CARD_HEIGHT / 2f
+        // The layout trailing edge sits exactly ON the trailing room line.
+        val onTheRoomLine = VIEWPORT - INSET_PX - CARD_HEIGHT
+        assertEquals(
+            "the drawn card still overhangs the room line by its glow plus half its growth, " +
+                "and that is what the landing pays for",
+            overhang,
+            drawnSpec.calculateScrollDistance(
+                offset = onTheRoomLine,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        // Live cards do not grow, so the same layout rect asks for nothing when
+        // the scale really is 1f - the six-column arithmetic is untouched.
+        assertEquals(
+            "a container that does not scale lands its cards exactly as before",
+            0f,
+            spec.calculateScrollDistance(
+                offset = onTheRoomLine,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        // The two halves of the overhang are independent: the shortest card's
+        // half-growth is under the deadzone and rightly rests, so the growth is
+        // read off a tall one.
+        val tall = 500f
+        assertEquals(
+            "while a card that grows but draws no glow pays only for the growth",
+            (ROW_SCALE - 1f) * tall / 2f,
+            SportsCardBringIntoViewSpec(insetPx = INSET_PX, focusedScale = ROW_SCALE)
+                .calculateScrollDistance(
+                    offset = VIEWPORT - INSET_PX - tall,
+                    size = tall,
+                    containerSize = VIEWPORT
+                ),
+            TOLERANCE
+        )
+    }
+
+    @Test
+    fun `a card flush with the bottom edge lands its DRAWN edge on the margin`() {
+        // The settler's own case: the reported card, 500dp tall and flush with
+        // the bottom of the list's clip. It must land with the whole drawn card
+        // clear of the edge, not just its layout rect - which is what left the
+        // channel line under the clip.
+        val height = 500f
+        val overhang = GLOW_PX + (ROW_SCALE - 1f) * height / 2f
+        val flush = VIEWPORT - height
+        val scroll = drawnSpec.calculateScrollDistance(
+            offset = flush,
+            size = height,
+            containerSize = VIEWPORT
+        )
+        assertTrue("a card flush with the bottom is pulled up", scroll > 0f)
+        assertEquals(
+            "and its drawn trailing edge lands exactly on the margin",
+            VIEWPORT - INSET_PX,
+            flush - scroll + height + overhang,
+            TOLERANCE
+        )
+    }
+
+    @Test
+    fun `a landing is idempotent for the drawn card - the second ask is always zero`() {
+        // The bounce, stated as arithmetic: a landing whose settled position does
+        // not satisfy the spec's own room rule re-requests on the next pass, and
+        // a card astride the edge re-requests forever - "it jumps up and down"
+        // until focus leaves. Every height the hub can draw, at offsets straddling
+        // both room lines and the deadzone, must settle in ONE move.
+        //
+        // The returned distance is applied by SUBTRACTING it from the offset (see
+        // the off-viewport test above, which lands a card at 1800f the same way),
+        // so that is how the settled position is recomputed here.
+        val heights = listOf(200f, 300f, 400f, 500f)
+        heights.forEach { height ->
+            val overhang = GLOW_PX + (ROW_SCALE - 1f) * height / 2f
+            val room = INSET_PX + overhang
+            val offsets = listOf(
+                -60f, 0f, 1f,
+                room - 1f, room, room + 1f,
+                VIEWPORT - height - room - 5f,
+                VIEWPORT - height - room - 1f,
+                VIEWPORT - height - room,
+                VIEWPORT - height - room + 1f,
+                VIEWPORT - height - room + 5f,
+                VIEWPORT - height - 1f,
+                VIEWPORT - height,
+                VIEWPORT - height + 40f,
+                500f
+            )
+            offsets.forEach { offset ->
+                val first = drawnSpec.calculateScrollDistance(
+                    offset = offset,
+                    size = height,
+                    containerSize = VIEWPORT
+                )
+                val second = drawnSpec.calculateScrollDistance(
+                    offset = offset - first,
+                    size = height,
+                    containerSize = VIEWPORT
+                )
+                assertEquals(
+                    "a $height card landed from $offset must not ask again (asked $second)",
+                    0f,
+                    second,
+                    TOLERANCE
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the deadzone still absorbs a drawn shortfall inside it, and pays past it`() {
+        // Unchanged value, unchanged job: a card resting within a quarter of the
+        // inset of its room is left alone, so a remeasurement cannot nudge it.
+        // The shortfall is measured from the DRAWN edge here - the whole point of
+        // the fix is that this is the edge that matters.
+        val height = CARD_HEIGHT
+        val overhang = GLOW_PX + (ROW_SCALE - 1f) * height / 2f
+        // The offset that leaves the drawn trailing edge [shortfall] past the room
+        // line, still inside the viewport.
+        fun restingWith(shortfall: Float): Float =
+            (VIEWPORT - INSET_PX + shortfall) - height - overhang
+        assertEquals(
+            "a drawn shortfall inside the deadzone rests",
+            0f,
+            drawnSpec.calculateScrollDistance(
+                offset = restingWith(INSET_PX / 8f),
+                size = height,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        assertEquals(
+            "and one past it is paid in full",
+            INSET_PX / 4f + 3f,
+            drawnSpec.calculateScrollDistance(
+                offset = restingWith(INSET_PX / 4f + 3f),
+                size = height,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+    }
+
+    @Test
+    fun `every scroll body in the hub installs the drawn-rect spec, and no other one exists`() {
+        // Three containers draw focusable KBCards under a clip: the games grid,
+        // the standings list and the detail sheets' body. Each hands its scroll
+        // the same spec, at the row scale its cards actually use - and a fourth
+        // construction somewhere would be a container measuring a rect the
+        // viewer never sees.
+        val installedIn = source().lineSequence()
+            .filter { it.contains("SportsCardBringIntoViewSpec(") }
+            // The class's own declaration line, not a construction.
+            .filterNot { it.contains("internal class") }
+            .count()
+        assertEquals(
+            "the grid, the standings list and the sheet body, and nothing else",
+            3,
+            installedIn
+        )
+        listOf(
+            "private fun HubList(" to "private fun HubGrid(",
+            "private fun HubGrid(" to "internal class SportsCardBringIntoViewSpec(",
+            "private fun ColumnScope.SheetScrollBody(" to "Hand this stop's D-pad Down"
+        ).forEach { (start, end) ->
+            val body = slice(start, end)
+            assertTrue(
+                "$start installs the spec with the glow and the row scale",
+                body.contains("SportsCardBringIntoViewSpec(") &&
+                    body.contains("glowPx = with(density) { KBFocusGlow.toPx() }") &&
+                    body.contains("focusedScale = KBFocusRow")
+            )
+        }
+    }
+
     // ── Source access ───────────────────────────────────────────────
 
     private fun slice(startMarker: String, endMarker: String): String {
@@ -512,6 +724,12 @@ class SportsHubLayoutContractTest {
 
         /** A 1080p viewport, in the raw pixels the spec is handed. */
         const val VIEWPORT = 1920f
+
+        /** [KBFocusGlow], 12dp, at the TV density the hub runs at. */
+        const val GLOW_PX = 12f
+
+        /** [KBFocusRow]: the scale a non-live card in the hub grows to on focus. */
+        const val ROW_SCALE = 1.02f
 
         const val TOLERANCE = 0.001f
     }
