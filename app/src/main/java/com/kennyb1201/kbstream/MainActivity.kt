@@ -3929,6 +3929,31 @@ fun AppRoot(
                 // system would not open the player". Catch it, report it, and
                 // leave the viewer on the stream list to pick another source.
                 runCatching { playerResultLauncher.launch(intent) }
+                    // One refusal IS the payload's doing, and it is the common
+                    // one: a spill that could not be written (a full cache, a
+                    // read-only volume) deliberately falls back to carrying the
+                    // extras on the intent, and past the binder buffer that is
+                    // the `TransactionTooLargeException` above - see
+                    // PlayerLaunchPayload. Retrying once without the payload
+                    // still opens a playable session (the source that is
+                    // playing, minus the picker's list); not retrying means the
+                    // press is dropped on the floor. A system refusal - the app
+                    // already finishing, a disabled target - fails the retry
+                    // just as fast and is reported once below.
+                    .recoverCatching { launchError ->
+                        if (launchPayloads.isEmpty()) throw launchError
+                        Log.w(
+                            TAG,
+                            "PLAYER LAUNCH REFUSED WITH PAYLOAD; retrying without it engine=" +
+                                playerActivity.simpleName,
+                            launchError
+                        )
+                        playerResultLauncher.launch(
+                            Intent(intent).apply {
+                                launchPayloads.keys.forEach { key -> removeExtra(key) }
+                            }
+                        )
+                    }
                     .onFailure { launchError ->
                         Log.e(
                             TAG,
@@ -3937,6 +3962,13 @@ fun AppRoot(
                         )
                         com.kennyb1201.kbstream.data.reporting.CrashReporter
                             .recordNonFatal(launchError, mapOf("source" to "player.launch"))
+                        // Nothing was started, so the shell is still painting
+                        // this launch's splash - the cover over a player that
+                        // will never arrive, and it would sit there for ever.
+                        // Put the viewer back where the play was pressed (the
+                        // stream list, the detail page), which is what the note
+                        // above always claimed happened.
+                        screen = stableBackDestination(current.returnTo)
                     }
             }
         }

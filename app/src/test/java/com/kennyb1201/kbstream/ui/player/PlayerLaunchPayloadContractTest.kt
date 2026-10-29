@@ -92,6 +92,30 @@ class PlayerLaunchPayloadContractTest {
     }
 
     @Test
+    fun `a launch the binder refuses is retried once without the payload`() {
+        val launch = main.indexOf("runCatching { playerResultLauncher.launch(intent) }")
+        val retry = main.indexOf(".recoverCatching {")
+        assertTrue(
+            "a refused launch must be retried rather than dropped: the spill's own " +
+                "fallback (carrying the payload on the intent) is exactly the failure " +
+                "this has to survive",
+            launch >= 0 && retry > launch
+        )
+        assertTrue(
+            "the retry has to drop the payload keys, or the same transaction is refused " +
+                "again",
+            main.contains("launchPayloads.keys.forEach { key -> removeExtra(key) }")
+        )
+        assertTrue(
+            "and when nothing starts, the launch splash must not be left over a player " +
+                "that will never arrive: the launch's own failure path has to put the " +
+                "viewer back where the play was pressed",
+            main.substring(maxOf(retry, 0))
+                .contains("screen = stableBackDestination(current.returnTo)")
+        )
+    }
+
+    @Test
     fun `the external player's fall-back re-spills instead of copying raw extras`() {
         assertTrue(
             "a 1.5 MB list handed back to the in-app engine would fail the same way, so " +
