@@ -51,7 +51,7 @@ internal class SportsTier1Ledger {
             label = label,
             strong = trace.strong,
             weak = trace.weak,
-            none = trace.none,
+            near = trace.near,
             listed = trace.listed,
             drops = trace.drops,
         )
@@ -92,7 +92,7 @@ internal class SportsTier1Ledger {
             append("  · game ").append(game.label)
             append(" strong=").append(game.strong)
             append(" weak=").append(game.weak)
-            append(" none=").append(game.none)
+            append(" near=").append(game.near)
             if (game.listed.isEmpty()) append(" listed=none")
             game.listed.forEach { (name, tier) ->
                 append(" ").append(name).append("=").append(tier)
@@ -155,7 +155,8 @@ internal data class Tier1Game(
     val label: String,
     val strong: Int,
     val weak: Int,
-    val none: Int,
+    /** Rows that named ONE side: the near misses, not every unrelated row. */
+    val near: Int,
     /** Each listed feed's name and the tier that produced it, strongest first. */
     val listed: List<Pair<String, String>>,
     val drops: List<Tier1Drop>,
@@ -165,8 +166,9 @@ internal data class Tier1Game(
  * The matcher's own read of one game, returned by
  * [SportsChannelMatcher.traceTier1]. Diagnostics-only.
  *
- * [strong] / [weak] / [none] count the guide rows inside the game's window by
- * the grade they earned; [drops] are the in-window rows that could not be used,
+ * [strong] / [weak] count the in-window rows that named both sides; [near]
+ * counts the ones that named exactly one (the near misses). [drops] are the
+ * in-window rows that could not be used,
  * each with its own gate ([TIER1_GATE_CHANNEL_BY_ID] when the playlist map has
  * no channel for it, [TIER1_GATE_NONE_GRADE] when it names only one side);
  * [listed] is each feed the card actually shows, with the tier it came from.
@@ -174,7 +176,7 @@ internal data class Tier1Game(
 internal data class Tier1GameTrace(
     val strong: Int,
     val weak: Int,
-    val none: Int,
+    val near: Int,
     val drops: List<Tier1Drop>,
     val listed: List<Pair<String, String>>,
 )

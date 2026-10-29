@@ -55,7 +55,7 @@ class SportsTier1TraceTest {
         val jetsFirst = tier1For(title = "NHL Hockey - Winnipeg Jets at Tampa Bay Lightning")
         assertEquals("both teams by name is the STRONG grade the field row earned", 1, jetsFirst.strong)
         assertEquals(0, jetsFirst.weak)
-        assertEquals(0, jetsFirst.none)
+        assertEquals(0, jetsFirst.near)
         assertEquals(
             "and the feed it airs on is attributed to the guide's title",
             listOf("TSN3" to "guide-title"),
@@ -89,7 +89,7 @@ class SportsTier1TraceTest {
     @Test
     fun `a row that names one side is recorded as a near miss, not silently dropped`() {
         val trace = tier1For(title = "NHL Hockey - Jets")
-        assertEquals("one side named is NONE for matching purposes", 1, trace.none)
+        assertEquals("one side named is NONE for matching purposes, and counted as the near miss it is", 1, trace.near)
         assertEquals(
             "and the row is named in the trace, with the grade as the gate: it is the shape a viewer expects to have matched",
             listOf(Tier1Drop(TIER1_GATE_NONE_GRADE, "tsn3", "NHL Hockey - Jets")),
@@ -134,7 +134,7 @@ class SportsTier1TraceTest {
             channelIndex = SportsChannelMatcher.ChannelIndex.of(listOf(network, matchup)),
             listed = listOf(network, matchup),
         )
-        assertEquals("no guide rows at all means no grades", 0, trace.strong + trace.weak + trace.none)
+        assertEquals("no guide rows at all means no grades", 0, trace.strong + trace.weak + trace.near)
         assertEquals(
             "the named network is attributed to the broadcast list, the matchup name to the channel",
             listOf("ESPN" to "network", "Jets @ Lightning" to "name-matchup"),
@@ -181,13 +181,13 @@ class SportsTier1TraceTest {
             Tier1GameTrace(
                 strong = 2,
                 weak = 1,
-                none = 3,
+                near = 3,
                 drops = emptyList(),
                 listed = listOf("TSN3" to "guide-title", "ESPN+3" to "network"),
             )
         )
         val block = ledger.render()
-        assertTrue(block.contains("game Jets @ Lightning strong=2 weak=1 none=3"))
+        assertTrue(block.contains("game Jets @ Lightning strong=2 weak=1 near=3"))
         assertTrue(block.contains("TSN3=guide-title"))
         assertTrue(block.contains("ESPN+3=network"))
     }

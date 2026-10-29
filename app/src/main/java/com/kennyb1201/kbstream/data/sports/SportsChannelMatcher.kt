@@ -763,11 +763,13 @@ internal object SportsChannelMatcher {
      *
      * One pass over the candidate rows, in the game's own window: each row's
      * grade (title first, description only when the title names nothing, exactly
-     * as [guideFeeds] reads it), the STRONG/WEAK/NONE counts those grades add up
-     * to, the rows whose channel is not in [channelById], and the best grade per
-     * channel. A row that names ONE side is recorded as a NONE_GRADE near miss -
-     * that shape ("NHL Hockey" plus a synopsis cut short) is precisely the row a
-     * viewer expects to have matched.
+     * as [guideFeeds] reads it), the STRONG/WEAK counts those grades add up to,
+     * the rows whose channel is not in [channelById], and the best grade per
+     * channel. A row that names ONE side is the near-miss count, and is recorded
+     * as a NONE_GRADE drop - that shape ("NHL Hockey" plus a synopsis cut short)
+     * is precisely the row a viewer expects to have matched. Rows that name
+     * neither side are not counted at all: the pool carries every matchup's
+     * rows, so they were never this game's.
      *
      * [listed] is then labelled by what produced it, strongest evidence first:
      * the guide row (title, description, or a weak city-only grade), the
@@ -785,7 +787,7 @@ internal object SportsChannelMatcher {
     ): Tier1GameTrace {
         var strong = 0
         var weak = 0
-        var none = 0
+        var near = 0
         val drops = ArrayList<Tier1Drop>()
         // Best guide grade per channel: 3 a STRONG title, 2 a STRONG description,
         // 1 a WEAK row (one side by its city).
@@ -804,22 +806,25 @@ internal object SportsChannelMatcher {
             } else {
                 teamNameStrength(descriptionTokens, game.away, game.home, variants)
             }
-            when (strength) {
-                TeamNameStrength.STRONG -> strong++
-                TeamNameStrength.WEAK -> weak++
-                TeamNameStrength.NONE -> none++
-            }
             if (strength == TeamNameStrength.NONE) {
                 val namesATeam =
                     namesStrongTeam(titleTokens, variants.away) ||
                         namesStrongTeam(titleTokens, variants.home) ||
                         namesStrongTeam(descriptionTokens, variants.away) ||
                         namesStrongTeam(descriptionTokens, variants.home)
-                if (namesATeam && drops.size < MAX_NEAR_MISS_DROPS) {
-                    drops += Tier1Drop(TIER1_GATE_NONE_GRADE, program.channelId, program.title)
+                // Only a NEAR MISS is counted: the pool also holds every other
+                // matchup's rows, and a row naming neither side says nothing
+                // about this game. A count that included them would read as
+                // "forty rows were rejected" when they were never this game's.
+                if (namesATeam) {
+                    near++
+                    if (drops.size < MAX_NEAR_MISS_DROPS) {
+                        drops += Tier1Drop(TIER1_GATE_NONE_GRADE, program.channelId, program.title)
+                    }
                 }
                 return@forEach
             }
+            if (strength == TeamNameStrength.WEAK) weak++ else strong++
             if (channelById[program.channelId] == null) {
                 drops += Tier1Drop(TIER1_GATE_CHANNEL_BY_ID, program.channelId, program.title)
                 return@forEach
@@ -856,7 +861,7 @@ internal object SportsChannelMatcher {
         return Tier1GameTrace(
             strong = strong,
             weak = weak,
-            none = none,
+            near = near,
             drops = drops,
             listed = listedTiers,
         )
