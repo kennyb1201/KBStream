@@ -398,6 +398,46 @@ object EpisodeMatch {
     fun isAutoplayCandidate(stream: Stream): Boolean =
         !stream.url.isNullOrBlank() || TorBoxResolve.isUnresolved(stream)
 
+    /**
+     * True when the row names a season AND an episode of it — the declaration
+     * that proves a row holds an episode.
+     *
+     * A bare "E15" is not this: it names an episode without saying which
+     * season, so it can neither prove the row is an episode of the requested
+     * show nor contradict one. Exposed for [RowMediaType], whose whole job is
+     * to stay as conservative as [verdict] is about weak signals.
+     */
+    internal fun declaresEpisode(stream: Stream): Boolean = declared(stream)?.season != null
+
+    /**
+     * True when the row's own text pins a season without ever naming an episode
+     * of it - "S03", "Season 3", "S03 COMPLETE".
+     *
+     * This is the pack signal that SAVES a row from [RowMediaType]'s movie
+     * verdict: a season pack is a wrong answer to an episode query, but it is
+     * an episode-show answer, not a film, and dropping it as movie-typed would
+     * be the wrong classification (the episode rules, not the type guard, are
+     * what keep it out of autoplay).
+     */
+    internal fun hasSeasonMarker(stream: Stream): Boolean =
+        textFields(stream).any { SEASON_MARKER.containsMatchIn(it) }
+
+    /**
+     * True when the row's size, read against [runtimeMinutes], needs more than
+     * [MAX_EPISODE_MBPS] - the one quantitative proof a file cannot be one
+     * episode of that length.
+     *
+     * False when either number is missing, deliberately: an unread size or an
+     * unknown runtime proves nothing, and guessing there is how an honest
+     * episode file gets thrown away.
+     */
+    internal fun exceedsEpisodeDensity(stream: Stream, runtimeMinutes: Int?): Boolean {
+        val runtime = runtimeMinutes?.takeIf { it > 0 } ?: return false
+        val sizeGb = StreamRanker.sizeGb(stream) ?: return false
+        // GB to bits, over the episode's own seconds, in Mbps.
+        return sizeGb * 8_000.0 / (runtime * 60.0) > MAX_EPISODE_MBPS
+    }
+
     fun isSeasonPack(stream: Stream, runtimeMinutes: Int?): Boolean {
         val runtime = runtimeMinutes?.takeIf { it > 0 }
         val sizeGb = if (runtime != null) StreamRanker.sizeGb(stream) else null

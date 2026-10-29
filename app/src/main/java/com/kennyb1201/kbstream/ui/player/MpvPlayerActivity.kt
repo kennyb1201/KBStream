@@ -59,6 +59,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
+import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
@@ -4323,6 +4324,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val fileName = detectionFileName()
         val fromName = bundledEpisodeCount(fileName)
         if (fileMs <= 0L && fromName == null) return
+        // Without a filename-bundle signal, a duration is only evidence about
+        // the FILE once the file has actually opened and played ([fileLoaded] -
+        // the flag this activity already keeps for "the file ever opened").
+        // A duration read before that describes the open attempt, not the
+        // media, and committing a scheme from it is one of the ways this show's
+        // numbering got poisoned. An early return, not a skip: the progress tick
+        // re-reads this, so the commit waits until there is a file to trust.
+        if (fromName == null && !fileLoaded) return
         lifecycleScope.launch {
             if (schemeStoreKey == null) {
                 schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
@@ -4340,10 +4349,31 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // The tick that started this coroutine may have been for a file the
             // session has already left, so the guard is re-read inside.
             if (schemeDetectedForFileId == sid) return@launch
+            // Same rule as the main player (RowMediaType.schemeCommitRefusal): a
+            // row proved to be a film, or a bundle that starts at another
+            // episode, is not evidence about this session's episode. The guard
+            // SKIPS the commit and leaves the stored scheme alone.
+            val refusal = RowMediaType.schemeCommitRefusal(
+                stream = sources.firstOrNull { it.url == currentUrl },
+                contentType = parentType,
+                streamId = sid,
+                runtimeMinutes = tmdbMs.takeIf { it > 0L }?.let { (it / 60_000L).toInt() },
+                sessionEpisode = episode,
+                fileName = fileName
+            )
+            // Marked detected either way: the answer cannot change while this
+            // file plays, so the tick must not re-run the TMDB lookup every
+            // second in the hope of a different verdict.
+            schemeDetectedForFileId = sid
+            if (refusal != null) {
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "scheme not stored for $sid: $refusal"
+                )
+                return@launch
+            }
             val detected = EpisodeScheme.detect(fileMs, tmdbMs, fileName)
             bingeScheme = detected
             EpisodeSchemeStore.put(this@MpvPlayerActivity, schemeStoreKey, detected)
-            schemeDetectedForFileId = sid
             com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                 "scheme ${detected.encode() ?: "1:1"} for $sid " +
                     "(file=${fileMs}ms tmdb=${tmdbMs}ms " +

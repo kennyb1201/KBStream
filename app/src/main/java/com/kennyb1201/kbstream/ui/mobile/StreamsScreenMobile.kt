@@ -156,6 +156,8 @@ fun StreamsScreenMobile(
         // A failed add-on contributes no sources, so without it a picker short
         // one provider's rows read exactly like a title with thin sources.
         val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
+        val droppedByTypeGuard by viewModel.droppedByTypeGuard.collectAsStateWithLifecycle()
+        val schemeResetOffer by viewModel.schemeResetOffer.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         // This phone's downloads for the profile on screen. The rows read their
@@ -480,10 +482,45 @@ fun StreamsScreenMobile(
                 }
 
                 visibleStreams.isEmpty() -> item(key = "empty") {
-                    MobileStreamsHeroState(
-                        title = "NO SOURCES FOUND",
-                        message = "Try another add-on or check that the provider is online."
-                    )
+                    // Said in the same order of actionability as the TV picker:
+                    // the saved numbering first (it comes with the reset), then
+                    // the type guard's own count, then the provider hint - which
+                    // is only the answer when neither of the app's own reasons
+                    // applies.
+                    val emptyMessage = when {
+                        schemeResetOffer != null ->
+                            "Sources were hidden because they did not match this episode, or " +
+                                "this show's saved episode numbering is wrong."
+
+                        droppedByTypeGuard > 0 ->
+                            "$droppedByTypeGuard source(s) were hidden because they did not " +
+                                "match this title."
+
+                        else -> "Try another add-on or check that the provider is online."
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        MobileStreamsHeroState(
+                            title = "NO SOURCES FOUND",
+                            message = emptyMessage
+                        )
+                        // The one correction the empty state can offer, and only
+                        // where the ViewModel says a stored scheme could be the
+                        // reason (see SchemeResetOffer). One tap: clearing it is
+                        // non-destructive - the next file this show plays
+                        // re-detects and re-stores it.
+                        schemeResetOffer?.let { offer ->
+                            KBButton(
+                                label = "RESET EPISODE NUMBERING FOR THIS SHOW",
+                                modifier = Modifier.padding(bottom = 20.dp)
+                            ) {
+                                viewModel.resetSchemeAndReload(
+                                    contentType,
+                                    streamId,
+                                    offer.stableShowId
+                                )
+                            }
+                        }
+                    }
                 }
 
                 else -> {

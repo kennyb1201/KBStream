@@ -245,7 +245,19 @@ data class EpisodeScheme(val kind: SchemeKind, val factor: Int) {
  * second number alone, so a quality tag or a year elsewhere in the name cannot
  * invent a pair: `2018 S01E02` still names one episode.
  */
-internal fun bundledEpisodeCount(fileName: String?): Int? {
+internal fun bundledEpisodeCount(fileName: String?): Int? = bundledEpisodeNumbers(fileName)?.size
+
+/**
+ * The consecutive episode numbers a file name's run names, or null when it
+ * names no run (or names a LIST of files rather than a bundle).
+ *
+ * [bundledEpisodeCount] answers "how many", which is all the scheme needs. The
+ * scheme COMMIT needs WHICH episodes: a bundle name is trusted over the duration
+ * ratio because it is a statement about the file, but `S01E05E06` played in a
+ * session labelled E1 is a statement about a different file than the one the
+ * session claims (see `RowMediaType.schemeCommitRefusal`).
+ */
+internal fun bundledEpisodeNumbers(fileName: String?): List<Int>? {
     val text = fileName?.uppercase() ?: return null
     val run = EPISODE_RUN.find(text) ?: return null
     val first = run.groupValues[1].toIntOrNull() ?: return null
@@ -256,7 +268,7 @@ internal fun bundledEpisodeCount(fileName: String?): Int? {
     val numbers = listOf(first) + rest
     // Consecutive only: "S01E01E05" is a list of files, not one file.
     if (numbers.zipWithNext().any { (a, b) -> b != a + 1 }) return null
-    return numbers.size.takeIf { it in 2..MAX_BUNDLED_EPISODES }
+    return numbers.takeIf { it.size in 2..MAX_BUNDLED_EPISODES }
 }
 
 /**

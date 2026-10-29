@@ -31,6 +31,49 @@ class EpisodeSchemeTest {
 
     private fun minutes(value: Int) = value * 60_000L
 
+    // --- the E1 anchor the commit guard rests on ---------------------------
+
+    /**
+     * Every scheme files TMDB episode 1 under file 1.
+     *
+     * The whole self-correction story depends on this arithmetic: playing E1 is
+     * always a play of file 1, so the file a poisoned scheme cannot misnumber is
+     * the one that re-detects and clears the entry. That is why the field
+     * incident healed by playing South Park S29E1 and needed no app-data clear -
+     * and why the stored scheme must keep being overwritten on every detection
+     * (no corroboration counter, no protecting a non-1:1 entry).
+     */
+    @Test
+    fun `the first episode is file 1 under every scheme`() {
+        listOf(
+            EpisodeScheme.ONE_TO_ONE,
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 4),
+            EpisodeScheme(SchemeKind.FILES_PER_EPISODE, 2),
+            EpisodeScheme(SchemeKind.FILES_PER_EPISODE, 4)
+        ).forEach { scheme ->
+            assertEquals(
+                "file holding E1 under $scheme",
+                1,
+                scheme.fileForTmdbEpisode(1)
+            )
+        }
+    }
+
+    /** The exact value the field capture stored, and the file it sent E4 to. */
+    @Test
+    fun `fe4 is a quarter-episode file scheme`() {
+        assertEquals(
+            EpisodeScheme(SchemeKind.FILES_PER_EPISODE, 4),
+            EpisodeScheme.decode("fe4")
+        )
+        assertEquals(
+            "the field case: E4 asked for as file 13",
+            13,
+            EpisodeScheme.decode("fe4").fileForTmdbEpisode(4)
+        )
+    }
+
     // --- detection ---------------------------------------------------------
 
     @Test

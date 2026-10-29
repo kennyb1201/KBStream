@@ -99,6 +99,7 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.player.fetchLanesFor
+import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -12378,6 +12379,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val fileName = detectionFileName()
         val fromName = bundledEpisodeCount(fileName)
         if (fileMs <= 0L && fromName == null) return
+        // Without a filename-bundle signal, a duration is only evidence about
+        // the FILE once the file has actually rendered a frame. A duration read
+        // before the picture arrived describes the open attempt, not the media,
+        // and committing a scheme from it is one of the ways this show's
+        // numbering got poisoned (a bad row, a clip, a short file). An early
+        // return rather than a skip: the tick re-reads this every second, so the
+        // commit simply waits until there is a frame to trust.
+        if (fromName == null && !firstFrameRendered) return
         val sessionScope = scope ?: return
         sessionScope.launch {
             if (schemeStoreKey == null) {
@@ -12396,10 +12405,34 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // The tick that started this coroutine may have been for a file the
             // session has already left, so the guard is re-read inside.
             if (schemeDetectedForFileId == sid) return@launch
+            // Is this file evidence about the episode the session asked for?
+            // A row proved to be a film, or a bundle that starts at another
+            // episode, would store a scheme read from the wrong file - the way
+            // the 1999 film, 81 minutes against a 22-minute episode runtime,
+            // would have overwritten one wrong scheme with another. The guard
+            // SKIPS the commit (and leaves the stored scheme and bingeScheme
+            // alone); it never substitutes a scheme of its own.
+            val refusal = RowMediaType.schemeCommitRefusal(
+                stream = sources.firstOrNull { it.url == currentUrl },
+                contentType = parentType,
+                streamId = sid,
+                runtimeMinutes = tmdbMs.takeIf { it > 0L }?.let { (it / 60_000L).toInt() },
+                sessionEpisode = episode,
+                fileName = fileName
+            )
+            // Marked detected either way: the answer cannot change while this
+            // file plays, so the tick must not re-run the TMDB lookup every
+            // second in the hope of a different verdict.
+            schemeDetectedForFileId = sid
+            if (refusal != null) {
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "scheme not stored for $sid: $refusal"
+                )
+                return@launch
+            }
             val detected = EpisodeScheme.detect(fileMs, tmdbMs, fileName)
             bingeScheme = detected
             EpisodeSchemeStore.put(this@NativePlayerActivity, schemeStoreKey, detected)
-            schemeDetectedForFileId = sid
             com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                 "scheme ${detected.encode() ?: "1:1"} for $sid " +
                     "(file=${fileMs}ms tmdb=${tmdbMs}ms " +

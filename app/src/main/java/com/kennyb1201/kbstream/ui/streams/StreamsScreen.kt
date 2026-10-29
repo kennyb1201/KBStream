@@ -184,6 +184,8 @@ fun StreamsScreen(
     val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
     // The add-ons that failed for these sources (see the notice above the rows).
     val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
+    val droppedByTypeGuard by viewModel.droppedByTypeGuard.collectAsStateWithLifecycle()
+    val schemeResetOffer by viewModel.schemeResetOffer.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -436,6 +438,21 @@ fun StreamsScreen(
             streams
         }
 
+    // What an empty picker says, in the order of what the viewer can act on.
+    // A hidden row and a wrong saved numbering are both facts this screen knows
+    // and the viewer does not; the generic provider hint is only the answer when
+    // neither applies.
+    val emptyStateMessage = when {
+        schemeResetOffer != null ->
+            "Sources were hidden because they did not match this episode, or this " +
+                "show's saved episode numbering is wrong."
+
+        droppedByTypeGuard > 0 ->
+            "$droppedByTypeGuard source(s) were hidden because they did not match this title."
+
+        else -> "Try another add-on or check that the provider is online."
+    }
+
     // The count follows the list on screen. It read the merged list, so on a
     // tab the header said "42 sources found" over the twelve rows that tab
     // actually shows - a count of a different list, read as a miscount.
@@ -682,10 +699,31 @@ fun StreamsScreen(
 
                     visibleStreams.isEmpty() -> {
                         item(key = "empty") {
-                            StreamsHeroState(
-                                title = "NO SOURCES FOUND",
-                                message = "Try another add-on or check that the provider is online."
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                StreamsHeroState(
+                                    title = "NO SOURCES FOUND",
+                                    message = emptyStateMessage
+                                )
+                                // Offered only where the saved numbering can be
+                                // the reason the list is empty (see the
+                                // ViewModel's SchemeResetOffer): the row is the
+                                // correction for a scheme the play path could
+                                // not heal, and one press - not two - because
+                                // clearing it is non-destructive: the next file
+                                // this show plays re-detects and re-stores it.
+                                schemeResetOffer?.let { offer ->
+                                    SchemeResetRow(
+                                        modifier = Modifier.padding(top = 14.dp),
+                                        onClick = {
+                                            viewModel.resetSchemeAndReload(
+                                                contentType,
+                                                streamId,
+                                                offer.stableShowId
+                                            )
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -1208,6 +1246,38 @@ private fun StreamTabChip(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * The picker's saved-numbering reset, under an empty list.
+ *
+ * Deliberately its own row and not a Settings action: the failure it corrects
+ * (an episode query answered on a wrong stored scheme) only ever appears HERE,
+ * and burying it in a settings pane would put it where the viewer never is when
+ * the picker is empty. One press, not the two-tap arm of a destructive action -
+ * clearing the scheme is not destructive (the next played file re-detects it),
+ * and an empty picker is already a dead end that should not ask twice.
+ */
+@Composable
+private fun SchemeResetRow(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(onClick = onClick, modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .background(KBSurfaceRaised.copy(alpha = 0.92f), KBShapeCard)
+                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapeCard)
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = "RESET EPISODE NUMBERING FOR THIS SHOW",
+                color = KBAccent,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }

@@ -53,8 +53,11 @@ class StreamsAddonOrderContractTest {
                 "sent with the result",
             viewModel.contains("val jobs = streamAddons.mapIndexed { index, addon ->") &&
                 viewModel.contains("index to") &&
+                // The call carries the request's own identity (and now the
+                // runtime the type guard reads a size against); the point here
+                // is that ONE call per tagged add-on is what the launch makes.
                 viewModel.contains(
-                    "loadAddon(addon, contentType, streamId, debugLines, onAddonResult)"
+                    "loadAddon(addon, contentType, streamId, debugLines, onAddonResult, runtimeMinutes)"
                 )
         )
         assertTrue(

@@ -12,6 +12,8 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
+import com.kennyb1201.kbstream.data.player.EpisodeScheme
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
@@ -21,6 +23,7 @@ import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -77,8 +80,36 @@ data class ResolvedSources(
      * StreamsScreen) instead of leaving the viewer to wonder why a source they
      * expected is never in the list.
      */
-    val failedAddons: List<String> = emptyList()
+    val failedAddons: List<String> = emptyList(),
+    /**
+     * How many rows the picker's TYPE GUARD refused for this answer (see
+     * [RowMediaType]). Zero for every ordinary answer.
+     *
+     * Published so the empty state can say "3 source(s) were hidden because
+     * they did not match this title" instead of the generic offline hint: a
+     * guard that hides everything and says nothing is indistinguishable from an
+     * add-on that answered nothing.
+     */
+    val droppedByTypeGuard: Int = 0,
+    /**
+     * The saved-numbering reset the picker may offer for this answer, or null.
+     *
+     * Non-null only when the answer was EMPTY, the request named an episode, and
+     * this show has a stored non-1:1 scheme - the one combination where the
+     * empty list may be the app's own numbering being wrong rather than the
+     * add-ons having nothing.
+     */
+    val schemeResetOffer: SchemeResetOffer? = null
 )
+
+/**
+ * A show whose stored episode numbering the picker can offer to reset.
+ *
+ * [encoded] is the stored value as the diagnostics print it (`fe4`), so the
+ * row's confirmation and the report agree; [stableShowId] is the key the store
+ * is filed under, which is the key the reset must clear.
+ */
+data class SchemeResetOffer(val stableShowId: String, val encoded: String)
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository.getInstance()
@@ -173,6 +204,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private val _addonFailures = MutableStateFlow<List<String>>(emptyList())
     val addonFailures: StateFlow<List<String>> = _addonFailures.asStateFlow()
 
+    /**
+     * How many rows the last answer's type guard refused (see [RowMediaType]).
+     *
+     * Beside the list rather than derived on the screen, because the count is
+     * only known where the rows arrive — one add-on at a time, before the merge.
+     */
+    private val _droppedByTypeGuard = MutableStateFlow(0)
+    val droppedByTypeGuard: StateFlow<Int> = _droppedByTypeGuard.asStateFlow()
+
+    /**
+     * The saved-numbering reset the EMPTY picker may offer, or null.
+     *
+     * Set only for the combination the reset can help: an episode query whose
+     * kept list is empty while this show has a stored non-1:1 scheme (see
+     * [ResolvedSources.schemeResetOffer]). Null everywhere else, so the row
+     * cannot appear over a list the viewer can already play.
+     */
+    private val _schemeResetOffer = MutableStateFlow<SchemeResetOffer?>(null)
+    val schemeResetOffer: StateFlow<SchemeResetOffer?> = _schemeResetOffer.asStateFlow()
+
     // The last target ("contentType:streamId") this ViewModel fetched. Lets the
     // streams screen skip a redundant re-fetch when it re-opens a target that
     // was just resolved in the background (autoselect path), so the picker
@@ -247,7 +298,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private var stateGeneration = 0
 
     private sealed class AddonLoadResult {
-        data class Success(val addonName: String, val streams: List<Stream>) : AddonLoadResult()
+        /**
+         * One add-on's answer to this request, with the type guard already
+         * applied: [streams] is what the picker may show, and the two counts
+         * are what the guard refused (see [RowMediaType]).
+         */
+        data class Success(
+            val addonName: String,
+            val streams: List<Stream>,
+            val droppedMovie: Int = 0,
+            val droppedEpisode: Int = 0
+        ) : AddonLoadResult()
+
         data class Failure(val addonName: String, val message: String?) : AddonLoadResult()
     }
 
@@ -271,6 +333,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // requests' sources.
         loadJob?.cancel()
         noteRequest(contentType, streamId, runtimeMinutes, bingeGroup, bingeAddonName)
+        // A reset offer belongs to the answer that made it: a new load for
+        // another target must not leave the previous one's row on screen.
+        _schemeResetOffer.value = null
+        _droppedByTypeGuard.value = 0
         val generation = ++stateGeneration
         // The fetch's own ticket, handed in rather than created inside [fetch], so
         // [resolve] can check the one its publish belongs to.
@@ -309,6 +375,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
             _addonFailures.value = resolved.failedAddons
+            _droppedByTypeGuard.value = resolved.droppedByTypeGuard
+            _schemeResetOffer.value = resolved.schemeResetOffer
             _loadedKey.value = "$contentType:$streamId"
             _isLoading.value = false
         }
@@ -339,6 +407,39 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             contentType = contentType,
             streamId = streamId,
             runtimeMinutes = runtimeMinutes,
+            bingeGroup = sameTarget?.bingeGroup,
+            bingeAddonName = sameTarget?.bingeAddonName
+        )
+    }
+
+    /**
+     * Forgets this show's stored episode numbering and re-asks for the SAME
+     * target, from the picker's empty state.
+     *
+     * The correction for the cases the self-healing play path cannot reach: a
+     * scheme poisoned by a file that never reached detection (a link that would
+     * not open), a show whose every episode query comes back empty under the
+     * stored numbering, or a viewer who is simply not going to play E1 to fix
+     * E4. Clearing is `put(ONE_TO_ONE)`, which REMOVES the key - the store's own
+     * spelling of 1:1 - so there is no second store API and no format change.
+     *
+     * Non-destructive by construction: the next file this show plays re-detects
+     * and re-stores its numbering, so a reset the viewer did not need costs one
+     * playback's worth of learning, not a setting.
+     *
+     * Never runs for a film or a live channel: neither has a stored scheme, and
+     * `load` re-asks under the same target with the request's own runtime and
+     * binge context, keeping its ticket and generation guards intact.
+     */
+    fun resetSchemeAndReload(contentType: String, streamId: String, stableShowId: String?) {
+        if (EpisodeMatch.requestedFrom(streamId) == null) return
+        EpisodeSchemeStore.put(getApplication(), stableShowId, EpisodeScheme.ONE_TO_ONE)
+        val sameTarget = lastRequest
+            ?.takeIf { it.contentType == contentType && it.streamId == streamId }
+        load(
+            contentType = contentType,
+            streamId = streamId,
+            runtimeMinutes = sameTarget?.runtimeMinutes,
             bingeGroup = sameTarget?.bingeGroup,
             bingeAddonName = sameTarget?.bingeAddonName
         )
@@ -392,6 +493,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         _sourceAddons.value = emptyList()
         _debug.value = emptyList()
         _loadedKey.value = null
+        _droppedByTypeGuard.value = 0
+        _schemeResetOffer.value = null
         lastRequest = null
         _isLoading.value = true
     }
@@ -441,6 +544,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _streams.value = resolved.streams
             _sourceAddons.value = resolved.addons
             _addonFailures.value = resolved.failedAddons
+            _droppedByTypeGuard.value = resolved.droppedByTypeGuard
+            _schemeResetOffer.value = resolved.schemeResetOffer
             // Only a COMPLETE collection may tell the picker this target is
             // loaded: that stamp is the picker's licence to skip its own fetch
             // (see MainActivity's Screen.Streams), so stamping a truncated
@@ -543,7 +648,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     // late answer nobody wants must not throw out of the scope.
                     outcomes.trySend(
                         index to
-                            loadAddon(addon, contentType, streamId, debugLines, onAddonResult)
+                            loadAddon(addon, contentType, streamId, debugLines, onAddonResult, runtimeMinutes)
                     )
                 }
             }
@@ -628,12 +733,61 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
+        // One line per request, beside the per-add-on ones above: those count
+        // what each add-on RETURNED, this says what the type guard took out of
+        // it and of which shape. Split, because a capture has to be able to say
+        // whether the wrong answer was film-shaped or episode-shaped - and on an
+        // empty list, whether the guard or the add-ons made it empty.
+        val droppedMovie =
+            results.filterIsInstance<AddonLoadResult.Success>().sumOf { it.droppedMovie }
+        val droppedEpisode =
+            results.filterIsInstance<AddonLoadResult.Success>().sumOf { it.droppedEpisode }
+        val droppedByTypeGuard = droppedMovie + droppedEpisode
+        val typeGuardLine =
+            if (droppedByTypeGuard > 0) {
+                val line = "type guard: dropped $droppedMovie movie-typed / " +
+                    "$droppedEpisode episode-typed row(s)"
+                Log.w(TAG, line)
+                debugLines.add(line)
+                line
+            } else {
+                null
+            }
+
         val useRanker = AppPreferences.getUseStreamRanker(getApplication())
         // The episode this request is for, when its id names one: the ranker
         // keeps a source that declares another episode of the same season out
         // of the head of the list, which is the position the picker and
         // auto-play both take from.
         val requestedEpisode = EpisodeMatch.requestedFrom(streamId)
+
+        // An EMPTY answer on a stored non-1:1 scheme is the one empty list the
+        // app itself may be responsible for, and it is made VISIBLE, never fed
+        // back into the store: emptiness carries no direction (an add-on outage,
+        // an unreleased episode and a geo-block all look exactly like this), and
+        // clearing a genuine `sp2` because AIOStreams was down would break the
+        // next binge on this device in a way that looks identical to the bug.
+        // The picker offers an explicit reset on the strength of this instead.
+        var schemeLine: String? = null
+        val schemeResetOffer =
+            if (requestedEpisode != null && allStreams.isEmpty()) {
+                val root = EpisodeMatch.seriesRootFrom(streamId)
+                val stableShowId = root?.let { EpisodeSchemeStore.stableShowId(it, null) }
+                val encoded = stableShowId
+                    ?.let { key -> EpisodeSchemeStore.get(getApplication(), key).encode() }
+                if (stableShowId != null && encoded != null) {
+                    val line = "scheme $encoded stored for $stableShowId; " +
+                        "episode query kept 0 rows (dropped $droppedByTypeGuard)"
+                    Log.w(TAG, line)
+                    debugLines.add(line)
+                    schemeLine = line
+                    SchemeResetOffer(stableShowId, encoded)
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
 
         // Which add-on each source came from, by the same stream identity the
         // ranking map is built from. Hoisted above the rank call because both
@@ -830,7 +984,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 requestedEpisode = requestedEpisode,
                 runtimeMinutes = runtimeMinutes,
                 debridAddons = debridAddons,
-                reordered = memoryReorder
+                reordered = memoryReorder,
+                // The two facts the list cannot show: what the type guard took
+                // out of the add-ons' answers, and whether an empty answer sat
+                // on a stored scheme. In the report as well as the debug lines,
+                // so a capture can answer "why is this list short" without the
+                // log.
+                notes = listOfNotNull(typeGuardLine, schemeLine)
             )
         )
 
@@ -865,7 +1025,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 .map { it.addonName }
                 .filter { it.isNotBlank() }
                 .distinct()
-                .sorted()
+                .sorted(),
+            droppedByTypeGuard = droppedByTypeGuard,
+            schemeResetOffer = schemeResetOffer
         )
     }
 
@@ -949,7 +1111,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         contentType: String,
         streamId: String,
         debugLines: MutableList<String>,
-        onAddonResult: ((List<Stream>) -> Unit)?
+        onAddonResult: ((List<Stream>) -> Unit)?,
+        runtimeMinutes: Int? = null
     ): AddonLoadResult {
         return try {
             val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
@@ -961,16 +1124,41 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 repository.getStreams(baseUrl, contentType, streamId)
             }
 
+            // Counts rows RETURNED, not kept: the type guard below is applied
+            // after this line, so a capture can still tell "the add-on sent
+            // nothing" from "the guard dropped what it sent" (see the guard's
+            // own line in [fetch]).
             val returnedMsg = "${addon.name}: returned ${result.size} streams"
             Log.e(TAG, returnedMsg)
             debugLines.add(returnedMsg)
 
+            // The TYPE GUARD's one choke point: every row this add-on offered
+            // is classified here, before anything downstream can see it, so the
+            // progressive paint, the merged list, the per-add-on tabs and
+            // autoplay's own pick all read the same kept hand. A guard on the
+            // merged list alone would flash the film and would not reach the
+            // resolve path that actually played it.
+            val guarded = RowMediaType.guard(result, contentType, streamId, runtimeMinutes)
+            if (guarded.dropped > 0) {
+                val guardMsg =
+                    "${addon.name}: hidden " + guarded.dropped +
+                        " wrong-type row(s) (" + guarded.droppedMovie + " movie-typed, " +
+                        guarded.droppedEpisode + " episode-typed)"
+                Log.w(TAG, guardMsg)
+                debugLines.add(guardMsg)
+            }
+
             // Progressive publish: hand this addon's streams to the caller the
             // moment they land instead of holding the picker empty until the
             // slowest addon answers (15s timeout).
-            onAddonResult?.invoke(result)
+            onAddonResult?.invoke(guarded.kept)
 
-            AddonLoadResult.Success(addon.name, result)
+            AddonLoadResult.Success(
+                addonName = addon.name,
+                streams = guarded.kept,
+                droppedMovie = guarded.droppedMovie,
+                droppedEpisode = guarded.droppedEpisode
+            )
         } catch (e: Exception) {
             val failMsg = "${addon.name}: FAILED -- ${e.message}"
             Log.e(TAG, failMsg, e)
@@ -999,9 +1187,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // The reorder that ran after the ranker, when it moved a row (see
         // [SourceAddonPreference]). Null = nothing moved, so the ranker's own
         // lines are the whole explanation.
-        reordered: String? = null
+        reordered: String? = null,
+        // Lines about the answer that are not about a row: the type guard's
+        // dropped count and the stored-scheme note (see [RowMediaType] and
+        // [SchemeResetOffer]). They stay in the report even when the list is
+        // empty, which is precisely when they are the only explanation there is.
+        notes: List<String> = emptyList()
     ): List<String> {
-        if (streams.isEmpty()) return listOf("streams: none returned")
+        if (streams.isEmpty()) return listOf("streams: none returned") + notes
 
         return buildList {
             add(
@@ -1016,6 +1209,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     ", top $RANK_REPORT_TOP:"
             )
             reordered?.let { add("  reorder: $it") }
+            notes.forEach { add("  $it") }
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
                     "  ${addonOf(stream) ?: "?"} · " +
