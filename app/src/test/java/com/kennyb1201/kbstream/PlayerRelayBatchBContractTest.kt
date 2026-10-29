@@ -95,7 +95,9 @@ class PlayerRelayBatchBContractTest {
         )
         assertTrue(
             "with the raw key hashed, never stored",
-            mdb.contains("private fun keyTag(apiKey: String): String")
+            // `internal`, not `private`: the taste-rating leg reads the same tag
+            // to name the profile's grant, and hashing must stay in one place.
+            mdb.contains("internal fun keyTag(apiKey: String): String")
         )
         assertTrue(
             "the day/count prefs are keyed per budget tag",

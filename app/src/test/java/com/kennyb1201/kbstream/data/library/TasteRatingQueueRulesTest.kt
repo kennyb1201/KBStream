@@ -209,9 +209,10 @@ class TasteRatingQueueRulesTest {
     fun `an entry knows its tracker, and a blob older than a rename is survived`() {
         assertEquals(TasteRatingTracker.SIMKL, entry(tracker = TasteRatingTracker.SIMKL).trackerOrNull)
         assertEquals(TasteRatingTracker.TRAKT, entry().trackerOrNull)
+        assertEquals(TasteRatingTracker.MDBLIST, entry(tracker = TasteRatingTracker.MDBLIST).trackerOrNull)
         assertNull(
             "a stored name this build does not know is skipped, not crashed on",
-            entry().copy(tracker = "MDBLIST").trackerOrNull
+            entry().copy(tracker = "LETTERBOXD").trackerOrNull
         )
         assertEquals("Simkl", TasteRatingTracker.SIMKL.label)
         assertEquals("Trakt", TasteRatingTracker.TRAKT.label)
