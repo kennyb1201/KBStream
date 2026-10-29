@@ -222,10 +222,10 @@ class TrailerGracefulFallbackContractTest {
         )
         assertTrue(
             "the trailer is still resolved through the launcher - now with the " +
-                "one-shot client exclusion the refusal asks for",
+                "cumulative client exclusion the ladder asks for",
             flat(home).contains(
-                "TrailerPlayerLauncher .resolvePlayableUrl(trailerKey, " +
-                    "excludeClient = excludeClient)"
+                "TrailerPlayerLauncher .resolvePlayableUrl( trailerKey, " +
+                    "excludeClients = pending?.excludedClients ?: emptySet() )"
             )
         )
         assertEquals(

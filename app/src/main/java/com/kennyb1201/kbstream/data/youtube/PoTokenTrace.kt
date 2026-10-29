@@ -163,9 +163,29 @@ object PoTokenTrace {
      * say which client's URL class died, how far it got, and whether the
      * re-resolve with a different client recovered it.
      *
-     * [resume] is the report's own vocabulary:
-     * `none`, `client <key> ok`, `client <key> died`, or a short reason the
-     * replacement could not be had. Never a URL and never a token.
+     * [resume] is the report's own CLOSED vocabulary - these values and no
+     * others, because a capture has to be readable without knowing the code:
+     *
+     *  - `pending` - a replacement resolve was requested and no outcome is known
+     *    yet. The only value that may describe an in-flight resume; a bare
+     *    `none` must never stand in for it (it read exactly like "no resume was
+     *    ever asked for", which is how the 2026-10-28 capture lost the thread).
+     *  - `client <key> ok` - the replacement resolved and mounted.
+     *  - `client <key> died` - a later identity-classified death, after which the
+     *    video is blocked for the session (the ladder is exhausted).
+     *  - `none: no other client` - the replacement resolve COMPLETED with no
+     *    source from any remaining client.
+     *  - `cancelled` - the requested resolve was cancelled (effect restart, scope
+     *    cancellation, activity finishing) before its outcome was known. The
+     *    request is still owed, never lost.
+     *  - `blocked` - the resolve early-returned because the video was already
+     *    blocked while a resume was owed. A bug state; its presence is a report.
+     *  - `replacement ended` / `replacement failed` - the mounted replacement
+     *    died in a shape the identity classifier does not catch (silent
+     *    `STATE_ENDED`, the rebuffer watchdog, any non-identity error), so the
+     *    death line names the resume instead of leaving the request's own line.
+     *
+     * Never a URL and never a token.
      */
     @Synchronized
     fun recordTrailerDeath(

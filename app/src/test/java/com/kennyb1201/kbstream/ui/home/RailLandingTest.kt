@@ -18,12 +18,19 @@ import org.junit.Test
  * A third, the same mistake one level down, is pinned here too: the spec was
  * handed the focused CARD and the landing was computed from the card's bounds,
  * so a rail's own top landed wherever its card's inset put it. Every rail on
- * Home insets its card by ~39-42dp and the landing inset is 40dp, so nothing
- * showed until the Upcoming rail, whose card is inset ~52dp and whose title came
- * out with its top third above the viewport. The RAIL is what a landing is about
- * - its title is at its top, and its height is what the band below it is charged
- * against - so the request is mapped back to its item first
- * (see [railItemContaining]).
+ * Home insets its card by ~39-42dp and the old preferred landing was the 40dp
+ * inset, so nothing showed until the Upcoming rail, whose card is inset ~52dp
+ * and whose title came out with its top third above the viewport. The RAIL is
+ * what a landing is about - its title is at its top, and its height is what the
+ * band below it is charged against - so the request is mapped back to its item
+ * first (see [railItemContaining]).
+ *
+ * A fourth is the segmented sliver reported across the hero's bottom edge under
+ * a short landscape rail: the rail above ends exactly one section gap above the
+ * focused rail's top, so any landing deeper than that gap leaves a strip of its
+ * artwork inside the viewport. The landing is now capped at the gap, which is
+ * what the code comment always claimed; the 40dp "KB parity" preferred landing
+ * is gone because it is what admitted the strip.
  *
  * The device these numbers are tight on is a 1080p TV at xhdpi: 540dp of
  * screen, the hero capped at 48% of it, and ~281dp of rails viewport left
@@ -60,7 +67,6 @@ class RailLandingTest {
     private val builtinCardInset = 52f
 
     private val floor get() = RailLanding.HeaderFloor.value
-    private val inset get() = RailLanding.HeaderInset.value
     private val gap get() = RailLanding.SectionGap.value
 
     private fun band(titleLinePx: Float) = railRevealBandPx(
@@ -70,15 +76,17 @@ class RailLandingTest {
         sliverPx = RailLanding.NextTitleSliver.value
     )
 
-    private fun landing(railHeight: Float) = railLandingTarget(
-        topInsetPx = inset,
+    private fun landing(railHeight: Float, titleLinePx: Float = titleLine) = railLandingTarget(
         floorPx = floor,
-        revealTargetPx = panel - railHeight - band(titleLine)
+        revealTargetPx = panel - railHeight - band(titleLinePx),
+        aboveClearancePx = gap
     )
 
     @Test
-    fun `a rail of landscape cards lands on the preferred inset`() {
-        assertEquals(inset, landing(landscapeRail), 0.01f)
+    fun `a rail of landscape cards lands at the section gap`() {
+        // It used to land on the 40dp "KB parity" inset, which left the bottom
+        // 28dp of the rail above inside the viewport - the segmented sliver.
+        assertEquals(gap, landing(landscapeRail), 0.01f)
     }
 
     @Test
@@ -113,14 +121,56 @@ class RailLandingTest {
         // rather than landing above the viewport, which is what used to scroll
         // the focused rail's own title out of sight.
         assertTrue(landing(posterRail) > 0f)
-        assertEquals(floor, railLandingTarget(topInsetPx = inset, floorPx = floor, revealTargetPx = -120f), 0.01f)
+        assertEquals(
+            floor,
+            railLandingTarget(floorPx = floor, revealTargetPx = -120f, aboveClearancePx = gap),
+            0.01f
+        )
     }
 
     @Test
-    fun `landing is never asked for above the preferred inset`() {
+    fun `landing is never asked for below the above-rail clearance`() {
         // A very short rail (a row of small tiles) would have a huge reveal
-        // target; it still lands on the inset rather than adrift in the panel.
-        assertEquals(inset, railLandingTarget(topInsetPx = inset, floorPx = floor, revealTargetPx = 1_000f), 0.01f)
+        // target; it still lands at the gap rather than adrift in the panel.
+        assertEquals(
+            gap,
+            railLandingTarget(floorPx = floor, revealTargetPx = 1_000f, aboveClearancePx = gap),
+            0.01f
+        )
+    }
+
+    @Test
+    fun `the rail above ends fully above the viewport, for every rail shape`() {
+        // The invariant this file exists for, and the one the old preferred
+        // inset broke: landing at or above the gap means the rail above (which
+        // ends exactly one gap above the focused rail) has a bottom edge at or
+        // above 0. Both the measured and the fallback title band are covered,
+        // because the band changes the landing for tall rails.
+        listOf(
+            "very short" to 100f,
+            "landscape" to landscapeRail,
+            "built-in" to builtinRail,
+            "poster" to posterRail,
+            "oversize" to 300f
+        ).forEach { (what, height) ->
+            listOf(titleLine, RailLanding.FallbackTitleHeight.value).forEach { line ->
+                val landed = landing(height, line)
+                val aboveBottom = landed - gap
+                assertTrue(
+                    "the $what rail (${height}dp, ${line}dp title) lands at $landed dp, " +
+                        "so the rail above ends at $aboveBottom dp - artwork inside the viewport",
+                    aboveBottom <= 0f
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the built-in rail moves 1_8dp and no more`() {
+        // 13.8dp was its old landing (the reveal target doing the work); the cap
+        // takes it to 12dp. Pinned exactly, so a restored inset is caught here
+        // before it reaches a television.
+        assertEquals(gap, landing(builtinRail), 0.01f)
     }
 
     @Test
@@ -150,12 +200,12 @@ class RailLandingTest {
     fun `the Upcoming rail lands by its own top, so its title is never clipped`() {
         // The reported bug. Its card is inset furthest of any rail (title 30dp,
         // the row's 10dp top padding, 12dp of box centering), and a landing
-        // built from the CARD aligns that card on the 40dp inset - which leaves
+        // built from the CARD folds that inset into the landing - which leaves
         // the rail's own top above the viewport, eating the top of its title.
         val cardAligned = railLandingTarget(
-            topInsetPx = inset,
             floorPx = floor,
-            revealTargetPx = panel - builtinCard - band(titleLine)
+            revealTargetPx = panel - builtinCard - band(titleLine),
+            aboveClearancePx = gap
         )
         assertTrue(
             "the card-aligned landing ($cardAligned) is the bug: it puts this " +

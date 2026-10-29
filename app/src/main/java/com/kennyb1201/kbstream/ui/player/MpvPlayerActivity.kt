@@ -6536,19 +6536,28 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (bywUi?.isVisible == true) {
             val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
                 event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-            // UP/DOWN have nothing above or below the row to move to, and
-            // letting them run focus search walked out of the row onto the
-            // controls overlay - the panel then sat there without the D-pad,
-            // so OK on a pick did nothing. A vertical press is swallowed, and
-            // any press arriving before the row has focus parks it on the
-            // first pick instead of reaching what is underneath.
+            // UP/DOWN used to be swallowed because focus search walked out of
+            // the row onto the controls overlay - the panel then sat there
+            // without the D-pad, so OK on a pick did nothing. What prevents that
+            // now is the panel's own vertical chain: the thumbs row for the
+            // finished title sits above the pick row, UP from a thumb and DOWN
+            // from a pill are self-pinned no-ops, so the press stays inside. With
+            // that in place a vertical press is let through to the view tree when
+            // the panel has the thumbs to reach (the reported "thumbs visible but
+            // unreachable", field 2026-10-28), and a raise without them keeps the
+            // old swallow. Any press arriving before the row has focus still
+            // parks it on the first pick first, and is swallowed.
             val vertical = event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
                 event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
             val confirm = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                 event.keyCode == KeyEvent.KEYCODE_ENTER ||
                 event.keyCode == KeyEvent.KEYCODE_BUTTON_SELECT
             if (event.action == KeyEvent.ACTION_DOWN && vertical) {
-                if (bywUi?.hasFocus() == false) bywUi?.focusFirst()
+                if (bywUi?.hasFocus() == false) {
+                    bywUi?.focusFirst()
+                    return true
+                }
+                if (bywUi?.hasTasteRow == true) return super.dispatchKeyEvent(event)
                 return true
             }
             if (event.action == KeyEvent.ACTION_DOWN && confirm && bywUi?.hasFocus() == false) {

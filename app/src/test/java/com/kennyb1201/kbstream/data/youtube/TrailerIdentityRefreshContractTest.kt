@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.youtube
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -111,32 +112,37 @@ class TrailerIdentityRefreshContractTest {
     }
 
     @Test
-    fun `the second 403 marks the video blocked for the session`() {
+    fun `the video is blocked only when the client ladder is exhausted`() {
         val handler = flat(home)
 
         // A refusal no longer spends the retry (a refused identity cannot be
         // recovered by re-signing - see TrailerGracefulFallbackContractTest),
-        // so the evidence that the fresh identity is refused too is the SECOND
-        // refusal of the same video: the first one already invalidated the
-        // watch config, which makes the resolve between them a fresh visitor.
-        assertTrue(
-            "refusals of the same trailer have to be counted",
-            handler.contains("trailerIdentityRefusals += 1")
+        // and it is no longer counted either: one exclusion answers one URL
+        // class, so the decision is the ladder's - no client left, or the attempt
+        // cap spent (HeroTrailerResumeLadder, pinned by its own unit test).
+        assertFalse(
+            "a refusal counter with a >= 2 rule is what this replaced",
+            handler.contains("trailerIdentityRefusals")
         )
         assertTrue(
-            "and the second one is what marks the video blocked",
-            handler.contains(
-                "if (trailerIdentityRefusals >= 2) { trailerKey?.let { " +
-                    "TrailerPlayerLauncher.markIdentityBlocked(it) }"
-            )
+            "the handler asks the ladder",
+            handler.contains("heroTrailerResumeDecision(") &&
+                handler.contains("HeroTrailerResumeVerdict.POISON")
+        )
+        assertTrue(
+            "and only the POISON branch marks the video for the session",
+            handler.substringAfter("onIdentityBlocked = {")
+                .substringAfter("HeroTrailerResumeVerdict.POISON")
+                .substringBefore("trailerExcludedClients = excluded")
+                .contains("markIdentityBlocked(key)")
         )
     }
 
     @Test
     fun `the hero checks the block before it invalidates or resolves`() {
         val blockedAt = home.indexOf("TrailerPlayerLauncher.isIdentityBlocked(trailerKey)")
-        val invalidateAt = home.indexOf("TrailerPlayerLauncher.invalidate(trailerKey)")
-        val resolveAt = home.indexOf(".resolvePlayableUrl(trailerKey", blockedAt)
+        val invalidateAt = home.indexOf("TrailerPlayerLauncher.invalidate(", blockedAt)
+        val resolveAt = home.indexOf(".resolvePlayableUrl(", blockedAt)
 
         assertTrue("the resolve effect must consult the blocked set", blockedAt >= 0)
         assertTrue("the retry still busts the cached URL", invalidateAt > blockedAt)

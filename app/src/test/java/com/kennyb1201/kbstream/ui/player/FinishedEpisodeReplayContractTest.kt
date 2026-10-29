@@ -108,9 +108,20 @@ class FinishedEpisodeReplayContractTest {
                 "finds nothing, and the press would fall through to the seek bar",
             block.contains("bywUi.focusFirst())")
         )
+        // UP/DOWN still must not raise the overlay mid-panel, but they are no
+        // longer unconditionally swallowed: the panel now has a thumbs row above
+        // the picks, and the press reaches the view tree only when that row is up
+        // (the BYW panel's own vertical chain keeps focus inside it - see
+        // BywPanelFitAndFocusContractTest). Without the row, the old swallow.
         assertTrue(
-            "UP/DOWN must not raise the overlay mid-panel",
-            block.contains("if (isOverlayRaisingKey(event.keyCode)) return true")
+            "UP/DOWN must not raise the overlay mid-panel: they go to the view tree " +
+                "only when the panel has a thumbs row to land on, and are swallowed " +
+                "otherwise",
+            block.contains("if (bywUi.hasTasteRow) return super.dispatchKeyEvent(event)") &&
+                Regex(
+                    "if \\(bywUi\\.hasTasteRow\\) return super\\.dispatchKeyEvent\\(event\\)\\s*" +
+                        "return true"
+                ).containsMatchIn(block)
         )
         // The one press the panel must keep its hands off: a SKIP CREDITS prompt
         // is raised over these very recommendations, and it owns OK while the

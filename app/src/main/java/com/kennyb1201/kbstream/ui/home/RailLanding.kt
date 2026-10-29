@@ -34,9 +34,21 @@ import androidx.compose.ui.unit.dp
  *   within a few dp of the hero. So the landing is small on purpose.
  *
  * On the numbers above a focused poster rail lands at [HeaderFloor] with the
- * next rail's title fully on screen plus ~6dp of its posters, while a rail of
- * landscape cards is short enough to take the roomier [HeaderInset] and still
- * show ~30dp of the rail below it.
+ * next rail's title fully on screen plus ~6dp of its posters.
+ *
+ * A THIRD failure came from the roomier landing short rails used to get, and it
+ * is the one this module now answers for: the rail ABOVE the focused one ends
+ * exactly one [SectionGap] above its top, so any landing deeper than that gap
+ * leaves the bottom of that rail inside the viewport. On a landscape rail that
+ * was a set of thin segmented slivers across the hero's bottom edge - the
+ * title text and scrim at the bottoms of the posters above, one sliver per
+ * poster position, since almost all of that strip is the row's own black
+ * padding. Nothing rail-specific is involved: a landing at or above the gap
+ * ends the rail above flush with the viewport's top edge by construction. So
+ * the landing is capped there ([railLandingTarget]), and the roomier "KB parity"
+ * inset it used to prefer is deliberately GONE - KB's 40dp is exactly what
+ * admitted that artwork into the viewport. The floor (4dp) is itself below the
+ * gap, so a poster rail's landing is unchanged.
  *
  * The band takes the title's MEASURED height once a rail has reported one
  * (`SectionTitle` reports it): a device with a raised font scale draws a taller
@@ -44,13 +56,6 @@ import androidx.compose.ui.unit.dp
  * title back under the panel edge — the same bug, one font size later.
  */
 internal object RailLanding {
-
-    /**
-     * Preferred landing: the focused rail's section this far below the top of
-     * the rails viewport. Mirrors KB's MODERN_ROW_HEADER_FOCUS_INSET, and is
-     * what a rail short enough to afford the band gets.
-     */
-    val HeaderInset = 40.dp
 
     /**
      * The closest a rail may land.
@@ -71,6 +76,12 @@ internal object RailLanding {
      * poster rows already read as two sections without a rule or a divider
      * between them: the card box keeps ~15dp of glow room below each poster and
      * the title carries its own padding.
+     *
+     * It is ALSO the landing cap, and that is not a coincidence: the rail above
+     * a focused one ends exactly this far above its top
+     * (`Arrangement.spacedBy`), so a landing at this gap puts that rail's bottom
+     * edge on the viewport's top edge — fully hidden — and anything deeper
+     * shows a strip of it. See [railLandingTarget].
      */
     val SectionGap = 12.dp
 
@@ -118,21 +129,32 @@ internal fun railItemContaining(
 /**
  * The leading edge a newly focused rail should land on, in pixels.
  *
- * [revealTargetPx] is where the rail would have to sit for the band below it
- * ([railRevealBandPx]) to fit: the viewport, less the rail, less the band. It
- * is [topInsetPx] when the rail is short enough to afford the preferred landing
- * and negative when the rail is too tall for the band to fit at all — hence the
- * floor, which is what keeps a poster rail's own title out from under the hero.
+ * Two things cap the landing, and the smaller wins:
+ *
+ *  - [aboveClearancePx], the space between two rails. The rail ABOVE a focused
+ *    one ends exactly that far above its top, so landing no deeper than the gap
+ *    is what keeps that rail — and its artwork — entirely above the viewport.
+ *    This is the reported segmented sliver across the hero's bottom edge, and
+ *    it is why the cap lives in the FUNCTION rather than at one call site: any
+ *    lander that returns something deeper re-admits the strip.
+ *  - [revealTargetPx], where the rail would have to sit for the band below it
+ *    ([railRevealBandPx]) to fit: the viewport, less the rail, less the band.
+ *    It is negative when the rail is too tall for the band to fit at all —
+ *    hence the floor, which is what keeps a poster rail's own title out from
+ *    under the hero.
+ *
+ * [floorPx] is below [aboveClearancePx] by construction (4dp against 12dp), so
+ * a tall rail's landing is unchanged by the cap; only short rails move up.
  *
  * Deliberately depends only on the rail's SIZE, never on where it currently is:
  * every child of a focused rail computes the same landing, so a horizontal
  * focus move inside a row cannot bounce the list.
  */
 internal fun railLandingTarget(
-    topInsetPx: Float,
     floorPx: Float,
-    revealTargetPx: Float
-): Float = minOf(topInsetPx, revealTargetPx).coerceAtLeast(floorPx)
+    revealTargetPx: Float,
+    aboveClearancePx: Float
+): Float = minOf(aboveClearancePx, revealTargetPx).coerceAtLeast(floorPx)
 
 /**
  * The band the landing has to leave below a focused rail: the section gap, one

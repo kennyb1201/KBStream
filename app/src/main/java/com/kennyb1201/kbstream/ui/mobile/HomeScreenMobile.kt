@@ -339,6 +339,10 @@ fun HomeScreenMobile(
         // The personalized row's picks (see HomeViewModel's Top Picks build).
         // Empty means no header and no rail on the phone either.
         val topPicks by viewModel.topPicks.collectAsStateWithLifecycle()
+        // ...and the artwork its landscape cards draw: the row is not a Rail,
+        // so this is the only place its backdrop + clearlogo come from (see
+        // [HomeViewModel.topPicksArt]).
+        val topPicksArt by viewModel.topPicksArt.collectAsStateWithLifecycle()
         val builtinWithContent =
             remember(upNext.isNotEmpty(), upcomingVisible, topPicks.isNotEmpty()) {
                 buildSet {
@@ -547,49 +551,96 @@ fun HomeScreenMobile(
                                                             meta.id,
                                                             meta.type
                                                         ) in partialWatchedKeys
-                                                    // The same poster tile the
+                                                    // The same card shape the
                                                     // catalog rails draw: this
                                                     // row is a group of titles,
-                                                    // not a second card shape.
-                                                    PosterCard(
-                                                        posterUrl =
-                                                            imageOverridePosterUrl(
-                                                                paths = overridePaths,
-                                                                rawId = meta.id,
-                                                                fallbackUrl = meta.poster
-                                                            ),
-                                                        contentDescription = meta.name,
-                                                        isWatched = watched,
-                                                        isPartiallyWatched =
-                                                            partiallyWatched,
-                                                        onClick = {
-                                                            armHeroSource(
-                                                                meta.type,
-                                                                meta.id
-                                                            )
-                                                            onItemClick(meta)
-                                                        },
-                                                        // No owning Rail: this row
-                                                        // is not a catalog, so the
-                                                        // menu offers its own
-                                                        // actions and no "Open in
-                                                        // Grid".
-                                                        onLongClick = {
-                                                            menuTarget =
-                                                                RailMenuTarget(meta)
-                                                        },
-                                                        modifier = Modifier
-                                                            .heroSourceOnPress(
-                                                                meta.type,
-                                                                meta.id
-                                                            )
-                                                            .width(
-                                                                railPosterSize.width
-                                                            )
-                                                            .height(
-                                                                railPosterSize.height
-                                                            )
-                                                    )
+                                                    // not a second card shape -
+                                                    // and it follows the same
+                                                    // landscape switch they do.
+                                                    // It used to draw posters
+                                                    // whatever that switch said,
+                                                    // with no wordmark once the
+                                                    // row was reshaped (field
+                                                    // 2026-10-28).
+                                                    if (landscapeCards) {
+                                                        val art = topPicksArt[
+                                                            meta.landscapeArtKey()
+                                                        ]
+                                                        LandscapeCard(
+                                                            backdropUrl =
+                                                                imageOverrideCardBackdropUrl(
+                                                                    paths = overridePaths,
+                                                                    rawId = meta.id,
+                                                                    fallbackUrl = art?.first
+                                                                        ?: meta.background
+                                                                        ?: meta.poster
+                                                                ),
+                                                            logoUrl = art?.second,
+                                                            fallbackTitle = meta.name,
+                                                            contentDescription = meta.name,
+                                                            isWatched = watched,
+                                                            isPartiallyWatched =
+                                                                partiallyWatched,
+                                                            onClick = {
+                                                                armHeroSource(
+                                                                    meta.type,
+                                                                    meta.id
+                                                                )
+                                                                onItemClick(meta)
+                                                            },
+                                                            onLongClick = {
+                                                                menuTarget =
+                                                                    RailMenuTarget(meta)
+                                                            },
+                                                            modifier = Modifier
+                                                                .heroSourceOnPress(
+                                                                    meta.type,
+                                                                    meta.id
+                                                                )
+                                                                .width(railLandscapeWidth)
+                                                                .height(railLandscapeHeight)
+                                                        )
+                                                    } else {
+                                                        PosterCard(
+                                                            posterUrl =
+                                                                imageOverridePosterUrl(
+                                                                    paths = overridePaths,
+                                                                    rawId = meta.id,
+                                                                    fallbackUrl = meta.poster
+                                                                ),
+                                                            contentDescription = meta.name,
+                                                            isWatched = watched,
+                                                            isPartiallyWatched =
+                                                                partiallyWatched,
+                                                            onClick = {
+                                                                armHeroSource(
+                                                                    meta.type,
+                                                                    meta.id
+                                                                )
+                                                                onItemClick(meta)
+                                                            },
+                                                            // No owning Rail: this row
+                                                            // is not a catalog, so the
+                                                            // menu offers its own
+                                                            // actions and no "Open in
+                                                            // Grid".
+                                                            onLongClick = {
+                                                                menuTarget =
+                                                                    RailMenuTarget(meta)
+                                                            },
+                                                            modifier = Modifier
+                                                                .heroSourceOnPress(
+                                                                    meta.type,
+                                                                    meta.id
+                                                                )
+                                                                .width(
+                                                                    railPosterSize.width
+                                                                )
+                                                                .height(
+                                                                    railPosterSize.height
+                                                                )
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }

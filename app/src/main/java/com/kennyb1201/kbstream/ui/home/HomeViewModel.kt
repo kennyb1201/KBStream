@@ -621,6 +621,26 @@ class HomeViewModel(
         _topPicks.asStateFlow()
 
     /**
+     * Landscape-card artwork (backdrop + clearlogo) for the picks in
+     * [topPicks], filed under [landscapeArtKey] exactly as a rail's own
+     * `landscapeArt` is.
+     *
+     * The row is not a [Rail], so it never went through [applyLandscapeArt] -
+     * which is why its landscape cards were drawn from the pick's own TMDB
+     * primary backdrop (a poster, when the pick carried no backdrop) with no
+     * clearlogo at all: the one row on Home whose cards ignored the landscape
+     * shape's artwork rules (field 2026-10-28). Resolved after the picks are
+     * published, so the row appears without waiting on one lookup per card, and
+     * cleared with the picks so a profile switch cannot leave the outgoing
+     * profile's art on the new row.
+     */
+    private val _topPicksArt =
+        MutableStateFlow<Map<String, Pair<String?, String?>>>(emptyMap())
+
+    internal val topPicksArt: StateFlow<Map<String, Pair<String?, String?>>> =
+        _topPicksArt.asStateFlow()
+
+    /**
      * Bumped by a profile switch and by every new build; a build from before it
      * must not publish. The list belongs to the profile it was built for, and a
      * build that started for the profile just left would otherwise land on top
@@ -648,6 +668,7 @@ class HomeViewModel(
                 .getOrDefault(emptyList())
             if (epoch == topPicksBuildEpoch) {
                 _topPicks.value = picks
+                if (picks.isEmpty()) _topPicksArt.value = emptyMap()
                 // Re-ask for the watched markers now that the row exists. The
                 // picks are not a [Rail], so their ids are only in the marker
                 // preload while this list is non-empty (see
@@ -657,8 +678,42 @@ class HomeViewModel(
                 // a finished one (field 2026-10-28).
                 refreshWatchedStatus(_rails.value)
             }
+
+            // After the row is up, not before: the cards draw the pick's own
+            // backdrop until this lands, and the row must not be held back by
+            // a lookup per card.
+            if (picks.isNotEmpty()) {
+                val art = runCatchingCancellable { resolveTopPicksArt(picks) }
+                    .getOrDefault(emptyMap())
+                if (epoch == topPicksBuildEpoch && art.isNotEmpty()) {
+                    _topPicksArt.value = art
+                }
+            }
         }
     }
+
+    /**
+     * The landscape-card artwork for [picks] - the same resolver the catalog
+     * rails use, so the row cannot drift from them again: TMDB's alternate
+     * backdrop (or the viewer's chosen still) and TMDB's English clearlogo, or
+     * nothing, never the add-on's wordmark.
+     *
+     * The pick's id is spelled `tmdb:<n>`, the form the rest of Home's
+     * app-built rows use, which is also what [landscapeArtKey] files the entry
+     * under for the card to read back.
+     */
+    private suspend fun resolveTopPicksArt(
+        picks: List<BlendPick>
+    ): Map<String, Pair<String?, String?>> =
+        landscapeArtFor(
+            requests = picks.map { pick ->
+                LandscapeArtRequest(
+                    id = "tmdb:${pick.tmdbId}",
+                    type = pick.type
+                )
+            },
+            tmdbArtOf = { request -> homeLandscapeArt(request) }
+        )
 
     /**
      * One build of the Top Picks row: seeds, one blend per seed, one merge.
@@ -1706,6 +1761,7 @@ Log.d(
                     topPicksBuildEpoch += 1
                     topPicksJob?.cancel()
                     _topPicks.value = emptyList()
+                    _topPicksArt.value = emptyMap()
 
                     // Same for the caught-up Upcoming cards: they come from
                     // the account-wide Simkl feed and are only kids-filtered

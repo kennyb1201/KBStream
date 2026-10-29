@@ -212,12 +212,16 @@ object InnerTubeExtractor {
     /**
      * The same resolve, naming the client that signed the winning source.
      *
-     * [excludeClient] skips that client when the winners are picked - HLS,
+     * [excludeClients] skips those clients when the winners are picked - HLS,
      * adaptive video/audio and progressive alike. The harvest still runs (the
      * requests are what make the fresh visitor's URLs), only the SELECTION
-     * skips it, because the refusal is a property of the URL class that client
-     * signs, not of the resolve or the identity. Null (every ordinary resolve)
-     * selects exactly as before.
+     * skips them, because the refusal is a property of the URL class a client
+     * signs, not of the resolve or the identity. An empty set (every ordinary
+     * resolve) selects exactly as before.
+     *
+     * A SET, not one key: one exclusion answers one URL class, and a video whose
+     * refusal survives it needs the next class excluded, which is a cumulative
+     * set (see HeroTrailerResumeLadder).
      */
     // internal, not public: its answer carries [ResolvedSource], which is an
     // implementation detail of the extractor (the client that signed the URL).
@@ -225,12 +229,12 @@ object InnerTubeExtractor {
     // cannot name an internal type, and the compiler correctly refused it.
     internal suspend fun extractPlaybackSourceWithClient(
         youtubeUrl: String,
-        excludeClient: String? = null
+        excludeClients: Set<String> = emptySet()
     ): ResolvedSource? =
         withContext(Dispatchers.IO) {
             if (youtubeUrl.isBlank()) return@withContext null
 
-            Log.d(TAG, "Starting extraction for $youtubeUrl (exclude=${excludeClient ?: "none"})")
+            Log.d(TAG, "Starting extraction for $youtubeUrl (exclude=${excludeDescription(excludeClients)})")
 
             var resolved: ResolvedSource? = null
             try {
@@ -238,7 +242,7 @@ object InnerTubeExtractor {
                     extractInternal(
                         youtubeUrl,
                         forceRefreshConfig = false,
-                        excludeClient = excludeClient
+                        excludeClients = excludeClients
                     )
                 }
             } catch (e: CancellationException) {
@@ -255,7 +259,7 @@ object InnerTubeExtractor {
                         extractInternal(
                             youtubeUrl,
                             forceRefreshConfig = true,
-                            excludeClient = excludeClient
+                            excludeClients = excludeClients
                         )
                     }
                 } catch (e: CancellationException) {
@@ -274,7 +278,7 @@ object InnerTubeExtractor {
     private suspend fun extractInternal(
         youtubeUrl: String,
         forceRefreshConfig: Boolean,
-        excludeClient: String? = null
+        excludeClients: Set<String> = emptySet()
     ): ResolvedSource? {
         val videoId = extractVideoId(youtubeUrl) ?: return null
         // The id is known before the config call on purpose: the visitor is
@@ -342,14 +346,15 @@ object InnerTubeExtractor {
         }
 
         // A resume after a boundary death asks for a source signed by a
-        // DIFFERENT client than the one whose URL class refused every offset
-        // read. The exclusion is applied at selection, not at harvest: the
-        // requests are what minted this visitor's URLs, and skipping one would
-        // only shrink the pool for no gain.
-        val allowedHls = hlsUrls.filter { it.first != excludeClient }
-        val allowedProgressive = progressive.filter { it.client != excludeClient }
-        val allowedVideo = adaptiveVideo.filter { it.client != excludeClient }
-        val allowedAudio = adaptiveAudio.filter { it.client != excludeClient }
+        // DIFFERENT client than the ones whose URL classes refused every offset
+        // read - a set, because the ladder excludes one class per step. The
+        // exclusion is applied at selection, not at harvest: the requests are
+        // what minted this visitor's URLs, and skipping one would only shrink
+        // the pool for no gain.
+        val allowedHls = hlsUrls.filterNot { it.first in excludeClients }
+        val allowedProgressive = progressive.filterNot { it.client in excludeClients }
+        val allowedVideo = adaptiveVideo.filterNot { it.client in excludeClients }
+        val allowedAudio = adaptiveAudio.filterNot { it.client in excludeClients }
 
         // Prefer HLS first. Media3 handles manifest segments, refreshes and
         // seeking without reopening googlevideo URLs at arbitrary byte offsets.
@@ -368,7 +373,7 @@ object InnerTubeExtractor {
         }
 
         // Prefer adaptive video + audio (best quality) only when HLS is absent.
-        val bestVideo = pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClient)
+        val bestVideo = pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)
 
         val resolvedVideo = bestVideo?.let {
             resolveReachableUrl(it.url, userAgentFor(it.client))
@@ -696,15 +701,25 @@ object InnerTubeExtractor {
         )
     }
 
+    /** The exclusion as one log token: `none`, or the keys in chain order. */
+    private fun excludeDescription(excludeClients: Set<String>): String =
+        if (excludeClients.isEmpty()) {
+            "none"
+        } else {
+            YouTubeClients.all.map { it.key }.filter { it in excludeClients }
+                .ifEmpty { excludeClients.sorted() }
+                .joinToString(",")
+        }
+
     private fun pickBest(
         items: List<StreamCandidate>,
         preferredClient: String,
-        excludeClient: String? = null
+        excludeClients: Set<String> = emptySet()
     ): StreamCandidate? {
         // Defence in depth: the pools are already filtered by the caller, but
-        // this is the one function that decides what plays, so an exclusion
-        // that reaches here must never win by being the preferred client.
-        val eligible = items.filter { it.client != excludeClient }
+        // this is the one function that decides what plays, so an excluded
+        // client must never win by being the preferred one.
+        val eligible = items.filterNot { it.client in excludeClients }
         val preferred = eligible.filter { it.client == preferredClient }
         val pool = if (preferred.isNotEmpty()) preferred else eligible
         return pool.sortedWith(

@@ -155,6 +155,20 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         sourceCache[normalizeId(videoIdOrUrl)]?.client ?: PoTokenTrace.resolveClient()
 
     /**
+     * The client recorded on THIS video's own cached entry, or null when there
+     * is none - deliberately WITHOUT [signingClient]'s trace fallback.
+     *
+     * This is the exclusion's source (see HeroTrailerResumeLadder): the set has
+     * to grow by the client that actually signed the URL that died, and the
+     * trace's answer is whatever resolve ran last in the process - a pre-warm
+     * for another title, a hero rotation - so excluding it would skip a client
+     * that never signed this trailer and hide the class that did. Null means
+     * "unknown client": the ladder grows nothing and relies on its attempt cap.
+     */
+    fun cachedSigningClient(videoIdOrUrl: String): String? =
+        sourceCache[normalizeId(videoIdOrUrl)]?.client
+
+    /**
      * The stored form of a video key: the extracted id when one can be read, so
      * the hero (which passes a bare id) and the detail screen (which passes a
      * watch URL) agree on the entry.
@@ -234,16 +248,20 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
          */
         recordFailure: Boolean = true,
         /**
-         * The client whose URL class just died, skipped when the winners are
+         * The clients whose URL classes have died, skipped when the winners are
          * chosen (see [InnerTubeExtractor.extractPlaybackSourceWithClient]).
          *
-         * A non-null exclusion also BYPASSES the per-video cache: the cached
-         * URL may be exactly the class being excluded, so answering the resume
-         * from it would hand back the dead source and look like the resume did
-         * nothing. The replacement is stored, so the next ordinary resolve
-         * serves the working source.
+         * A SET and not one key: the hero's resume ladder excludes one class per
+         * step, and the next step has to exclude the first two (see
+         * HeroTrailerResumeLadder).
+         *
+         * A non-empty set also BYPASSES the per-video cache: the cached URL may
+         * be exactly the class being excluded, so answering the resume from it
+         * would hand back the dead source and look like the resume did nothing.
+         * The replacement is stored, so the next ordinary resolve serves the
+         * working source.
          */
-        excludeClient: String? = null
+        excludeClients: Set<String> = emptySet()
     ): Result<PlayableSource> = resolveMutex.withLock {
 
         // Keep the two process-wide caches bounded (see [pruneCaches]). Every
@@ -297,7 +315,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
 
         // Serve from cache if fresh - unless this is an exclusion resolve, whose
         // whole point is a source DIFFERENT from the one the cache holds.
-        if (excludeClient == null) {
+        if (excludeClients.isEmpty()) {
             sourceCache[videoId]?.let { cached ->
                 if (!cached.isStale) {
                     Log.w(TAG, "Trailer source cache hit for $videoId")
@@ -313,7 +331,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         // work here with no po-token/proxy infrastructure at all.
         val resolved = InnerTubeExtractor.extractPlaybackSourceWithClient(
             videoId,
-            excludeClient = excludeClient
+            excludeClients = excludeClients
         )
         if (resolved != null) {
             sourceCache[videoId] = CachedSource(resolved.source, resolved.client)

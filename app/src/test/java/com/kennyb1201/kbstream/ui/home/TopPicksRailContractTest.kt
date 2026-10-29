@@ -247,6 +247,78 @@ class TopPicksRailContractTest {
         assertTrue("and a forty-card row", viewModel.contains("TOP_PICKS_ROW_CAP = 40"))
     }
 
+    @Test
+    fun `the row's landscape cards wear the backdrop and clearlogo every other rail wears`() {
+        // Field 2026-10-28: with landscape Home on, this row drew the pick's own
+        // PRIMARY backdrop - its portrait poster, for a pick without one - and
+        // no wordmark at all: `logoUrl` was hardcoded null under the note "a
+        // blend pick carries no logo art", although the titles the blends return
+        // are TMDB titles and TMDB has their English marks. It is also the one
+        // row that drew posters when the landscape switch was on at all.
+        assertTrue(
+            "the picks are not a Rail, so their artwork needs a flow of its own",
+            viewModel.contains("internal val topPicksArt:")
+        )
+        assertTrue(
+            "resolved through the one resolver every rail uses",
+            viewModel.contains("requests = picks.map { pick ->") &&
+                viewModel.contains("id = \"tmdb:\${pick.tmdbId}\",")
+        )
+        assertTrue(
+            "and cleared with the picks, so a profile switch cannot leave its art behind",
+            viewModel.contains("_topPicksArt.value = emptyMap()")
+        )
+        assertTrue(
+            "the television hands the row the art",
+            home.contains("art = topPicksArt,")
+        )
+        assertTrue(
+            "and the phone reads it for its own landscape cards",
+            mobile.contains("topPicksArt[")
+        )
+        assertFalse(
+            "a landscape card with no wordmark is the defect itself: the row may " +
+                "never hardcode a null logo again",
+            home.substringAfter("private fun BuiltinTopPicksRail(")
+                .substringBefore("private fun BuiltinContinueWatchingRail(")
+                .contains("logoUrl = null")
+        )
+        assertTrue(
+            "the phone draws the landscape card when its rows do, not a poster",
+            phoneRow.contains("if (landscapeCards) {") &&
+                phoneRow.contains("LandscapeCard(")
+        )
+        // ...and with the artwork, not a blank card: the opening of a landscape
+        // card is its backdrop, so a poster URL here is the defect itself.
+        assertTrue(
+            "the phone reads the row's own art map under the same key the TV does",
+            phoneRow.contains("topPicksArt[") &&
+                phoneRow.contains("meta.landscapeArtKey()")
+        )
+        assertTrue(
+            "its backdrop is the resolved landscape art, then the pick's own " +
+                "backdrop, then its poster - the chain every rail card uses",
+            phoneRow.contains("imageOverrideCardBackdropUrl(") &&
+                phoneRow.contains("fallbackUrl = art?.first") &&
+                phoneRow.contains("?: meta.background") &&
+                phoneRow.contains("?: meta.poster")
+        )
+        assertTrue(
+            "and its clearlogo is the resolved wordmark, never a hardcoded null",
+            phoneRow.contains("logoUrl = art?.second,")
+        )
+        assertTrue(
+            "the watched markers ride the landscape card too",
+            phoneRow.contains("isWatched = watched,") &&
+                phoneRow.contains("isPartiallyWatched =") &&
+                phoneRow.contains("fallbackTitle = meta.name,")
+        )
+        assertTrue(
+            "and with the switch off the row is still the poster tile it always was",
+            phoneRow.contains("PosterCard(")
+        )
+    }
+
     private fun source(path: String): String {
         val file = File(findSourceRoot(), path)
         assertTrue("source missing: $file", file.isFile)
@@ -270,6 +342,12 @@ class TopPicksRailContractTest {
 
     private val home by lazy { source(HOME) }
     private val mobile by lazy { source(MOBILE) }
+
+    /** The phone's Top Picks branch only - the rail rows have their own. */
+    private val phoneRow by lazy {
+        mobile.substringAfter("KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU -> {")
+            .substringBefore("// Any other built-in key")
+    }
     private val viewModel by lazy { source(VIEW_MODEL) }
     private val history by lazy { source(HISTORY) }
     private val order by lazy { source(ORDER) }

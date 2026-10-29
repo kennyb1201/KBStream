@@ -8,16 +8,21 @@ import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * The two trackers a taste signal can be written back to.
+ * The three trackers a taste signal can be written back to.
  *
  * Separate legs in every sense: separate queue entries, separate attempt
  * counts, separate guards and separate disable states, so a Simkl failure can
- * never delay, block or drop a Trakt submission and vice versa. They share only
- * the mapping ([TasteRatingMapping]) and this storage shape.
+ * never delay, block or drop a Trakt or MDBList submission and vice versa. They
+ * share only the mapping ([TasteRatingMapping]) and this storage shape.
+ *
+ * Entries name their tracker by `name`, and [from] tolerates a value this build
+ * does not know, so adding MDBLIST neither migrates nor invalidates a queue that
+ * already holds Simkl/Trakt rows.
  */
 enum class TasteRatingTracker(val label: String) {
     SIMKL("Simkl"),
-    TRAKT("Trakt");
+    TRAKT("Trakt"),
+    MDBLIST("MDBList");
 
     companion object {
         /** The tracker a stored entry names, or null for a value this build does not know. */

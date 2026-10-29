@@ -28,7 +28,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -568,6 +570,29 @@ class TmdbRepository private constructor(context: Context) :
         )
     }
 
+    // ── the header entity-logo cache (see EntityLogoCache.kt) ────────────────
+    //
+    // Guards the two maps below only - never the network call, the hero
+    // artwork cache's discipline and for the same reason: holding it across a
+    // fetch serializes every resolution in the process behind the slowest one.
+    private val entityLogoMutex = Mutex()
+
+    /**
+     * Resolved brand marks for the session, `(fetchedAt, ranked urls)`.
+     *
+     * A ConcurrentHashMap like the caches above - not because the mutex is
+     * skipped (it is not), but because [releaseCaches] drops it from a
+     * memory-pressure callback that cannot suspend to take the lock.
+     */
+    private val entityLogoMemory = ConcurrentHashMap<String, Pair<Long, List<String>>>()
+
+    /** Concurrent resolutions of one key share one fetch. */
+    private val entityLogoInFlight = HashMap<String, CompletableDeferred<List<String>>>()
+
+    private val entityLogoJsonAdapter: JsonAdapter<List<String>> by lazy {
+        moshi.adapter(Types.newParameterizedType(List::class.java, String::class.java))
+    }
+
     private val imdbResolutionMemoryCache =
         ConcurrentHashMap<String, Pair<Long, String?>>()
 
@@ -706,6 +731,9 @@ class TmdbRepository private constructor(context: Context) :
         imdbResolutionMemoryCache.clear()
         tmdbResolutionMemoryCache.clear()
         reviewsCache.clear()
+        // Resolved brand marks are re-readable from the disk rows, so they are
+        // part of what a tight heap may take back.
+        entityLogoMemory.clear()
     }
 
     /**
@@ -3270,6 +3298,128 @@ class TmdbRepository private constructor(context: Context) :
     ): List<String> {
         if (apiKey.isBlank()) return emptyList()
 
+        // The RESOLVED list, cached at this boundary so both callers (the Studio
+        // header and the Browse shortcut art) pay for one walk rather than one
+        // each per screen load. Key, TTLs and the failure rule live in
+        // EntityLogoCache.kt; this owns the layers.
+        val key = entityLogoCacheKey(
+            entityId = entityId,
+            isNetwork = isNetwork,
+            providerId = providerId,
+            originalsCompanyId = originalsCompanyId,
+            name = name
+        )
+        val now = System.currentTimeMillis()
+
+        var sharedFetch: CompletableDeferred<List<String>>? = null
+        var ownFetch: CompletableDeferred<List<String>>? = null
+
+        entityLogoMutex.withLock {
+            entityLogoMemory[key]?.let { (fetchedAt, urls) ->
+                if (entityLogoMemoryEntryIsFresh(now - fetchedAt)) return urls
+                entityLogoMemory.remove(key)
+            }
+
+            // The key already carries the versioned disk prefix (see
+            // entityLogoCacheKey), so the memory key and the disk row key are the
+            // same string - one spelling, bumped in one place.
+            val diskCached = runCatchingCancellable {
+                tmdbJsonCacheDao.getByKey(key)
+            }.getOrNull()
+            if (diskCached != null) {
+                val parsed = runCatching {
+                    entityLogoJsonAdapter.fromJson(diskCached.json)
+                }.getOrNull()
+                if (
+                    parsed != null &&
+                    entityLogoDiskEntryIsFresh(now - diskCached.updatedAt, parsed)
+                ) {
+                    entityLogoMemory[key] = now to parsed
+                    return parsed
+                }
+            }
+
+            entityLogoInFlight[key]?.let { pending ->
+                sharedFetch = pending
+                return@withLock
+            }
+
+            val registered = CompletableDeferred<List<String>>()
+            entityLogoInFlight[key] = registered
+            ownFetch = registered
+        }
+
+        sharedFetch?.let { return it.await() }
+        val deferred = ownFetch ?: return emptyList()
+
+        // One attempt tracker for the whole resolution: the steps swallow their
+        // own failures (that is the fail-soft contract), so the cache has to be
+        // TOLD whether anything failed rather than infer it from an empty list.
+        // A failed attempt caches nothing - the next screen load retries, as
+        // today - while a genuine "TMDB has no artwork for this brand" caches
+        // its empty answer under the short negative TTL.
+        val attempt = EntityLogoAttempt()
+        val resolved: List<String> = try {
+            resolveEntityLogoUrls(
+                entityId = entityId,
+                isNetwork = isNetwork,
+                providerId = providerId,
+                name = name,
+                originalsCompanyId = originalsCompanyId,
+                attempt = attempt
+            )
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            abandonEntityLogoFetch(key, deferred)
+            throw cancellation
+        } catch (error: Throwable) {
+            attempt.failed = true
+            emptyList()
+        }
+
+        val cacheable = !attempt.failed
+        val fetchedAt = System.currentTimeMillis()
+        try {
+            entityLogoMutex.withLock {
+                if (cacheable) {
+                    entityLogoMemory[key] = fetchedAt to resolved
+                    pruneEntityLogoMemory(fetchedAt)
+                }
+                deferred.complete(resolved)
+                entityLogoInFlight.remove(key)
+            }
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            abandonEntityLogoFetch(key, deferred)
+            throw cancellation
+        }
+
+        if (cacheable) {
+            runCatchingCancellable {
+                cacheJson(
+                    key,
+                    entityLogoJsonAdapter.toJson(resolved),
+                    fetchedAt
+                )
+            }
+        }
+
+        return resolved
+    }
+
+    /**
+     * One entity-logo resolution: the five fallback steps, unchanged.
+     *
+     * [attempt] records whether any step FAILED (as opposed to answered
+     * nothing), which is the one thing [getEntityLogoUrls]' cache needs and the
+     * return value cannot say.
+     */
+    private suspend fun resolveEntityLogoUrls(
+        entityId: Int,
+        isNetwork: Boolean,
+        providerId: Int?,
+        name: String?,
+        originalsCompanyId: Int?,
+        attempt: EntityLogoAttempt
+    ): List<String> {
         val spaces = brandIdSpaces(isNetwork)
         val twinSpace = spaces.getOrNull(1)
 
@@ -3279,27 +3429,37 @@ class TmdbRepository private constructor(context: Context) :
         var brandName = name?.takeIf { it.isNotBlank() }
         suspend fun brand(): String? {
             if (brandName == null) {
-                brandName = getEntityDetail(entityId, isNetwork)?.name
+                val detail = getEntityDetail(entityId, isNetwork)
+                // A detail read that answered nothing leaves the name steps
+                // unproven, so the resolution may not be cached as "no artwork".
+                if (detail == null) attempt.failed = true
+                brandName = detail?.name
             }
             return brandName
         }
 
         val candidates = buildList {
             addAll(
-                entityLogoUrls(entityId, company = spaces.first().isCompany)
+                entityLogoUrls(entityId, company = spaces.first().isCompany, attempt = attempt)
             )
 
             if (originalsCompanyId != null && originalsCompanyId != entityId) {
-                addAll(entityLogoUrls(originalsCompanyId, company = true))
+                addAll(entityLogoUrls(originalsCompanyId, company = true, attempt = attempt))
             }
 
             if (twinSpace != null) {
-                val twin = entityLogoUrls(entityId, company = twinSpace.isCompany)
+                val twin = entityLogoUrls(
+                    entityId,
+                    company = twinSpace.isCompany,
+                    attempt = attempt
+                )
                 if (twin.isNotEmpty()) {
-                    val twinName = getEntityDetail(
+                    val twinDetail = getEntityDetail(
                         entityId,
                         twinSpace == BrandIdSpace.NETWORK
-                    )?.name
+                    )
+                    if (twinDetail == null) attempt.failed = true
+                    val twinName = twinDetail?.name
                     // Same brand or nothing: the two id spaces are numbered
                     // independently, so the number alone proves no relation.
                     if (entityNamesMatch(brand(), twinName)) addAll(twin)
@@ -3311,15 +3471,66 @@ class TmdbRepository private constructor(context: Context) :
 
         providerId?.let { id ->
             val providerLogo = runCatchingCancellable {
-                listOfNotNull(watchProviderLogoUrl(id))
-            }.getOrDefault(emptyList())
+                listOfNotNull(watchProviderLogoUrl(id, attempt))
+            }
+                .onFailure { attempt.failed = true }
+                .getOrDefault(emptyList())
             if (providerLogo.isNotEmpty()) return providerLogo
         }
 
         val sibling = brand()?.let { label ->
-            companyLogosByName(label, setOfNotNull(entityId, originalsCompanyId))
+            companyLogosByName(label, setOfNotNull(entityId, originalsCompanyId), attempt)
         }.orEmpty()
         return sibling
+    }
+
+    /**
+     * Whether any step of ONE entity-logo resolution failed.
+     *
+     * The steps are fail-soft by contract - an outage contributes an empty list
+     * and the next step is tried - so the RETURN value cannot distinguish "TMDB
+     * holds no artwork for this brand" from "the images call failed". The cache
+     * must: pinning an outage for the negative TTL is exactly the mistake the
+     * hero cache's MobLand note records.
+     */
+    private class EntityLogoAttempt {
+        @Volatile var failed = false
+    }
+
+    /**
+     * Releases an abandoned resolution's slot, un-cancellably.
+     *
+     * The cleanup itself suspends on the same mutex, and this runs from a
+     * CANCELLATION handler - where a plain withLock would throw at once and
+     * leave the map entry and the deferred exactly as they were, so every later
+     * caller for that key awaited it forever.
+     */
+    private suspend fun abandonEntityLogoFetch(
+        key: String,
+        deferred: CompletableDeferred<List<String>>
+    ) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            entityLogoMutex.withLock { entityLogoInFlight.remove(key) }
+            // Unblock anyone sharing this fetch with a miss rather than a
+            // cancellation they did not ask for.
+            deferred.complete(emptyList())
+        }
+    }
+
+    /**
+     * Keeps [entityLogoMemory] bounded: expired entries go first, then the
+     * oldest-fetched remainder. Called with the mutex held.
+     */
+    private fun pruneEntityLogoMemory(now: Long) {
+        if (entityLogoMemory.size <= ENTITY_LOGO_MEMORY_MAX_ENTRIES) return
+        entityLogoMemory.entries.removeAll {
+            now - it.value.first >= ENTITY_LOGO_MEMORY_TTL_MS
+        }
+        if (entityLogoMemory.size <= ENTITY_LOGO_MEMORY_MAX_ENTRIES) return
+        entityLogoMemory.entries
+            .sortedBy { it.value.first }
+            .take(entityLogoMemory.size - ENTITY_LOGO_MEMORY_MAX_ENTRIES)
+            .forEach { entityLogoMemory.remove(it.key) }
     }
 
     /**
@@ -3334,14 +3545,17 @@ class TmdbRepository private constructor(context: Context) :
      */
     private suspend fun companyLogosByName(
         brand: String,
-        excludeIds: Set<Int>
+        excludeIds: Set<Int>,
+        attempt: EntityLogoAttempt
     ): List<String> {
         val query = brand.trim()
         if (query.isBlank()) return emptyList()
 
         val results = runCatchingCancellable {
             api.searchCompany(query, apiKey).results
-        }.getOrDefault(emptyList())
+        }
+            .onFailure { attempt.failed = true }
+            .getOrDefault(emptyList())
 
         // A handful of candidates, not the whole page: the duplicates TMDB
         // holds for one studio sit at the top of its own relevance ranking, and
@@ -3353,7 +3567,7 @@ class TmdbRepository private constructor(context: Context) :
             if (result.id in excludeIds) continue
             if (!entityNamesMatch(brand, result.name)) continue
             if (checked++ >= MAX_BRAND_NAME_CANDIDATES) break
-            val logos = entityLogoUrls(result.id, company = true)
+            val logos = entityLogoUrls(result.id, company = true, attempt = attempt)
             if (logos.isNotEmpty()) return logos
         }
         return emptyList()
@@ -3543,14 +3757,20 @@ class TmdbRepository private constructor(context: Context) :
      * One entity's ranked logo URLs (company or network space), best first,
      * with marks too small to draw filtered out.
      */
-    private suspend fun entityLogoUrls(entityId: Int, company: Boolean): List<String> {
+    private suspend fun entityLogoUrls(
+        entityId: Int,
+        company: Boolean,
+        attempt: EntityLogoAttempt
+    ): List<String> {
         val fetched = runCatchingCancellable {
             if (company) {
                 api.getCompanyImages(entityId, apiKey).logos
             } else {
                 api.getNetworkImages(entityId, apiKey).logos
             }
-        }.getOrDefault(emptyList())
+        }
+            .onFailure { attempt.failed = true }
+            .getOrDefault(emptyList())
 
         val ranked = fetched
             .filter { !it.filePath.isNullOrBlank() }
@@ -3623,7 +3843,10 @@ class TmdbRepository private constructor(context: Context) :
      * Memoized for the session: this changes about as often as TMDB adds a
      * service. A failure is not cached, so it can be retried.
      */
-    private suspend fun watchProviderLogoUrl(providerId: Int): String? {
+    private suspend fun watchProviderLogoUrl(
+        providerId: Int,
+        attempt: EntityLogoAttempt? = null
+    ): String? {
         watchProviderLogos?.let { cached ->
             return cached[providerId]?.let { LOGO_BASE + it }
         }
@@ -3632,7 +3855,9 @@ class TmdbRepository private constructor(context: Context) :
             val results = runCatchingCancellable {
                 if (movie) api.getWatchProvidersMovie("US", apiKey).results
                 else api.getWatchProvidersTv("US", apiKey).results
-            }.getOrDefault(emptyList())
+            }
+                .onFailure { attempt?.failed = true }
+                .getOrDefault(emptyList())
             results.forEach { provider ->
                 provider.logoPath?.takeIf { it.isNotBlank() }?.let { path ->
                     byId[provider.providerId] = path

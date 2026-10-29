@@ -4,6 +4,11 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.mdblist.MDBLIST_RATINGS_ENABLED
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.mdblist.MdbListRatingOutcome
+import com.kennyb1201.kbstream.data.mdblist.mdbListKeyGrant
+import com.kennyb1201.kbstream.data.mdblist.submitRatingImpl as submitMdbListRating
 import com.kennyb1201.kbstream.data.simkl.SIMKL_RATINGS_ENABLED
 import com.kennyb1201.kbstream.data.simkl.SimklRatingOutcome
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
@@ -42,7 +47,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * The legs are independent in every sense this class can enforce: separate
  * entries, separate attempt counts, separate guards, separate closed states, and
- * one leg's failure never blocks, delays or drops the other's.
+ * one leg's failure never blocks, delays or drops another's.
+ *
+ * Three legs today (Simkl, Trakt, MDBList), sharing the mapping, the queue and
+ * this drain. MDBList differs in one way worth knowing here: it has no connect
+ * or disconnect hook, because there is no OAuth flow - its grant IS the pasted
+ * per-profile API key, so a changed key re-opens a closed leg by itself and a
+ * removed key is a pause (nothing can be sent), never a refusal.
  */
 object TasteRatingSubmission {
 
@@ -81,6 +92,7 @@ object TasteRatingSubmission {
     fun enabled(tracker: TasteRatingTracker): Boolean = when (tracker) {
         TasteRatingTracker.SIMKL -> SIMKL_RATINGS_ENABLED
         TasteRatingTracker.TRAKT -> TRAKT_RATINGS_ENABLED
+        TasteRatingTracker.MDBLIST -> MDBLIST_RATINGS_ENABLED
     }
 
     /** True when at least one leg is open, i.e. when queuing can lead anywhere. */
@@ -97,7 +109,7 @@ object TasteRatingSubmission {
      *
      * Synchronous and cheap (one blob write per leg, coalescing with anything
      * already pending for this title), so a thumb press never waits on it; an
-     * empty build (both legs closed by the landing gate) does nothing at all.
+     * empty build (every leg closed by its landing gate) does nothing at all.
      */
     fun onSignalWritten(
         context: Context,
@@ -198,6 +210,7 @@ object TasteRatingSubmission {
                 val paused = when (tracker) {
                     TasteRatingTracker.TRAKT -> drainTrakt(app, entry, now)
                     TasteRatingTracker.SIMKL -> drainSimkl(app, entry, now)
+                    TasteRatingTracker.MDBLIST -> drainMdbList(app, entry, now)
                 }
                 if (paused) {
                     val waitMs = remainingPauseMs(app, tracker)
@@ -306,6 +319,62 @@ object TasteRatingSubmission {
     }
 
     /**
+     * One MDBList attempt.
+     *
+     * Always false: unlike the other two legs, this one has no spacing window of
+     * its own to wait out - MDBList's per-key budget interceptor is the guard, it
+     * refuses or parks at the HTTP layer, and it synthesizes its park with 429,
+     * which the leg answers PAUSED. A follow-up wait would therefore never have
+     * anything to wait for, and scheduling one would re-drain for nothing.
+     */
+    private suspend fun drainMdbList(
+        app: Context,
+        entry: TasteRatingQueueEntry,
+        now: Long
+    ): Boolean {
+        val ids = trackerIdsOf(entry)
+        val outcome = MdbListClient.submitMdbListRating(
+            context = app,
+            parentId = ids.parentId.orEmpty(),
+            tmdbId = ids.tmdbId,
+            mediaType = entry.mediaType,
+            rating = entry.rating,
+            removal = entry.removal,
+            ratedAtIso = TasteRatingMapping.ratedAtIso(entry.enqueuedAt)
+        )
+        when (outcome) {
+            MdbListRatingOutcome.LANDED -> TasteRatingQueue.removeEntry(app, entry)
+            MdbListRatingOutcome.NOT_FOUND -> {
+                Log.w(TAG, "MDBList could not match ${entry.title.ifBlank { "a title" }}")
+                TasteRatingQueue.dropEntry(
+                    app,
+                    entry,
+                    now,
+                    "mdblist.com could not match the title"
+                )
+            }
+            MdbListRatingOutcome.NO_IDS -> TasteRatingQueue.dropEntry(
+                app,
+                entry,
+                now,
+                "no id MDBList can be addressed with"
+            )
+            MdbListRatingOutcome.AUTH -> {
+                TasteRatingQueue.dropEntry(app, entry, now, "the MDBList key was refused")
+                closeLeg(app, TasteRatingTracker.MDBLIST)
+            }
+            MdbListRatingOutcome.PAUSED -> Unit
+            MdbListRatingOutcome.NO_ANSWER -> TasteRatingQueue.markAttempt(
+                app,
+                entry,
+                now,
+                "mdblist.com did not answer"
+            )
+        }
+        return false
+    }
+
+    /**
      * The tracker ids an entry carries, read back out of the store's own key
      * spellings (see [TasteRatingMapping.imdbIdOf] / [tmdbIdOf]).
      *
@@ -346,11 +415,19 @@ object TasteRatingSubmission {
                 "${tracker.label} refused this profile's rating writes; the leg stays closed " +
                     "until it reconnects"
             )
+            // MDBList has no connect flow to reconnect through: its grant is the
+            // pasted per-profile key, so the remedy that actually works there is
+            // replacing the key. Same closure, different instruction.
+            val remedy = if (tracker == TasteRatingTracker.MDBLIST) {
+                "paste a new key"
+            } else {
+                "reconnect"
+            }
             TasteRatingQueue.noteFailure(
                 app,
                 tracker,
                 System.currentTimeMillis(),
-                "${tracker.label} refused the session (reconnect to resume)"
+                "${tracker.label} refused the session ($remedy to resume)"
             )
         }
     }
@@ -360,13 +437,27 @@ object TasteRatingSubmission {
         when (tracker) {
             TasteRatingTracker.TRAKT -> TraktRepository.getInstance(app).guard.blockedForMs()
             TasteRatingTracker.SIMKL -> simklRatingPauseMs()
+            // MDBList's pause lives in the budget interceptor, which parks the
+            // key itself and answers 429 while parked: the leg has no window of
+            // its own for this drain to wait out.
+            TasteRatingTracker.MDBLIST -> 0L
         }
 
-    /** The access token a leg's closure is recorded against, or null. */
+    /**
+     * The grant a leg's closure is recorded against, or null.
+     *
+     * A session token for the two OAuth trackers; for MDBList, the pasted key's
+     * non-reversible tag (see `mdbListKeyGrant`) - the same comparison, so a
+     * replaced key re-opens that leg exactly as a reconnect re-opens the others.
+     */
     private fun currentGrant(app: Context, tracker: TasteRatingTracker): String? =
         when (tracker) {
             TasteRatingTracker.TRAKT -> TraktRepository.getInstance(app).store.accessToken()
             TasteRatingTracker.SIMKL -> SimklRepository.getInstance(app).getSavedAccessToken()
+            // Not a token: the pasted key's own hash tag. A changed key is a
+            // different grant and re-opens the leg with no connect flow, and the
+            // raw secret never reaches this map.
+            TasteRatingTracker.MDBLIST -> mdbListKeyGrant(app)
         }
 
     /**
@@ -401,8 +492,8 @@ object TasteRatingSubmission {
      * The COPY DIAGNOSTICS lines: what is queued per tracker and the last
      * submission failure each one hit.
      *
-     * Empty while nothing has been queued and nothing has failed AND both legs
-     * are open, so a clean report stays as short as it was; a closed or
+     * Empty while nothing has been queued and nothing has failed AND every leg
+     * is open, so a clean report stays as short as it was; a closed or
      * gated-off leg is worth naming, because "my ratings never reach Simkl" is
      * exactly the report this has to answer.
      */

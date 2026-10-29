@@ -15,7 +15,7 @@ import org.junit.Test
  * complaint. The pins, in the order the spec states them:
  *
  *  - two endpoints per tracker, an add and a remove, and no inbound ratings READ
- *    (v1 never reads a rating it did not write) and no MDBList call at all;
+ *    (v1 never reads a rating it did not write) - on all three legs now;
  *  - the existing write discipline reused, not reinvented: the token first, then
  *    the leg's own guard, then the repository's OWN id resolution (no second id
  *    grammar), then the call, then `noteRetryAfter` on every answer;
@@ -24,9 +24,12 @@ import org.junit.Test
  *    dialog) knows the trackers exist;
  *  - a server-requested pause is not an attempt: the PAUSED branches do nothing,
  *    and only a real no-answer advances an entry;
- *  - both legs are behind their landing-gate constant, and that constant is the
+ *  - every leg is behind its landing-gate constant, and that constant is the
  *    only switch: the live probe has not been run, so the legs are ON by the
- *    account owner's decision (2026-10-29) and OFF again is the same one line.
+ *    account owner's decision and OFF again is the same one line;
+ *  - MDBList is a leg like the others, not a special case: same mapping, same
+ *    queue, same outcomes, its per-key budget interceptor standing in for the
+ *    other legs' guards, and the pasted key standing in for a connect flow.
  */
 class TasteRatingSubmissionContractTest {
 
@@ -65,11 +68,20 @@ class TasteRatingSubmissionContractTest {
     }
 
     @Test
-    fun `MDBList gains nothing, having no rating-write surface`() {
-        val mdb = source(MDBLIST)
-        assertFalse("no ratings write is added to MDBList", mdb.contains("sync/ratings"))
-        assertFalse(mdb.contains("addRatings"))
-        assertFalse(mdb.contains("removeRatings"))
+    fun `MDBList gains the same add and remove, and no read`() {
+        // The third leg posts raw OkHttp bodies rather than Retrofit endpoints
+        // (MdbListClient has no service interface), so the pins are its paths.
+        val src = source(MDBLIST_WRITES)
+        assertTrue("the add path", src.contains("\"/sync/ratings\""))
+        assertTrue("one body builder, one bucket",
+            source(MDBLIST_WIRE).contains("internal fun mdbListRatingsPayload("))
+        assertTrue("the remove path", src.contains("\"/sync/ratings/remove\""))
+        assertFalse(
+            "no ratings READ anywhere: v1 never reads a rating it did not write",
+            src.contains("@GET") || src.contains(".get()")
+        )
+        assertFalse("and the client file stays free of a second ratings path",
+            source(MDBLIST).contains("/sync/ratings"))
     }
 
     // ── the reused write discipline ──────────────────────────────────
@@ -95,6 +107,41 @@ class TasteRatingSubmissionContractTest {
             src.contains("TRAKT_RATINGS_ENABLED = true"))
         assertFalse("and no production code path keeps a second, closed gate",
             src.contains("TRAKT_RATINGS_ENABLED = false"))
+    }
+
+    @Test
+    fun `the MDBList leg reuses the client, the ids and the mapping, and adds no guard`() {
+        val src = source(MDBLIST_WRITES)
+
+        assertTrue("the client's own id grammar, not a second one",
+            src.contains("idsNode(mdbListImdbId(parentId), tmdbId)"))
+        assertTrue("the shared mapping decides the bucket",
+            src.contains("TasteRatingMapping.isMovie(mediaType)"))
+        assertTrue("and the shared clamp keeps a stored value on the scale",
+            src.contains("TasteRatingMapping.clamp(rating)"))
+        assertTrue("a write sends that clamped integer",
+            src.contains("rating = if (removal) null else TasteRatingMapping.clamp(rating)"))
+        assertTrue("and a removal sends the ids only, per the documented shape",
+            source(MDBLIST_WIRE).contains("if (rating != null)") &&
+                source(MDBLIST_WIRE).contains(".put(\"rating\", rating)"))
+        assertFalse("no half-stars: the integer scale is the verified one",
+            src.contains("toDouble()") || src.contains("toFloat()") || src.contains("/ 2"))
+        assertTrue("the write rides the client's budgeted instance",
+            src.contains("client.newCall(request)"))
+        assertFalse("a second OkHttp client would bypass the budget interceptor",
+            src.contains("OkHttpClient("))
+        assertTrue("and is tagged a write, so the budget never skips it",
+            src.contains(".tag(WRITE_TAG)"))
+        assertFalse("no guard of its own: the budget interceptor is the guard",
+            src.contains("tryAcquire") || src.contains("Guard("))
+        assertTrue("the landing gate is the only switch, and it is open",
+            src.contains("MDBLIST_RATINGS_ENABLED = true"))
+        assertFalse("and no production path keeps a second, closed gate",
+            src.contains("MDBLIST_RATINGS_ENABLED = false"))
+        // The key never leaves the client's hashing: the leg's grant tag is the
+        // existing non-reversible one, so no secret can reach the grant map.
+        assertTrue("the closure tag is the key's hash, not the key",
+            src.contains("MdbListClient.keyTag(key)"))
     }
 
     @Test
@@ -167,19 +214,24 @@ class TasteRatingSubmissionContractTest {
         val src = source(SUBMISSION)
 
         assertEquals(
-            "both legs answer PAUSED by sending nothing at all",
-            2,
+            "every leg answers PAUSED by sending nothing at all",
+            3,
             count(src, "PAUSED -> Unit")
         )
         assertEquals(
             "and an attempt is recorded only where there was no usable answer",
-            2,
+            3,
             count(src, "TasteRatingQueue.markAttempt(")
         )
         assertTrue(
             "a refused grant closes the leg rather than being retried into",
             src.contains("closeLeg(app, TasteRatingTracker.TRAKT)") &&
-                src.contains("closeLeg(app, TasteRatingTracker.SIMKL)")
+                src.contains("closeLeg(app, TasteRatingTracker.SIMKL)") &&
+                src.contains("closeLeg(app, TasteRatingTracker.MDBLIST)")
+        )
+        assertTrue(
+            "and MDBList has no pause of its own for the drain to wait out",
+            src.contains("TasteRatingTracker.MDBLIST -> 0L")
         )
         assertTrue(
             "and the wait is bounded: a long park is left to the next trigger",
@@ -220,10 +272,25 @@ class TasteRatingSubmissionContractTest {
     }
 
     @Test
-    fun `both legs' open state is the landing gate, and diagnostics can say so`() {
+    fun `every leg's open state is the landing gate, and diagnostics can say so`() {
         val src = source(SUBMISSION)
         assertTrue(src.contains("TasteRatingTracker.SIMKL -> SIMKL_RATINGS_ENABLED"))
         assertTrue(src.contains("TasteRatingTracker.TRAKT -> TRAKT_RATINGS_ENABLED"))
+        assertTrue(src.contains("TasteRatingTracker.MDBLIST -> MDBLIST_RATINGS_ENABLED"))
+        // The three-leg shape, pinned where a missing arm would silently stop a
+        // leg: the enum, the enable switch, the drain dispatch and the grant.
+        assertTrue(
+            "MDBList must be a tracker the queue can name",
+            source(QUEUE).contains("MDBLIST(\"MDBList\")")
+        )
+        assertTrue(
+            "and it must reach its own drain",
+            src.contains("TasteRatingTracker.MDBLIST -> drainMdbList(app, entry, now)")
+        )
+        assertTrue(
+            "whose closure is recorded against the pasted key's tag",
+            src.contains("TasteRatingTracker.MDBLIST -> mdbListKeyGrant(app)")
+        )
         assertTrue(
             "COPY DIAGNOSTICS carries the queue and the last failure per leg",
             source(DIAGNOSTICS).contains("TasteRatingSubmission.statusLines(app)")
@@ -296,6 +363,12 @@ class TasteRatingSubmissionContractTest {
         const val TASTE_SIGNALS = "com/kennyb1201/kbstream/data/library/TasteSignals.kt"
         const val DIAGNOSTICS = "com/kennyb1201/kbstream/data/reporting/Diagnostics.kt"
         const val MDBLIST = "com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt"
+        const val MDBLIST_WRITES =
+            "com/kennyb1201/kbstream/data/mdblist/MdbListRatingWrites.kt"
+
+        /** The leg's dependency-free half: body and answer, pinned by a JVM test. */
+        const val MDBLIST_WIRE =
+            "com/kennyb1201/kbstream/data/mdblist/MdbListRatingWire.kt"
         const val SYNC_PREFS = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
         const val APP_PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
         const val TRAKT_VM = "com/kennyb1201/kbstream/ui/trakt/TraktViewModel.kt"

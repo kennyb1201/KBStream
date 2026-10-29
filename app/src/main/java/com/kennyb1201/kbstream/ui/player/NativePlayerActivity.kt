@@ -3356,11 +3356,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 bywUi.focusFirst()
                 return true
             }
-            // Focus is on a pick: UP/DOWN have nothing above or below the row to
-            // move to (raising the overlay would also take the D-pad away from
-            // the row mid-panel), so they are swallowed; LEFT/RIGHT and OK belong
-            // to the focused pick and pass through to it.
-            if (isOverlayRaisingKey(event.keyCode)) return true
+            // Focus is inside the panel. LEFT/RIGHT and OK belong to the focused
+            // view and pass through below.
+            //
+            // UP/DOWN now have somewhere to go: the thumbs row for the finished
+            // title sits above the pick row, and the panel pins both ends of the
+            // vertical chain (UP from a thumb is a no-op, DOWN from a pill is a
+            // no-op), so letting the press reach the view tree can no longer walk
+            // focus out onto the seek bar / controls overlay underneath. That is
+            // the reported "no way to reach the thumbs" (field 2026-10-28).
+            //
+            // A raise WITHOUT the thumbs row (no finished identity) has nothing
+            // above the row, so it keeps the old behavior byte for byte and
+            // swallows the press.
+            //
+            // The let-through returns `super` HERE rather than falling out of the
+            // branch: `plainPlaybackForeground()` does not cover this panel, so a
+            // fall-through could reach its skip-prompt arm and swallow UP/DOWN
+            // again while a prompt is visible. The panel owns the vertical keys
+            // while it is up; the prompt owns only OK.
+            if (isOverlayRaisingKey(event.keyCode)) {
+                if (bywUi.hasTasteRow) return super.dispatchKeyEvent(event)
+                return true
+            }
         }
         if (plainPlaybackForeground() && horizontal &&
             handleSurfaceScrubKey(event.keyCode, event)
@@ -11776,7 +11794,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             kind = kind,
             positionMs = positionMs,
             durationMs = durationMs,
-            resume = "none"
+            resume = "pending"
         )
         // The 2026-10-22 case is a SOURCE problem, not an identity one: the
         // DIAG ladder showed this URL class serving bytes=0-0, 0-1M and
@@ -11785,9 +11803,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // signed it, and the replacement is sought where the trailer died.
         lifecycleScope.launch {
             val replacement = TrailerPlayerLauncher
-                .resolvePlayableUrl(videoId, excludeClient = deadClient)
+                .resolvePlayableUrl(videoId, excludeClients = setOfNotNull(deadClient))
                 .getOrNull()
-            if (isFinishing || isDestroyed) return@launch
+            if (isFinishing || isDestroyed) {
+                // The session (or the process) went away before the requested
+                // resolve had an outcome: say so rather than leaving the
+                // request's own `pending` line standing as if it were still in
+                // flight. Fullscreen keeps its one resume; this is vocabulary.
+                PoTokenTrace.recordTrailerDeath(
+                    videoId = videoId,
+                    client = deadClient,
+                    kind = kind,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    resume = "cancelled"
+                )
+                return@launch
+            }
             if (replacement == null) {
                 Log.w(
                     "PLAYER_RETRY",

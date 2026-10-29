@@ -124,8 +124,13 @@ import com.kennyb1201.kbstream.data.tmdb.BlendPick
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
+import com.kennyb1201.kbstream.data.youtube.HeroTrailerResume
+import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
 import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.data.youtube.MAX_HERO_TRAILER_RESUMES
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
+import com.kennyb1201.kbstream.data.youtube.heroTrailerResumeDecision
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.images.ImageOverrides
@@ -273,7 +278,6 @@ internal val RailHorizontalStartPadding = 12.dp
 // why the next rail's title has to come out of it. Named here so this screen
 // keeps reading as one set of layout numbers.
 private val RailSectionGap = RailLanding.SectionGap
-private val RailHeaderFocusInset = RailLanding.HeaderInset
 private val RailHeaderFloor = RailLanding.HeaderFloor
 
 private val HeroToFirstRailGap = 2.dp
@@ -1328,38 +1332,66 @@ private fun HomeHero(
         mutableStateOf<HeroTrailerPlayback?>(null)
     }
 
-    // One-shot handoff from the failure below to the resolve that retries it:
-    // written when a retry is actually going to happen, read (and cleared) by
-    // that retry's resolve. Deliberately NOT kept as "where playback is": a
-    // value like that would follow the viewer into the next play.
+    // One-shot handoff from the ORDINARY playback-failure retry to the resolve
+    // that retries it: written when a retry is actually going to happen, read
+    // (and cleared) by that retry's resolve. Deliberately NOT kept as "where
+    // playback is": a value like that would follow the viewer into the next
+    // play. The identity ladder does NOT use it - its handoff is the pending
+    // record below, which survives a cancellation.
     var trailerResumeMs by remember(trailerKey) { mutableLongStateOf(0L) }
-
-    // The client to skip when a refused trailer is re-resolved, one-shot for
-    // the same reason as the resume above: the exclusion belongs to the source
-    // that just died, and a foreground re-arm must not inherit it.
-    var trailerExcludeClient by remember(trailerKey) { mutableStateOf<String?>(null) }
-
-    // How long the trailer said it was when it died - the diagnostics death line
-    // reports the death point against it, and it is only known at the failure,
-    // not at the resolve that follows. Consumed with the same one-shot resume.
-    var trailerDeathDurationMs by remember(trailerKey) { mutableLongStateOf(0L) }
 
     // One-shot playback-failure retry: googlevideo signed URLs can go stale
     // mid-stream (403 on a later chunk). Re-resolving fetches a fresh URL —
     // capped at a single retry per trailer so a genuinely dead video can't
     // loop resolve → mount → 403 forever.
+    //
+    // SPLIT from the identity ladder's budget on purpose: a refusal is not a
+    // stale URL, so it must not spend this retry (see
+    // shouldRetryHeroTrailerAfterError), and this retry must not spend an
+    // identity attempt either. Each is capped where it belongs.
     var trailerAttempt by remember(trailerKey) { mutableStateOf(0) }
 
-    // How many times YouTube has refused THIS trailer in this session.
-    //
-    // A refusal never spends the retry above (a refused identity cannot be
-    // recovered by re-signing - see shouldRetryHeroTrailerAfterError), so this
-    // counter is what remembers that a refusal happened. The first one
-    // invalidates the watch config, which means the resolve that follows it is
-    // signed with a FRESH visitor: a second refusal is therefore real evidence
-    // that the fresh identity is refused too, and is what marks the video
-    // blocked for the session.
-    var trailerIdentityRefusals by remember(trailerKey) { mutableStateOf(0) }
+    // The identity ladder's cumulative exclusion set: every client whose URL
+    // class has already been refused for this trailer, growing by one per
+    // resumed death (see HeroTrailerResumeLadder). Reset with the key, like
+    // every other trailer state here, so the next title starts clean.
+    var trailerExcludedClients by remember(trailerKey) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+
+    // Identity resumes spent on this trailer, against
+    // MAX_HERO_TRAILER_RESUMES. Its own counter: the ordinary retry above and
+    // this one never consume each other.
+    var trailerResumeAttempts by remember(trailerKey) { mutableStateOf(0) }
+
+    // The resolve-request counter: bumped by an identity resume AND by the
+    // ordinary retry, and the resolve effect's key. It exists so the effect is
+    // restarted by a REQUEST rather than by a piece of state it also writes -
+    // the old shape keyed on `trailerAttempt`, which the effect's own callers
+    // mutated, and a key the effect participates in is how a requested resume
+    // got cancelled before it could record an outcome.
+    var trailerResumeSeq by remember(trailerKey) { mutableLongStateOf(0L) }
+
+    // The resume this owner currently OWES the effect. Written only when the
+    // refusal handler takes a resume; cleared only by the resolve's own
+    // outcome callbacks. A run that is cancelled therefore leaves it in place,
+    // and the next run re-issues the same resolve (same exclusion set, same
+    // position) instead of starting over.
+    var trailerPendingResume by remember(trailerKey) {
+        mutableStateOf<HeroTrailerResume?>(null)
+    }
+
+    // The last resume this raise took, kept past its completion so a replacement
+    // that later dies in a shape the identity classifier does not catch can name
+    // it on the death line (`replacement ended` / `replacement failed`).
+    var trailerLastResume by remember(trailerKey) {
+        mutableStateOf<HeroTrailerResume?>(null)
+    }
+
+    // True while the mounted source is one a resume produced. What makes those
+    // two values reachable: the pending record itself is gone once the resolve
+    // completes, so the flag carries "this player is a replacement".
+    var trailerReplacementMounted by remember(trailerKey) { mutableStateOf(false) }
 
     // Re-arm the trailer when the app returns to the foreground: ON_PAUSE
     // silenced the player (audio-leak fix), so bump the epoch to drop the
@@ -1395,18 +1427,20 @@ private fun HomeHero(
         onDispose { TrailerPlayerPool.releaseForReuse() }
     }
 
-    LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt, resumeEpoch) {
+    // Keyed on the REQUEST counter, not on `trailerAttempt`: the retry state is
+    // written by the effect's own callers, and a key the effect participates in
+    // is how a requested resume used to be cancelled before it could record an
+    // outcome. Nothing in this body mutates a key.
+    LaunchedEffect(trailerPlaying, trailerKey, trailerResumeSeq, resumeEpoch) {
         resolvedTrailer = null
-        // Consume the resume position WITH this resolve: a retry seeks to it,
-        // and every other reason to re-run this effect (foreground re-arm,
-        // autoplay toggle) starts from the top because the value is gone.
-        val resumeFrom = trailerResumeMs
-        trailerResumeMs = 0L
-        // Consumed with it: the exclusion is part of the same one-shot retry.
-        val excludeClient = trailerExcludeClient
-        trailerExcludeClient = null
-        val deathDurationMs = trailerDeathDurationMs
-        trailerDeathDurationMs = 0L
+        trailerReplacementMounted = false
+        // SNAPSHOT the resume this run owes; do NOT consume it here. It is
+        // cleared only by the resolve's outcome callbacks below, so a run that
+        // is cancelled leaves it for the next run instead of losing it.
+        val pending = trailerPendingResume
+        // The ordinary retry's own one-shot position, spent by its own resolve.
+        val resumeFrom = pending?.positionMs ?: trailerResumeMs
+        if (pending == null) trailerResumeMs = 0L
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
             // Non-null from the guard above, and captured by the lambdas below:
@@ -1419,6 +1453,25 @@ private fun HomeHero(
             // resolve on every foreground return, for a URL that will 403.
             // Checked BEFORE the retry's invalidate for exactly that reason.
             if (TrailerPlayerLauncher.isIdentityBlocked(trailerKey)) {
+                if (pending != null) {
+                    // A resume was owed and the video is already blocked. That is
+                    // a bug state (poison is only written with no resume owed),
+                    // so it is reported rather than swallowed.
+                    PoTokenTrace.recordTrailerDeath(
+                        videoId = key,
+                        client = pending.deadClient,
+                        kind = PoTokenTrace.resolveKind(),
+                        positionMs = pending.positionMs,
+                        durationMs = pending.durationMs,
+                        resume = "blocked"
+                    )
+                    trailerPendingResume = null
+                    Log.e(
+                        "HOME_HERO",
+                        "Hero trailer key=$key was blocked while a resume was owed; " +
+                            "dropping the resume (bug)"
+                    )
+                }
                 Log.w(
                     "HOME_HERO",
                     "Hero trailer key=$trailerKey is blocked by YouTube this " +
@@ -1426,7 +1479,18 @@ private fun HomeHero(
                 )
                 return@LaunchedEffect
             }
-            if (trailerAttempt > 0) {
+            if (pending != null) {
+                // Bust the cached source so the resume cannot be answered with
+                // the URL class that just died. Invalidating also lifts a block,
+                // and the guard above has established there is none.
+                TrailerPlayerLauncher.invalidate(key)
+                Log.w(
+                    "HOME_HERO",
+                    "Re-resolving hero trailer key=$key on another client " +
+                        "(attempt=$trailerResumeAttempts/$MAX_HERO_TRAILER_RESUMES " +
+                        "excluded=${pending.excludedClients.sorted()})"
+                )
+            } else if (trailerAttempt > 0) {
                 // Bust the cached source so the retry gets a fresh signed URL.
                 TrailerPlayerLauncher.invalidate(trailerKey)
                 Log.w(
@@ -1440,53 +1504,97 @@ private fun HomeHero(
                 "Resolving hero trailer key=$trailerKey"
             )
 
-            TrailerPlayerLauncher
-                .resolvePlayableUrl(trailerKey, excludeClient = excludeClient)
-                .onSuccess { source ->
-                    resolvedTrailer = HeroTrailerPlayback(
-                        source = source,
-                        startPositionMs = resumeFrom
+            var outcomeRecorded = false
+            try {
+                TrailerPlayerLauncher
+                    .resolvePlayableUrl(
+                        trailerKey,
+                        excludeClients = pending?.excludedClients ?: emptySet()
                     )
-                    if (excludeClient != null) {
-                        // The resume the refusal asked for: name the client that
-                        // signed the replacement, so a capture shows the fix
-                        // working rather than inferring it from a smooth play.
-                        PoTokenTrace.recordTrailerDeath(
-                            videoId = key,
-                            client = excludeClient,
-                            kind = PoTokenTrace.resolveKind(),
-                            positionMs = resumeFrom,
-                            durationMs = deathDurationMs,
-                            resume = "client " +
-                                (TrailerPlayerLauncher.signingClient(trailerKey)
-                                    ?: "unknown") + " ok"
+                    .onSuccess { source ->
+                        resolvedTrailer = HeroTrailerPlayback(
+                            source = source,
+                            startPositionMs = resumeFrom
+                        )
+                        if (pending != null) {
+                            outcomeRecorded = true
+                            trailerPendingResume = null
+                            trailerReplacementMounted = true
+                            // The resume the refusal asked for: name the client
+                            // that signed the replacement, so a capture shows
+                            // the fix working rather than inferring it from a
+                            // smooth play.
+                            PoTokenTrace.recordTrailerDeath(
+                                videoId = key,
+                                client = pending.deadClient,
+                                kind = PoTokenTrace.resolveKind(),
+                                positionMs = pending.positionMs,
+                                durationMs = pending.durationMs,
+                                resume = "client " +
+                                    (TrailerPlayerLauncher.signingClient(trailerKey)
+                                        ?: "unknown") + " ok"
+                            )
+                        }
+                        Log.w(
+                            "HOME_HERO",
+                            "Hero trailer resolved: " +
+                                heroSourceOrigin(source) +
+                                if (pending != null) {
+                                    " (excluded ${pending.excludedClients.sorted()})"
+                                } else {
+                                    ""
+                                }
                         )
                     }
-                    Log.w(
-                        "HOME_HERO",
-                        "Hero trailer resolved: " +
-                            heroSourceOrigin(source) +
-                            if (excludeClient != null) " (excluded $excludeClient)" else ""
-                    )
-                }
-                .onFailure { error ->
-                    if (excludeClient != null) {
-                        PoTokenTrace.recordTrailerDeath(
-                            videoId = key,
-                            client = excludeClient,
-                            kind = PoTokenTrace.resolveKind(),
-                            positionMs = resumeFrom,
-                            durationMs = deathDurationMs,
-                            resume = "none: no other client"
+                    .onFailure { error ->
+                        if (pending != null) {
+                            outcomeRecorded = true
+                            trailerPendingResume = null
+                            PoTokenTrace.recordTrailerDeath(
+                                videoId = key,
+                                client = pending.deadClient,
+                                kind = PoTokenTrace.resolveKind(),
+                                positionMs = pending.positionMs,
+                                durationMs = pending.durationMs,
+                                resume = "none: no other client"
+                            )
+                            if (heroTrailerResolveFailurePoisons(pending.excludedClients)) {
+                                // The ladder was actually walked and no client
+                                // left has a usable URL class: the video is done
+                                // for this session, and the log says so.
+                                TrailerPlayerLauncher.markIdentityBlocked(key)
+                                Log.w(
+                                    "HOME_HERO",
+                                    "Hero trailer key=$key: ladder exhausted " +
+                                        "(excluded=${pending.excludedClients.sorted()} " +
+                                        "attempts=$trailerResumeAttempts); blocked for " +
+                                        "this session"
+                                )
+                            }
+                        }
+                        Log.e(
+                            "HOME_HERO",
+                            "Failed to resolve hero trailer, " +
+                                "keeping backdrop",
+                            error
                         )
                     }
-                    Log.e(
-                        "HOME_HERO",
-                        "Failed to resolve hero trailer, " +
-                            "keeping backdrop",
-                        error
+            } finally {
+                if (pending != null && !outcomeRecorded) {
+                    // A restart or scope cancellation ate this attempt before it
+                    // had an outcome. Say THAT - the request is still owed, and
+                    // leaving the request's own `pending` line would read as if
+                    // the resolve were still in flight.
+                    PoTokenTrace.recordTrailerDeath(
+                        videoId = key,
+                        client = pending.deadClient,
+                        kind = PoTokenTrace.resolveKind(),
+                        positionMs = pending.positionMs,
+                        durationMs = pending.durationMs,
+                        resume = "cancelled"
                     )
                 }
+            }
         } else {
             Log.w(
                 "HOME_HERO",
@@ -1794,6 +1902,27 @@ private fun HomeHero(
                                     // on a stuck player): drop the source so
                                     // the hero crossfades back to the
                                     // backdrop.
+                                    //
+                                    // A replacement that ends this way died in a
+                                    // shape the identity classifier never sees
+                                    // (a silent STATE_ENDED, the rebuffer
+                                    // watchdog), so the death line is re-written
+                                    // to say that rather than leaving the resume
+                                    // request's own `pending`/`ok` standing.
+                                    val resume = trailerLastResume
+                                    if (trailerReplacementMounted && resume != null) {
+                                        trailerKey?.let { key ->
+                                            PoTokenTrace.recordTrailerDeath(
+                                                videoId = key,
+                                                client = resume.deadClient,
+                                                kind = PoTokenTrace.resolveKind(),
+                                                positionMs = resume.positionMs,
+                                                durationMs = resume.durationMs,
+                                                resume = "replacement ended"
+                                            )
+                                        }
+                                    }
+                                    trailerReplacementMounted = false
                                     resolvedTrailer = null
                                 },
                                 onFailed = { positionMs ->
@@ -1803,6 +1932,20 @@ private fun HomeHero(
                                     // URL, resuming where it died. onEnded
                                     // still fires first, so the backdrop shows
                                     // immediately either way.
+                                    val resume = trailerLastResume
+                                    if (trailerReplacementMounted && resume != null) {
+                                        trailerKey?.let { key ->
+                                            PoTokenTrace.recordTrailerDeath(
+                                                videoId = key,
+                                                client = resume.deadClient,
+                                                kind = PoTokenTrace.resolveKind(),
+                                                positionMs = positionMs,
+                                                durationMs = resume.durationMs,
+                                                resume = "replacement failed"
+                                            )
+                                        }
+                                    }
+                                    trailerReplacementMounted = false
                                     if (trailerAttempt < 1) {
                                         // Record the resume point ONLY when the
                                         // retry is really going to happen: a
@@ -1813,33 +1956,52 @@ private fun HomeHero(
                                         // dead position.
                                         trailerResumeMs = positionMs
                                         trailerAttempt += 1
+                                        // The retry is a REQUEST: restart the
+                                        // effect through the request counter.
+                                        trailerResumeSeq += 1
                                     } else {
                                         resolvedTrailer = null
                                     }
                                 },
                                 onIdentityBlocked = { positionMs, durationMs ->
-                                    // The first refusal already invalidated the
-                                    // watch config, so the resolve that follows
-                                    // it is signed with a fresh visitor AND, now,
-                                    // a different client: the 2026-10-22 log is
-                                    // a URL class that refuses offset reads, not
-                                    // an identity verdict. A second refusal of
-                                    // the same video is therefore the fresh
-                                    // identity and the replacement both being
-                                    // refused, and that is when the video is
-                                    // marked for the session - so a later re-arm
-                                    // goes straight to the backdrop instead of
-                                    // buying a watch-page fetch every time.
+                                    // A refusal is a property of the URL class a
+                                    // client signs, not an identity verdict: the
+                                    // 2026-10-22 log shows the same URL serving
+                                    // `bytes=0-0` and `0-1M` with 206 while every
+                                    // offset read 403s. So one step of the ladder
+                                    // re-resolves excluding the class that just
+                                    // died, and a later step excludes that one
+                                    // TOO - a cumulative set, bounded by the
+                                    // client table and by the attempt cap
+                                    // (HeroTrailerResumeLadder).
                                     val key = trailerKey
-                                    trailerIdentityRefusals += 1
-                                    if (trailerIdentityRefusals >= 2) {
-                                        trailerKey?.let {
-                                            TrailerPlayerLauncher.markIdentityBlocked(it)
-                                        }
-                                        val died = key?.let {
-                                            TrailerPlayerLauncher.signingClient(it)
-                                        }
-                                        if (key != null) {
+                                    if (key == null) {
+                                        false
+                                    } else {
+                                        // Display name (cache, else the trace's
+                                        // fallback) is what the death line says.
+                                        val died = TrailerPlayerLauncher.signingClient(key)
+                                        // The EXCLUSION grows from the cache's own
+                                        // answer only: the trace's last resolve is
+                                        // whatever ran last in the process, and
+                                        // excluding it could skip a client that
+                                        // never signed this trailer.
+                                        val decision = heroTrailerResumeDecision(
+                                            deadClient = TrailerPlayerLauncher
+                                                .cachedSigningClient(key),
+                                            excludedClients = trailerExcludedClients,
+                                            resumeAttempts = trailerResumeAttempts
+                                        )
+                                        if (decision.verdict ==
+                                            HeroTrailerResumeVerdict.POISON
+                                        ) {
+                                            // Nothing left to try: the video is
+                                            // done for this session, and a later
+                                            // re-arm goes straight to the
+                                            // backdrop instead of buying a
+                                            // watch-page fetch every time.
+                                            TrailerPlayerLauncher
+                                                .markIdentityBlocked(key)
                                             PoTokenTrace.recordTrailerDeath(
                                                 videoId = key,
                                                 client = died,
@@ -1849,29 +2011,54 @@ private fun HomeHero(
                                                 resume = "client " +
                                                     (died ?: "unknown") + " died"
                                             )
+                                            Log.w(
+                                                "HOME_HERO",
+                                                "Hero trailer key=$key: identity ladder " +
+                                                    "exhausted " +
+                                                    "(excluded=" +
+                                                    decision.nextExcludedClients.sorted() +
+                                                    " attempts=$trailerResumeAttempts); " +
+                                                    "blocked for this session"
+                                            )
+                                            false
+                                        } else {
+                                            // One more step: exclude everything
+                                            // excluded so far plus the class that
+                                            // just died, and resume where it
+                                            // died. The record is what the effect
+                                            // reads; it is cleared only when that
+                                            // resolve has an outcome.
+                                            val excluded = decision.nextExcludedClients
+                                            trailerExcludedClients = excluded
+                                            trailerResumeAttempts += 1
+                                            trailerResumeSeq += 1
+                                            val request = HeroTrailerResume(
+                                                positionMs = positionMs,
+                                                durationMs = durationMs,
+                                                deadClient = died,
+                                                excludedClients = excluded,
+                                                requestId = trailerResumeSeq
+                                            )
+                                            trailerPendingResume = request
+                                            trailerLastResume = request
+                                            PoTokenTrace.recordTrailerDeath(
+                                                videoId = key,
+                                                client = died,
+                                                kind = PoTokenTrace.resolveKind(),
+                                                positionMs = positionMs,
+                                                durationMs = durationMs,
+                                                resume = "pending"
+                                            )
+                                            Log.w(
+                                                "HOME_HERO",
+                                                "Hero trailer key=$key refused; " +
+                                                    "re-resolving on another client " +
+                                                    "(attempt=$trailerResumeAttempts/" +
+                                                    "$MAX_HERO_TRAILER_RESUMES " +
+                                                    "excluded=${excluded.sorted()})"
+                                            )
+                                            true
                                         }
-                                        false
-                                    } else if (key != null && trailerAttempt < 1) {
-                                        // One re-resolve, signed by a client
-                                        // other than the one that just died,
-                                        // resumed where it did.
-                                        val deadClient =
-                                            TrailerPlayerLauncher.signingClient(key)
-                                        trailerExcludeClient = deadClient
-                                        trailerResumeMs = positionMs
-                                        trailerDeathDurationMs = durationMs
-                                        PoTokenTrace.recordTrailerDeath(
-                                            videoId = key,
-                                            client = deadClient,
-                                            kind = PoTokenTrace.resolveKind(),
-                                            positionMs = positionMs,
-                                            durationMs = durationMs,
-                                            resume = "none"
-                                        )
-                                        trailerAttempt += 1
-                                        true
-                                    } else {
-                                        false
                                     }
                                 }
                             )
@@ -2815,6 +3002,17 @@ private fun BuiltinTopPicksRail(
      * reads the same answer they do.
      */
     landscapeCards: Boolean,
+    /**
+     * The row's resolved landscape artwork, keyed by `landscapeArtKey()` -
+     * the same map a catalog rail carries in `Rail.landscapeArt` and the same
+     * resolver fills (see [HomeViewModel.topPicksArt]).
+     *
+     * Without it this row hardcoded a null wordmark and fell back to the
+     * pick's poster for its backdrop, so a landscape Home drew "Top Picks for
+     * You" as poster-shaped art with no wordmark - the one rail that ignored
+     * both halves of the landscape card's artwork (field 2026-10-28).
+     */
+    art: Map<String, Pair<String?, String?>>,
     bringIntoViewSpec: BringIntoViewSpec,
     onTitleHeight: (Int) -> Unit,
     /**
@@ -2835,6 +3033,10 @@ private fun BuiltinTopPicksRail(
     // Home takes the top-bar hook like any other rail.
     onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
+    // The viewer's chosen stills, resolved once for this row's cards - the same
+    // call the enclosing screen makes for the catalog rails.
+    val overridePaths = rememberImageOverridePaths()
+
     Column(
         modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
     ) {
@@ -2895,14 +3097,25 @@ private fun BuiltinTopPicksRail(
                             .padding(end = HomeRailGap),
                         contentAlignment = Alignment.Center
                     ) {
+                        val blendedArt = art[meta.landscapeArtKey()]
+
                         if (landscapeCards) {
                             LandscapeCard(
-                                // The pick's TMDB backdrop; a title without one
-                                // falls back to its poster, cropped - the same
-                                // degradation the catalog rails accept.
-                                backdropUrl = meta.background ?: meta.poster,
-                                // No wordmark: a blend pick carries no logo art.
-                                logoUrl = null,
+                                // Target: the resolved TMDB art, then the pick's
+                                // own TMDB backdrop, then its poster - the same
+                                // chain a catalog rail's card uses, including the
+                                // viewer's chosen still on top of it.
+                                backdropUrl = imageOverrideCardBackdropUrl(
+                                    paths = overridePaths,
+                                    rawId = meta.id,
+                                    fallbackUrl = blendedArt?.first
+                                        ?: meta.background
+                                        ?: meta.poster
+                                ),
+                                // TMDB's English wordmark, or the corner title.
+                                // The pick carries no wordmark of its own, so
+                                // there is nothing else this could be.
+                                logoUrl = blendedArt?.second,
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
@@ -4167,6 +4380,10 @@ fun HomeScreen(
     // is already dropped where the row is built (the blend's `dropHidden`),
     // and filtering a second time here would only re-derive the same answer.
     val topPicks by viewModel.topPicks.collectAsStateWithLifecycle()
+    // The row's own landscape artwork (backdrop + clearlogo): the picks are not
+    // a Rail, so nothing else resolves their art (see
+    // [HomeViewModel.topPicksArt]).
+    val topPicksArt by viewModel.topPicksArt.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     // Held as State objects rather than values: HomeHeroHost below performs the
@@ -4633,23 +4850,32 @@ fun HomeScreen(
     // ModernHomeRowsList). No snap scrolls anywhere: the rows LazyColumn is
     // wrapped in a BringIntoViewSpec so that when a catalog rail takes
     // focus, Compose's native focus bring-into-view scroll lands the row
-    // at a fixed inset below the viewport top. Deterministic landing means:
-    //  - no Continue Watching / Upcoming sliver peeking under the hero
-    //    (landing on a catalog rail always pushes those rows fully above),
+    // at a fixed line below the viewport top. Deterministic landing means:
+    //  - the rail ABOVE the focused one ends fully above the viewport: the
+    //    landing is capped at the section gap, which is exactly how far above
+    //    the focused rail's top that rail's bottom edge sits. This is what the
+    //    comment here used to CLAIM while the arithmetic showed 28dp of that
+    //    rail's artwork under a short landscape rail - the segmented sliver
+    //    reported across the hero's bottom edge (field 2026-10-28).
     //  - no bounce (the spec returns the same distance for every child of
     //    the focused row, so the scroll target never changes mid-flight),
     //  - the hero stays visible above the first rail exactly like KB.
-    // KB uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
-    // RailHeaderFocusInset mirrors that (defined with the Home constants).
+    //
+    // KB uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job, and this
+    // screen used to mirror it. That made the claim above false for every short
+    // rail, so KB parity yielded to the invariant: 12dp is the deepest landing
+    // that keeps the rail above hidden (see [railLandingTarget]).
     val density = LocalDensity.current
     val railRowsBringIntoViewSpec = remember(density, railTitleHeightPx) {
-        val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
         val headerFloorPx = with(density) { RailHeaderFloor.toPx() }
+        // One dp value, two jobs: how far above a focused rail the rail above
+        // ends (the landing cap), and the gap the reveal band below is charged.
         // Rebuilt whenever a rail reports a different title height, so a
         // font-scale change re-reserves the band instead of leaving the next
         // rail's title short of the panel edge.
+        val sectionGapPx = with(density) { RailSectionGap.toPx() }
         val revealBandPx = railRevealBandPx(
-            sectionGapPx = with(density) { RailSectionGap.toPx() },
+            sectionGapPx = sectionGapPx,
             titleHeightPx = railTitleHeightPx,
             fallbackTitlePx = with(density) { RailLanding.FallbackTitleHeight.toPx() },
             sliverPx = with(density) { RailLanding.NextTitleSliver.toPx() }
@@ -4678,17 +4904,19 @@ fun HomeScreen(
                 )
                 val currentLeadingEdge = rail?.offset?.toFloat() ?: offset
                 val railSize = rail?.size?.toFloat() ?: abs(size)
-                // Landing line, pulled up when the focused rail is too tall to
-                // leave the reveal band below it — a poster rail always is, so
-                // it lands on the floor and the next rail's title is fitted
-                // into what remains. Depends only on the RAIL's size, so every
-                // child of a rail still returns the same distance (no bounce
-                // mid-flight). See [RailLanding] for the packing this closes.
+                // Landing line, capped at the section gap so the rail above
+                // ends fully above the viewport, and pulled up further when the
+                // focused rail is too tall to leave the reveal band below it — a
+                // poster rail always is, so it lands on the floor and the next
+                // rail's title is fitted into what remains. Depends only on the
+                // RAIL's size, so every child of a rail still returns the same
+                // distance (no bounce mid-flight). See [RailLanding] and
+                // [railLandingTarget].
                 val revealTarget = containerSize - railSize - revealBandPx
                 val targetLeadingEdge = railLandingTarget(
-                    topInsetPx = topInsetPx,
                     floorPx = headerFloorPx,
-                    revealTargetPx = revealTarget
+                    revealTargetPx = revealTarget,
+                    aboveClearancePx = sectionGapPx
                 )
                 // Already resting on the landing line: done. This also keeps
                 // the spring quiet during horizontal focus moves (no bounce).
@@ -5106,6 +5334,7 @@ fun HomeScreen(
                     picks = topPicks,
                     title = title,
                     landscapeCards = landscapeCards,
+                    art = topPicksArt,
                     bringIntoViewSpec = railCardsBringIntoViewSpec,
                     onTitleHeight = { railTitleHeightPx = it.toFloat() },
                     cardFocusRequesters = railFocusRequesters,

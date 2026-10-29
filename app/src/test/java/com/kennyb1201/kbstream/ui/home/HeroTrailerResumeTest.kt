@@ -258,16 +258,19 @@ class HeroTrailerResumeTest {
     fun `the resume point is consumed with the resolve that uses it`() {
         val resolve = between(
             rawScreen(),
-            "LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt, resumeEpoch) {",
+            "LaunchedEffect(trailerPlaying, trailerKey, trailerResumeSeq, resumeEpoch) {",
             "if (trailerPlaying && !trailerKey.isNullOrBlank()) {"
         )
         assertTrue(
-            "the retry's resolve must read the handoff",
-            resolve.contains("val resumeFrom = trailerResumeMs")
+            "the retry's resolve must read the handoff - the identity ladder's own " +
+                "record first, then the plain retry's one-shot position",
+            resolve.contains("val resumeFrom = pending?.positionMs ?: trailerResumeMs")
         )
         assertTrue(
-            "and clear it, so no later re-arm can seek to a dead position",
-            resolve.contains("trailerResumeMs = 0L")
+            "and clear the plain handoff, so no later re-arm can seek to a dead " +
+                "position (a pending resume record is NOT cleared here: it is owed " +
+                "until its resolve has an outcome)",
+            resolve.contains("if (pending == null) trailerResumeMs = 0L")
         )
         assertTrue(
             "the start position travels with the resolved source",

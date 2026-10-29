@@ -4,12 +4,12 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /**
- * The taste signals' translation layer: one thumb, one number, on the scale
- * both trackers already speak.
+ * The taste signals' translation layer: one thumb, one number, on the scale all
+ * three trackers already speak.
  *
- * Simkl and Trakt both rate on an integer 1-10 (the same scale the local store
- * uses, which is why the store was built on it), so ONE mapping serves both and
- * no per-tracker table exists:
+ * Simkl, Trakt and MDBList all rate on an integer 1-10 (the same scale the local
+ * store uses, which is why the store was built on it), so ONE mapping serves all
+ * three and no per-tracker table exists:
  *
  *  - **LIKE -> 8.** The strong-positive value that leaves 9-10 above it for an
  *    explicit numeric rating (the numeric-ratings follow-up), without claiming
@@ -23,7 +23,11 @@ import java.time.temporal.ChronoUnit
  *
  * Pure by construction - no Android, no network, no clock of its own - so every
  * rule here is pinned by a plain JVM test, and the same functions serve the
- * submission queue, the two tracker legs and the diagnostics line.
+ * submission queue, the three tracker legs and the diagnostics line.
+ *
+ * The integer scale is the verified one for MDBList as well; its client's
+ * half-star UI is an unresolved question and must not drive a wire format, so
+ * nothing here produces a fractional rating.
  */
 object TasteRatingMapping {
 

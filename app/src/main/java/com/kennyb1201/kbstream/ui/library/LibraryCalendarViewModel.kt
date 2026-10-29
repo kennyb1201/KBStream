@@ -105,6 +105,21 @@ class LibraryCalendarViewModel(
     private var buildJob: Job? = null
 
     /**
+     * The one in-flight watched pass, local or full. A newer pass cancels and
+     * replaces the previous one, the same discipline [buildJob] uses: the passes
+     * write the same `watched` set, and two of them racing would let the older
+     * answer land last.
+     */
+    private var watchedJob: Job? = null
+
+    /**
+     * Bumped on every show-set read (and when the set is thrown away). A
+     * background re-read that is no longer the latest drops its result instead
+     * of adopting it - see [refreshShowIdsInBackground].
+     */
+    private var showSetGeneration = 0
+
+    /**
      * The session's tracked shows, as the ids the sources name them by.
      *
      * Reloaded on [SHOW_SET_TTL_MS] and on a profile switch - the set is four
@@ -181,7 +196,28 @@ class LibraryCalendarViewModel(
         val state = _uiState.value
         val stale = System.currentTimeMillis() - showsLoadedAt >= SHOW_SET_TTL_MS
 
-        if (stale || showIds.isEmpty()) {
+        // The cached month paints FIRST, stale set or not.
+        //
+        // It used to sit behind the staleness check, so past the TTL a month
+        // that was already built waited on four tracker reads (plus Simkl's
+        // uncapped caught-up list) before a single row could appear - the
+        // reported "the calendar does not seem to cache" (field 2026-10-28).
+        // The rows cannot be wrong: they are this session's own build, and the
+        // watched set is re-read right here. What may be stale is the SET, and
+        // that correction now arrives behind the paint, not in front of it.
+        val cached = monthCache[state.month]
+        if (cached != null) {
+            publish(cached, landingDay = state.selected)
+            launchFullWatched()
+            if (stale) refreshShowIdsInBackground()
+            return
+        }
+
+        // Nothing built for this month and no show set at all: the first-ever
+        // open (or the one after a profile switch, which empties the set). There
+        // is nothing to paint from, so the set still lands first, exactly as
+        // today - nothing publishes an empty month.
+        if (showIds.isEmpty()) {
             viewModelScope.launch {
                 loadShowIds()
                 loadMonth(state.month, landingDay = state.selected)
@@ -189,12 +225,36 @@ class LibraryCalendarViewModel(
             return
         }
 
-        val cached = monthCache[state.month]
-        if (cached != null) {
-            publish(cached, landingDay = state.selected)
-            viewModelScope.launch { refreshWatched() }
-        } else {
-            loadMonth(state.month, landingDay = state.selected)
+        // An uncached month with a set in hand: build it now and correct the set
+        // behind the build when it is stale.
+        loadMonth(state.month, landingDay = state.selected)
+        if (stale) refreshShowIdsInBackground()
+    }
+
+    /**
+     * Re-reads the tracked-show set BEHIND whatever is on screen.
+     *
+     * The cached month has already painted, so this can take as long as its
+     * tracker reads take. What it must not do is repaint for nothing: an
+     * unchanged set is left alone (no flicker, no rebuild), and a changed one
+     * rebuilds ONLY the month current at completion time - never the month the
+     * viewer has since paged away from, and never a month built for a profile
+     * that has been switched away from (see [showSetGeneration]).
+     */
+    private fun refreshShowIdsInBackground() {
+        viewModelScope.launch {
+            val previousIds = showIds
+            val previousPriority = priorityIds
+            val generation = loadShowIds()
+            if (generation != showSetGeneration) return@launch
+            if (showIds == previousIds && priorityIds == previousPriority) return@launch
+
+            val month = _uiState.value.month
+            // The month's own build is dropped so the new set is actually
+            // consulted; its [MonthProgress], if any, is kept, so the rebuild
+            // resumes past the candidates it already resolved.
+            monthCache.remove(month)
+            loadMonth(month, landingDay = _uiState.value.selected)
         }
     }
 
@@ -227,13 +287,93 @@ class LibraryCalendarViewModel(
         val showIds = state.days.values.flatten().map { it.showId }.toSet()
         if (showIds.isEmpty()) return
         val watched = mergeWatched(showIds)
-        _uiState.value = _uiState.value.copy(
-            watched = watched.flatMapTo(HashSet()) { (showId, pairs) ->
+        publishWatched(
+            watched.flatMapTo(HashSet()) { (showId, pairs) ->
                 pairs.map { (season, episode) ->
                     calendarWatchedKey(showId, season, episode)
                 }
             }
         )
+    }
+
+    /**
+     * Pass A of the watched state: this profile's own completed rows, for the
+     * shows that have ALREADY LANDED in the month on screen.
+     *
+     * One Room read, no tracker call and no id resolution - which is the point:
+     * the full union ([refreshWatched]) never runs until the last show has
+     * resolved, so before this pass existed the grid drew its rows unbudged
+     * until the slowest tracker answered (field 2026-10-28: "the watched badges
+     * are there, they just take a while"). Local history is the source that
+     * needs no network, so it is the one that can tint the first rows.
+     *
+     * Matching uses only spellings that exist without a lookup: the show's own
+     * `tmdb:<n>` id, canonicalized the same way [localWatchedRows] canonicalizes
+     * row ids. A show whose local rows are filed under the IMDb twin tints when
+     * the full pass resolves that twin - late, exactly as today, never wrong.
+     *
+     * Publishes by UNION: a tracker-only badge already on screen is never
+     * removed by a local pass, and this pass removes nothing at all. Un-marking
+     * is the terminal pass's job (see [publishWatched]).
+     */
+    private suspend fun refreshWatchedLocal(month: YearMonth) {
+        val state = _uiState.value
+        if (state.month != month) return
+        val showIds = state.days.values
+            .flatten()
+            .map { it.showId }
+            .toSet()
+        if (showIds.isEmpty()) return
+
+        val local = localWatchedRows()
+        // The viewer may have paged away during the read; a pass for a month
+        // that is no longer on screen must not tint the one that is.
+        if (_uiState.value.month != month) return
+
+        val keys = HashSet<String>()
+        for (showId in showIds) {
+            val pairs = local[TraktIdKeys.canonical(showId)] ?: continue
+            pairs.forEach { (season, episode) ->
+                keys += calendarWatchedKey(showId, season, episode)
+            }
+        }
+        if (keys.isEmpty()) return
+
+        val current = _uiState.value
+        if (current.month != month) return
+        _uiState.value = current.copy(watched = current.watched + keys)
+    }
+
+    /**
+     * Publishes a watched set, replacing the old one or adding to it.
+     *
+     * The two modes are what keep badges correct at rest AND early during a
+     * fill: [refreshWatchedLocal] unions (it only ever knows about local rows,
+     * so it may not speak for tracker-only badges), while every TERMINAL pass -
+     * the end of a build, a cached-month publish, a resume - replaces the set
+     * with the full union. The replace is what picks up an un-mark made in
+     * Detail; a union there would mask it forever.
+     */
+    private fun publishWatched(keys: Set<String>) {
+        _uiState.value = _uiState.value.copy(watched = keys)
+    }
+
+    /** Launches the terminal, replacing watched pass, superseding any in flight. */
+    private fun launchFullWatched() {
+        watchedJob?.cancel()
+        watchedJob = viewModelScope.launch { refreshWatched() }
+    }
+
+    /**
+     * Launches Pass A for [month], superseding any watched pass in flight.
+     *
+     * A child of [viewModelScope] rather than a call inside [noteResolved]: that
+     * function runs under the month build's per-show semaphore permit, and a
+     * Room read must not hold one.
+     */
+    private fun launchLocalWatched(month: YearMonth) {
+        watchedJob?.cancel()
+        watchedJob = viewModelScope.launch { refreshWatchedLocal(month) }
     }
 
     /**
@@ -316,6 +456,9 @@ class LibraryCalendarViewModel(
 
     /** Drops every per-profile fact this session gathered. */
     private fun forgetEverything() {
+        // A show-set read already running belongs to the profile being left, and
+        // must not adopt its result onto the incoming one.
+        showSetGeneration += 1
         showIds = emptyList()
         priorityIds = emptyList()
         showsLoadedAt = 0L
@@ -346,7 +489,10 @@ class LibraryCalendarViewModel(
      * placement paths would have dated it Dec 1, and it was simply never handed
      * to the month builder because it sat past the round-robin cut.
      */
-    private suspend fun loadShowIds() {
+    private suspend fun loadShowIds(): Int {
+        val generation = showSetGeneration + 1
+        showSetGeneration = generation
+
         // Read once: the completed rows feed the tracked set AND the local
         // caught-up half, which is the same rows Upcoming's own builder reads.
         val historyRows = runCatchingCancellable {
@@ -427,6 +573,10 @@ class LibraryCalendarViewModel(
             emptyList()
         }
 
+        // A newer read (a profile switch, another open) owns the set now; this
+        // one's answer is stale by definition and must not land on top of it.
+        if (generation != showSetGeneration) return generation
+
         priorityIds = calendarPriorityIds(simklPriority + caughtUp)
 
         showIds = calendarCandidates(
@@ -435,6 +585,7 @@ class LibraryCalendarViewModel(
             priority = priorityIds
         )
         showsLoadedAt = System.currentTimeMillis()
+        return generation
     }
 
     /**
@@ -474,7 +625,7 @@ class LibraryCalendarViewModel(
         val cached = monthCache[month]
         if (cached != null) {
             publish(cached, landingDay)
-            viewModelScope.launch { refreshWatched() }
+            launchFullWatched()
             return
         }
 
@@ -536,6 +687,10 @@ class LibraryCalendarViewModel(
         val moved = _uiState.value.selected
             .takeIf { _uiState.value.month == month && it != selectedWhenStarted }
         publish(built, landingDay, keepSelection = moved)
+        // Terminal pass: it REPLACES the set with the full four-source union, so
+        // an un-mark made while the build ran is not masked by anything Pass A
+        // unioned in (see [publishWatched]).
+        watchedJob?.cancel()
         refreshWatched()
     }
 
@@ -571,6 +726,9 @@ class LibraryCalendarViewModel(
             loading = false,
             hasShows = showIds.isNotEmpty()
         )
+        // Ride the publish gate: the rows that just landed get their local
+        // badges now, instead of waiting for the last show of the month.
+        launchLocalWatched(month)
     }
 
     /** Puts a built month on screen, with the day the viewer should be on. */
@@ -659,15 +817,31 @@ class LibraryCalendarViewModel(
 
         val seasonNumbers = seasonsCoveringMonth(detail.seasons, month)
 
-        val seasons = LinkedHashMap<Int, List<ResolvedEpisode>>()
-        for (season in seasonNumbers) {
-            val episodes = runCatchingCancellable {
-                tmdbRepository.getSeasonEpisodes(detail.id, season, imdbId ?: candidateId)
-            }.getOrNull().orEmpty()
-            // Stored as the payload sent it: the premiere/finale badges read a
-            // season's NUMBERING, and [calendarEpisodesFor] sorts by episode
-            // number itself rather than trusting this order.
-            if (episodes.isNotEmpty()) seasons[season] = episodes
+        // Seasons concurrently, assembled in [seasonNumbers] order.
+        //
+        // A month usually covers one season and rarely more than two, so this is
+        // a small fan-out inside the month build's own permit - and the
+        // assembly is by the INPUT order, never by completion order, so nothing
+        // downstream (the premiere/finale numbering, the payload order the
+        // calendar sorts itself) can observe the change.
+        val seasons = coroutineScope {
+            val fetched = seasonNumbers.map { season ->
+                async {
+                    season to runCatchingCancellable {
+                        tmdbRepository.getSeasonEpisodes(detail.id, season, imdbId ?: candidateId)
+                    }.getOrNull().orEmpty()
+                }
+            }.awaitAll()
+            val ordered = LinkedHashMap<Int, List<ResolvedEpisode>>()
+            for ((season, episodes) in fetched) {
+                // Stored as the payload sent it: the premiere/finale badges read
+                // a season's NUMBERING, and [calendarEpisodesFor] sorts by
+                // episode number itself rather than trusting this order. A season
+                // that failed or came back empty contributes nothing and does
+                // not fail the show.
+                if (episodes.isNotEmpty()) ordered[season] = episodes
+            }
+            ordered
         }
 
         // The detail's next_episode_to_air is a second, independent statement
@@ -801,8 +975,20 @@ class LibraryCalendarViewModel(
         val simklReady = simklRepository.isConfigured() && simklRepository.hasToken()
         val out = HashMap<String, Set<Pair<Int, Int>>>()
 
+        // The id resolution for every on-screen show, concurrently and bounded -
+        // the shape TagViewModel uses for the same resolve (8 permits). Only this
+        // step is parallelized: the per-show union below stays sequential, and so
+        // do Simkl's per-show reads, so the tracker traffic is exactly what it
+        // was before.
+        val keysByShow = coroutineScope {
+            val permits = Semaphore(KEYS_RESOLVE_CONCURRENCY)
+            showIds.map { showId ->
+                async { showId to permits.withPermit { keysFor(showId) } }
+            }.awaitAll().toMap()
+        }
+
         for (showId in showIds) {
-            val keys = keysFor(showId)
+            val keys = keysByShow[showId].orEmpty()
             val pairs = LinkedHashSet<Pair<Int, Int>>()
 
             keys.forEach { key ->
@@ -877,6 +1063,16 @@ class LibraryCalendarViewModel(
 
         /** Parallel TMDB/TVmaze resolutions per month build. */
         const val CALENDAR_CONCURRENCY = 4
+
+        /**
+         * Concurrent id resolutions for the watched union.
+         *
+         * The same bound TagViewModel resolves IMDb ids under
+         * (imdbResolveSemaphore, 8 permits): the lookup is disk-cached, so the
+         * wins are on a cold read, and 8 keeps a month's worth of shows from
+         * opening that many TMDB requests at once.
+         */
+        const val KEYS_RESOLVE_CONCURRENCY = 8
 
         /**
          * Bound on how many shows one month build will resolve FROM THE

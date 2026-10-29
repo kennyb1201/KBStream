@@ -277,8 +277,15 @@ object MdbListClient {
      * what stops us. */
     private const val TOTAL_CEILING = 980
 
-    /** Tags a request that must go out (a write) rather than a refetch. */
-    private val WRITE_TAG = Any()
+    /**
+     * Tags a request that must go out (a write) rather than a refetch.
+     *
+     * `internal` for the ratings leg (MdbListRatingWrites.kt): a rating write is
+     * a state change like any other, so it must trip the same budget branch and
+     * the same 429 park as the writes in this file. Widened, not duplicated -
+     * a second tag would exempt a second set of requests from the budget.
+     */
+    internal val WRITE_TAG = Any()
 
     /**
      * One API key's spend and backoff.
@@ -430,14 +437,16 @@ object MdbListClient {
         }
     }
 
-    private val client = BaseHttpClient.derived {
+    // `internal` for the ratings leg (MdbListRatingWrites.kt), which posts
+    // through THIS client on purpose: its budget interceptor is that leg's guard.
+    internal val client = BaseHttpClient.derived {
         // 6 s ceiling and the local budget interceptor stay this client's
         // own; the sockets and threads behind it are the process-wide ones.
         callTimeout(6, TimeUnit.SECONDS)
         addInterceptor(budgetInterceptor)
     }
 
-    private const val BASE = "https://api.mdblist.com"
+    internal const val BASE = "https://api.mdblist.com"
     private const val TAG = "MDBLIST"
 
     private const val WATCHED_AT_COMPLETE_THRESHOLD = 80.0
@@ -588,7 +597,7 @@ object MdbListClient {
      * so the raw secret never lands in a prefs name, an in-memory map or a disk
      * row - the same rule Simkl's cache keys already follow.
      */
-    private fun keyTag(apiKey: String): String =
+    internal fun keyTag(apiKey: String): String =
         runCatching {
             java.security.MessageDigest.getInstance("SHA-256")
                 .digest(apiKey.toByteArray())
@@ -1144,7 +1153,7 @@ object MdbListClient {
     // Sync section — direct history writes and paused-session reads.
     // ------------------------------------------------------------------
 
-    private fun idsNode(imdbId: String?, tmdbId: Int?): JSONObject? {
+    internal fun idsNode(imdbId: String?, tmdbId: Int?): JSONObject? {
         val ids = JSONObject()
         if (!imdbId.isNullOrBlank()) ids.put("imdb", imdbId)
         if (tmdbId != null && tmdbId > 0) ids.put("tmdb", tmdbId)

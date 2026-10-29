@@ -615,9 +615,20 @@ internal class BecauseYouWatchedUi(
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
-    /** Live view refs + mutable imdb id for one card in the row. */
+    /**
+     * Live view refs + mutable imdb id for one card in the row.
+     *
+     * [posterFrame], [nameView] and [reasonView] are here for the credits fit
+     * pass (see [fitCreditsPanel]): an overflowing credits panel shrinks the
+     * posters and their captions IN PLACE. Rebuilding a card would move focus
+     * off the pill being pressed, so the pass only ever mutates these views'
+     * own params.
+     */
     private class CardRefs(
         val cardView: View,
+        val posterFrame: View,
+        val nameView: TextView,
+        val reasonView: TextView?,
         val metaView: TextView?,
         var imdbId: String?
     )
@@ -653,6 +664,13 @@ internal class BecauseYouWatchedUi(
     private var dislikeThumb: ImageView? = null
 
     /**
+     * How far the credits fit pass has shrunk this raise's panel (see
+     * [fitCreditsPanel]). Monotonic within a raise: [build] resets it to 0 at
+     * the full sizes, and the pass only ever moves DOWN a level.
+     */
+    private var fitLevel = BYW_FIT_LEVEL_FULL
+
+    /**
      * The collector that repaints the thumbs whenever the store changes - a press
      * here, a press on the title's Detail page, a row in a poster menu. One per
      * raise, cancelled in [hide].
@@ -676,6 +694,10 @@ internal class BecauseYouWatchedUi(
         val onLayout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             if (isVisible) polish()
             keepRowClearOfNotch()
+            // After the clearance pass, never before it: that pass only ever ADDS
+            // margin (so it can grow the panel), and the fit pass measures what
+            // is actually on screen, not what it hoped to save.
+            fitCreditsPanel()
         }
         panel.addOnLayoutChangeListener(onLayout)
         row.addOnLayoutChangeListener(onLayout)
@@ -685,6 +707,21 @@ internal class BecauseYouWatchedUi(
         get() = panel.visibility == View.VISIBLE
 
     fun hasFocus(): Boolean = panel.hasFocus()
+
+    /**
+     * True when this raise carries a visible thumbs row - i.e. when the panel has
+     * something for a vertical press to reach above the pick row.
+     *
+     * The HOSTS ask this before letting UP/DOWN through to the view tree (see
+     * the two players' `dispatchKeyEvent`). Visibility is the test, not thumb
+     * existence: both thumbs are built once and kept for the panel's life, so
+     * they are non-null even on a raise with no identity, where the row is GONE
+     * and focus search would skip the thumbs and walk out of the panel instead.
+     * [ensureTasteRow] re-sets the row's visibility from the finished title on
+     * every [show], so this is exact for every raise.
+     */
+    val hasTasteRow: Boolean
+        get() = tasteRow?.visibility == View.VISIBLE
 
     /**
      * Raises the panel for [titleText], with [finished] as the title the thumbs
@@ -827,6 +864,14 @@ internal class BecauseYouWatchedUi(
      * (see [pressThumb]). Nothing here requests focus: the panel's initial focus
      * stays on the first card's PLAY pill, and [focusFirst] walks the pick row
      * only, so the header is invisible to it.
+     *
+     * UP from a thumb is pinned to the thumb itself: the row is the TOP of the
+     * panel's vertical chain, and without this the press ran the geometric focus
+     * search, which walked out onto the controls overlay / seek bar underneath
+     * and took the D-pad away from the panel. A self-pinned UP keeps focus where
+     * it is, which is what lets the activities let vertical presses through at
+     * all (see `BecauseYouWatchedUi.hasTasteRow`). Set here because this is the
+     * thumbs' only constructor, so the trap survives every raise that reuses them.
      */
     private fun thumbView(up: Boolean): ImageView = ImageView(host).apply {
         tag = if (up) TAG_TASTE_LIKE else TAG_TASTE_DISLIKE
@@ -839,6 +884,8 @@ internal class BecauseYouWatchedUi(
         isFocusable = true
         isFocusableInTouchMode = true
         isClickable = true
+        // The chain's top end: UP from a thumb is a no-op.
+        nextFocusUpId = id
         if (up) {
             setImageResource(R.drawable.ic_detail_thumb_up_outline)
             contentDescription = LIKE_DESCRIPTION
@@ -1100,6 +1147,128 @@ internal class BecauseYouWatchedUi(
         }
     }
 
+    /**
+     * Keeps the credits panel inside the screen by shrinking artwork, never by
+     * sacrificing the pills or the hint.
+     *
+     * Runs from the panel's layout callback, AFTER [keepRowClearOfNotch], and
+     * only in credits mode - the plain centered box (and the External player,
+     * which never arms the credits arrangement) is untouched. It measures the
+     * panel as laid out and asks [fitLevelFor] for the next level; the level it
+     * applies is one step deeper at most, so the next layout pass re-measures the
+     * real result instead of trusting an assumed saving.
+     *
+     * Available height is the parent's measured height minus the panel's own
+     * margins (robust to overscan and insets); the display height is the fallback
+     * for the frame before the parent has been measured.
+     */
+    private fun fitCreditsPanel() {
+        if (creditsInsetPx <= 0 || !isVisible) return
+        val params = panel.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+        val parentHeight = (panel.parent as? View)?.height ?: 0
+        val available =
+            (if (parentHeight > 0) parentHeight else host.resources.displayMetrics.heightPixels) -
+                params.topMargin - params.bottomMargin
+        val next = fitLevelFor(
+            measuredHeightPx = panel.measuredHeight,
+            availableHeightPx = available,
+            currentLevel = fitLevel
+        )
+        if (next == fitLevel) return
+        fitLevel = next
+        applyFitLevel(next)
+    }
+
+    /**
+     * Applies [level]'s sizes IN PLACE.
+     *
+     * The cards are never rebuilt here: a rebuild would drop focus off the pill
+     * the viewer is on, which is exactly the moment this pass runs. Every level is
+     * cumulative (its thresholds are `>=`), so stepping down one level at a time
+     * always lands on a consistent arrangement.
+     */
+    private fun applyFitLevel(level: Int) {
+        val compactStrip = level >= BYW_FIT_LEVEL_COMPACT_STRIP
+        val compactPosters = level >= BYW_FIT_LEVEL_COMPACT_POSTERS
+
+        panel.findViewWithTag<View>(TAG_FEATURED_STRIP)?.let { strip ->
+            val backdrop = strip.findViewWithTag<View>(TAG_FEATURED_BACKDROP)
+            (backdrop?.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+                val height = dp(
+                    if (compactStrip) STRIP_BACKDROP_COMPACT_DP else STRIP_BACKDROP_FULL_DP
+                )
+                if (params.height != height) {
+                    params.height = height
+                    backdrop?.requestLayout()
+                }
+            }
+            val lines = if (compactStrip) STRIP_DESC_COMPACT_LINES else STRIP_DESC_FULL_LINES
+            strip.findViewWithTag<TextView>(TAG_FEATURED_DESC)?.let { desc ->
+                if (desc.maxLines != lines) {
+                    desc.maxLines = lines
+                    desc.requestLayout()
+                }
+            }
+            // The floor. Terminal for the raise: [feature] never changes the
+            // strip's visibility, and the next [build] puts it back.
+            if (level >= BYW_FIT_LEVEL_STRIP_HIDDEN && strip.visibility != View.GONE) {
+                strip.visibility = View.GONE
+            }
+        }
+
+        val posterWidth = dp(
+            if (compactPosters) POSTER_COMPACT_WIDTH_DP else POSTER_FULL_WIDTH_DP
+        )
+        val posterHeight = dp(
+            if (compactPosters) POSTER_COMPACT_HEIGHT_DP else POSTER_FULL_HEIGHT_DP
+        )
+        cards.values.forEach { refs ->
+            (refs.posterFrame.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+                if (params.width != posterWidth || params.height != posterHeight) {
+                    params.width = posterWidth
+                    params.height = posterHeight
+                    refs.posterFrame.requestLayout()
+                }
+            }
+            // The captions are held to the poster's width, so they follow it - on
+            // the card that is being SHRUNK as well as on the cards beside it.
+            listOfNotNull(refs.nameView, refs.reasonView, refs.metaView).forEach { text ->
+                if (text.maxWidth != posterWidth) {
+                    text.maxWidth = posterWidth
+                    text.requestLayout()
+                }
+            }
+        }
+    }
+
+    /**
+     * Puts the featured strip back to the full sizes and back on screen, for a
+     * new raise.
+     *
+     * The strip outlives [build] (it is inserted once and found by tag after), so
+     * a raise that ended with it hidden or shrunk must not leave it that way for
+     * the next one. The cards need no equivalent: [build] constructs them at the
+     * full sizes every time.
+     */
+    private fun resetFeaturedSizing() {
+        val strip = panel.findViewWithTag<View>(TAG_FEATURED_STRIP) ?: return
+        if (strip.visibility != View.VISIBLE) strip.visibility = View.VISIBLE
+        val backdrop = strip.findViewWithTag<View>(TAG_FEATURED_BACKDROP)
+        (backdrop?.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+            val height = dp(STRIP_BACKDROP_FULL_DP)
+            if (params.height != height) {
+                params.height = height
+                backdrop?.requestLayout()
+            }
+        }
+        strip.findViewWithTag<TextView>(TAG_FEATURED_DESC)?.let { desc ->
+            if (desc.maxLines != STRIP_DESC_FULL_LINES) {
+                desc.maxLines = STRIP_DESC_FULL_LINES
+                desc.requestLayout()
+            }
+        }
+    }
+
     /** Puts the row's own top margin back, on leaving the credits arrangement. */
     private fun clearRowClearance() {
         val base = creditsRowBaseMargin ?: return
@@ -1151,7 +1320,10 @@ internal class BecauseYouWatchedUi(
             // over the first - the doubled logo. The featured backdrop is a 16:9
             // still with no title on it, so its logo stays.
             val posterFrame = FrameLayout(host).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(108), dp(162))
+                layoutParams = LinearLayout.LayoutParams(
+                    dp(POSTER_FULL_WIDTH_DP),
+                    dp(POSTER_FULL_HEIGHT_DP)
+                )
                 clipToOutline = true
                 setBackgroundColor(surfaceColor())
                 roundArtwork(this)
@@ -1171,7 +1343,7 @@ internal class BecauseYouWatchedUi(
                 text = pick.name
                 textSize = 11f
                 setTextColor(ContextCompat.getColor(host, R.color.kb_text_hi))
-                maxWidth = dp(108)
+                maxWidth = dp(POSTER_FULL_WIDTH_DP)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -1189,22 +1361,20 @@ internal class BecauseYouWatchedUi(
             // questions, and the row is wide enough for both. Accent-tinted so
             // the reason reads as the panel talking rather than as metadata,
             // and held to the poster's width so every card keeps one pitch.
-            pick.reason?.takeIf { it.isNotBlank() }?.let { reason ->
-                card.addView(
-                    TextView(host).apply {
-                        text = reason
-                        textSize = 9f
-                        setTextColor(themeAccentColor(host))
-                        maxWidth = dp(108)
-                        maxLines = 1
-                        ellipsize = TextUtils.TruncateAt.END
-                        gravity = Gravity.CENTER_HORIZONTAL
-                        setPadding(0, dp(3), 0, 0)
-                        typeface = androidx.core.content.res.ResourcesCompat.getFont(
-                            host, R.font.oswald_medium
-                        )
-                    }
-                )
+            val reasonView = pick.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                TextView(host).apply {
+                    text = reason
+                    textSize = 9f
+                    setTextColor(themeAccentColor(host))
+                    maxWidth = dp(POSTER_FULL_WIDTH_DP)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(0, dp(3), 0, 0)
+                    typeface = androidx.core.content.res.ResourcesCompat.getFont(
+                        host, R.font.oswald_medium
+                    )
+                }.also { card.addView(it) }
             }
 
             // Year + length under the name: enough to compare picks without
@@ -1212,7 +1382,7 @@ internal class BecauseYouWatchedUi(
             val cardMeta = TextView(host).apply {
                 textSize = 9f
                 setTextColor(ContextCompat.getColor(host, R.color.kb_text_lo))
-                maxWidth = dp(108)
+                maxWidth = dp(POSTER_FULL_WIDTH_DP)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -1259,6 +1429,12 @@ internal class BecauseYouWatchedUi(
             // build, never cached across one.
             play.nextFocusUpId = likeThumb?.id ?: View.NO_ID
             details.nextFocusUpId = dislikeThumb?.id ?: View.NO_ID
+            // The chain's bottom end: DOWN from a pill is a no-op, for EVERY
+            // card. Without it a vertical press on the last row of the panel
+            // walked the geometric search out under the panel, which is what
+            // kept the D-pad from staying inside while UP/DOWN are let through.
+            play.nextFocusDownId = play.id
+            details.nextFocusDownId = details.id
             if (index == 0) {
                 likeThumb?.nextFocusDownId = play.id
                 dislikeThumb?.nextFocusDownId = details.id
@@ -1266,6 +1442,9 @@ internal class BecauseYouWatchedUi(
 
             cards[pick.tmdbId] = CardRefs(
                 cardView = card,
+                posterFrame = posterFrame,
+                nameView = name,
+                reasonView = reasonView,
                 metaView = cardMeta,
                 imdbId = pick.imdbId
             )
@@ -1295,6 +1474,22 @@ internal class BecauseYouWatchedUi(
                 }
             }
         }
+
+        // A raise always starts at full size: the cards above were just built
+        // that way, and the strip - which outlives a raise - is put back to full
+        // and visible here, because the previous raise's fit pass may have
+        // shrunk or hidden it (see [fitCreditsPanel]).
+        fitLevel = BYW_FIT_LEVEL_FULL
+        resetFeaturedSizing()
+
+        // Reserve the strip BEFORE any pill takes focus. It used to be inserted
+        // by the first pill focus (the `card.post` above), so the panel grew by
+        // the strip's whole height at the exact moment a pill lit up - and the
+        // panel is TOP-anchored in credits mode, so that growth is what pushed
+        // the pills and the hint off the bottom edge on a 1080p UI (field
+        // 2026-10-28). Same insert, same fill; it only happens early enough to
+        // be in the first measure.
+        picks.firstOrNull()?.let { feature(it) }
 
         // Clear-logo + description pass: fetch images/metadata per pick and fill
         // the featured strip as answers land (cards render instantly with
@@ -1384,7 +1579,10 @@ internal class BecauseYouWatchedUi(
             }
             val backdrop = ImageView(host).apply {
                 tag = TAG_FEATURED_BACKDROP
-                layoutParams = LinearLayout.LayoutParams(dp(192), dp(108)).also {
+                layoutParams = LinearLayout.LayoutParams(
+                    dp(192),
+                    dp(STRIP_BACKDROP_FULL_DP)
+                ).also {
                     it.marginEnd = dp(14)
                 }
                 scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1423,7 +1621,7 @@ internal class BecauseYouWatchedUi(
                 tag = TAG_FEATURED_DESC
                 textSize = 12f
                 setTextColor(ContextCompat.getColor(host, R.color.kb_text_lo))
-                maxLines = 3
+                maxLines = STRIP_DESC_FULL_LINES
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(0, dp(6), 0, 0)
             }
@@ -1524,5 +1722,21 @@ internal class BecauseYouWatchedUi(
 
         /** The thumbs row's own slot: after the kicker and title, before the strip. */
         const val TASTE_ROW_INDEX = 2
+
+        /**
+         * The card and strip sizes the panel is BUILT at, and the sizes the
+         * credits fit pass shrinks them to (see [applyFitLevel]). The full values
+         * are the construction defaults: the fit pass always builds a raise back
+         * to these and only ever overrides them downward within that raise.
+         */
+        const val POSTER_FULL_WIDTH_DP = 108
+        const val POSTER_FULL_HEIGHT_DP = 162
+        const val POSTER_COMPACT_WIDTH_DP = 88
+        const val POSTER_COMPACT_HEIGHT_DP = 132
+
+        const val STRIP_BACKDROP_FULL_DP = 108
+        const val STRIP_BACKDROP_COMPACT_DP = 80
+        const val STRIP_DESC_FULL_LINES = 3
+        const val STRIP_DESC_COMPACT_LINES = 2
     }
 }
