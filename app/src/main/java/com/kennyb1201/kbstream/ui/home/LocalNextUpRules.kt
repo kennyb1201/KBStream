@@ -156,6 +156,60 @@ internal fun hasUnwatchedAiredEpisodes(
 }
 
 /**
+ * Whether a LOCAL advance card must be withheld because it cannot be trusted.
+ *
+ * The reported ghost: a show the viewer had just finished came back on CORRECT
+ * ENTRY (not in the same session) as "Next up" of the very episode that was
+ * finished, and the ghost burned off after a few restarts. Both shapes reduce
+ * to one print site - [HomeViewModel.buildLocalNextUpItem] turning the series
+ * resolver's answer into a card - and two ways the answer can be a pair nobody
+ * asked for:
+ *
+ * 1. The resolver refused to walk because the show's watched state could not be
+ *    read completely (`watchedStateIncompleteShows`). It still returns the one
+ *    pair it KNOWS - the tracker's episode or the furthest episode watched -
+ *    which is right for the tracker callers and is exactly the finished
+ *    episode here.
+ * 2. The resolver walked against a watched set that silently missed the local
+ *    rows (an IMDb twin that failed to resolve, so the "tt..."-filed row was
+ *    never read), and the walk therefore stepped onto the finished episode
+ *    itself.
+ *
+ * [evidenceIncomplete] closes the first: unknown evidence is not "nothing
+ * watched", so no advance card is printed from it. The pair comparison closes
+ * the second, and is the backstop for any future gap: an ADVANCE card's target
+ * is by construction a different episode than the row it was built from, so a
+ * target equal to the row is proof the walk was missing that row.
+ *
+ * Both answers are "omit", never "caught up" - the caller must not record the
+ * show as finished on the strength of this (see [HomeViewModel]'s caught-up
+ * recording). The omission is pass-scoped: the next refresh clears the preload
+ * caches and the show returns without a restart.
+ *
+ * A pair-less row cannot prove self-target (there is no episode to compare),
+ * so the shape stays the caller's to handle - see the write-side residual.
+ *
+ * @param targetSeason the resolver's target season, null when unknown.
+ * @param targetEpisode the resolver's target episode, null when unknown.
+ * @param rowSeason the candidate history row's own season, null when absent.
+ * @param rowEpisode the candidate history row's own episode, null when absent.
+ * @param evidenceIncomplete the show's watched state could not be read fully.
+ * @return true when no advance card may be printed for this candidate.
+ */
+internal fun shouldOmitLocalAdvanceCard(
+    targetSeason: Int?,
+    targetEpisode: Int?,
+    rowSeason: Int?,
+    rowEpisode: Int?,
+    evidenceIncomplete: Boolean
+): Boolean {
+    if (evidenceIncomplete) return true
+    if (targetSeason == null || targetEpisode == null) return false
+    if (rowSeason == null || rowEpisode == null) return false
+    return targetSeason == rowSeason && targetEpisode == rowEpisode
+}
+
+/**
  * Ids of in-progress (resume) rows a LATER completed episode has already
  * overtaken — the "Continue S1E5 while the user is actually on S3E15" report.
  *

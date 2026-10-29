@@ -313,7 +313,9 @@ class HomeViewModel(
         mutableSetOf<String>()
 
     // Shows whose last preload could not read a COMPLETE watched state: the
-    // local history read failed, or a CONFIGURED tracker's read did.
+    // local history read failed, a CONFIGURED tracker's read did, or the
+    // show's IMDb twin could not be resolved - in which case the local read
+    // succeeded but was blind to every "tt..."-filed row.
     //
     // Everything the preload writes for such a show is "no evidence", not
     // "nothing watched" - and the season walk cannot tell the two apart, so
@@ -3385,6 +3387,36 @@ Log.d(
         // A resume target here means the show already has an in-progress row
         // (and therefore its own card); don't duplicate it.
         if (target.isResume) return null
+
+        // The cold-entry ghost. An ADVANCE card's target is by construction a
+        // DIFFERENT episode than the row it was built from, so the resolver
+        // handing back a pair that cannot be one means the evidence under it was
+        // missing - either the state was incomplete (it refused to walk and
+        // returned only the pair it knows, which for this builder is the
+        // furthest episode WATCHED) or the walk was blind to this row's id
+        // flavor (see localHistoryParentIdsWithTwinState) and stepped onto the
+        // finished episode itself.
+        //
+        // Omit the card rather than print one. Deliberately NOT recorded as
+        // caught up: unknown evidence is not "finished", and the tracker twin
+        // may be the only card naming a genuinely next episode - suppressing it
+        // here would hide the show instead of the ghost. The omission is
+        // pass-scoped: the next refreshUpNext clears the preload caches (see
+        // clearWatchedStateCaches) and re-reads, so the card returns without a
+        // restart once the reads succeed (see shouldOmitLocalAdvanceCard).
+        val evidenceIncomplete =
+            watchedStateMutex.withLock { parentId in watchedStateIncompleteShows }
+        if (
+            shouldOmitLocalAdvanceCard(
+                targetSeason = target.season,
+                targetEpisode = target.episode,
+                rowSeason = row.season,
+                rowEpisode = row.episode,
+                evidenceIncomplete = evidenceIncomplete
+            )
+        ) {
+            return null
+        }
 
         val poster =
             row.poster?.takeIf { it.isNotBlank() }
@@ -6551,8 +6583,28 @@ episodesTotal =
     private suspend fun localHistoryParentIds(
         parentId: String,
         tmdbId: Int
-    ): List<String> {
-        if (parentId.isBlank()) return emptyList()
+    ): List<String> = localHistoryParentIdsWithTwinState(parentId, tmdbId).first
+
+    /**
+     * The same id list, plus whether the IMDb half of it is UNKNOWN.
+     *
+     * The list itself is unchanged, so every caller that only reads history
+     * keeps its behavior. The flag exists for the watched-state preload, which
+     * cannot otherwise tell a show with nothing watched from a show whose
+     * "tt..."-filed rows were never read because the twin lookup failed: the
+     * narrowed list looks exactly like a complete one, the read succeeds, and
+     * the resolver walks against half the evidence (see [isImdbTwinUnknown]
+     * for the failure this produced).
+     *
+     * A proven "TMDB has no IMDb id" answer is NOT blindness - TMDB said the
+     * twin adds nothing - so the flag stays false for a show that genuinely has
+     * no mapping, and such a show keeps its card.
+     */
+    private suspend fun localHistoryParentIdsWithTwinState(
+        parentId: String,
+        tmdbId: Int
+    ): Pair<List<String>, Boolean> {
+        if (parentId.isBlank()) return emptyList<String>() to false
 
         val imdbId =
             if (tmdbId > 0) {
@@ -6563,10 +6615,21 @@ episodesTotal =
                 null
             }
 
+        // Read AFTER the lookup, so a blank answer this very call recorded counts
+        // as proven-absent rather than unknown.
+        val missRecorded =
+            imdbId.isNullOrBlank() &&
+                tmdbRepository.hasProvenNoImdbMapping(tmdbId, "series")
+
         return localHistoryParentIdsForShow(
             parentId = parentId,
             tmdbShowId = tmdbId,
             imdbId = imdbId
+        ) to isImdbTwinUnknown(
+            tmdbId = tmdbId,
+            imdbId = imdbId,
+            parentId = parentId,
+            missRecorded = missRecorded
         )
     }
 
@@ -6628,8 +6691,13 @@ episodesTotal =
             // The id forms THIS show is stored under (card id + its TMDB and
             // IMDB twins). Reused to read local rows and to look the show up
             // in the MDBList snapshot, whose keys carry the same id forms.
-            val showParentIds =
-                localHistoryParentIds(
+            //
+            // The flag rides along because a list MISSING the IMDb flavor is
+            // indistinguishable from a complete one downstream: the local read
+            // still succeeds, it just never sees the "tt..."-filed rows. That
+            // silent half-read is the cold-build ghost's second cause.
+            val (showParentIds, imdbTwinUnknown) =
+                localHistoryParentIdsWithTwinState(
                     parentId,
                     tmdbShowId
                 )
@@ -6773,7 +6841,11 @@ episodesTotal =
                 ] =
                     mergedWatchedKeys
 
-                if (localReadFailed || trackerReadFailed) {
+                // Three ways this can be "no evidence" rather than "nothing
+                // watched": a local read that threw, a configured tracker
+                // whose read threw, and a local read that answered with an
+                // incomplete flavor list because the IMDb twin did not resolve.
+                if (localReadFailed || trackerReadFailed || imdbTwinUnknown) {
 
                     watchedStateIncompleteShows.add(
                         parentId

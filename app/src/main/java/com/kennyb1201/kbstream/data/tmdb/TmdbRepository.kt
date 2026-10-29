@@ -1059,6 +1059,30 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * Whether TMDB has PROVEN there is no IMDb mapping for this id - a
+     * successful blank answer still inside [resolutionMissTtlMs].
+     *
+     * [resolveImdbId] answers null for two very different facts: "TMDB says
+     * this title has no IMDb id" (a successful blank `/external_ids`, which it
+     * records in `resolutionMisses`) and "the lookup did not answer" (a
+     * failure, which records nothing so it retries). Callers that BUILD a list
+     * of id flavors from the answer need the distinction: one means the other
+     * flavor is unnecessary, the other means the read may be blind. Continue
+     * Watching's preload is such a caller (see `isImdbTwinUnknown`), and reads
+     * this instead of guessing from a null.
+     *
+     * Deliberately read-only: no lookup, no cache write, no change to
+     * [resolveImdbId]'s own contract - a proven answer that has aged out reads
+     * as unknown again, which is what makes the next attempt re-issue.
+     */
+    internal fun hasProvenNoImdbMapping(tmdbId: Int, type: String): Boolean {
+        if (tmdbId <= 0) return false
+        val key = imdbResolutionKey(tmdbId, normalizeType(type))
+        val missAt = resolutionMisses["i:$key"] ?: return false
+        return System.currentTimeMillis() - missAt < resolutionMissTtlMs
+    }
+
+    /**
      * The root id a STREAM REQUEST for this title must name it by.
      *
      * The id the route arrived with is the catalog's, and a catalog's mapping

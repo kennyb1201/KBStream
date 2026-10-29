@@ -552,6 +552,49 @@ internal fun localHistoryParentIdsForShow(
 }
 
 /**
+ * Whether the IMDb twin of a show is UNKNOWN - i.e. a history read built from
+ * [localHistoryParentIdsForShow] may be blind to "tt..."-filed rows.
+ *
+ * The twin list only adds the IMDB flavor when the lookup answered, so a failed
+ * lookup silently narrows the read: Continue Watching then reads the `tmdb:<n>`
+ * rows alone, finds none of the "tt..."-filed completions, and walks from the
+ * furthest episode it DOES see - printing the finished episode as "next up" on
+ * a cold build. Because the narrowed list still looks like a normal list, the
+ * preload had no way to report the hole; this predicate is that report.
+ *
+ * "Unknown" is narrowed deliberately, because the two null answers from
+ * `TmdbRepository.resolveImdbId` mean different things:
+ *
+ * - A FAILED lookup (network, quota, cancellation) records nothing. The twin
+ *   may well exist, so the read may be blind: unknown.
+ * - A SUCCESSFUL blank answer records a miss (`resolutionMissTtlMs`). TMDB says
+ *   there is no mapping, the twin genuinely adds nothing, and a show with no
+ *   IMDb record must not be permanently unreadable: proven absent.
+ *
+ * A `tt...` parent id is its own twin (`localHistoryParentIdsForShow` keeps the
+ * row's own flavor first), and a show with no TMDB id was never looked up at
+ * all - neither is blind.
+ *
+ * @param tmdbId the show's TMDB id; 0 or less means no lookup was attempted.
+ * @param imdbId the resolved IMDb id, null/blank when the lookup did not answer.
+ * @param parentId the id the history read is keyed by.
+ * @param missRecorded whether the repository currently holds a proven
+ *   no-mapping answer for this TMDB id.
+ * @return true when the read may be blind to the other id flavor.
+ */
+internal fun isImdbTwinUnknown(
+    tmdbId: Int,
+    imdbId: String?,
+    parentId: String,
+    missRecorded: Boolean
+): Boolean {
+    if (tmdbId <= 0) return false
+    if (!imdbId.isNullOrBlank()) return false
+    if (parentId.trim().startsWith("tt", ignoreCase = true)) return false
+    return !missRecorded
+}
+
+/**
  * The Home hero's Continue Watching line: the card's own season/episode label
  * behind its action prefix ("Resume  •  S2 E8").
  *
