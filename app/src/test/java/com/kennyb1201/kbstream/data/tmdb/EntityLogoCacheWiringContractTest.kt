@@ -155,6 +155,64 @@ class EntityLogoCacheWiringContractTest {
     }
 
     @Test
+    fun `a failed walk leaves a marker, and a successful one clears it`() {
+        val wrapper = wrapper()
+        assertTrue(
+            "a fresh marker answers before a walk is registered",
+            wrapper.contains("if (entityLogoFailureIsFresh(key, now)) return emptyList()") &&
+                wrapper.indexOf("entityLogoFailureIsFresh(key, now)") <
+                wrapper.indexOf("val registered = CompletableDeferred")
+        )
+        assertTrue(
+            "it is asked after the memory and disk success layers, so a real answer wins",
+            wrapper.indexOf("entityLogoMemory[key]?.let") <
+                wrapper.indexOf("entityLogoFailureIsFresh(key, now)") &&
+                wrapper.indexOf("getByKey(key)") <
+                wrapper.indexOf("entityLogoFailureIsFresh(key, now)")
+        )
+        assertTrue(
+            "the failure branch writes the marker under its own key",
+            wrapper.contains("} else {") &&
+                wrapper.contains("cacheJson(\n                    entityLogoFailureKey(key),")
+        )
+        assertTrue(
+            "and a success deletes any standing marker in the same batch",
+            wrapper.contains("tmdbJsonCacheDao.deleteByKeys(listOf(entityLogoFailureKey(key)))")
+        )
+        assertFalse(
+            "the marker is never written under the success key",
+            wrapper.contains("cacheJson(\n                    key,\n                    fetchedAt.toString()")
+        )
+        assertTrue(
+            "its freshness is the pure rule, keyed on the row's own write time",
+            repository.contains(
+                "return entityLogoFailureMarkerIsFresh(now - marker.updatedAt)"
+            )
+        )
+    }
+
+    @Test
+    fun `the proven-miss TTL and the disk generation are unchanged`() {
+        assertTrue(
+            "the proven-empty answer still reads through its own freshness rule",
+            repository.contains("entityLogoDiskEntryIsFresh(now - diskCached.updatedAt, parsed)")
+        )
+        val cache = cacheSource()
+        assertTrue(
+            "the disk generation is not bumped - that would drop every standing entry",
+            cache.contains("internal const val ENTITY_LOGO_DISK_PREFIX = \"entity_logos_v1:\"")
+        )
+        assertTrue(
+            "and the 24h proven-empty TTL is untouched",
+            cache.contains("internal const val ENTITY_LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L")
+        )
+        assertTrue(
+            "the failure window is its own constant, an hour",
+            cache.contains("internal const val ENTITY_LOGO_FAILURE_TTL_MS = 60L * 60L * 1000L")
+        )
+    }
+
+    @Test
     fun `the five fallback steps are untouched and still in order`() {
         val resolution = resolution()
         val ownEntity = resolution.indexOf("entityLogoUrls(entityId, company = spaces.first().isCompany")
@@ -192,6 +250,12 @@ class EntityLogoCacheWiringContractTest {
         return file.readText()
     }
 
+    private fun cacheSource(): String {
+        val file = File(findSourceRoot(), CACHE_RULES)
+        assertTrue("source missing: $file", file.isFile)
+        return file.readText()
+    }
+
     private fun findSourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -210,5 +274,7 @@ class EntityLogoCacheWiringContractTest {
     private companion object {
         const val REPOSITORY =
             "com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt"
+        const val CACHE_RULES =
+            "com/kennyb1201/kbstream/data/tmdb/EntityLogoCache.kt"
     }
 }

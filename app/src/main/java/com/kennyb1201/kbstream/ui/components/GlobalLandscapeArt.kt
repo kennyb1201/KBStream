@@ -29,6 +29,13 @@ import kotlinx.coroutines.sync.withPermit
  * has landscape art": a Library row that ships only a poster gets a real
  * backdrop and a corner clearlogo, exactly as if it had come off a Home rail.
  *
+ * The memo is session-only by construction, so a cold start used to resolve
+ * every card again. [resolve] therefore consults a disk layer in front of the
+ * lookup (rules and codec in `LandscapeArtDiskCache.kt`): the PRE-MERGE TMDB
+ * pair is written through on every answered resolve and merged with the
+ * CURRENT request on the way back, so a changed add-on backdrop or `tmdbOnly`
+ * flag can never be served stale.
+ *
  * A caller only reaches this in landscape mode - [GlobalPosterCard] gates it -
  * so the lookups never run for a portrait grid.
  */
@@ -55,10 +62,13 @@ internal object GlobalLandscapeArtCache {
     fun peek(key: String): Pair<String?, String?>? = memo[key]
 
     /**
-     * Resolves [request]'s landscape art: the memo, then one TMDB lookup through
-     * the semaphore. Every answer - including "TMDB had nothing" - is filed, so
-     * the same title is resolved once however many cards and scrolls it appears
-     * under.
+     * Resolves [request]'s landscape art: the memo, then the disk row, then one
+     * TMDB lookup through the semaphore. Every answer - including "TMDB had
+     * nothing" - is filed, so the same title is resolved once however many
+     * cards and scrolls it appears under, and once per month across cold starts.
+     *
+     * [peek] deliberately does NOT read the disk layer: first composition has to
+     * answer synchronously, and a suspend read cannot serve it.
      */
     suspend fun resolve(
         context: Context,
@@ -71,6 +81,14 @@ internal object GlobalLandscapeArtCache {
 
             val repository = TmdbRepository.getInstance(context.applicationContext)
 
+            // The disk layer, consulted before the lookup so a title resolved in
+            // an earlier session costs no TMDB call at all. It is merged with
+            // the CURRENT request because only the pre-merge pair is stored.
+            readDiskArt(repository, request)?.let { cached ->
+                return@withPermit landscapeArtEntry(tmdbArt = cached, request = request)
+            }
+
+            var answered = false
             val tmdbArt =
                 if (isCollectionArtType(request.type)) {
                     // A collection's art comes from its own endpoint: there is no
@@ -81,27 +99,34 @@ internal object GlobalLandscapeArtCache {
                     // whole answer - TMDB publishes no logos for a collection -
                     // and the card keeps its plain title in the corner.
                     val collectionId = request.id.trim().toIntOrNull()
-                    val backdrop = if (collectionId == null) {
-                        null
+                    if (collectionId == null) {
+                        null to null
                     } else {
-                        runCatchingCancellable {
+                        val backdrop = runCatchingCancellable {
                             repository.fetchCollectionBackdropCached(
                                 collectionId = collectionId,
                                 primaryBackdropPath =
                                     TmdbRepository.tmdbImagePath(request.addonBackdrop)
                             )
-                        }.getOrNull()
+                        }
+                        answered = backdrop.isSuccess
+                        backdrop.getOrNull() to null
                     }
-                    backdrop to null
                 } else {
                     val detail = runCatchingCancellable {
                         repository.fetchEnrichedMetaCached(
                             imdbId = request.id,
                             type = request.type
                         )
-                    }.getOrNull()
-                    detail.landscapeArtUrls()
+                    }
+                    answered = detail.isSuccess
+                    detail.getOrNull().landscapeArtUrls()
                 }
+
+            // Write-through, and only for an answer the lookup actually
+            // produced: a failed or cancelled fetch must never be filed as
+            // "TMDB has nothing" (that is the MobLand trap, a day long).
+            if (answered) writeDiskArt(repository, request, tmdbArt)
 
             landscapeArtEntry(
                 tmdbArt = tmdbArt,
@@ -112,6 +137,44 @@ internal object GlobalLandscapeArtCache {
         if (memo.size >= MAX_KEYS) memo.clear()
         memo[request.key] = art
         return art
+    }
+
+    /**
+     * The fresh disk answer for [request], or null to fall through to a lookup.
+     *
+     * A stale, absent or corrupt row is a miss here and gets overwritten by the
+     * write-through that follows the lookup - the same expiry-on-read the detail
+     * disk rows use, with no pruning job of its own.
+     */
+    private suspend fun readDiskArt(
+        repository: TmdbRepository,
+        request: LandscapeArtRequest
+    ): Pair<String?, String?>? {
+        val now = System.currentTimeMillis()
+        val (json, updatedAt) = repository.readJsonCacheRow(landscapeArtDiskKey(request.key))
+            ?: return null
+        val entry = decodeLandscapeArtDiskEntry(json) ?: return null
+        if (!landscapeArtDiskEntryIsFresh(now - updatedAt, entry)) return null
+        return entry.toPair()
+    }
+
+    /**
+     * Files [tmdbArt] for later sessions. Best-effort: the caller already holds
+     * the pair, so a failed write costs the next cold start a lookup and nothing
+     * else.
+     */
+    private suspend fun writeDiskArt(
+        repository: TmdbRepository,
+        request: LandscapeArtRequest,
+        tmdbArt: Pair<String?, String?>
+    ) {
+        runCatchingCancellable {
+            repository.writeJsonCacheRow(
+                key = landscapeArtDiskKey(request.key),
+                json = encodeLandscapeArtDiskEntry(LandscapeArtDiskEntry.of(tmdbArt)),
+                now = System.currentTimeMillis()
+            )
+        }
     }
 }
 

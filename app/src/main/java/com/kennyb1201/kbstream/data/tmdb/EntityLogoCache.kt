@@ -39,6 +39,23 @@ internal const val ENTITY_LOGO_DISK_TTL_MS = 30L * 24L * 60L * 60L * 1000L
  */
 internal const val ENTITY_LOGO_MISS_TTL_MS = 24L * 60L * 60L * 1000L
 
+/**
+ * How long a FAILED walk is remembered: one hour.
+ *
+ * The success layers only help a brand that has already resolved, and a walk
+ * that failed caches nothing anywhere - so one flaky evening re-walked five
+ * fail-soft network steps on every Studio screen load, for every failing brand.
+ * This marker bounds those REPEAT walks without pinning the failure to the
+ * answer: an hour is long enough that a bad network costs one walk per brand
+ * instead of one per screen, short enough that artwork appearing in the meantime
+ * surfaces without intervention, and an order of magnitude below the 24h
+ * proven-empty TTL so a failure can never be read as an answer.
+ *
+ * A brand that was never resolved still walks once. That walk is the price of a
+ * first answer; nothing here can make it cheaper.
+ */
+internal const val ENTITY_LOGO_FAILURE_TTL_MS = 60L * 60L * 1000L
+
 /** Session memo bound, matching the hero cache's. */
 internal const val ENTITY_LOGO_MEMORY_MAX_ENTRIES = 128
 
@@ -89,3 +106,22 @@ internal fun entityLogoDiskEntryIsFresh(ageMs: Long, urls: List<String>): Boolea
 /** Whether a memory entry of [ageMs] may answer. Flat: the memo holds either answer. */
 internal fun entityLogoMemoryEntryIsFresh(ageMs: Long): Boolean =
     ageMs >= 0 && ageMs < ENTITY_LOGO_MEMORY_TTL_MS
+
+/**
+ * The disk key of the failure marker for the resolution filed under [key].
+ *
+ * A SEPARATE row, never an overload of the success row: a marker that shared the
+ * success key would have to be written in the success rows' shape and would then
+ * be indistinguishable from "TMDB has no artwork for this brand" - the MobLand
+ * trap, where an outage remembered for a day hides real art.
+ */
+internal fun entityLogoFailureKey(key: String): String = "$key:failed"
+
+/**
+ * Whether a failure marker of [ageMs] still suppresses a repeat walk.
+ *
+ * A clock that moved backwards is not trusted, exactly as with the success
+ * layers.
+ */
+internal fun entityLogoFailureMarkerIsFresh(ageMs: Long): Boolean =
+    ageMs >= 0 && ageMs < ENTITY_LOGO_FAILURE_TTL_MS

@@ -814,6 +814,31 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * One raw row of the JSON cache, for a cache whose payload this class does
+     * not own.
+     *
+     * The landscape-card memo (`GlobalLandscapeArtCache`) keeps its own key
+     * generation, TTLs and codec beside the card vocabulary it serves (see
+     * `ui/components/LandscapeArtDiskCache.kt`), but the table itself is this
+     * class's: it reads and writes through here so every row on disk is still
+     * one budget, one trim and one generation.
+     *
+     * Null when the row is absent or the read failed - a miss either way.
+     */
+    internal suspend fun readJsonCacheRow(key: String): Pair<String, Long>? =
+        runCatchingCancellable { tmdbJsonCacheDao.getByKey(key) }
+            .getOrNull()
+            ?.let { it.json to it.updatedAt }
+
+    /**
+     * The write half of [readJsonCacheRow]; goes through [cacheJson], the single
+     * path that keeps the shared table inside its byte budget.
+     */
+    internal suspend fun writeJsonCacheRow(key: String, json: String, now: Long) {
+        cacheJson(key, json, now)
+    }
+
+    /**
      * Resolves raw Stremio-style ids to a full TMDB detail record.
      *
      * Catalogs don't just hand out Imdb ids: AIOStreams and search emit
@@ -3344,6 +3369,15 @@ class TmdbRepository private constructor(context: Context) :
                 return@withLock
             }
 
+            // A walk that just FAILED answers nothing, and this is the marker
+            // that stops it being re-walked on every screen load while the
+            // network is bad. Short (one hour, see EntityLogoCache) and
+            // separate from the success rows: it can suppress a repeat walk, it
+            // can never be mistaken for a proven logo-less answer, and it never
+            // extends itself. After the in-flight join so a caller that arrives
+            // while a walk is running still shares its result.
+            if (entityLogoFailureIsFresh(key, now)) return emptyList()
+
             val registered = CompletableDeferred<List<String>>()
             entityLogoInFlight[key] = registered
             ownFetch = registered
@@ -3399,10 +3433,39 @@ class TmdbRepository private constructor(context: Context) :
                     entityLogoJsonAdapter.toJson(resolved),
                     fetchedAt
                 )
+                // Artwork that arrived inside the marker's hour must not stay
+                // hidden by a standing marker for the rest of it. A delete that
+                // fails is swallowed: the marker expires on its own.
+                tmdbJsonCacheDao.deleteByKeys(listOf(entityLogoFailureKey(key)))
+            }
+        } else {
+            // The marker records THIS failure's answer - nothing - for an hour,
+            // under a key of its own so the success rows stay empty rather than
+            // holding an outage. Its value is the fetch time, for diagnostics;
+            // freshness reads the row's `updatedAt`.
+            runCatchingCancellable {
+                cacheJson(
+                    entityLogoFailureKey(key),
+                    fetchedAt.toString(),
+                    fetchedAt
+                )
             }
         }
 
         return resolved
+    }
+
+    /**
+     * Whether a failed walk for [key] was recorded inside [ENTITY_LOGO_FAILURE_TTL_MS].
+     *
+     * Absent, unreadable or expired counts as no marker: the brand walks, which
+     * is what a brand that was never resolved does anyway.
+     */
+    private suspend fun entityLogoFailureIsFresh(key: String, now: Long): Boolean {
+        val marker = runCatchingCancellable {
+            tmdbJsonCacheDao.getByKey(entityLogoFailureKey(key))
+        }.getOrNull() ?: return false
+        return entityLogoFailureMarkerIsFresh(now - marker.updatedAt)
     }
 
     /**

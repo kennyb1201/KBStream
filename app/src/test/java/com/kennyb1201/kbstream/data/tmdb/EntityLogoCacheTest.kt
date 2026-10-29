@@ -129,4 +129,37 @@ class EntityLogoCacheTest {
         assertFalse("13 hours old is dropped on read", entityLogoMemoryEntryIsFresh(13 * hour))
         assertFalse("a clock that went backwards is not trusted", entityLogoMemoryEntryIsFresh(-1))
     }
+
+    // ── the failure marker ──────────────────────────────────────────────────
+
+    @Test
+    fun `a failure has its own row, never the success key`() {
+        val success = key(name = "TNT")
+        val failure = entityLogoFailureKey(success)
+        assertEquals("the marker is the success key plus its suffix", "$success:failed", failure)
+        assertNotEquals(
+            "a marker can never be read as a proven answer, or the reverse",
+            success,
+            failure
+        )
+        assertTrue(
+            "and it stays inside the same versioned generation",
+            failure.startsWith(ENTITY_LOGO_DISK_PREFIX)
+        )
+    }
+
+    @Test
+    fun `a failure is remembered for an hour, far short of a proven miss`() {
+        val minute = 60L * 1000L
+        val hour = 60L * minute
+        assertEquals("the failure TTL", 60L * minute, ENTITY_LOGO_FAILURE_TTL_MS)
+        assertTrue("59 minutes old still suppresses a repeat walk", entityLogoFailureMarkerIsFresh(59 * minute))
+        assertFalse("61 minutes old walks again", entityLogoFailureMarkerIsFresh(61 * minute))
+        assertFalse("a clock that went backwards is not trusted", entityLogoFailureMarkerIsFresh(-1))
+        assertTrue(
+            "an outage must expire well before a proven logo-less brand does",
+            ENTITY_LOGO_FAILURE_TTL_MS < ENTITY_LOGO_MISS_TTL_MS / 4
+        )
+        assertTrue("and it is under the hour it claims", ENTITY_LOGO_FAILURE_TTL_MS <= hour)
+    }
 }
