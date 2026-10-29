@@ -1038,12 +1038,7 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 .takeIf { it >= 0 }
                 ?: current.indexOfFirst { it.id == updatedAddon.id }
 
-        if (index >= 0) {
-
-            current[index] =
-                updatedAddon
-
-        } else {
+        if (index < 0) {
 
             // Apply-only: never INSERT here. This runs from the manifest
             // refresh, which iterates the list captured when the refresh
@@ -1058,7 +1053,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         // REPLACED: the arrangement key embeds the catalog id, so without
         // this a reordered dynamic rail (BingeCat) silently dropped back to
         // the default tail the moment its id changed. Done here because this
-        // is the one place that sees both the old and the new ids.
+        // is the one place that sees both the old and the new ids - and done
+        // BEFORE the addon list is assigned and saved, because the order this
+        // merge computed for those catalogs and the arrangement remap come
+        // from one pairing: if the remap cannot be written, saving the order
+        // anyway leaves the two stores disagreeing with no evidence anywhere.
         if (replacementPairs.isNotEmpty()) {
             val remap = replacementPairs.associate { (added, removed) ->
                 com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.addonKeyFromManifest(
@@ -1071,11 +1070,40 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                     added.id
                 )
             }
-            runCatching {
-                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
-                    .remapAddonKeys(context, remap)
+            val refused =
+                runCatchingCancellable {
+                    com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .remapAddonKeys(context, remap)
+                }
+            refused.onFailure { error ->
+                Log.e(
+                    TAG,
+                    "catalog order remap failed for ${updatedAddon.id} " +
+                        "(${remap.size} keys); refresh of this add-on aborted so the " +
+                        "add-on list and the home order cannot disagree: " +
+                        (error.message ?: error.javaClass.simpleName),
+                    error
+                )
+            }
+            if (refused.getOrElse { false } != true) {
+                // "false" is writeBlob refusing over an unreadable arrangement
+                // blob; a throw is the same verdict with a stack trace. Both
+                // leave BOTH stores exactly as they were, and the next refresh
+                // retries the same merge.
+                if (refused.isSuccess) {
+                    Log.e(
+                        TAG,
+                        "catalog order remap refused for ${updatedAddon.id} " +
+                            "(${remap.size} keys): stored home order unreadable; " +
+                            "refresh of this add-on aborted"
+                    )
+                }
+                return
             }
         }
+
+        current[index] =
+            updatedAddon
 
         saveInstalledAddons(current, userEdit = false)
         }

@@ -151,7 +151,12 @@ class HomeBlobReadSafetyTest {
         KBHomeOrderPrefs.save(context, KBHomeOrder(order = listOf(oldKey)))
         homeOrder.edit().putLong("home_order_synced_at", stamp).commit()
 
-        KBHomeOrderPrefs.remapAddonKeys(context, mapOf(oldKey to newKey))
+        val applied = KBHomeOrderPrefs.remapAddonKeys(context, mapOf(oldKey to newKey))
+        assertTrue("a rewrite that landed must report success", applied)
+        assertTrue(
+            "and an empty remap has nothing to write, so it cannot fail",
+            KBHomeOrderPrefs.remapAddonKeys(context, emptyMap())
+        )
 
         assertEquals(
             "the position follows the new catalog id",

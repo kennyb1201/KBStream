@@ -961,14 +961,22 @@ object KBHomeOrderPrefs {
      * account-wide. The rewrite keeps the edit time it already had and publishes
      * under it (see [writeBlob] and [publish]), so content converges without
      * winning a race it never entered.
+     *
+     * Returns `false` only when the write was REFUSED - the stored arrangement is
+     * unreadable on this build (see [writeBlob]), so there was nothing safe to
+     * rewrite. `true` covers both "nothing to rewrite" and "rewritten". The
+     * caller in the addon merge has to check it: the catalog-order store it is
+     * about to save would otherwise move while this arrangement stayed on the old
+     * ids, which is the two stores silently disagreeing.
      */
-    fun remapAddonKeys(context: Context, remap: Map<String, String>) {
-        if (remap.isEmpty()) return
+    fun remapAddonKeys(context: Context, remap: Map<String, String>): Boolean {
+        if (remap.isEmpty()) return true
         val current = get(context)
         val updated = remapAddonOrderKeys(current, remap)
-        if (updated != current && writeBlob(context, updated, stampAsEdit = false)) {
-            publish(context)
-        }
+        if (updated == current) return true
+        if (!writeBlob(context, updated, stampAsEdit = false)) return false
+        publish(context)
+        return true
     }
 
     /**

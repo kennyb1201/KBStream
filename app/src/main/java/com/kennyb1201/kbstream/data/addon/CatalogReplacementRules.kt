@@ -98,6 +98,24 @@ internal data class ManifestMergePlan(
  * addon, not just this one), and [keyOf] derives a catalog's key exactly the
  * way that map is keyed.
  *
+ * The slot rule, in one place because it decides what BOTH stores see:
+ *
+ * ```
+ * order = globalOrder[key]                             // survivor: unchanged
+ *     ?: globalOrder[keyOf(paired predecessor)]        // paired newcomer: inherits
+ *     ?: next remaining freed slot, ascending          // unpaired newcomer
+ *     ?: (fallbackOrderStart + overflowOffset++)       // genuinely new: append
+ * ```
+ *
+ * "Paired predecessor" is the removed catalog [pairReplacedCatalogs] matched to
+ * this newcomer — the same pairing returned in [ManifestMergePlan.replaced] and
+ * used to remap the Home arrangement. Deriving the order from that pairing (and
+ * not from manifest position) is what keeps the two stores from disagreeing:
+ * consuming freed slots in manifest order gave a churned rail a DIFFERENT slot
+ * than the arrangement remap gave it whenever the addon reordered its rails.
+ * A freed slot is never handed out twice either, because a slot inherited by a
+ * pair is withdrawn from the pool below.
+ *
  * Pure, so the whole merge — the part that regressed into losing a rename, a
  * pin, or a slot — is unit tested without a manager, a store, or a network.
  */
@@ -113,8 +131,16 @@ internal fun planManifestMerge(
     val replacementByKey =
         replaced.associate { (added, removed) -> keyOf(added) to removed }
     val manifestKeys = manifestCatalogs.mapTo(mutableSetOf(), keyOf)
+
+    // Slots inherited by a replacement are NOT free: handing one of them to an
+    // unpaired newcomer as well would put two rails in one slot, and the two
+    // would then be ordered by whatever the densifier's tie-break happened to
+    // be. Withdraw them from the pool before anyone draws from it.
+    val inheritedSlots =
+        replaced.mapNotNullTo(HashSet()) { (_, removed) -> globalOrder[keyOf(removed)] }
     val freedOrderSlots =
         slotsFreedByManifest(existingByKey.keys, manifestKeys, globalOrder)
+            .filter { slot -> slot !in inheritedSlots }
     val fallbackOrderStart = (globalOrder.values.maxOrNull() ?: -1) + 1
 
     var freedSlotCursor = 0
@@ -129,6 +155,9 @@ internal fun planManifestMerge(
                 customName = inherited?.customName ?: manifestCatalog.customName,
                 order =
                     globalOrder[key]
+                        ?: replacementByKey[key]?.let { predecessor ->
+                            globalOrder[keyOf(predecessor)]
+                        }
                         ?: (
                             freedOrderSlots.getOrNull(freedSlotCursor++)
                                 ?: (fallbackOrderStart + overflowOffset++)
