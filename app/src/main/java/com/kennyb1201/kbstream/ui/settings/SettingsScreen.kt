@@ -869,6 +869,10 @@ fun SettingsScreen(
         // stops at its content on a panel tall enough to fit every row
         // (a 4K set), where this scrollable does not scroll at all.
         val railScroll = rememberScrollState()
+        // Where RIGHT lands when About is open. Held here rather than inside
+        // AboutSection because the press happens on the RAIL: the rail asks,
+        // the pane's own first row answers (see SettingsNavRail's onEnterPane).
+        val aboutEntryFocus = remember { FocusRequester() }
         Column(
             modifier = Modifier
                 .fillMaxHeight()
@@ -884,7 +888,16 @@ fun SettingsScreen(
                 searchQuery = settingsSearchQuery,
                 onSearchQueryChange = { settingsSearchQuery = it },
                 searchFocus = settingsSearchFocus,
-                onPickResult = jumpToSetting
+                onPickResult = jumpToSetting,
+                onEnterPane = { pane ->
+                    // About is the one pane that has to name its landing (see
+                    // the rail's press handler): its update row sits under a
+                    // version plate and a changelog plate, so geometric entry
+                    // found the credits plate instead. Every other pane keeps
+                    // the search's landing, unanswered here.
+                    pane == SettingsPane.ABOUT &&
+                        runCatching { aboutEntryFocus.requestFocus() }.getOrDefault(false)
+                }
             )
         }
         //
@@ -3744,6 +3757,7 @@ fun SettingsScreen(
 
                 if (selectedPane == SettingsPane.ABOUT) {
                     AboutSection(
+                        entryFocus = aboutEntryFocus,
                         modifier = Modifier.searchAnchor(
                             SettingsSearchIndex.entryFor("${SECTION_KEY_PREFIX}about-updates")
                         )
@@ -3871,7 +3885,8 @@ private fun SettingsNavRail(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     searchFocus: FocusRequester,
-    onPickResult: (SettingSearchEntry) -> Unit
+    onPickResult: (SettingSearchEntry) -> Unit,
+    onEnterPane: (SettingsPane) -> Boolean
 ) {
     // TV entry point: focus lands on the first rail item once. Selecting a
     // pane must NOT move focus — the user stays on the rail to keep browsing.
@@ -3964,6 +3979,27 @@ private fun SettingsNavRail(
                         // other row is one D-pad press away.
                         if (pane == SettingsPane.entries.first()) {
                             Modifier.focusRequester(firstItemFocus)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .then(
+                        // RIGHT into the open pane is a NAMED landing, not a
+                        // guess: without this the pane is entered by Compose's
+                        // geometric search, which picks whichever focusable
+                        // happens to sit level with the rail row - and on About
+                        // that is the credits plate below a long changelog, so
+                        // Right landed on the TMDB mark instead of the update
+                        // row. Only the selected row can open a pane, and only
+                        // a pane that wired an entry asks for it: a false
+                        // answer leaves the press to the search, i.e. exactly
+                        // the behaviour every other pane already has.
+                        if (selectedHere) {
+                            Modifier.onPreviewKeyEvent { event ->
+                                event.type == KeyEventType.KeyDown &&
+                                    event.key == Key.DirectionRight &&
+                                    onEnterPane(pane)
+                            }
                         } else {
                             Modifier
                         }
@@ -4228,7 +4264,14 @@ private fun ColumnScope.SettingsSectionHeader(text: String, first: Boolean = fal
 }
 
 @Composable
-private fun AboutSection(modifier: Modifier = Modifier) {
+private fun AboutSection(
+    modifier: Modifier = Modifier,
+    // Where RIGHT from the rail lands. The update row is the pane's one
+    // ACTION (everything below it is a read-only scroll driver), so it is what
+    // entering the pane should put under the D-pad - the credits plate was the
+    // geometric answer, and it is a plate that answers OK with nothing.
+    entryFocus: FocusRequester? = null
+) {
     // About pane: build identity + the in-app update flow. Updates live here
     // (not in Integrations) — it's app plumbing, not an integration.
     //
@@ -4281,7 +4324,7 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             !com.kennyb1201.kbstream.BuildConfig.DEBUG
         ) {
             Spacer(modifier = Modifier.height(10.dp))
-            UpdateRow()
+            UpdateRow(entryFocus = entryFocus)
         }
         if (changelog.isNotBlank()) {
             Spacer(modifier = Modifier.height(10.dp))
@@ -4809,7 +4852,7 @@ internal fun syncRelativeTime(timestampMs: Long): String =
     }
 
 @Composable
-private fun UpdateRow() {
+private fun UpdateRow(entryFocus: FocusRequester? = null) {
     // In-app update: checks GitHub releases, offers download + install.
     // State comes from AppUpdater so a launch-time auto-check is reflected
     // here too (row shows "Update available").
@@ -4864,7 +4907,11 @@ private fun UpdateRow() {
                     else -> AppUpdater.checkForUpdate(context)
                 }
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (entryFocus != null) Modifier.focusRequester(entryFocus) else Modifier
+                )
         ) {
             Row(
                 modifier = Modifier

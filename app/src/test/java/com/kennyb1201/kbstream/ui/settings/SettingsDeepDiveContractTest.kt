@@ -385,7 +385,7 @@ class SettingsDeepDiveContractTest {
         val about = aboutSection()
         var previous = -1
         listOf(
-            "UpdateRow()",
+            "UpdateRow(entryFocus = entryFocus)",
             "changelogHeadFocused = it.isFocused",
             "changelogTailFocused = it.isFocused",
             "creditsFocused = it.isFocused",
@@ -400,6 +400,51 @@ class SettingsDeepDiveContractTest {
             )
             previous = at
         }
+    }
+
+    /**
+     * The reported landing (2026-10-29): with About open, RIGHT from the rail
+     * focused the TMDB credits plate instead of the update row. Nothing was
+     * broken in the pane - the ENTRY was a guess. Without a named landing,
+     * Compose enters the pane by geometric search and picks whichever
+     * focusable sits level with the rail row, which under a long changelog is
+     * the credits plate. So the rail's selected row asks the pane where to
+     * land, About answers with its update row, and every other pane declines
+     * and keeps the landing it always had.
+     */
+    @Test
+    fun `right from the rail enters About at the update row, not the credits plate`() {
+        val screen = source(SCREEN)
+        val rail = between(screen, "private fun SettingsNavRail(", "private fun SettingsContentHost(")
+        assertTrue(
+            "the rail's selected row must ask the pane where RIGHT lands, and only " +
+                "that row - an unselected row cannot open a pane",
+            rail.contains("onEnterPane: (SettingsPane) -> Boolean") &&
+                rail.contains("event.key == Key.DirectionRight &&") &&
+                rail.contains("onEnterPane(pane)") &&
+                rail.contains("if (selectedHere) {")
+        )
+        assertTrue(
+            "and a refusal has to fall through to the search rather than swallow " +
+                "the press: every other pane's landing is the search's",
+            screen.contains("pane == SettingsPane.ABOUT &&") &&
+                screen.contains("runCatching { aboutEntryFocus.requestFocus() }.getOrDefault(false)")
+        )
+
+        val about = aboutSection()
+        assertTrue(
+            "the update row is the pane's one action, so it is what the entry " +
+                "requester has to be attached to",
+            about.contains("entryFocus: FocusRequester? = null") &&
+                about.contains("UpdateRow(entryFocus = entryFocus)")
+        )
+        val update = between(screen, "private fun UpdateRow(", "private fun SettingsImportBackupDialog(")
+        assertTrue(
+            "the update row only carries the requester when one was handed in - a " +
+                "Play/debug pane composes no update row at all, and a requester on " +
+                "a node that is not there is what the runCatching fallback absorbs",
+            update.contains("if (entryFocus != null) Modifier.focusRequester(entryFocus) else Modifier")
+        )
     }
 
     @Test
@@ -457,9 +502,9 @@ class SettingsDeepDiveContractTest {
     @Test
     fun `the new stops are composed outside the update row's gate`() {
         val about = aboutSection()
-        val updateCall = about.indexOf("UpdateRow()")
+        val updateCall = about.indexOf("UpdateRow(entryFocus = entryFocus)")
         assertTrue("the update row is missing", updateCall >= 0)
-        // The gate is `if (!PLAY_BUILD && !DEBUG) { ... UpdateRow() }`, so the
+        // The gate is `if (!PLAY_BUILD && !DEBUG) { ... UpdateRow(...) }`, so the
         // first brace after the call closes it.
         val gateCloses = about.indexOf('}', updateCall)
         assertTrue("the update row's gate never closes", gateCloses > updateCall)
