@@ -33,6 +33,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
@@ -2721,38 +2724,68 @@ private fun GuideHeader(
         }
 
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            // The sports hub row: accent-labelled because it is the one action
-            // here that leaves Live TV for a different screen, and it sits
-            // ahead of SEARCH/SETUP so the D-pad reaches it first. The label
-            // names the destination ("SPORTS HUB"), not the topic, so it is
-            // clear this leaves Live TV rather than filtering it.
+            // The sports hub button: accent-tinted because it is the one action
+            // here that leaves Live TV for a different screen, and it sits ahead
+            // of search/setup so the D-pad reaches it first. The icon and its
+            // TalkBack name ("Sports hub") are what name the destination now
+            // that the word is gone - not the topic - so it is still clear this
+            // leaves Live TV rather than filtering it. The soccer ball is the
+            // phone guide header's own glyph for this action (see
+            // GuideScreenMobile), so the two forms say it the same way.
+            //
+            // Icons, not words, and still a KBCard: the header's D-pad
+            // treatment (focus border, glow, KBFocusCard scale) is the card's, so
+            // only the content inside it changed. The Box is what centres the
+            // glyph - KBCard's content is a ColumnScope, and a bare Icon would be
+            // aligned by that column rather than by the button - and the 12/9
+            // padding is the words' own, so the button footprint (and the header
+            // row's height, and everything beside it) does not move. The
+            // contentDescription is the TalkBack name the word label used to
+            // provide; an icon-only button without one is silent.
             if (onSportsClick != null) {
                 KBCard(onClick = onSportsClick) {
-                    Text(
-                        text = "SPORTS HUB",
-                        color = KBAccent,
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                    )
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SportsSoccer,
+                            contentDescription = "Sports hub",
+                            tint = KBAccent,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
             if (onSearchClick != null) {
                 KBCard(onClick = onSearchClick) {
-                    Text(
-                        text = "SEARCH",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                    )
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = "Search",
+                            tint = KBTextHi,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
+            // SETUP is never omitted, unlike the two above: setup is always
+            // available, they are not.
             KBCard(onClick = onSetupClick) {
-                Text(
-                    text = "SETUP",
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                )
+                Box(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Settings,
+                        contentDescription = "Playlist setup",
+                        tint = KBTextHi,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
 
             GuideHeaderClock()
