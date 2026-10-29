@@ -12,9 +12,26 @@ import org.junit.Test
  * chunks routinely, so that rule cut playback off at the first short chunk.
  * These pin the replacement: only an empty chunk (or one that consumes the
  * last of a known length) is the end.
+ *
+ * SCOPE NOTE (2026-10-29): this is the PREDICATE's answer, not the DataSource's
+ * behavior. [YoutubeChunkedDataSourceFactory] no longer asks the zero-byte arm
+ * anything - a chunk that served nothing is retried under a 3-attempt budget
+ * and then THROWS, because an empty 206 mid-stream is a truncation, and media3
+ * reads EOF as a clean end (no error, no retry, no death line, just the
+ * backdrop - the `xgI5iYmOf5Q` capture). Only a 416 or a consumed known length
+ * ends the stream there. Do not "restore" the old call-site behavior from these
+ * assertions: see `YoutubeChunkedDataSourceTest` (a chunk that serves nothing is
+ * retried; a chunk that never serves a byte throws; a 416 and a consumed length
+ * still end the stream).
  */
 class YouTubeChunkingTest {
 
+    /**
+     * The predicate's zero-byte arm. The DataSource retries before consulting
+     * it (see the class comment and `YoutubeChunkedDataSourceTest`); this pins
+     * the pure rule alone, so a future reader does not mistake green here for
+     * "an empty chunk may end a trailer".
+     */
     @Test
     fun `a chunk that delivered nothing is the end of input`() {
         assertTrue(youTubeChunkEndsStream(0L, lengthKnown = false, remainingContentLength = -1L))

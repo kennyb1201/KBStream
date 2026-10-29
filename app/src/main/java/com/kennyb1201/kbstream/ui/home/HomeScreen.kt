@@ -759,7 +759,14 @@ internal fun HeroInlineTrailerPlayer(
      * `trailerAttempt` budget). [durationMs] is passed so the owner can stamp
      * the death line the diagnostics report reads.
      */
-    onIdentityBlocked: (positionMs: Long, durationMs: Long) -> Boolean = { _, _ -> false }
+    onIdentityBlocked: (positionMs: Long, durationMs: Long) -> Boolean = { _, _ -> false },
+    /**
+     * The trailer's video id, for the watchdog's log line ONLY (never a URL,
+     * never a token). The hero passes the same key its `trailer.death` line
+     * records so a capture can join the two artifacts; the mobile Detail hero
+     * passes nothing and the line says `video=?`.
+     */
+    videoId: String? = null
 ) {
     val context = LocalContext.current
     // One pooled player for every hero trailer: renderer initialization is
@@ -908,6 +915,16 @@ internal fun HeroInlineTrailerPlayer(
             android.os.Looper.getMainLooper()
         )
 
+        // When this player mounted, for the watchdog's elapsed field.
+        val mountedAtMs = android.os.SystemClock.elapsedRealtime()
+
+        // Which budget is armed: the short start grace until a frame plays, the
+        // long rebuffer grace after. Both arms used to log the same sentence, so
+        // a capture could not say which one gave up on the trailer.
+        var watchdogBudget = "start"
+
+        var startedPlaying = false
+
         // Watchdog with two budgets: a short one before the first frame
         // (so the hero never hangs on a blank gray screen), and a much
         // longer one for a mid-play re-buffer (so a healthy trailer is not
@@ -917,17 +934,24 @@ internal fun HeroInlineTrailerPlayer(
                 val state = exoPlayer.playbackState
                 val playing = exoPlayer.isPlaying
                 if (state != Player.STATE_READY || !playing) {
+                    // Read position/duration BEFORE onEnded(): dropping the
+                    // source hands the pooled player back, and a released
+                    // player reports 0 at both.
+                    val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    val durationMs = exoPlayer.duration
                     Log.w(
                         "HOME_HERO",
-                        "Inline trailer stuck (state=$state playing=$playing); " +
+                        "Inline trailer stuck (state=$state playing=$playing " +
+                            "startedPlaying=$startedPlaying budget=$watchdogBudget " +
+                            "elapsedMs=${android.os.SystemClock.elapsedRealtime() - mountedAtMs} " +
+                            "video=${videoId ?: "?"} positionMs=$positionMs " +
+                            "durationMs=${if (durationMs > 0L) durationMs else -1L}); " +
                             "falling back to backdrop"
                     )
                     onEnded()
                 }
             }
         }
-
-        var startedPlaying = false
 
         val listener =
             object : Player.Listener {
@@ -943,6 +967,7 @@ internal fun HeroInlineTrailerPlayer(
                     } else if (playbackState == Player.STATE_BUFFERING && startedPlaying) {
                         // Re-buffer mid-playback: give it the long grace before
                         // falling back to the backdrop.
+                        watchdogBudget = "rebuffer"
                         handler.removeCallbacks(watchdog)
                         handler.postDelayed(watchdog, HeroTrailerRebufferGraceMs)
                     }
@@ -1896,6 +1921,9 @@ private fun HomeHero(
                                 muted = muted,
                                 startPositionMs = trailerPlayback.startPositionMs,
                                 modifier = Modifier.fillMaxSize(),
+                                // The same key the trailer.death line records, so
+                                // the watchdog's fire line joins to it.
+                                videoId = trailerKey,
                                 onFirstFrame = { firstFrameRendered = true },
                                 onEnded = {
                                     // Video finished (or the watchdog gave up

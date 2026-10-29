@@ -9,6 +9,13 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import okhttp3.OkHttpClient
 
 /**
@@ -33,6 +40,24 @@ import okhttp3.OkHttpClient
  * current position. All requests keep the signed URL otherwise byte-for-byte
  * intact.
  *
+ * Two failure shapes at a chunk boundary are handled HERE rather than above,
+ * because the only recovery above is a full re-resolve (a fresh signed URL and
+ * a re-mounted player) and a dropped connection does not deserve one:
+ *
+ *  - a transient failure opening or reading a chunk (timeout, reset, refused
+ *    connection, DNS blip, TLS failure, 5xx) is retried in place, up to
+ *    [CHUNK_OPEN_ATTEMPTS] attempts on the same request with a short backoff;
+ *  - a TRUNCATED response (a from-0 body shorter than the prefix already
+ *    delivered, or a 206 that serves no bytes at all) is never end-of-stream.
+ *    media3 reads EOF as a clean end - no error, no retry, no death line, the
+ *    hero crossfades back to the backdrop - so a truncation answered with EOF
+ *    is a trailer that silently stops mid-play. Truncation is retried, and
+ *    exhaustion THROWS so the hero can re-resolve.
+ *
+ * A 403 and a 416 keep their exact handling: 403 belongs to the identity
+ * ladder above (retrying it here would hide the refusal the hero classifies),
+ * and 416 is the server's own end signal.
+ *
  * Only activates for googlevideo.com URLs; other URLs pass through untouched.
  */
 @UnstableApi
@@ -52,6 +77,27 @@ class YoutubeChunkedDataSourceFactory(
          * 403 — so the chunk stays well inside the proven-safe size.
          */
         private const val CHUNK_SIZE = 1L * 1024 * 1024
+
+        /**
+         * How many times one chunk may be opened: the initial attempt plus two
+         * retries.
+         *
+         * The budget is per chunk, not per playback: a chunk that recovers is
+         * done with its budget, and a chunk that serves some bytes and then
+         * fails is resumed at the advanced position as a new chunk. The hero's
+         * own budgets (the 8 s start grace, the 30 s rebuffer grace) bound the
+         * total, so nothing wider is added here. Three attempts is the shape
+         * that covers a single dropped connection without turning a dead URL
+         * into a 45 s stall before the throw.
+         */
+        internal const val CHUNK_OPEN_ATTEMPTS = 3
+
+        /**
+         * Backoff before retry 1, doubled per attempt (250 ms, then 500 ms).
+         * Total added latency is under a second, so a healthy trailer never
+         * notices and a dead one does not stall the loader thread for long.
+         */
+        internal const val CHUNK_RETRY_BACKOFF_MS = 250L
 
         /**
          * googlevideo only serves a signed URL to requests carrying the
@@ -110,7 +156,17 @@ class YoutubeChunkedDataSourceFactory(
         )
     }
 
-    private class YoutubeChunkedDataSource(
+    /**
+     * The chunk reader itself.
+     *
+     * `internal` rather than private so a unit test can drive it against a fake
+     * [HttpDataSource]. The retry and truncation rules are only describable by
+     * scripting opens (codes, byte bodies, IOExceptions), and until this seam
+     * existed no test touched this class at all - which is how "a truncated
+     * response is the end of the stream" survived two fixes in this file. The
+     * production construction path ([createDataSource]) is unchanged.
+     */
+    internal class YoutubeChunkedDataSource(
         private val upstream: HttpDataSource,
         private val chunkSize: Long,
         /**
@@ -119,7 +175,14 @@ class YoutubeChunkedDataSourceFactory(
          * rejects a signed URL requested with the wrong client's UA, so the
          * ladder advances only when every mode 403s with the current one.
          */
-        private val userAgentCandidates: List<String>
+        private val userAgentCandidates: List<String>,
+        /**
+         * The raw-OkHttp bisection run once every UA x mode 403s. A constructor
+         * parameter only so a unit test can observe the call without touching
+         * the network; production always takes [runYouTubeChunkDiagnostics].
+         */
+        private val diagnostics: (url: String, userAgent: String, position: Long) -> Unit =
+            ::runYouTubeChunkDiagnostics
     ) : DataSource {
 
         private var activeUaIndex = 0
@@ -141,6 +204,14 @@ class YoutubeChunkedDataSourceFactory(
         private var currentChunkEnd = 0L
         private var bytesReadInChunk = 0L
         private var bytesToSkip = 0L
+
+        /**
+         * Attempts spent on the CURRENT chunk: 1 is the initial open, capped at
+         * [CHUNK_OPEN_ATTEMPTS]. Reset for every new chunk, kept across retries
+         * of the same one (see [openNextChunk]'s `continuingRetry`).
+         */
+        private var chunkAttempt = 1
+
         private var originalDataSpec: DataSpec? = null
         private var originalUrlString: String? = null
 
@@ -220,8 +291,17 @@ class YoutubeChunkedDataSourceFactory(
                 put("User-Agent", activeUserAgent)
             }
 
-        private fun openNextChunk(): Long {
+        /**
+         * Opens the next chunk (or re-opens the current one) and returns the
+         * length media3 should expect, or [C.LENGTH_UNSET].
+         *
+         * [continuingRetry] keeps the attempt budget of the chunk that is being
+         * retried in place; every other call is a NEW chunk at a new position
+         * and starts with a fresh budget.
+         */
+        private fun openNextChunk(continuingRetry: Boolean = false): Long {
             val spec = originalDataSpec ?: throw IllegalStateException("No DataSpec")
+            if (!continuingRetry) chunkAttempt = 1
             currentChunkEnd = if (totalContentLength != C.LENGTH_UNSET.toLong()) {
                 minOf(currentChunkStart + chunkSize - 1, currentChunkStart + totalContentLength - 1)
             } else {
@@ -268,8 +348,9 @@ class YoutubeChunkedDataSourceFactory(
                 if (youTubeChunkUsesPosition(currentChunkStart)) {
                     for (rb in listOf(false, true)) {
                         try {
-                            upstream.open(
-                                buildChunkSpec(spec, rb, bounded = false, fromPosition = true)
+                            openChunk(
+                                buildChunkSpec(spec, rb, bounded = false, fromPosition = true),
+                                mode = "position"
                             )
                             useRateByPass = rb
                             chunkedRange = false
@@ -317,7 +398,7 @@ class YoutubeChunkedDataSourceFactory(
                     )
                 }) {
                     try {
-                        upstream.open(buildChunkSpec(spec, rb, bounded))
+                        openChunk(buildChunkSpec(spec, rb, bounded), mode = "from0")
                         useRateByPass = rb
                         chunkedRange = bounded
                         positionMode = false
@@ -347,50 +428,163 @@ class YoutubeChunkedDataSourceFactory(
             // Every mode 403'd with the media3 stack. Run a raw-OkHttp bisection
             // against the untouched signed URL (same as the extractor's probe that
             // PASSED) so we can see exactly what googlevideo rejects and why.
-            runDiagnostics(originalUrlString ?: spec.uri.toString())
+            //
+            // Runs ONLY here: a transient retry above must not multiply these
+            // six probes, which would add throttle pressure to a URL that is
+            // already being refused.
+            diagnostics(
+                originalUrlString ?: spec.uri.toString(),
+                activeUserAgent,
+                currentChunkStart
+            )
 
             throw last403
                 ?: IllegalStateException("Failed to open YouTube stream (no mode succeeded)")
         }
 
         /**
-         * Debug-only: replays the failing URL through a plain OkHttpClient with
-         * different Range styles and logs each response code + body. Device
-         * bisection so far: capped ranges succeed at offset 0 (0-0, 0-1M) but
-         * 403 at 10M span and at later offsets. These probes add the missing
-         * offset cases: open-ended from 0 and from the current chunk position.
+         * Opens [spec], retrying a transient failure in place.
+         *
+         * Only the SAME request is retried: a dropped connection says nothing
+         * about the UA x mode ladder, and walking that ladder on one bad socket
+         * is how a single timeout used to cost a whole playback. 403 / 416 and
+         * every other status propagate untouched - 403 has to reach the ladder
+         * in [openNextChunk], and 416 is the stream's own end signal.
          */
-        private fun runDiagnostics(url: String) {
-            runCatching {
-                val client = okhttp3.OkHttpClient.Builder()
-                    .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-                val pos = currentChunkStart
-                val probes = listOf(
-                    "plain-get" to null,
-                    "range-0-0" to "bytes=0-0",
-                    "range-0-1M" to "bytes=0-1048575",
-                    "range-0-10M" to "bytes=0-10485759",
-                    "range-0-openpos" to "bytes=0-$pos",
-                    "range-pos-open" to "bytes=$pos-"
-                )
-                for ((label, range) in probes) {
-                    val rb = okhttp3.Request.Builder().url(url).get()
-                    rb.header("User-Agent", activeUserAgent)
-                    if (range != null) rb.header("Range", range)
-                    client.newCall(rb.build()).execute().use { resp ->
-                        val body = resp.peekBody(400).string().take(400)
-                        val loc = resp.header("Location")
-                        Log.w(
-                            TAG,
-                            "DIAG[$label] code=${resp.code} msg=${resp.message} loc=$loc body=$body"
-                        )
+        private fun openChunk(spec: DataSpec, mode: String) {
+            while (true) {
+                try {
+                    upstream.open(spec)
+                    return
+                } catch (e: IOException) {
+                    if (
+                        !e.isTransientChunkFailure() ||
+                        !consumeChunkAttempt(describeFailure(e), mode)
+                    ) {
+                        throw e
                     }
                 }
-            }.onFailure { e ->
-                Log.w(TAG, "DIAG failed: ${e.message}")
             }
+        }
+
+        /**
+         * Spends one attempt on the current chunk, sleeps the backoff, and logs.
+         *
+         * Returns false - after logging the exhaustion - when the chunk has used
+         * all [CHUNK_OPEN_ATTEMPTS]. The caller then RETHROWS, so the hero does
+         * what it already does with a failed playback (ordinary retry, identity
+         * ladder) instead of the chunker pretending the stream ended.
+         */
+        private fun consumeChunkAttempt(error: String, mode: String): Boolean {
+            val used = chunkAttempt
+            if (used >= CHUNK_OPEN_ATTEMPTS) {
+                Log.w(
+                    TAG,
+                    "Chunk open failed after $used attempts at offset=$currentChunkStart " +
+                        "error=$error"
+                )
+                return false
+            }
+            chunkAttempt = used + 1
+            Log.w(
+                TAG,
+                "Chunk retry $chunkAttempt/$CHUNK_OPEN_ATTEMPTS at offset=$currentChunkStart " +
+                    "error=$error mode=$mode uaIndex=$activeUaIndex"
+            )
+            sleepBeforeChunkRetry(chunkAttempt)
+            return true
+        }
+
+        /**
+         * [CHUNK_RETRY_BACKOFF_MS] before retry 1, doubled for retry 2. Sleeps on
+         * the loader thread (never the main one), and never swallows an
+         * interrupt: a cancellation has to stop the chunk immediately.
+         */
+        private fun sleepBeforeChunkRetry(attempt: Int) {
+            val delayMs = CHUNK_RETRY_BACKOFF_MS shl (attempt - 2)
+            try {
+                Thread.sleep(delayMs)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw InterruptedIOException("chunk retry interrupted after ${delayMs}ms")
+            }
+        }
+
+        /** Which shape the attached chunk was opened in, for logs and re-opens. */
+        private fun chunkMode(): String = if (positionMode) "position" else "from0"
+
+        /**
+         * Re-opens the chunk after a failed read.
+         *
+         * Bytes already handed to ExoPlayer are never re-delivered, so they are
+         * booked as delivered first ([currentChunkStart] advances, the known
+         * length shrinks). A chunk that delivered NOTHING is retried in place on
+         * the SAME budget; a chunk that delivered some bytes is resumed as a new
+         * chunk at the advanced position with a fresh budget - progress bounds
+         * that loop, and the hero's own budgets bound the total.
+         *
+         * Returns false when the budget is spent, and the caller rethrows the
+         * original failure rather than answering EOF.
+         */
+        private fun reopenAfterFailedRead(error: IOException): Boolean {
+            upstream.close()
+            val delivered = bytesReadInChunk
+            val sameChunk = delivered <= 0L
+            if (!sameChunk) {
+                currentChunkStart += delivered
+                if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+                    totalContentLength -= delivered
+                }
+                bytesReadInChunk = 0
+            }
+            if (sameChunk && !consumeChunkAttempt(describeFailure(error), chunkMode())) {
+                return false
+            }
+            openNextChunk(continuingRetry = sameChunk)
+            return true
+        }
+
+        /**
+         * A from-0 response ended before the prefix already delivered was
+         * consumed: truncated. Retry the same position on the same budget.
+         *
+         * [skipChunkPrefix] zeroed [bytesToSkip] on its false return, so the
+         * skip is re-derived by [openNextChunk]'s own assignments (from-0 sets
+         * it to [currentChunkStart]) rather than from the zeroed field.
+         */
+        private fun retryTruncatedChunk(): Boolean {
+            upstream.close()
+            if (!consumeChunkAttempt("truncated prefix", chunkMode())) return false
+            openNextChunk(continuingRetry = true)
+            return true
+        }
+
+        /** A chunk that served no bytes at all: retry the same position on the same budget. */
+        private fun retryEmptyChunk(): Boolean {
+            if (!consumeChunkAttempt("empty chunk", chunkMode())) return false
+            openNextChunk(continuingRetry = true)
+            return true
+        }
+
+        private fun truncatedPrefixFailure(): IOException =
+            IOException(
+                "YouTube chunk at offset $currentChunkStart ended before the delivered prefix " +
+                    "after $CHUNK_OPEN_ATTEMPTS attempts"
+            )
+
+        private fun emptyChunkFailure(): IOException =
+            IOException(
+                "YouTube chunk at offset $currentChunkStart delivered no bytes " +
+                    "after $CHUNK_OPEN_ATTEMPTS attempts"
+            )
+
+        /** `error=<class>:<code or message>` for the retry log lines. */
+        private fun describeFailure(e: Throwable): String {
+            val code = (e as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+            val head = if (code != null) "${e.javaClass.simpleName}:$code" else e.javaClass.simpleName
+            val root = generateSequence(e) { it.cause }.last()
+            val forLog = if (root === e) "" else " via ${root.javaClass.simpleName}"
+            return "$head$forLog: ${root.message.orEmpty().take(80)}"
         }
 
         /** Skips [bytesToSkip] bytes of the current response; false at end of input. */
@@ -407,9 +601,37 @@ class YoutubeChunkedDataSourceFactory(
             return true
         }
 
+        /**
+         * Reads one chunk's worth of bytes, treating a failed or truncated chunk
+         * as something to RETRY rather than as the end of the stream.
+         *
+         * media3 reads [C.RESULT_END_OF_INPUT] as a CLEAN end: no error, no
+         * retry, no death line - the hero crossfades to the backdrop and the
+         * trailer silently stops where it died (the "it just goes back to
+         * backdrop, same spot every time" capture). So only the server's own
+         * signals may answer EOF from here:
+         *  - a 416 on a position open ([openHitEndOfStream]), and
+         *  - a known length fully consumed with bytes actually delivered
+         *    ([youTubeChunkEndsStream]'s length arm).
+         *
+         * Everything else - a transient open/read failure, a body shorter than
+         * the prefix already delivered, a 206 that serves nothing - retries the
+         * chunk under [CHUNK_OPEN_ATTEMPTS] and then THROWS, so the hero
+         * re-resolves a fresh signed URL instead of believing the trailer
+         * finished.
+         *
+         * [youTubeChunkEndsStream]'s zero-byte arm is deliberately NOT consulted
+         * here any more: an empty chunk is a truncation candidate, and this
+         * layer answers it with a retry (then a throw), not with EOF. The pure
+         * rule is unchanged for every other caller.
+         */
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-            if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
             while (true) {
+                if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
+
+                // Not a YouTube stream: pass through, no chunk retry bookkeeping.
+                if (!isYouTubeStream) return upstream.read(buffer, offset, length)
+
                 // A from-0 chunk carries the prefix already delivered to
                 // ExoPlayer, so it is discarded here. A from-position chunk
                 // (the mid-stream default) requests exactly where we are and
@@ -420,15 +642,38 @@ class YoutubeChunkedDataSourceFactory(
                 // after a chunk boundary handed ExoPlayer bytes from the
                 // beginning of the stream again — the corruption that stalled
                 // and stopped trailers mid-play.
-                if (!skipChunkPrefix()) return C.RESULT_END_OF_INPUT
+                val skipped =
+                    try {
+                        skipChunkPrefix()
+                    } catch (e: IOException) {
+                        // Mid-skip leaves the response in an unknown state: close
+                        // it and retry the chunk, exactly like a failed read.
+                        if (!e.isTransientChunkFailure() || !reopenAfterFailedRead(e)) throw e
+                        continue
+                    }
+                if (!skipped) {
+                    // The response ended before the already-delivered prefix was
+                    // consumed, so the server served a SHORTER body than the
+                    // prefix: truncated, not end-of-stream. (Answering EOF here
+                    // is the silent mid-trailer stop this fix exists for.)
+                    if (!retryTruncatedChunk()) throw truncatedPrefixFailure()
+                    continue
+                }
 
-                if (!isYouTubeStream || (!chunkedRange && !positionMode)) {
-                    // Not a YouTube stream, or googlevideo only let us start an
-                    // open-ended from-0 read — just stream it straight through.
+                if (!chunkedRange && !positionMode) {
+                    // googlevideo only let us start an open-ended from-0 read —
+                    // just stream it straight through: there is no chunk
+                    // boundary here to retry.
                     return upstream.read(buffer, offset, length)
                 }
 
-                val bytesRead = upstream.read(buffer, offset, length)
+                val bytesRead =
+                    try {
+                        upstream.read(buffer, offset, length)
+                    } catch (e: IOException) {
+                        if (!e.isTransientChunkFailure() || !reopenAfterFailedRead(e)) throw e
+                        continue
+                    }
                 if (bytesRead != C.RESULT_END_OF_INPUT) {
                     bytesReadInChunk += bytesRead
                     return bytesRead
@@ -441,26 +686,41 @@ class YoutubeChunkedDataSourceFactory(
                 val chunkBytesReceived = bytesReadInChunk
                 upstream.close()
 
-                if (
-                    youTubeChunkEndsStream(
-                        bytesDeliveredInChunk = chunkBytesReceived,
-                        lengthKnown = totalContentLength != C.LENGTH_UNSET.toLong(),
-                        remainingContentLength = totalContentLength
-                    )
-                ) {
-                    return C.RESULT_END_OF_INPUT
+                if (chunkBytesReceived > 0L) {
+                    // Length-consumed check FIRST: it is the server's own end
+                    // signal and must win over any retry.
+                    if (
+                        youTubeChunkEndsStream(
+                            bytesDeliveredInChunk = chunkBytesReceived,
+                            lengthKnown = totalContentLength != C.LENGTH_UNSET.toLong(),
+                            remainingContentLength = totalContentLength
+                        )
+                    ) {
+                        return C.RESULT_END_OF_INPUT
+                    }
+
+                    currentChunkStart += chunkBytesReceived
+                    if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+                        totalContentLength -= chunkBytesReceived
+                    }
+
+                    // A new chunk at the new position: fresh attempt budget.
+                    //
+                    // A failed mid-stream open still throws out of here rather
+                    // than masquerading as EOF, and it does NOT try to
+                    // re-sign: this DataSource has no path back to the
+                    // extractor by design (re-signing with a refused identity
+                    // is useless), so the hero above owns re-resolving.
+                    openNextChunk()
+                    continue
                 }
 
-                currentChunkStart += chunkBytesReceived
-                if (totalContentLength != C.LENGTH_UNSET.toLong()) {
-                    totalContentLength -= chunkBytesReceived
-                }
-
-                // Open the next chunk and loop back so its prefix is skipped
-                // before any of its bytes are delivered. A failed mid-stream
-                // open still throws here rather than masquerading as EOF.
-                openNextChunk()
-                if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
+                // Zero bytes: no 416 and no known length says the stream is
+                // over, and a 206 that serves an empty body mid-stream is a
+                // truncation by the same logic as a short prefix. Retry the
+                // same position; exhaustion throws (see the class comment).
+                if (!retryEmptyChunk()) throw emptyChunkFailure()
+                continue
             }
         }
 
@@ -470,5 +730,92 @@ class YoutubeChunkedDataSourceFactory(
             upstream.close()
             originalDataSpec = null
         }
+    }
+}
+
+/**
+ * Whether a chunk open/read failure is worth retrying in place.
+ *
+ * Retryable is "the network hiccuped": a timeout, a reset or refused
+ * connection, a DNS blip, a TLS failure, a 5xx from the edge, and an
+ * unrecognised IOException (the budget bounds the damage, and guessing which
+ * wrapper a transport failure arrived in is worse than one extra attempt).
+ *
+ * Everything else is a verdict, not a hiccup:
+ *  - a 403 belongs to the identity ladder in [YoutubeChunkedDataSourceFactory]
+ *    (retrying it here would hide the refusal the hero classifies), a 416 is
+ *    the stream's own end signal, and any other 4xx means the signed URL is
+ *    simply wrong;
+ *  - an interrupt is a cancellation, and must never become a retry.
+ *
+ * The cause chain is walked because OkHttpDataSource wraps every transport
+ * failure in a `HttpDataSourceException`, so the timeout arrives as a CAUSE.
+ */
+@UnstableApi
+internal fun Throwable.isTransientChunkFailure(): Boolean {
+    var node: Throwable? = this
+    var depth = 0
+    while (node != null && depth++ < 8) {
+        when (node) {
+            is HttpDataSource.InvalidResponseCodeException ->
+                return node.responseCode in TRANSIENT_HTTP_CODES
+            // SocketTimeoutException IS an InterruptedIOException (a read that
+            // timed out); it is checked first on purpose.
+            is SocketTimeoutException -> return true
+            is InterruptedIOException -> return false
+            is InterruptedException -> return false
+            is SocketException,
+            is ConnectException,
+            is UnknownHostException,
+            is SSLException -> return true
+            else -> node = node.cause
+        }
+    }
+    return true
+}
+
+/** Edge statuses that mean "try the same request again", never "refused". */
+private val TRANSIENT_HTTP_CODES = setOf(500, 502, 503, 504)
+
+/**
+ * Debug-only: replays the failing URL through a plain OkHttpClient with
+ * different Range styles and logs each response code + body. Device
+ * bisection so far: capped ranges succeed at offset 0 (0-0, 0-1M) but
+ * 403 at 10M span and at later offsets. These probes add the missing
+ * offset cases: open-ended from 0 and from the current chunk position.
+ *
+ * Top-level (not a member) only so a unit test can substitute it through
+ * [YoutubeChunkedDataSourceFactory]'s constructor and observe the call without
+ * touching the network. Behavior is unchanged.
+ */
+private fun runYouTubeChunkDiagnostics(url: String, userAgent: String, position: Long) {
+    runCatching {
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val probes = listOf(
+            "plain-get" to null,
+            "range-0-0" to "bytes=0-0",
+            "range-0-1M" to "bytes=0-1048575",
+            "range-0-10M" to "bytes=0-10485759",
+            "range-0-openpos" to "bytes=0-$position",
+            "range-pos-open" to "bytes=$position-"
+        )
+        for ((label, range) in probes) {
+            val rb = okhttp3.Request.Builder().url(url).get()
+            rb.header("User-Agent", userAgent)
+            if (range != null) rb.header("Range", range)
+            client.newCall(rb.build()).execute().use { resp ->
+                val body = resp.peekBody(400).string().take(400)
+                val loc = resp.header("Location")
+                Log.w(
+                    "YTChunkedDS",
+                    "DIAG[$label] code=${resp.code} msg=${resp.message} loc=$loc body=$body"
+                )
+            }
+        }
+    }.onFailure { e ->
+        Log.w("YTChunkedDS", "DIAG failed: ${e.message}")
     }
 }
