@@ -321,8 +321,11 @@ class StreamsDeepDiveContractTest {
         assertTrue(
             "and the launch intent writes it beside the source list and its add-ons",
             mainActivity.contains("putExtra(\"selected_addon\", it)") &&
+                // The add-on list rides the collected launch payload rather than
+                // the intent directly, so a source list too big for the binder
+                // can be spooled beside it (see PlayerLaunchPayload).
                 mainActivity.contains(
-                    "putExtra(\"source_addons\", sourceAddonsJson(current.sourceAddons))"
+                    "launchPayloads[\"source_addons\"] = sourceAddonsJson(current.sourceAddons)"
                 )
         )
         assertTrue(
