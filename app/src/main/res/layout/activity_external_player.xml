@@ -325,7 +325,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:fontFamily="@font/oswald_medium"
-            android:text="Pick a title, or press BACK to exit"
+            android:text="Pick a title · UP to rate · BACK to exit"
             android:textColor="@color/kb_text_lo"
             android:textSize="11sp" />
     </LinearLayout>

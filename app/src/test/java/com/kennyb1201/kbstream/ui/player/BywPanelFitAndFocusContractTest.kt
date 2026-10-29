@@ -195,6 +195,40 @@ class BywPanelFitAndFocusContractTest {
         )
     }
 
+    /**
+     * The clipped-panel case - the one this pass exists for, and the one it used to
+     * miss. The panel is a `WRAP_CONTENT` child of a clipping parent, so it is
+     * measured with an `AT_MOST` height: an over-full panel measures EXACTLY the
+     * available height and never a pixel more. Reading that equality as "it fits"
+     * is how the Like / Dislike row added to the header could push the PLAY /
+     * DETAILS pills and the hint under the clip with the ladder never running
+     * (field 2026-10-29: "no way to reach the thumbs, and the play and details I
+     * can't see - I don't know which selection I'm on").
+     */
+    @Test
+    fun `a clipped panel measures exactly the available height, and equality is the overflow`() {
+        assertEquals(
+            "a panel clipped to the viewport reports the viewport height, not its own",
+            BYW_FIT_LEVEL_COMPACT_STRIP,
+            fitLevelFor(measuredHeightPx = 492, availableHeightPx = 492, currentLevel = 0)
+        )
+        assertEquals(
+            "and it keeps walking while it is still clipped",
+            BYW_FIT_LEVEL_COMPACT_POSTERS,
+            fitLevelFor(measuredHeightPx = 492, availableHeightPx = 492, currentLevel = 1)
+        )
+        assertEquals(
+            "at the floor it stops, so a panel that cannot be made to fit cannot loop",
+            BYW_FIT_LEVEL_STRIP_HIDDEN,
+            fitLevelFor(measuredHeightPx = 492, availableHeightPx = 492, currentLevel = 3)
+        )
+        assertEquals(
+            "a panel that fits with even a pixel to spare is left at full size",
+            BYW_FIT_LEVEL_FULL,
+            fitLevelFor(measuredHeightPx = 491, availableHeightPx = 492, currentLevel = 0)
+        )
+    }
+
     @Test
     fun `the pass is credits-only and runs after the notch clearance`() {
         val src = source(BYW)

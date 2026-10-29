@@ -52,6 +52,16 @@ internal const val BYW_FIT_LEVEL_STRIP_HIDDEN = 3
  * row's top margin by the same amount, and the total does not move - so the next
  * pass still sees an overflow and walks on to the posters, which sit below the
  * margin and always reduce the total.
+ *
+ * EQUALITY IS THE OVERFLOW SIGNAL, not slack. The panel is a `WRAP_CONTENT`
+ * child of a clipping parent, so the parent measures it with an `AT_MOST`
+ * height spec: an overflowing panel's measured height IS the available height,
+ * never more. Reading `measured <= available` as "it fits" therefore made this
+ * pass a no-op in exactly the case it exists for - and the Like / Dislike row
+ * added to the header (about 44dp, field 2026-10-29: "no way to reach the
+ * thumbs, and the play and details I can't see") pushed the pills and the hint
+ * under that clip again. A panel that genuinely fits lands strictly under the
+ * available height, so only equality has to be read as overflow here.
  */
 internal fun fitLevelFor(
     measuredHeightPx: Int,
@@ -60,6 +70,9 @@ internal fun fitLevelFor(
 ): Int {
     // Nothing measured yet, or no height to fit into: not a verdict.
     if (availableHeightPx <= 0 || measuredHeightPx <= 0) return currentLevel
-    if (measuredHeightPx <= availableHeightPx) return currentLevel
+    // Strictly under is a fit; equality is the CLAMP (see the file comment): the
+    // parent cannot report a height above its own, so a panel that measured the
+    // full available height is an overflowing one, not a snug one.
+    if (measuredHeightPx < availableHeightPx) return currentLevel
     return (currentLevel + 1).coerceAtMost(BYW_FIT_LEVEL_STRIP_HIDDEN)
 }

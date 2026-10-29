@@ -1161,6 +1161,12 @@ internal class BecauseYouWatchedUi(
      * Available height is the parent's measured height minus the panel's own
      * margins (robust to overscan and insets); the display height is the fallback
      * for the frame before the parent has been measured.
+     *
+     * [panel].measuredHeight is the CLAMPED height, not the content's: the panel is
+     * a `WRAP_CONTENT` child of a clipping parent, so an over-full panel measures
+     * exactly the available height and never more. [fitLevelFor] reads that
+     * equality as the overflow, which is what keeps the PLAY / DETAILS pills and
+     * the hint on screen on a 540dp-tall TV UI.
      */
     private fun fitCreditsPanel() {
         if (creditsInsetPx <= 0 || !isVisible) return
