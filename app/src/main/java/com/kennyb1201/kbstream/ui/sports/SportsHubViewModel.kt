@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.iptv.EpgTermLookup
 import com.kennyb1201.kbstream.data.iptv.FreeLineup
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.XumoGuide
@@ -14,7 +15,6 @@ import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
-import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.playlistCallsignKeys
 import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
@@ -29,6 +29,10 @@ import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.MatcherProgram
 import com.kennyb1201.kbstream.data.sports.SportsChannelMatcher
 import com.kennyb1201.kbstream.data.sports.SportsChannelMemory
+import com.kennyb1201.kbstream.data.sports.SportsTier1Ledger
+import com.kennyb1201.kbstream.data.sports.SportsTier1Trace
+import com.kennyb1201.kbstream.data.sports.TIER1_GATE_GUIDE_INDEX
+import com.kennyb1201.kbstream.data.sports.Tier1Drop
 import com.kennyb1201.kbstream.data.sports.SportsFavoriteKeys
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsKind
@@ -114,6 +118,34 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private val iptv = IptvRepository.shared(app)
     private val espn = EspnSportsRepository.shared()
+
+    /**
+     * The per-matchup guide lookup: the FTS index first, and the `LIKE` scan
+     * only when the index answered nothing, at most
+     * [EpgTermLookup.MAX_LIKE_FALLBACKS] times a pass.
+     *
+     * The second stage is the fix for a MISSING feed rather than a wrong one
+     * (Kenny, 2026-10-29): the guide carried Jets @ Lightning with both teams in
+     * the title, and the hub listed three other feeds for the game - so the row
+     * either never came back from the index or was dropped after it. An index
+     * that answers nothing is not evidence the guide has nothing, and this is
+     * the one branch a scan can close. Both stages are `runCatchingCancellable`:
+     * a lookup is an optimisation over the tiers below it and may never fail the
+     * pass.
+     */
+    private val tier1Lookup = EpgTermLookup(
+        indexed = { terms, limit ->
+            runCatchingCancellable {
+                iptv.searchProgramsByTitleTerms(terms, limit)
+            }.getOrDefault(emptyList())
+        },
+        like = { terms, limit ->
+            runCatchingCancellable {
+                iptv.searchProgramsByTitleTermsLike(terms, limit)
+            }.getOrDefault(emptyList())
+        },
+    )
+
     // Var, not val: the prefs FILE is per-profile (see [onProfileSwitched]).
     private var prefs: SharedPreferences = app.getSharedPreferences(
         ProfileStorage.prefsName(app, GuideFilesPrefs),
@@ -1239,11 +1271,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // [epgTournamentCandidates]).
             val gamesBudget = EpgLookups(MAX_EPG_LOOKUPS)
             val tournamentsBudget = EpgLookups(MAX_EPG_LOOKUPS)
+            // The pass's own tier-1 ledger: what each matchup asked, what came
+            // back, and which gate dropped what. Diagnostics only - it never
+            // changes a match - and one per pass, because "the last pass" is
+            // all a capture needs (see [SportsTier1Ledger]). The LIKE
+            // fallback's scan budget starts with it.
+            val tier1 = SportsTier1Ledger()
+            tier1Lookup.resetBudget()
             val programs = if (guideIndex.isEmpty()) {
                 emptyList()
             } else {
                 runCatchingCancellable {
-                    epgCandidates(games, guideIndex, gamesBudget) +
+                    epgCandidates(games, guideIndex, gamesBudget, tier1) +
                         epgTournamentCandidates(events, guideIndex, tournamentsBudget)
                 }.getOrDefault(emptyList())
             }
@@ -1284,6 +1323,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
                 val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById,
                     gameVariants.getValue(game.id), channelIndex)
+                // Diagnostics only: the grade breakdown of this game's rows, the
+                // rows a gate dropped, and which tier produced each feed the
+                // card lists. It runs on every card - the miss is what it is
+                // here to explain, and a miss lists nothing.
+                tier1.game(
+                    gameTraceLabel(game),
+                    SportsChannelMatcher.traceTier1(
+                        game,
+                        programs,
+                        channelById,
+                        gameVariants.getValue(game.id),
+                        channelIndex,
+                        matchedFeeds,
+                    )
+                )
                 matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[game.id] = feeds
@@ -1335,6 +1389,9 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             PerfTrace.recordCount("sports.match.cards", (games.size + events.size).toLong())
             PerfTrace.recordCount("sports.match.matched", found.size.toLong())
             PerfTrace.recordCount("sports.match.programs", programs.size.toLong())
+            // The block COPY DIAGNOSTICS reads (see Diagnostics). Recorded once
+            // per pass, after the loop, so it describes a finished pass.
+            SportsTier1Trace.record(tier1.render())
             found
         }
         _matches.value = matches
@@ -1596,6 +1653,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         games: List<SportsGame>,
         guideIndex: Map<String, IptvChannel>,
         budget: EpgLookups,
+        ledger: SportsTier1Ledger,
     ): List<MatcherProgram> {
         val out = LinkedHashMap<String, MatcherProgram>()
         val asked = HashSet<String>()
@@ -1605,10 +1663,27 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 if (terms.size < 2) return@forEach
                 if (!asked.add(terms.sorted().joinToString("|"))) return@forEach
                 if (!budget.take()) return@forEach
-                val rows = searchTerms(terms)
-                    .ifEmpty { searchTerms(abbreviationSearchTerms(game)) }
+                val hit = searchTerms(terms)
+                // The abbreviation retry, unchanged in when it runs; it also
+                // carries its own LIKE stage for the guides that title a game
+                // "MIN @ TB" (see [EpgTermLookup]).
+                val abbreviations = if (hit.rows.isEmpty()) {
+                    searchTerms(abbreviationSearchTerms(game))
+                } else {
+                    null
+                }
+                val rows = abbreviations?.rows?.takeIf { it.isNotEmpty() } ?: hit.rows
+                val fallback = (abbreviations?.takeIf { it.rows.isNotEmpty() } ?: hit).fallback
+                val drops = ArrayList<Tier1Drop>()
                 rows.forEach { row ->
-                    val channel = guideIndex[row.channelId] ?: return@forEach
+                    // The guide holds this row and the pass cannot name a channel
+                    // for it - the one gate that made a field miss unattributable
+                    // (see [SportsTier1Ledger]).
+                    val channel = guideIndex[row.channelId]
+                    if (channel == null) {
+                        drops += Tier1Drop(TIER1_GATE_GUIDE_INDEX, row.channelId, row.title)
+                        return@forEach
+                    }
                     out.putIfAbsent(
                         "${channel.id}|${row.startUtcMillis}|${row.title}",
                         MatcherProgram(
@@ -1623,6 +1698,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     )
                 }
+                ledger.matchup(
+                    label = gameTraceLabel(game),
+                    terms = terms,
+                    rows = rows.size,
+                    kept = rows.size - drops.size,
+                    fallback = fallback,
+                    drops = drops,
+                )
             }
         return out.values.toList()
     }
@@ -1695,12 +1778,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * there degrades to "no EPG signal for these two teams" and the cards fall
      * through to the network tiers - exactly as they did before tier 1 existed.
      */
-    private suspend fun searchTerms(terms: List<String>): List<EpgProgramRow> {
-        if (terms.size < 2) return emptyList()
-        return runCatchingCancellable {
-            iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
-        }.getOrDefault(emptyList())
-    }
+    private suspend fun searchTerms(terms: List<String>): EpgTermLookup.Hit =
+        tier1Lookup.rows(terms, EPG_SEARCH_LIMIT)
+
+    /**
+     * A game as the tier-1 ledger names it: the matchup, which is what a guide
+     * titles ("Jets @ Lightning").
+     */
+    private fun gameTraceLabel(game: SportsGame): String =
+        "${teamTraceLabel(game.away)} @ ${teamTraceLabel(game.home)}"
+
+    private fun teamTraceLabel(team: SportsTeam): String =
+        team.shortName?.takeIf { it.isNotBlank() } ?: team.displayName
 
     /**
      * The two teams' abbreviations, for the guides that title a game by them.

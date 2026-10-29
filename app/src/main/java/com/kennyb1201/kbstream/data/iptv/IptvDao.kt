@@ -478,4 +478,13 @@ interface IptvDao {
      */
     @RawQuery
     suspend fun searchProgramsByTitleFts(query: SupportSQLiteQuery): List<EpgProgramRow>
+
+    /**
+     * The unindexed half of the sports hub's term search (see
+     * [likeTermsQuery] and `EpgTermLookup`): a `LIKE` scan the FTS index's empty
+     * answer falls back to. Raw for the same reason the indexed query is - the
+     * statement is built per matchup, one title/description pair per term.
+     */
+    @RawQuery
+    suspend fun searchProgramsByTitleTermsLike(query: SupportSQLiteQuery): List<EpgProgramRow>
 }

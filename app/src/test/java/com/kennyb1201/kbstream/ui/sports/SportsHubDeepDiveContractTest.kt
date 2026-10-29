@@ -230,7 +230,9 @@ class SportsHubDeepDiveContractTest {
                 "every tournament with no tier-1 question at all",
             viewModel.contains("val gamesBudget = EpgLookups(MAX_EPG_LOOKUPS)") &&
                 viewModel.contains("val tournamentsBudget = EpgLookups(MAX_EPG_LOOKUPS)") &&
-                viewModel.contains("epgCandidates(games, guideIndex, gamesBudget)") &&
+                // The trailing argument is the pass's diagnostics-only tier-1
+                // ledger (2026-10-29); the two ceilings are untouched.
+                viewModel.contains("epgCandidates(games, guideIndex, gamesBudget, tier1)") &&
                 viewModel.contains(
                     "epgTournamentCandidates(events, guideIndex, tournamentsBudget)"
                 )

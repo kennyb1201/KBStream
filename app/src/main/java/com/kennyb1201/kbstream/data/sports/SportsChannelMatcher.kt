@@ -747,6 +747,121 @@ internal object SportsChannelMatcher {
         }
     }
 
+    // ── Tier 1 diagnostics ───────────────────────────────────────────
+
+    /** How many near-miss rows one game's trace names (see [traceTier1]). */
+    private const val MAX_NEAR_MISS_DROPS = 3
+
+    /**
+     * What tier 1 SAW for [game], and where each of [listed] came from.
+     *
+     * Diagnostics only: nothing here decides a match, and the tiers above do not
+     * read it. It exists because every gate between a guide row and a card
+     * drops the row silently (see [SportsTier1Ledger]), so a field miss could not
+     * be attributed to a gate - search coverage, the guide index, the playlist
+     * map, or the grade - from a capture.
+     *
+     * One pass over the candidate rows, in the game's own window: each row's
+     * grade (title first, description only when the title names nothing, exactly
+     * as [guideFeeds] reads it), the STRONG/WEAK/NONE counts those grades add up
+     * to, the rows whose channel is not in [channelById], and the best grade per
+     * channel. A row that names ONE side is recorded as a NONE_GRADE near miss -
+     * that shape ("NHL Hockey" plus a synopsis cut short) is precisely the row a
+     * viewer expects to have matched.
+     *
+     * [listed] is then labelled by what produced it, strongest evidence first:
+     * the guide row (title, description, or a weak city-only grade), the
+     * channel's own matchup name, the game's own broadcast names, then the team's
+     * regional network. Anything else is `other` - a feed the list carries for a
+     * reason this trace cannot see (a remembered pick leads the list that way).
+     */
+    internal fun traceTier1(
+        game: SportsGame,
+        programs: List<MatcherProgram>,
+        channelById: Map<String, IptvChannel>,
+        variants: TeamVariants,
+        channelIndex: ChannelIndex,
+        listed: List<IptvChannel>,
+    ): Tier1GameTrace {
+        var strong = 0
+        var weak = 0
+        var none = 0
+        val drops = ArrayList<Tier1Drop>()
+        // Best guide grade per channel: 3 a STRONG title, 2 a STRONG description,
+        // 1 a WEAK row (one side by its city).
+        val guideGrade = HashMap<String, Int>()
+        programs.forEach { program ->
+            if (!overlapsWindow(program, game.dateMs)) return@forEach
+            val titleTokens = words(program.title)
+            val titleStrength = teamNameStrength(titleTokens, game.away, game.home, variants)
+            val descriptionTokens = if (titleStrength == TeamNameStrength.NONE) {
+                words(program.description.orEmpty())
+            } else {
+                emptyList()
+            }
+            val strength = if (titleStrength != TeamNameStrength.NONE) {
+                titleStrength
+            } else {
+                teamNameStrength(descriptionTokens, game.away, game.home, variants)
+            }
+            when (strength) {
+                TeamNameStrength.STRONG -> strong++
+                TeamNameStrength.WEAK -> weak++
+                TeamNameStrength.NONE -> none++
+            }
+            if (strength == TeamNameStrength.NONE) {
+                val namesATeam =
+                    namesStrongTeam(titleTokens, variants.away) ||
+                        namesStrongTeam(titleTokens, variants.home) ||
+                        namesStrongTeam(descriptionTokens, variants.away) ||
+                        namesStrongTeam(descriptionTokens, variants.home)
+                if (namesATeam && drops.size < MAX_NEAR_MISS_DROPS) {
+                    drops += Tier1Drop(TIER1_GATE_NONE_GRADE, program.channelId, program.title)
+                }
+                return@forEach
+            }
+            if (channelById[program.channelId] == null) {
+                drops += Tier1Drop(TIER1_GATE_CHANNEL_BY_ID, program.channelId, program.title)
+                return@forEach
+            }
+            val grade = when {
+                strength == TeamNameStrength.WEAK -> 1
+                titleStrength != TeamNameStrength.NONE -> 3
+                else -> 2
+            }
+            if (grade > (guideGrade[program.channelId] ?: 0)) guideGrade[program.channelId] = grade
+        }
+        val agreement = broadcastAgreement(game, channelIndex)
+        val rsnIds = (rsnNetworks(game.home, game.league) + rsnNetworks(game.away, game.league))
+            .flatMap { channelIndex.channelsFor(it) }
+            .mapTo(HashSet()) { it.id }
+        val listedTiers = listed.map { channel ->
+            val name = channel.displayName.ifBlank { channel.name }
+            val nameTier = when (nameGrade(words(name), game, variants)) {
+                NameGrade.BOTH -> "name-matchup"
+                NameGrade.ONE -> "name-team"
+                NameGrade.NONE -> null
+            }
+            val tier = when {
+                guideGrade[channel.id] == 3 -> "guide-title"
+                guideGrade[channel.id] == 2 -> "guide-description"
+                guideGrade[channel.id] == 1 -> "guide-weak"
+                nameTier != null -> nameTier
+                channel.id in agreement -> "network"
+                channel.id in rsnIds -> "rsn"
+                else -> "other"
+            }
+            name to tier
+        }
+        return Tier1GameTrace(
+            strong = strong,
+            weak = weak,
+            none = none,
+            drops = drops,
+            listed = listedTiers,
+        )
+    }
+
     // ── Tier 1c: the channel's own name ─────────────────────────────
 
     /**
@@ -791,15 +906,10 @@ internal object SportsChannelMatcher {
         val strong = ArrayList<IptvChannel>()
         val weak = ArrayList<IptvChannel>()
         channelIndex.forEachNamed { nameWords, channel ->
-            val awayStrong = namesStrongTeam(nameWords, variants.away)
-            val homeStrong = namesStrongTeam(nameWords, variants.home)
-            val namesBoth =
-                (awayStrong || cityNamesTeam(nameWords, game.away)) &&
-                    (homeStrong || cityNamesTeam(nameWords, game.home))
-            when {
-                namesBoth -> strong += channel
-                awayStrong || homeStrong -> weak += channel
-                else -> Unit
+            when (nameGrade(nameWords, game, variants)) {
+                NameGrade.BOTH -> strong += channel
+                NameGrade.ONE -> weak += channel
+                NameGrade.NONE -> Unit
             }
         }
         return NameHits(strong = strong, weak = weak)
@@ -810,6 +920,44 @@ internal object SportsChannelMatcher {
         val strong: List<IptvChannel>,
         val weak: List<IptvChannel>,
     )
+
+    /** How well a channel's own name names a game's two sides, per [nameHits]. */
+    private enum class NameGrade {
+        /** Both sides named: the provider generated this feed for tonight's game. */
+        BOTH,
+
+        /** One side named by a real name - a 24/7 team channel. */
+        ONE,
+
+        /** Neither: the name says nothing about this game. */
+        NONE,
+    }
+
+    /**
+     * [nameHits]' own rule, on a name the index already tokenized - and, for
+     * [traceTier1], on a name read on the spot.
+     *
+     * One function so the tier and its trace cannot disagree about what naming
+     * the game means: both sides, cities allowed ("Timberwolves @ Magic"), is
+     * BOTH; one side by a real name is ONE; a city alone is not enough, and
+     * neither is nothing.
+     */
+    private fun nameGrade(
+        tokens: List<String>,
+        game: SportsGame,
+        variants: TeamVariants,
+    ): NameGrade {
+        val awayStrong = namesStrongTeam(tokens, variants.away)
+        val homeStrong = namesStrongTeam(tokens, variants.home)
+        val namesBoth =
+            (awayStrong || cityNamesTeam(tokens, game.away)) &&
+                (homeStrong || cityNamesTeam(tokens, game.home))
+        return when {
+            namesBoth -> NameGrade.BOTH
+            awayStrong || homeStrong -> NameGrade.ONE
+            else -> NameGrade.NONE
+        }
+    }
 
     /**
      * The rows whose [textOf] names both sides, with the facts the grouping
@@ -975,8 +1123,20 @@ internal object SportsChannelMatcher {
         away: SportsTeam,
         home: SportsTeam,
         variants: TeamVariants,
+    ): TeamNameStrength = teamNameStrength(words(text), away, home, variants)
+
+    /**
+     * [namesBothTeamsStrength] on text that is already tokenized.
+     *
+     * Split out for [traceTier1], which needs the grade of a row it has had to
+     * tokenize anyway; the rule itself is unchanged and lives here now.
+     */
+    private fun teamNameStrength(
+        tokens: List<String>,
+        away: SportsTeam,
+        home: SportsTeam,
+        variants: TeamVariants,
     ): TeamNameStrength {
-        val tokens = words(text)
         if (tokens.isEmpty()) return TeamNameStrength.NONE
         val awayStrong = namesStrongTeam(tokens, variants.away)
         val homeStrong = namesStrongTeam(tokens, variants.home)

@@ -114,8 +114,12 @@ class SportsMatchCoverageContractTest {
     @Test
     fun `a guide that titles a game by abbreviation is still found`() {
         assertTrue(
+            // Reshaped by the 2026-10-29 tier-1 miss spec: the lookup now
+            // reports which stage answered (for the ledger), so the empty-answer
+            // gate is explicit rather than an `.ifEmpty`.
             "when the nickname lookup comes back empty, the abbreviations are asked",
-            candidates.contains(".ifEmpty { searchTerms(abbreviationSearchTerms(game)) }")
+            candidates.contains("val abbreviations = if (hit.rows.isEmpty()) {") &&
+                candidates.contains("searchTerms(abbreviationSearchTerms(game))")
         )
         assertTrue(
             "both abbreviations, lowercased, and only when long enough to search on",
@@ -159,14 +163,23 @@ class SportsMatchCoverageContractTest {
 
     @Test
     fun `a lookup cannot fail the matching pass`() {
+        // Both stages moved into the pass's `tier1Lookup` (2026-10-29 spec): the
+        // index first, the bounded LIKE scan only when the index answered
+        // nothing, and each stage wrapped so neither can fail the pass.
         assertTrue(
             "the search degrades to no EPG signal for those teams",
-            lookup.contains("runCatchingCancellable") &&
-                lookup.contains(".getOrDefault(emptyList())")
+            model.contains("private val tier1Lookup = EpgTermLookup(") &&
+                model.contains("runCatchingCancellable") &&
+                model.contains(".getOrDefault(emptyList())")
         )
         assertTrue(
             "and it is limited, so one lookup cannot pull the whole guide back",
-            lookup.contains("iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)")
+            model.contains("iptv.searchProgramsByTitleTerms(terms, limit)") &&
+                model.contains("iptv.searchProgramsByTitleTermsLike(terms, limit)")
+        )
+        assertTrue(
+            "while the matchup question itself goes through the two-stage lookup",
+            lookup.contains("tier1Lookup.rows(terms, EPG_SEARCH_LIMIT)")
         )
     }
 

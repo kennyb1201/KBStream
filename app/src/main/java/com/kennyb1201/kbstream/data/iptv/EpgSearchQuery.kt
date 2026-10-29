@@ -53,6 +53,70 @@ internal fun likeContainsPattern(raw: String): String {
     return "%$escaped%"
 }
 
+/**
+ * A statement and its bind arguments, so a builder can stay pure Kotlin.
+ *
+ * The repository wraps this in a `SimpleSQLiteQuery` at the call site: keeping
+ * the SQL out of the `androidx.sqlite` types is what lets the builders - and
+ * therefore what actually reaches SQLite - be asserted on a plain JVM.
+ */
+internal class SqlWithArgs(
+    val sql: String,
+    val args: Array<Any?>,
+)
+
+/**
+ * The sports hub's second-stage term search: every term must appear inside the
+ * title OR the description, of programs that have not finished yet.
+ *
+ * The unindexed twin of the FTS expression above, and it exists for one reason:
+ * the FTS index can answer nothing for a matchup the guide is in fact carrying
+ * (a row imported after the last backfill, an index entry the join dropped), and
+ * an empty answer used to end the question. `LIKE` cannot use an index, so this
+ * is a scan and only ever runs after the index came back empty - see
+ * `EpgTermLookup`.
+ *
+ * Null when there is nothing to ask (fewer than two terms, or every term blank),
+ * which is also what keeps a bare `%%` pattern from matching the whole guide.
+ * [limit] is applied by SQLite, the same way the indexed query applies it.
+ */
+internal fun likeTermsQuery(
+    terms: List<String>,
+    fromMillis: Long,
+    limit: Int,
+): SqlWithArgs? {
+    val wanted = terms.map { it.trim() }.filter { it.isNotEmpty() }
+    if (wanted.size < 2) return null
+    val conditions = wanted.joinToString(" AND ") {
+        "(p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\')"
+    }
+    val args = ArrayList<Any?>(wanted.size * 2 + 2)
+    args += fromMillis
+    wanted.forEach { term ->
+        val pattern = likeContainsPattern(term)
+        args += pattern
+        args += pattern
+    }
+    args += limit
+    return SqlWithArgs(
+        sql = """
+        SELECT
+            p.channelId AS channelId,
+            p.title AS title,
+            p.description AS description,
+            p.category AS category,
+            p.startUtcMillis AS startUtcMillis,
+            p.endUtcMillis AS endUtcMillis
+        FROM epg_programs AS p
+        WHERE p.endUtcMillis > ?
+          AND $conditions
+        ORDER BY p.startUtcMillis ASC
+        LIMIT ?
+        """.trimIndent(),
+        args = args.toTypedArray(),
+    )
+}
+
 /** Separators mirror the FTS tokenizer: everything that is not a letter/digit. */
 private val TOKEN_SEPARATORS = Regex("[^\\p{L}\\p{N}]+")
 

@@ -1524,11 +1524,12 @@ class IptvRepository(
      * columns are wanted here. The matcher sorts out which is which - a title
      * hit outranks a description hit - so this only has to be generous.
      *
-     * This stops at the index on purpose. [searchPrograms] falls back to a
-     * `LIKE '%…%'` scan when the index returns nothing, which is the right
-     * trade for a human typing a fragment and the wrong one here: a scoreboard
-     * refresh asks about every live game at once, and each empty answer would
-     * be a full scan of the program table. No terms, or no index, means no
+     * This stops at the index: the fallback is the SIBLING below
+     * ([searchProgramsByTitleTermsLike]), which the hub calls only when this
+     * answers nothing - never per question. A scoreboard refresh asks about
+     * every live game at once, and each empty answer scanning the program table
+     * is exactly the regression `searchPrograms`' two-stage split avoids, so the
+     * caller owns the bound (`EpgTermLookup`). No terms, or no index, means no
      * rows - the hub reads that as "no EPG signal" and falls through to the
      * network tiers.
      */
@@ -1544,6 +1545,32 @@ class IptvRepository(
             )
         }.getOrElse { t ->
             Log.w(TAG, "term program search failed: ${t.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * The `LIKE` stage of the same question, for the case where the index holds
+     * nothing (see [likeTermsQuery]): every term must appear in the title OR the
+     * description, programs that have not finished yet, soonest first, the same
+     * [limit].
+     *
+     * A scan, not a lookup - which is why nothing calls it on its own. The hub
+     * reaches it through `EpgTermLookup`, only after the indexed query answered
+     * empty and only while that pass's scan budget lasts.
+     */
+    suspend fun searchProgramsByTitleTermsLike(
+        terms: List<String>,
+        limit: Int = 40
+    ): List<EpgProgramRow> = withContext(Dispatchers.IO) {
+        val prepared = likeTermsQuery(terms, System.currentTimeMillis(), limit)
+            ?: return@withContext emptyList()
+        runCatchingCancellable {
+            dao.searchProgramsByTitleTermsLike(
+                SimpleSQLiteQuery(prepared.sql, prepared.args)
+            )
+        }.getOrElse { t ->
+            Log.w(TAG, "like term program search failed: ${t.message}")
             emptyList()
         }
     }

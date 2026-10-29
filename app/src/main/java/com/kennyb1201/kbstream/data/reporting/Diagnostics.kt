@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sports.SportsTier1Trace
 import com.kennyb1201.kbstream.data.tmdb.HeroArtTrace
 import com.kennyb1201.kbstream.data.trakt.TraktPollTrace
 import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
@@ -130,6 +131,16 @@ object Diagnostics {
         // reports as "it takes a minute to find the channels" travels with the
         // report. Absent until the hub has run (see [sportsLine]).
         sportsLine()?.let { report.appendLine(it) }
+        // ...and the tier-1 ledger behind that line: per matchup, what the guide
+        // search answered and which gate dropped what, then per card which tier
+        // produced each feed. The line above says a pass ran and what it cost;
+        // this says why a guide row the viewer can see on the grid never reached
+        // their card, which is the question a "the working feed isn't listed"
+        // report actually asks (see SportsTier1Ledger). It names the rows it
+        // dropped - channel id and program title - on purpose: a gate cannot be
+        // identified without them, and every one of them is already in logcat
+        // under the same tag. Last pass only, capped.
+        SportsTier1Trace.block()?.lines()?.forEach { line -> report.appendLine(line) }
         artLine()?.let { report.appendLine(it) }
         heroArtLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
