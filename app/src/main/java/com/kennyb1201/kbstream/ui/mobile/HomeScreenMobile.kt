@@ -453,8 +453,15 @@ fun HomeScreenMobile(
         // order, that its row on Home shows (already filtered for hidden
         // titles and hide-watched above).
         val billboardFeedSources = remember(railsShown, upNext, upcoming, topPicks) {
-            buildMap {
-                put(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU, topPicks)
+            buildMap<String, List<MetaPreview>> {
+                // Top Picks is a row of BLEND PICKS, not rail items, so it is
+                // converted through the same preview mapper its cards navigate
+                // with - the ids stay the `tmdb:<id>` spelling the rest of the
+                // app resolves, rather than a second id space for the hero.
+                put(
+                    KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU,
+                    topPicks.map { pick -> mobileBlendPickPreview(pick) }
+                )
                 put(
                     KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
                     upNext.map { item -> item.billboardPreview() }

@@ -97,7 +97,15 @@ class MobileBillboardContractTest {
 
         assertTrue(home.contains("billboardChosenFeed("))
         assertTrue(home.contains("railsShown.forEach { rail -> rail.billboardFeedKey()?.let { key -> put(key, rail.items) } }"))
-        assertTrue(home.contains("KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU, topPicks"))
+        // Top Picks holds BLEND PICKS, not rail items, so its entry is mapped
+        // through the same preview mapper its cards use - feeding the raw
+        // picks would be a type error and a second id spelling.
+        assertTrue(
+            home.contains(
+                "KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU, topPicks.map { pick -> " +
+                    "mobileBlendPickPreview(pick) }"
+            )
+        )
         assertTrue(home.contains("KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING"))
         assertTrue(home.contains("KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE"))
         // Hidden titles are dropped, exactly as they are from the rails.
