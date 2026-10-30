@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.sync
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -29,7 +30,35 @@ class PinHashTest {
 
     @Test
     fun `the stored value does not contain the PIN`() {
-        assertFalse(PinHash.create("1234").contains("1234"))
+        val stored = PinHash.create("1234")
+        val fields = stored.split('$')
+        // Deliberately NOT a substring hunt. Every 4-digit PIN is spelled out of
+        // the hex alphabet the salt and digest use, so "the stored value never
+        // happens to contain 1234" is a lottery over ~93 positions of random hex
+        // (about one run in 700) - and it landed on the v0.9.108 build with a
+        // perfectly good hash, failing a release for nothing. What the format
+        // actually promises is pinned instead, deterministically.
+        assertEquals(
+            "v2$<iterations>$<salt>$<digest> is the whole stored value",
+            4,
+            fields.size
+        )
+        assertNotEquals(
+            "the digest is not the PIN itself",
+            "1234",
+            fields[3]
+        )
+        assertNotEquals(
+            "and not the unsalted SHA-256 the old format stored, which WAS the PIN " +
+                "to anyone holding a precomputed table",
+            sha256Hex("1234"),
+            fields[3]
+        )
+        assertTrue(
+            "every byte of it is the format's own alphabet, so no field can spell the " +
+                "PIN out",
+            stored.matches(Regex("v2\\$\\d+\\$[0-9a-f]{32}\\$[0-9a-f]{64}"))
+        )
     }
 
     @Test
