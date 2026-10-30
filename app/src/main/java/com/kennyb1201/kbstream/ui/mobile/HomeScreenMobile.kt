@@ -1634,7 +1634,7 @@ private fun MobileTopBar() {
 }
 
 /**
- * A full-width hero: the backdrop, the clearlogo (with the shared dark-surface
+ * One billboard page: the backdrop, the clearlogo (with the shared dark-surface
  * treatment) or the title, and the short meta line. Tapping it opens the title.
  *
  * One billboard page draws exactly this - the billboard is a pager of these,
@@ -1684,7 +1684,16 @@ private fun MobileHero(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 9f)
+            // 16:10, not 16:9 (spec 2.8, chosen 2026-10-30): the billboard is
+            // the first thing on Home and at 16:9 inside the premium refresh's
+            // 16dp margins it read small. On a 390dp phone the frame is 358dp
+            // wide, so 16:10 is ~224dp tall - ~23dp more than 16:9 in the same
+            // margins, and a touch more than the old full-bleed 16:9 (~219dp),
+            // which is the point. MobileHero's only call site is the billboard,
+            // so the phone's Detail header and every TV surface keep 16:9; a
+            // 16:9 backdrop under ContentScale.Crop here overflows on the SIDES
+            // (~11% of width), which is the room the Ken Burns pan sweeps.
+            .aspectRatio(16f / 10f)
             .clickable(onClick = onClick)
     ) {
         AsyncImage(

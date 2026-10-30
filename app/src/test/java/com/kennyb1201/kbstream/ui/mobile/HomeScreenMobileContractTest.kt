@@ -174,8 +174,10 @@ class HomeScreenMobileContractTest {
             mobile.contains("\"Continue Watching\"") && mobile.contains("\"Upcoming\"")
         )
         assertTrue(
-            "the hero must be a full-width 16:9 card",
-            mobile.contains("aspectRatio(16f / 9f)")
+            "the billboard hero must be the 16:10 frame of spec 2.8, not a " +
+                "16:9 banner - MobileHero's only call site is the billboard, so " +
+                "the phone's Detail header keeps its own 16:9",
+            mobile.contains("aspectRatio(16f / 10f)")
         )
         assertTrue(
             "a Continue Watching tap must still resume through the shared target",
