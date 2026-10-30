@@ -421,19 +421,23 @@ fun HomeScreenMobile(
         // of up to ten titles drawn with the SAME hero presentation, fed from
         // the rails below or (by default) from TMDB's trending of the day.
         //
-        // Its four prefs are DEVICE-LOCAL and read on the sync revision like
-        // every other display pref, so the manager's own controls land here
-        // without a relaunch.
-        val billboardEnabled = remember(activeProfileId?.id, syncRevision) {
+        // Its four prefs are DEVICE-LOCAL, so they are deliberately NOT keyed
+        // on the sync revision: that revision means "another device changed
+        // something", and a billboard is a statement about this phone's Home
+        // only (see PrefsPayloadBuilder's exclusion list, which pins it). They
+        // still land without a relaunch because the place that edits them - the
+        // Home manager - is a different destination: coming back to Home
+        // re-enters this composable and these reads run again.
+        val billboardEnabled = remember(activeProfileId?.id) {
             AppPreferences.getHomeBillboardEnabled(context)
         }
-        val billboardFeeds = remember(activeProfileId?.id, syncRevision) {
+        val billboardFeeds = remember(activeProfileId?.id) {
             AppPreferences.getHomeBillboardFeeds(context)
         }
-        val billboardCycleMs = remember(activeProfileId?.id, syncRevision) {
+        val billboardCycleMs = remember(activeProfileId?.id) {
             AppPreferences.getHomeBillboardCycleMs(context)
         }
-        val billboardTrailerMode = remember(activeProfileId?.id, syncRevision) {
+        val billboardTrailerMode = remember(activeProfileId?.id) {
             AppPreferences.getHomeBillboardTrailerMode(context)
         }
         // The delay and the mute are NOT billboard prefs: they are the existing

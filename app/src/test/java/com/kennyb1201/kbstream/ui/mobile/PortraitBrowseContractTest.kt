@@ -191,10 +191,16 @@ class PortraitBrowseContractTest {
             !topBar.contains(".widthIn(max = 140.dp)") &&
                 !topBar.contains("onSwitchProfile")
         )
+        // The header's own body, not the whole file: the billboard below it
+        // draws icon buttons (the pager's chevrons, the trailer's close mark),
+        // and the width this test is about is the HEADER's.
+        val header = topBar
+            .substringAfter("private fun MobileTopBar()")
+            .substringBefore("A full-width hero")
         assertTrue(
             "the four icon buttons are gone from the header; that is what makes it fit",
-            !topBar.contains("IconButton(") &&
-                !topBar.contains("contentDescription = \"TV guide\"")
+            !header.contains("IconButton(") &&
+                !header.contains("contentDescription = \"TV guide\"")
         )
         assertTrue(
             "Home's rails stay horizontal carousels in portrait",

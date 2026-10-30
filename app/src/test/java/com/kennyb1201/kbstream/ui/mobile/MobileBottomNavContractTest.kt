@@ -451,7 +451,16 @@ class MobileBottomNavContractTest {
             )
         }
         val mobile = mobileHome()
-        listOf("IconButton", "Icons.Filled.Search", "Icons.Filled.LiveTv", "Icons.Filled.VideoLibrary", "Icons.Filled.Settings").forEach { gone ->
+        // Scoped to the HEADER: the Home billboard below it draws its own icon
+        // buttons (the pager's chevrons and the trailer's close mark), and
+        // those are not the header's doors. What this test protects is that the
+        // header itself shrank to one child.
+        assertTrue(
+            "the header must no longer draw any icon button; that destination " +
+                "lives in the bar",
+            !header.contains("IconButton(")
+        )
+        listOf("Icons.Filled.Search", "Icons.Filled.LiveTv", "Icons.Filled.VideoLibrary", "Icons.Filled.Settings").forEach { gone ->
             assertTrue(
                 "the header's $gone must be gone; that destination lives in the bar",
                 !mobile.contains(gone)

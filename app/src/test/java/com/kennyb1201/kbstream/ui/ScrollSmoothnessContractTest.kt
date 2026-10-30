@@ -157,8 +157,11 @@ class ScrollSmoothnessContractTest {
     fun `the phone's home list declares content types too`() {
         val home = read(HOME_MOBILE)
         assertTrue(
-            "the phone's hero and top bar must carry their own types",
-            home.contains("item(key = \"hero\", contentType = \"hero\")") &&
+            "the phone's hero slot and top bar must carry their own types",
+            // The hero slot IS the billboard (2026-10-30): same slot, same
+            // "hero" content type, so the property this test protects - a
+            // reorder can reuse the slot - is unchanged.
+            home.contains("item(key = \"billboard\", contentType = \"hero\")") &&
                 home.contains("item(key = \"topBar\", contentType = \"topbar\")")
         )
         assertTrue(
