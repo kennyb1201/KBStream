@@ -88,7 +88,21 @@ class FireTvSearchContractTest {
             "which asks the pure rule whose Back the press is: the editing echo first, then " +
                 "the window's refocus (a Fire TV keyboard is a window the app cannot see)",
             guide.contains("searchBackBelongsToKeyboard(") &&
-                guide.contains("|| !windowFocused")
+                guide.contains("(!searchWindowFocused && searchWindowHeld)")
+        )
+        // The focus it consults is the OVERLAY's, not this activity's: the search
+        // overlay is a Dialog (its own window), so the activity's window is
+        // unfocused for the whole session and made every Back look like the
+        // keyboard's - the overlay could not be closed at all (2026-10-30).
+        assertTrue(
+            "the focus must be the search overlay window's own, reported up from the dialog",
+            guide.contains("var searchWindowFocused by remember(showSearch)") &&
+                guide.contains("onWindowFocusChanged = { focused ->")
+        )
+        assertTrue(
+            "and the dialog reports it from inside its own window",
+            guide.contains("val dialogWindowFocused = LocalWindowInfo.current.isWindowFocused") &&
+                guide.contains("onWindowFocusChanged(dialogWindowFocused)")
         )
         assertTrue(
             "and ends the field's session rather than dismissing",
@@ -105,6 +119,63 @@ class FireTvSearchContractTest {
         assertFalse(
             "the search case must no longer dismiss outright",
             guide.contains("showSearch -> {\n                dismissSearch()")
+        )
+    }
+
+    /**
+     * CLOSE is an explicit press on an explicit button, so it closes.
+     *
+     * It used to share the Back decision, which meant a session the field no
+     * longer had (or a window-focus trace it kept) could read the button press
+     * as the keyboard's and leave the overlay on screen with every exit dead
+     * (reported 2026-10-30: "the close button doesnt work and back button doesnt
+     * work so u get stuck on that screen").
+     */
+    @Test
+    fun `CLOSE closes, whatever the keyboard says`() {
+        val guide = source(GUIDE)
+        val dialog = guide.substringAfter("private fun ChannelSearchDialog(")
+            .substringBefore("private enum class HiddenItemsTab")
+        assertTrue(
+            "the CLOSE card takes its own callback",
+            dialog.contains("onClick = onClose,")
+        )
+        assertFalse(
+            "and no longer the Back decision that can swallow it",
+            dialog.contains("onClick = onDismiss,")
+        )
+        assertTrue(
+            "which the screen wires straight to the dismissal, not to the keyboard test",
+            guide.contains("onClose = dismissSearch,") &&
+                guide.contains("val dismissSearch = {") &&
+                guide.contains("showSearch = false")
+        )
+    }
+
+    /**
+     * The search overlay must stay closable, however the window focus reports it.
+     *
+     * Report (2026-10-30, TV): after backing out of the keyboard in guide
+     * search, CLOSE did nothing and Back did nothing - the overlay could not be
+     * closed. The decision read THIS ACTIVITY's window focus, and the overlay is
+     * a Dialog (its own window), so this activity was unfocused for the whole
+     * session and every press was read as the keyboard's.
+     */
+    @Test
+    fun `the overlay cannot be wedged by the window focus it reads`() {
+        val guide = source(GUIDE)
+        assertTrue(
+            "the keyboard arm requires the overlay's window to have held focus first, " +
+                "so a focus that never reports cannot pin the overlay open",
+            guide.contains("(!searchWindowFocused && searchWindowHeld)")
+        )
+        assertTrue(
+            "and that history is only set by the overlay's own window reporting focus",
+            guide.contains("if (searchWindowFocused) searchWindowHeld = true")
+        )
+        assertFalse(
+            "the bare activity-window test that caused it is gone",
+            guide.contains("|| !windowFocused")
         )
     }
 

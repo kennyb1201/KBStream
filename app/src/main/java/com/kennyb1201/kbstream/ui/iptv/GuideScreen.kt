@@ -389,8 +389,19 @@ fun GuideScreen(
     // Hung on the search field to end its session when this screen decides a
     // Back belonged to the keyboard (see KBTextField.endEditingSignal).
     var searchEndEditingSignal by remember(showSearch) { mutableStateOf(0) }
-    // The window's own focus, and the moments it was lost / won back while the
-    // search overlay was up.
+    // The focus of the window that HOSTS the search overlay, and the moments it
+    // was lost / won back while that overlay was up.
+    //
+    // It must be the overlay's own window, not this activity's: the overlay is a
+    // Dialog, i.e. a window of its own, so this activity's window is unfocused
+    // for as long as the dialog shows. Reading the activity's focus here made
+    // "the window is not focused" true for the whole session, so every Back -
+    // and CLOSE, which goes through the same decision - was read as the
+    // keyboard's and only ended an editing session that was already over: the
+    // overlay could not be closed at all (reported 2026-10-30). The dialog
+    // reports its own focus instead (see ChannelSearchDialog), which is true
+    // while the overlay is up and false exactly while another window - the TV
+    // keyboard - holds it.
     //
     // On Fire TV the keyboard is a separate window that takes window focus, so
     // the only trace of it the app can observe is the focus leaving and coming
@@ -400,13 +411,26 @@ fun GuideScreen(
     // and then the viewer's Back to close the keyboard looks like the viewer's
     // Back to close the results. Arming on "lost while the search is up" rather
     // than on editing keeps the two apart (see searchBackBelongsToKeyboard).
-    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    var searchWindowFocused by remember(showSearch) { mutableStateOf(true) }
+    // Whether the overlay's window has actually held the focus in this session.
+    // A loss only counts after that: the frame or two before a Dialog's window
+    // takes the focus also report "not focused", and arming on that would read
+    // the first Back of a freshly opened overlay as a phantom keyboard echo
+    // (the overlay would then need a second press to close - the same complaint
+    // this fix answers, one second long instead of forever).
+    var searchWindowHeld by remember(showSearch) { mutableStateOf(false) }
     var windowLostAt by remember { mutableStateOf(0L) }      // 0 = never
     var windowRefocusedAt by remember { mutableStateOf(0L) } // 0 = never
-    LaunchedEffect(windowFocused, showSearch) {
+    LaunchedEffect(searchWindowFocused, showSearch) {
+        if (!showSearch) return@LaunchedEffect
         val now = System.currentTimeMillis()
-        if (!windowFocused && showSearch) windowLostAt = now
-        else if (windowFocused && windowLostAt != 0L) windowRefocusedAt = now
+        if (searchWindowFocused) searchWindowHeld = true
+        when {
+            !searchWindowFocused && searchWindowHeld && windowLostAt == 0L ->
+                windowLostAt = now
+            searchWindowFocused && windowLostAt != 0L ->
+                windowRefocusedAt = now
+        }
     }
 
     // Last-viewed persistence: reopening the guide drops you back on the
@@ -736,7 +760,13 @@ fun GuideScreen(
             windowLostAt = windowLostAt,
             windowRefocusedAt = windowRefocusedAt,
             nowMs = nowMs
-        ) || !windowFocused
+        ) ||
+            // The overlay's window held the focus and then lost it: another
+            // window is in front of it right now, which on this screen can only
+            // be the TV keyboard. It is deliberately not a bare "not focused":
+            // a device that never reports the dialog as focused would otherwise
+            // read every Back as the keyboard's, forever - the trap this fixes.
+            (!searchWindowFocused && searchWindowHeld)
         if (keyboards) {
             // The keyboard's Back: end the session, keep the results. Clearing
             // the stamps disarms the echo, so a fast second Back - the viewer's
@@ -1782,6 +1812,14 @@ Spacer(modifier = Modifier.height(14.dp))
                             searchInputChangedAt = System.currentTimeMillis()
                         },
                         endEditingSignal = searchEndEditingSignal,
+                        onWindowFocusChanged = { focused ->
+                            searchWindowFocused = focused
+                        },
+                        // CLOSE is an explicit press on an explicit button, and
+                        // it must always be able to leave: it never goes through
+                        // the keyboard decision, which is about Back presses the
+                        // IME may have already spent.
+                        onClose = dismissSearch,
                         onDismiss = handleSearchBack
                     )
                 }
@@ -2214,6 +2252,15 @@ private fun SetupPanel(
                 runCatching { firstFieldFocusRequester.requestFocus() }
             }
         )
+
+        // The free block's last row is a KBCard (the offer card, or the
+        // installed row's Remove pill) and every KBCard grows and lights a
+        // 12dp glow past its own bounds on focus. Flush against the source
+        // rows below, the first row's Remove pill - drawn after this block,
+        // so on top of it - sat on the focused card's bottom border. 16dp is
+        // the same room rule the landing insets use (glow + the scale's
+        // growth, see KBFocusRowInset), so focus and the pill never meet.
+        if (sources.isNotEmpty()) Spacer(modifier = Modifier.height(16.dp))
 
         // What is installed, above the fields that edit it. One Remove per
         // source, one tap, no confirmation - the reload that follows is the
@@ -3599,12 +3646,27 @@ private fun ChannelSearchDialog(
     /** Ends that session when the screen decides a Back belonged to it. */
     endEditingSignal: Int,
     onPlay: (IptvChannelWithEpg) -> Unit,
-    onDismiss: () -> Unit
+    /** Ends the editing session or closes the overlay: the system Back. */
+    onDismiss: () -> Unit,
+    /** The CLOSE button: always closes, never ends a session. */
+    onClose: () -> Unit,
+    /** Reports whether this dialog's own window holds focus, for the Back decision. */
+    onWindowFocusChanged: (Boolean) -> Unit = {}
 ) {
     // Whether this device can run an in-app voice search at all - false on Fire
     // OS, which ships no recognizer (see [voiceSearchAvailable]).
     val voiceContext = androidx.compose.ui.platform.LocalContext.current
     val voiceSearchHere = remember(voiceContext) { voiceSearchAvailable(voiceContext) }
+
+    // This dialog is its own window, so ITS focus - not the activity's - is the
+    // trace of another window (the TV keyboard) sitting in front of the overlay.
+    // Reported up so the screen's Back decision can ask (see handleSearchBack);
+    // the activity's window is unfocused for as long as this dialog shows, so it
+    // can never answer that question.
+    val dialogWindowFocused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(dialogWindowFocused) {
+        onWindowFocusChanged(dialogWindowFocused)
+    }
 
     // Enter/Done on the query field must not close the overlay: the results
     // live BELOW the field, so dismissing on Done dropped the user back on the
@@ -3961,7 +4023,11 @@ private fun ChannelSearchDialog(
                 }
             }
             KBCard(
-                onClick = onDismiss,
+                // CLOSE closes. It shares nothing with the Back decision: a press
+                // on a visible button is never the keyboard's press, and routing
+                // it through the keyboard test is what left the reported
+                // "CLOSE does nothing" overlay on screen.
+                onClick = onClose,
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(closeFocusRequester)
