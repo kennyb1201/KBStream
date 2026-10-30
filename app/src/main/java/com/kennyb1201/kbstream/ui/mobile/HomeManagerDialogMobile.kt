@@ -321,6 +321,13 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
         mutableStateOf(AppPreferences.getHomeBillboardTrailerMode(context))
     }
 
+    // Collapsed on open, every time, first run included - the rule the IMPORT
+    // block above already follows. The chip list is the long thing in this
+    // section (one chip per catalog), and expanded it pushed HOLD and TRAILER
+    // below the fold, so much so that the billboard's own settings were
+    // reported missing (field 2026-10-30). Dialog-local, not a pref.
+    var feedsExpanded by remember { mutableStateOf(false) }
+
     /**
      * Writes a selection, with the picker's one invariant: it never represents
      * an EMPTY feed, so deselecting everything restores the default.
@@ -345,6 +352,13 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
             .filter { row -> row.config != null || row.isBuiltinRail }
             .distinctBy { it.key }
     }
+
+    // What a collapsed FEED says about itself, in the same short names its
+    // chips carry, so a single pick is named rather than counted.
+    val feedTitles = remember(feedRows) {
+        feedRows.associate { row -> row.key to shortFeedLabel(row.title) }
+    }
+    val feedSummary = billboardFeedSummary(feeds = feeds, feedTitles = feedTitles)
 
     Column(
         modifier = Modifier
@@ -388,27 +402,50 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
             )
         }
 
-        RowLabelMobile(
-            "FEED — pick several to merge them, in this order"
-        )
-        FlowRow(
+        // The header stays, the chips fold away behind it: the summary above
+        // says what is merged, and HOLD and TRAILER are the next thing down
+        // instead of the far side of the catalog list.
+        Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            TouchChoiceChip(
-                label = orderLabel(
-                    feeds.indexOf(AppPreferences.BILLBOARD_TRENDING_DAY_FEED),
-                    BILLBOARD_DEFAULT_FEED_LABEL
-                ),
-                selected = AppPreferences.BILLBOARD_TRENDING_DAY_FEED in feeds,
-                onClick = { toggleFeed(AppPreferences.BILLBOARD_TRENDING_DAY_FEED) }
-            )
-            feedRows.forEach { row ->
-                TouchChoiceChip(
-                    label = orderLabel(feeds.indexOf(row.key), shortFeedLabel(row.title)),
-                    selected = row.key in feeds,
-                    onClick = { toggleFeed(row.key) }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                RowLabelMobile(feedSummary)
+                Text(
+                    text = "Pick several to merge them, in this order",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
                 )
+            }
+            ManagerActionMobile(
+                label = if (feedsExpanded) "CLOSE FEEDS" else "PICK FEEDS",
+                onClick = { feedsExpanded = !feedsExpanded }
+            )
+        }
+        if (feedsExpanded) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TouchChoiceChip(
+                    label = orderLabel(
+                        feeds.indexOf(AppPreferences.BILLBOARD_TRENDING_DAY_FEED),
+                        BILLBOARD_DEFAULT_FEED_LABEL
+                    ),
+                    selected = AppPreferences.BILLBOARD_TRENDING_DAY_FEED in feeds,
+                    onClick = { toggleFeed(AppPreferences.BILLBOARD_TRENDING_DAY_FEED) }
+                )
+                feedRows.forEach { row ->
+                    TouchChoiceChip(
+                        label = orderLabel(feeds.indexOf(row.key), shortFeedLabel(row.title)),
+                        selected = row.key in feeds,
+                        onClick = { toggleFeed(row.key) }
+                    )
+                }
             }
         }
 
@@ -448,6 +485,24 @@ private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
             }
         }
     }
+}
+
+/**
+ * The FEED block's state in one line, so a collapsed section still says what is
+ * merged without being expanded: several picks are counted, a single pick is
+ * named - the trending-day default the way its chip names it, any other feed
+ * through its own short chip name, and "1 selected" for a key this manager no
+ * longer lists (a feed whose catalog was removed).
+ */
+internal fun billboardFeedSummary(feeds: List<String>, feedTitles: Map<String, String>): String {
+    if (feeds.size != 1) return "FEED — ${feeds.size} selected"
+    val only = feeds.first()
+    val title = if (only == AppPreferences.BILLBOARD_TRENDING_DAY_FEED) {
+        BILLBOARD_DEFAULT_FEED_LABEL
+    } else {
+        feedTitles[only]
+    }
+    return "FEED — ${title ?: "1 selected"}"
 }
 
 /** A small caption above one row of billboard chips. */

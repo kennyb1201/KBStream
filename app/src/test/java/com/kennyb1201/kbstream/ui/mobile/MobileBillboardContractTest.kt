@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +64,28 @@ class MobileBillboardContractTest {
 
     private fun managerDialog(): String =
         source("com/kennyb1201/kbstream/ui/mobile/HomeManagerDialogMobile.kt")
+
+    /**
+     * The body of the first `{ … }` after [marker], brace-matched, so a test can
+     * say what a collapsed block does and does not contain rather than only
+     * where its text sits.
+     */
+    private fun blockOf(text: String, marker: String): String {
+        val markerAt = text.indexOf(marker)
+        assertTrue("marker not found: $marker", markerAt >= 0)
+        val open = text.indexOf('{', markerAt)
+        var depth = 0
+        for (i in open until text.length) {
+            when (text[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(open + 1, i)
+                }
+            }
+        }
+        throw AssertionError("unbalanced block after $marker")
+    }
 
     /** The billboard's own block in the view model, between its two markers. */
     private fun billboardBlock(): String {
@@ -445,6 +468,62 @@ class MobileBillboardContractTest {
         // No second delay/mute control: those live in Settings.
         assertFalse(dialog.contains("setHeroTrailerDelayMs"))
         assertFalse(dialog.contains("setHeroTrailerMuted"))
+    }
+
+    /**
+     * The feed chips are one chip per catalog, so expanded they buried HOLD and
+     * TRAILER far enough down that the billboard's settings were reported
+     * missing (field 2026-10-30). They fold away on every open, behind a header
+     * that says what is merged - and the two rows somebody actually came for
+     * stay beside the shut block, not inside it.
+     */
+    @Test
+    fun `the feed chips fold away on open, and hold and trailer stay outside`() {
+        val dialog = managerDialog()
+
+        // The dialog's own rule for a long block (IMPORT above): collapsed on
+        // every open, dialog-local, not a pref.
+        assertTrue(dialog.contains("var feedsExpanded by remember { mutableStateOf(false) }"))
+
+        val chips = blockOf(dialog, "if (feedsExpanded) {")
+        // Expanded, the block is the chip list it always was...
+        assertTrue(chips.contains("AppPreferences.BILLBOARD_TRENDING_DAY_FEED in feeds"))
+        assertTrue(chips.contains("onClick = { toggleFeed(row.key) }"))
+        assertTrue(chips.contains("orderLabel(feeds.indexOf(row.key), shortFeedLabel(row.title))"))
+        // ...and nothing else, so the shut section reads BILLBOARD -> FEED ->
+        // HOLD -> TRAILER with no catalog list in between.
+        assertFalse(chips.contains("HOLD —"))
+        assertFalse(chips.contains("TRAILER —"))
+        assertFalse(chips.contains("BILLBOARD_CYCLE_OPTIONS_MS"))
+        assertFalse(chips.contains("BillboardTrailerMode.entries"))
+
+        // The header carries the selection without expanding, keeps the merge
+        // wording reachable, and is the thing that opens the block.
+        val header = dialog.substring(
+            dialog.indexOf("RowLabelMobile(feedSummary)"),
+            dialog.indexOf("if (feedsExpanded) {")
+        )
+        assertTrue(header.contains("Pick several to merge them, in this order"))
+        assertTrue(header.contains("if (feedsExpanded) \"CLOSE FEEDS\" else \"PICK FEEDS\""))
+        assertTrue(header.contains("onClick = { feedsExpanded = !feedsExpanded }"))
+    }
+
+    @Test
+    fun `a shut feed block names one pick and counts several`() {
+        val titles = mapOf("kb_anime" to "Anime")
+
+        assertEquals(
+            "FEED — Trending today",
+            billboardFeedSummary(listOf(AppPreferences.BILLBOARD_TRENDING_DAY_FEED), titles)
+        )
+        assertEquals("FEED — Anime", billboardFeedSummary(listOf("kb_anime"), titles))
+        // A key this manager no longer lists still reads as one pick.
+        assertEquals("FEED — 1 selected", billboardFeedSummary(listOf("gone"), titles))
+        assertEquals(
+            "FEED — 3 selected",
+            billboardFeedSummary(listOf("trending_day", "kb_anime", "kb_x"), titles)
+        )
+        assertEquals("FEED — 0 selected", billboardFeedSummary(emptyList(), titles))
     }
 
     @Test
