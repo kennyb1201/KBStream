@@ -47,11 +47,11 @@ internal const val BYW_FIT_LEVEL_STRIP_HIDDEN = 3
  *  - it stops at [BYW_FIT_LEVEL_STRIP_HIDDEN], so there are at most three
  *    transitions per raise and no layout loop.
  *
- * The measured-total rule is what makes the notch-margin absorption case behave:
- * shrinking the strip also shrinks the header, the clearance pass then grows the
- * row's top margin by the same amount, and the total does not move - so the next
- * pass still sees an overflow and walks on to the posters, which sit below the
- * margin and always reduce the total.
+ * The measured-total rule is what keeps a level honest: the pass never trusts an
+ * assumed saving, it shrinks one step and measures the REAL height again. (The
+ * clearance pass used to absorb a shrink by growing the row's top margin by the
+ * same amount, so a level could cost nothing at all; it narrows the row instead
+ * now, and every level shows in the total.)
  *
  * EQUALITY IS THE OVERFLOW SIGNAL, not slack. The panel is a `WRAP_CONTENT`
  * child of a clipping parent, so the parent measures it with an `AT_MOST`

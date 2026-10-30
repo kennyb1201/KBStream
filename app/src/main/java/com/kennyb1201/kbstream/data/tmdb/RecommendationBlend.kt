@@ -52,11 +52,15 @@ import kotlinx.coroutines.coroutineScope
 /**
  * How many picks the credits row fills in.
  *
- * Seven, not six: the row is built from a wrap-content set of cards packed to
- * the left, so the six it used to stop at left a visible gap at the end of the
- * line while the end-credits arrangement has the whole screen's width to fill.
+ * The row is a wrap-content set of cards packed to the left inside a panel that
+ * owns the whole screen's width in the end-credits arrangement, so a count one
+ * short of the line shows up as a blank slot at the end rather than as slack.
+ * Six left a visible gap, and so did seven (field 2026-10-30: "there's a blank
+ * space at the end where another suggestion could fit"); eight fills the line at
+ * the full 108 x 162dp poster. A panel narrower than that simply scrolls - the
+ * cards are chained RIGHT/LEFT, so nothing in the row is out of reach.
  */
-internal const val BYW_PICK_COUNT = 7
+internal const val BYW_PICK_COUNT = 8
 
 /**
  * How many survivors the kids walk aims to hand the ceiling: twice the row, so

@@ -72,6 +72,32 @@ class BywPanelFitAndFocusContractTest {
         )
     }
 
+    /**
+     * The marks both thumb drawables ship with are baked near-white (#FFF3EFE4),
+     * but the SIGNALLED plate is the accent fill - so a pressed thumb drew a
+     * near-white mark on a pale accent plate and read as a blank white box (field
+     * 2026-10-30, the same frame that reported the pills being clipped: the thumbs
+     * were visibly there but gave no sign of what they were). The filled state
+     * must tint the mark with the fill's own contrast colour, the way PLAY's label
+     * on that same chip does.
+     */
+    @Test
+    fun `a signalled thumb's mark is tinted off its accent plate`() {
+        val look = section(
+            source(BYW),
+            "private fun applyThumbLook(",
+            "private fun isThumbActive"
+        )
+        assertTrue(
+            "the mark takes the chip's contrast colour while the plate is filled",
+            look.contains("view.imageTintList") && look.contains("R.color.kb_void")
+        )
+        assertTrue(
+            "and only while it is filled: the unsignalled plate keeps the baked mark",
+            look.contains("if (active) {") && look.contains("} else {")
+        )
+    }
+
     @Test
     fun `hasTasteRow answers from the row's visibility, not from the thumbs existing`() {
         val src = source(BYW)
@@ -164,15 +190,83 @@ class BywPanelFitAndFocusContractTest {
     }
 
     @Test
-    fun `the notch absorption case walks on, because the pass judges the measured total`() {
-        // Level 1 shrank the strip, which also shrank the HEADER - and
-        // keepRowClearOfNotch then grew the row's margin by the same amount, so
-        // the total did not move. The pass only looks at the measured height, so
-        // an unchanged total is an overflow and the next level is taken.
+    fun `an overflowing total keeps walking, and equality is still the signal`() {
+        // The pass only ever looks at the measured height, never at an assumed
+        // saving: a level that did not move the total is still an overflow and
+        // the next level is taken. (The clearance pass no longer grows the row's
+        // margin, so a shrink always shows - but the rule does not depend on it.)
         assertEquals(
             "an unchanged overflowing total takes the next level",
             BYW_FIT_LEVEL_COMPACT_POSTERS,
             fitLevelFor(measuredHeightPx = 600, availableHeightPx = 492, currentLevel = 1)
+        )
+    }
+
+    /**
+     * The field report behind this pass's second field round (2026-10-30): the
+     * panel's BOTTOM was still under the screen edge - no meta line, no PLAY /
+     * DETAILS pills, no hint - while the featured strip (and with it the
+     * clearlogo and the meta line above the row) had already been dropped by the
+     * ladder, and the row ran past the panel's edges.
+     *
+     * Two seams, both pinned below: a shrunk panel measures the same clamped
+     * height, so its bounds never change and the layout listener that drives the
+     * ladder would never fire again; and the credits clearance bought vertical
+     * room by pushing the row DOWN, which made the panel's height video + row +
+     * hint no matter what the ladder shrank.
+     */
+    @Test
+    fun `a level that is applied asks for the next measurement`() {
+        val fit = section(
+            source(BYW),
+            "private fun fitCreditsPanel() {",
+            "private fun applyFitLevel(level: Int) {"
+        )
+        assertTrue(
+            "an over-full panel measures the same clamped height at every level, so its " +
+                "bounds never change and its layout listener never fires again - without " +
+                "this re-ask the ladder stopped after one step",
+            fit.contains("OneShotPreDrawListener.add(panel) { fitCreditsPanel() }")
+        )
+    }
+
+    @Test
+    fun `the credits corner narrows the row instead of pushing it down`() {
+        val clearance = section(
+            source(BYW),
+            "private fun keepRowClearOfNotch() {",
+            "private fun fitCreditsPanel() {"
+        )
+        assertTrue(
+            "the row ends before the video's left edge, so the corner never costs height",
+            clearance.contains("params.marginEnd = inset") &&
+                clearance.contains("if (header < creditsNotchPx) creditsInsetPx else 0")
+        )
+        assertTrue(
+            "and the row's own top margin goes back to its XML value",
+            clearance.contains("params.topMargin = base")
+        )
+        assertFalse(
+            "never pushed down: that made the panel's total video + row + hint, which is " +
+                "how the ladder ran to its floor and still clipped the pills",
+            clearance.contains("params.topMargin = margin") ||
+                clearance.contains("creditsNotchPx - header)")
+        )
+    }
+
+    @Test
+    fun `every card is reachable across the row`() {
+        val build = buildBody(source(BYW))
+        assertTrue(
+            "the card boundary is named in both directions: the row's window can end before " +
+                "the credits video, and a geometric search that stops at the window is what " +
+                "left the picks past it unreachable",
+            build.contains("prevDetails?.nextFocusRightId = play.id") &&
+                build.contains("play.nextFocusLeftId = prevDetails?.id ?: View.NO_ID")
+        )
+        assertTrue(
+            "and the row's right end is a no-op, the way DOWN is for every pill",
+            build.contains("details.nextFocusRightId = details.id")
         )
     }
 

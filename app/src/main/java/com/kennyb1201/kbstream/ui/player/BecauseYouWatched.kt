@@ -26,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.OneShotPreDrawListener
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
@@ -108,7 +109,7 @@ internal fun bywMediaType(parentType: String): String = when (parentType.lowerca
  *  - the finished title's detail as the seed;
  *  - the SAME FRANCHISE tier, which belongs to this surface only (Detail's
  *    Collections rail already carries the saga);
- *  - seven picks;
+ *  - eight picks;
  *  - the DROP watched rule: this panel suggests something NEW to watch, so a
  *    title this profile has already seen is gone rather than pushed down;
  *  - hidden titles dropped, the same rule Detail's rail uses;
@@ -926,6 +927,19 @@ internal class BecauseYouWatchedUi(
                 else -> R.drawable.ic_detail_thumb_down_outline
             }
         )
+        // The marks are baked near-white (#FFF3EFE4) - the Detail header's own
+        // glyphs - but the ACTIVE plate is the accent fill, and a near-white mark
+        // on it is invisible: the pressed thumb read as a blank white box (field
+        // 2026-10-30: the thumbs looked like empty plates, so there was no way to
+        // tell which one the panel was offering). The filled state therefore
+        // takes the fill's own contrast colour, exactly like PLAY's label on the
+        // same chip; the unselected plate keeps the baked mark on the raised /
+        // surface fill, where it reads.
+        view.imageTintList = if (active) {
+            ColorStateList.valueOf(ContextCompat.getColor(context, R.color.kb_void))
+        } else {
+            null
+        }
     }
 
     /** True when [up]'s thumb is the one the painted signal belongs to. */
@@ -1123,28 +1137,50 @@ internal class BecauseYouWatchedUi(
     private fun rowScroll(): View? = row.parent as? View
 
     /**
-     * Pushes the pick row below the notch when the header is shorter than the
-     * shrunk video. Both scale with the screen, but not identically: a box that
-     * reports a 4K surface at a 1080p density gets a video nearly twice the
-     * header's height, and the row's right end would then sit under the credits
-     * instead of under the panel's fill. The margin comes from the header's own
-     * height (which excludes it), so the pass settles after one layout.
+     * Holds the pick row clear of the shrunk video's corner - by narrowing the
+     * row, never by pushing it down.
+     *
+     * It used to push the row DOWN by (video height - header height). That cost
+     * the panel precisely the height the video occupies: once the header is
+     * shorter than the corner, the panel's total becomes video + row + hint
+     * whatever the fit ladder shrinks, so on a 1080p UI the ladder walked to its
+     * floor - dropping the featured strip, and with it the clearlogo and the meta
+     * line - and STILL clipped the PLAY / DETAILS pills and the hint off the
+     * bottom (field 2026-10-30: "the play and details buttons are cut off, it's
+     * missing meta and clearlogo").
+     *
+     * The row is a horizontal scroll view, so it does not need to move down: it
+     * takes the header's own right inset instead, ends before the video's left
+     * edge, and the picks past that edge are reached by scrolling the row - which
+     * a focus move does on its own. The panel's height then stays header + row +
+     * hint at every level, which is what lets the fit pass keep the strip.
      */
     private fun keepRowClearOfNotch() {
         if (creditsInsetPx <= 0 || creditsNotchPx <= 0) return
         val scroll = rowScroll() ?: return
         // Before the first layout the header has no measured height at all, and
-        // taking that for a header would shove the row down for a frame. The
-        // layout pass that follows calls this again with real numbers.
+        // taking that for a header would inset the row for a frame. The layout
+        // pass that follows calls this again with real numbers.
         if (scroll.top <= 0) return
         val params = scroll.layoutParams as? LinearLayout.LayoutParams ?: return
         val base = creditsRowBaseMargin ?: params.topMargin.also { creditsRowBaseMargin = it }
+        // Measured against the margin this layout actually used, so the header's
+        // height is the truth and not the clearance the old pass added to it.
         val header = scroll.top - panel.paddingTop - params.topMargin
-        val margin = base + (creditsNotchPx - header).coerceAtLeast(0)
-        if (params.topMargin != margin) {
-            params.topMargin = margin
-            scroll.requestLayout()
+        // Only when the row's top is under the video: a header taller than the
+        // corner already ends below it, and insetting would give up width for
+        // nothing.
+        val inset = if (header < creditsNotchPx) creditsInsetPx else 0
+        var changed = false
+        if (params.topMargin != base) {
+            params.topMargin = base
+            changed = true
         }
+        if (params.marginEnd != inset) {
+            params.marginEnd = inset
+            changed = true
+        }
+        if (changed) scroll.requestLayout()
     }
 
     /**
@@ -1183,6 +1219,17 @@ internal class BecauseYouWatchedUi(
         if (next == fitLevel) return
         fitLevel = next
         applyFitLevel(next)
+        // Ask again once this level is actually laid out. The panel is a
+        // `WRAP_CONTENT` child of a clipping parent, so an over-full panel
+        // measures the SAME clamped height at every level: its bounds never
+        // change, which means the layout listener that started this pass never
+        // fires again. Without this re-ask the ladder stopped after ONE step and
+        // left the panel over-full - the pills and the hint under the clip, with
+        // the strip already shrunk or hidden for nothing (field 2026-10-30).
+        // One shot, on the pre-draw of the frame that carries the new level: a
+        // plain `post` can land before that traversal and step on a stale
+        // measurement, which is how the ladder overshoots the level that fits.
+        OneShotPreDrawListener.add(panel) { fitCreditsPanel() }
     }
 
     /**
@@ -1275,15 +1322,24 @@ internal class BecauseYouWatchedUi(
         }
     }
 
-    /** Puts the row's own top margin back, on leaving the credits arrangement. */
+    /**
+     * Puts the row's own margins back, on leaving the credits arrangement: both
+     * the top margin and the credits corner's right inset.
+     */
     private fun clearRowClearance() {
         val base = creditsRowBaseMargin ?: return
         val scroll = rowScroll() ?: return
         val params = scroll.layoutParams as? LinearLayout.LayoutParams ?: return
+        var changed = false
         if (params.topMargin != base) {
             params.topMargin = base
-            scroll.requestLayout()
+            changed = true
         }
+        if (params.marginEnd != 0) {
+            params.marginEnd = 0
+            changed = true
+        }
+        if (changed) scroll.requestLayout()
     }
 
     /** Re-tints everything the panel owns, after an AMOLED / theme change. */
@@ -1313,6 +1369,9 @@ internal class BecauseYouWatchedUi(
         metaCache.clear()
         logoCache.clear()
         featured = null
+        // The previous card's rightmost pill, so the row's own traversal can be
+        // pinned card to card (see the RIGHT/LEFT wiring below).
+        var prevDetails: TextView? = null
 
         picks.forEachIndexed { index, pick ->
             val card = LinearLayout(host).apply {
@@ -1441,6 +1500,19 @@ internal class BecauseYouWatchedUi(
             // kept the D-pad from staying inside while UP/DOWN are let through.
             play.nextFocusDownId = play.id
             details.nextFocusDownId = details.id
+            // LEFT/RIGHT across the row is pinned by id too. The row is a
+            // horizontal scroll view that ends before the credits video, so the
+            // picks past its right edge are off the window - and a geometric
+            // search that stops at the window is what left them unreachable
+            // (field 2026-10-30: "it has room for one more poster I can't
+            // reach"). PLAY -> DETAILS inside a card stays geometric (DETAILS is
+            // to the right of PLAY); only the card boundary is named.
+            prevDetails?.nextFocusRightId = play.id
+            play.nextFocusLeftId = prevDetails?.id ?: View.NO_ID
+            // The row's right end is a no-op for the last card, the way DOWN is
+            // for every pill.
+            details.nextFocusRightId = details.id
+            prevDetails = details
             if (index == 0) {
                 likeThumb?.nextFocusDownId = play.id
                 dislikeThumb?.nextFocusDownId = details.id
