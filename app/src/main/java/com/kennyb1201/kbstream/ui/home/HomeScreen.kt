@@ -757,17 +757,29 @@ internal fun HeroInlineTrailerPlayer(
      * Returns whether the owner took its one client-exclusion re-resolve. The
      * refusal is NOT an identity verdict on the 2026-10-22 evidence - the same
      * signed URL served bytes=0-0, 0-1M and 0-<pos> while every offset read was
-     * refused - so the owner is asked first, and only the owner knows whether
-     * the session's one attempt is still unspent (see the hero's own
-     * `trailerAttempt` budget). [durationMs] is passed so the owner can stamp
-     * the death line the diagnostics report reads.
+     * refused - so the owner is asked first, and only the owner knows whether a
+     * replacement is still owed (Home's `trailerAttempt` budget, the Detail
+     * page's class ladder). [durationMs] is passed so the owner can stamp the
+     * death line the diagnostics report reads.
      */
     onIdentityBlocked: (positionMs: Long, durationMs: Long) -> Boolean = { _, _ -> false },
     /**
-     * The trailer's video id, for the watchdog's log line ONLY (never a URL,
-     * never a token). The hero passes the same key its `trailer.death` line
-     * records so a capture can join the two artifacts; the mobile Detail hero
-     * passes nothing and the line says `video=?`.
+     * The media's own clock, reported on state changes only (never per frame).
+     *
+     * Exists for the death line: the ordinary `onFailed` callback carries the
+     * position but no duration, and a capture that cannot see how long the
+     * trailer was cannot tell "died near the end" from "died at 20 s of 140" -
+     * and an identical replay's skip needs the length to convert its 1 MB chunk
+     * into media time. Every existing caller ignores it (the default), so no
+     * surface's behaviour changes.
+     */
+    onProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
+    /**
+     * The trailer's video id, for the watchdog's log line and the chunk-death
+     * record ONLY (never a URL, never a token). The hero passes the same key its
+     * `trailer.death` line records so a capture can join the two artifacts, and
+     * the mobile Detail hero passes it too - a line that says `video=?` joins to
+     * nothing.
      */
     videoId: String? = null
 ) {
@@ -836,7 +848,12 @@ internal fun HeroInlineTrailerPlayer(
                     userAgentHint = when (source) {
                         is PlayableSource.Muxed -> source.userAgent
                         is PlayableSource.Adaptive -> source.userAgent
-                    }
+                    },
+                    // Diagnostics only, and the reason it is passed rather than
+                    // read off the URL: googlevideo's `id` is YouTube's opaque
+                    // id, so a chunk death keyed on it could never be matched
+                    // to the `trailer.death` line this player's owner writes.
+                    videoIdHint = videoId
                 ),
                 DefaultExtractorsFactory()
             )
@@ -967,6 +984,10 @@ internal fun HeroInlineTrailerPlayer(
                     } else if (playbackState == Player.STATE_READY && exoPlayer.isPlaying) {
                         startedPlaying = true
                         handler.removeCallbacks(watchdog)
+                        onProgress(
+                            exoPlayer.currentPosition.coerceAtLeast(0L),
+                            exoPlayer.duration
+                        )
                     } else if (playbackState == Player.STATE_BUFFERING && startedPlaying) {
                         // Re-buffer mid-playback: give it the long grace before
                         // falling back to the backdrop.
@@ -980,6 +1001,12 @@ internal fun HeroInlineTrailerPlayer(
                     if (isPlaying) {
                         startedPlaying = true
                         handler.removeCallbacks(watchdog)
+                        // The duration is only known once the container has been
+                        // read, which is exactly here.
+                        onProgress(
+                            exoPlayer.currentPosition.coerceAtLeast(0L),
+                            exoPlayer.duration
+                        )
                     }
                 }
 

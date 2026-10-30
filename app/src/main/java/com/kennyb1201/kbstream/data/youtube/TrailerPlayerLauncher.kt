@@ -476,3 +476,46 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         }.getOrNull()
     }
 }
+
+/** A resolved source's VIDEO url: the one a trailer's format lives on. */
+internal fun PlayableSource.signedUrl(): String = when (this) {
+    is PlayableSource.Muxed -> url
+    is PlayableSource.Adaptive -> videoUrl
+}
+
+/**
+ * The shape a death line names for this source, in the trace's own vocabulary
+ * (`hls | adaptive | progressive`).
+ *
+ * Read from the SOURCE rather than from `PoTokenTrace.resolveKind`, which is
+ * whatever resolve ran last in the process: the Detail hero's death line has to
+ * describe the stream that just died, not another title's pre-warm.
+ */
+internal fun PlayableSource.deathKind(): String = when (this) {
+    is PlayableSource.Muxed ->
+        if (url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) "hls"
+        else "progressive"
+
+    is PlayableSource.Adaptive -> "adaptive"
+}
+
+/**
+ * A googlevideo signed URL's `name` query parameter, or null.
+ *
+ * [googlevideoItag] and [googlevideoBytes] are the two facts a mid-play death
+ * has to carry: which FORMAT died (the `itag` a capture can compare against a
+ * later attempt's) and how big the stream is (which turns the chunk that killed
+ * it into a media-time skip).
+ */
+internal fun googlevideoParam(url: String, name: String): String? =
+    runCatching { Uri.parse(url).getQueryParameter(name) }
+        .getOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+/** The `itag` of the format a googlevideo URL serves, or null. */
+internal fun googlevideoItag(url: String): String? = googlevideoParam(url, "itag")
+
+/** The stream's byte length as its own signed URL claims it (`clen`), or null. */
+internal fun googlevideoBytes(url: String): Long? =
+    googlevideoParam(url, "clen")?.toLongOrNull()?.takeIf { it > 0L }

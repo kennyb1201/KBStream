@@ -63,7 +63,17 @@ import okhttp3.OkHttpClient
 @UnstableApi
 class YoutubeChunkedDataSourceFactory(
     private val chunkSizeBytes: Long = CHUNK_SIZE,
-    private val userAgentHint: String? = null
+    private val userAgentHint: String? = null,
+    /**
+     * The watch id this stream belongs to, when the caller knows it (a hero
+     * trailer does; a full-player VOD session is not required to).
+     *
+     * Diagnostics only: it keys the chunk-death record the trailer death line
+     * quotes, because the signed URL's own `id` parameter is YouTube's OPAQUE
+     * id (`o-AH…`) and can never be compared against a watch id. Nothing about
+     * the chunk size, the retry budget or the mode ladder reads it.
+     */
+    private val videoIdHint: String? = null
 ) : DataSource.Factory {
 
     companion object {
@@ -75,8 +85,13 @@ class YoutubeChunkedDataSourceFactory(
          * for open-ended requests), but 206 for ranges up to 1 MB. Larger
          * chunks avoid request churn on other hosts, but here they get a hard
          * 403 — so the chunk stays well inside the proven-safe size.
+         *
+         * `internal` rather than private because the trailer resume maths
+         * (see [resumePastFailureMs]) has to skip exactly one of these: an
+         * identical replay that starts less than a chunk past the death lands
+         * back in the byte range that refused it.
          */
-        private const val CHUNK_SIZE = 1L * 1024 * 1024
+        internal const val CHUNK_SIZE = 1L * 1024 * 1024
 
         /**
          * How many times one chunk may be opened: the initial attempt plus two
@@ -152,7 +167,8 @@ class YoutubeChunkedDataSourceFactory(
             buildList {
                 if (!userAgentHint.isNullOrBlank()) add(userAgentHint)
                 addAll(KNOWN_CLIENT_USER_AGENTS)
-            }.distinct()
+            }.distinct(),
+            videoIdHint = videoIdHint
         )
     }
 
@@ -182,7 +198,9 @@ class YoutubeChunkedDataSourceFactory(
          * the network; production always takes [runYouTubeChunkDiagnostics].
          */
         private val diagnostics: (url: String, userAgent: String, position: Long) -> Unit =
-            ::runYouTubeChunkDiagnostics
+            ::runYouTubeChunkDiagnostics,
+        /** See [YoutubeChunkedDataSourceFactory]'s `videoIdHint`: diagnostics only. */
+        private val videoIdHint: String? = null
     ) : DataSource {
 
         private var activeUaIndex = 0
@@ -234,7 +252,17 @@ class YoutubeChunkedDataSourceFactory(
             currentChunkStart = dataSpec.position
             totalContentLength = dataSpec.length
             positionMode = false
-            val openedLength = openNextChunk()
+            val openedLength =
+                try {
+                    openNextChunk()
+                } catch (e: IOException) {
+                    // The first chunk could not be opened at all (a 403 on a
+                    // refused class, a dead socket): record the range now, so
+                    // the hero's death line can name the byte offset instead of
+                    // only the playhead.
+                    recordChunkDeath(e)
+                    throw e
+                }
             // The server reported the requested position is past the end and
             // media3 did not already read it as an empty open: hand back an
             // empty stream rather than reading from a closed connection.
@@ -602,6 +630,30 @@ class YoutubeChunkedDataSourceFactory(
         }
 
         /**
+         * Records the chunk range a fatal open/read failure died in, for the
+         * trailer death line (`PoTokenTrace.recordChunkDeath`).
+         *
+         * Observation only: no retry decision, no chunk size and no backoff
+         * reads this back, so VOD playback behaves exactly as it did. Keyed by
+         * the watch id the caller supplied ([videoIdHint]) - never by the URL's
+         * own `id`, which is googlevideo's opaque id and cannot be compared with
+         * one - so a full-player failure for another clip can never be quoted as
+         * this trailer's chunk.
+         */
+        private fun recordChunkDeath(e: IOException) {
+            if (!isYouTubeStream) return
+            PoTokenTrace.recordChunkDeath(
+                videoId = videoIdHint?.takeIf { it.isNotBlank() } ?: runCatching {
+                    Uri.parse(originalUrlString.orEmpty()).getQueryParameter("id")
+                }.getOrNull(),
+                offsetBytes = currentChunkStart,
+                totalBytes = totalContentLength
+                    .takeIf { it != C.LENGTH_UNSET.toLong() && it > 0L },
+                reason = describeFailure(e)
+            )
+        }
+
+        /**
          * Reads one chunk's worth of bytes, treating a failed or truncated chunk
          * as something to RETRY rather than as the end of the stream.
          *
@@ -625,7 +677,20 @@ class YoutubeChunkedDataSourceFactory(
          * layer answers it with a retry (then a throw), not with EOF. The pure
          * rule is unchanged for every other caller.
          */
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            try {
+                readChunked(buffer, offset, length)
+            } catch (e: IOException) {
+                // The loop gave up (or a non-transient refusal came straight
+                // out - the chunker never retries a 403 or a 416): this is the
+                // range that killed the playback, and the only place it is
+                // still known. Pure observation; the exception is rethrown
+                // untouched.
+                recordChunkDeath(e)
+                throw e
+            }
+
+        private fun readChunked(buffer: ByteArray, offset: Int, length: Int): Int {
             while (true) {
                 if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
 

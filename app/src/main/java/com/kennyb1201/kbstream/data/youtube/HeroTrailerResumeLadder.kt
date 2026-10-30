@@ -98,6 +98,154 @@ internal fun heroTrailerResumeDecision(
 }
 
 /**
+ * One requested retry after a mid-play death: what to re-resolve for, whether
+ * that replacement is a DIFFERENT URL class, and where playback must resume.
+ *
+ * Why the resume position differs by shape. The 2026-10-30 field report is a
+ * Detail-hero trailer that dies at ~20 s at the same spot on BOTH attempts, on
+ * one device, over Wi-Fi, while the same clip plays from the same cache on the
+ * TV: a failure PERSISTENT at one position, not a stale signature. The retry
+ * used to re-sign the same request and resume at exactly the dying position, so
+ * it re-fired the identical read into the identical refusal and spent the one
+ * attempt doing it. So a replacement signed by another class resumes at the
+ * death (the new stream has no reason to fail there), and an identical replay
+ * resumes PAST it (see [resumePastFailureMs]) - otherwise there is no point
+ * asking again.
+ */
+internal data class HeroTrailerRetryPlan(
+    /** RESUME for a replacement worth requesting, POISON when nothing is left. */
+    val verdict: HeroTrailerResumeVerdict,
+    /** The strict set the replacement resolve is told to skip. */
+    val excludedClients: Set<String>,
+    /** Where the replacement must start, in the media's own timeline. */
+    val resumeAtMs: Long,
+    /**
+     * True when the replacement is signed by a class other than the one that
+     * died; false for the identical replay (same class, past the death).
+     */
+    val changedClass: Boolean
+)
+
+/**
+ * How much media time an identical replay must skip, when the chunk span cannot
+ * be derived: a 1 MB chunk at trailer bitrates of roughly 500 kB/s.
+ *
+ * Only used when neither the stream's length nor a duration is known - a
+ * resolver that names no `clen`, an error the player reported without a
+ * duration. It is a guess, and deliberately the small one: skipping less than a
+ * chunk still leaves the exact read that just refused.
+ */
+internal const val IDENTICAL_REPLAY_SKIP_MS = 2_000L
+
+/** How many identical replays one trailer gets. One: after it, stop asking. */
+internal const val MAX_IDENTICAL_REPLAYS = 1
+
+/** The media time kept between a resume point and the end, so a seek cannot land past it. */
+private const val MIN_RETRY_TAIL_MS = 5_000L
+
+/**
+ * The media time one [chunkBytes] window of a stream is worth, or null when the
+ * stream's own numbers are not both known.
+ *
+ * googlevideo URLs carry `clen` (their byte length) and the player reports the
+ * clip's duration, so the chunk a trailer died in can be converted into the
+ * timeline position that leaves it behind. Both numbers are needed: a length
+ * without a duration cannot say how much media a byte is worth.
+ */
+internal fun chunkSpanMs(chunkBytes: Long, totalBytes: Long?, durationMs: Long): Long? {
+    if (chunkBytes <= 0L || durationMs <= 0L) return null
+    val total = totalBytes?.takeIf { it > 0L } ?: return null
+    return ((chunkBytes.toDouble() / total.toDouble()) * durationMs.toDouble())
+        .toLong()
+        .coerceAtLeast(1L)
+}
+
+/**
+ * Where an IDENTICAL replay must start so its first read is not the range that
+ * just refused.
+ *
+ * At least one chunk of media past [positionMs] - derived from the stream's own
+ * length when it is known ([chunkSpanMs]), and [IDENTICAL_REPLAY_SKIP_MS] when
+ * it is not - and clamped so the seek never lands on (or past) the end, which
+ * would turn a retry into an instant end.
+ */
+internal fun resumePastFailureMs(
+    positionMs: Long,
+    durationMs: Long,
+    chunkBytes: Long = CHUNK_SIZE,
+    totalBytes: Long? = null
+): Long {
+    val at = positionMs.coerceAtLeast(0L)
+    val skip = chunkSpanMs(chunkBytes, totalBytes, durationMs) ?: IDENTICAL_REPLAY_SKIP_MS
+    val target = at + skip
+    if (durationMs <= 0L) return target
+    return target
+        .coerceAtMost((durationMs - MIN_RETRY_TAIL_MS).coerceAtLeast(0L))
+        .coerceAtLeast(at)
+}
+
+/**
+ * What a mid-play death means for the Detail hero's retry: the next request, or
+ * none at all.
+ *
+ * The budget is spent by a CHANGED request, not by an attempt: a class that has
+ * died is never offered again ([excludedClients] is cumulative), so every class
+ * change is progress and may be taken while a class remains. An identical
+ * replay cannot make progress, so it is allowed [MAX_IDENTICAL_REPLAYS] time and
+ * then the ladder is spent - that cap is what stops "same spot, both attempts"
+ * from becoming "same spot, forever".
+ *
+ * A full exclusion set names every class, and a resolve told to skip them all
+ * can only fail, so the fallback re-signs with the set cleared. Poison is a
+ * verdict of the LADDER: nothing left to exclude and the replay spent.
+ */
+internal fun heroTrailerRetryPlan(
+    positionMs: Long,
+    durationMs: Long,
+    deadClient: String?,
+    excludedClients: Set<String>,
+    identicalReplays: Int,
+    resumeAttempts: Int,
+    chunkBytes: Long = CHUNK_SIZE,
+    totalBytes: Long? = null,
+    allClientKeys: Set<String> = YouTubeClients.all.map { it.key }.toSet()
+): HeroTrailerRetryPlan {
+    val grown = if (deadClient.isNullOrBlank()) excludedClients else excludedClients + deadClient
+    val changedClass = grown != excludedClients && !grown.containsAll(allClientKeys)
+    // A class change is spent against the class table, never against an attempt
+    // count: five clients can sign a source, so five steps is the whole ladder.
+    // An identical replay cannot make progress, so it is one, and only while
+    // the ladder itself is still alive.
+    val ladderAlive = resumeAttempts < allClientKeys.size
+
+    if (changedClass && ladderAlive) {
+        return HeroTrailerRetryPlan(
+            verdict = HeroTrailerResumeVerdict.RESUME,
+            excludedClients = grown,
+            resumeAtMs = positionMs.coerceAtLeast(0L),
+            changedClass = true
+        )
+    }
+    if (!ladderAlive || identicalReplays >= MAX_IDENTICAL_REPLAYS) {
+        return HeroTrailerRetryPlan(
+            verdict = HeroTrailerResumeVerdict.POISON,
+            excludedClients = grown,
+            resumeAtMs = positionMs.coerceAtLeast(0L),
+            changedClass = false
+        )
+    }
+    return HeroTrailerRetryPlan(
+        verdict = HeroTrailerResumeVerdict.RESUME,
+        // Nothing new to exclude: the replay is the same class, so the set only
+        // stays as a cache bypass. A set that already covers every class is
+        // dropped instead - it would leave the extractor nothing to sign with.
+        excludedClients = if (grown.containsAll(allClientKeys)) emptySet() else excludedClients,
+        resumeAtMs = resumePastFailureMs(positionMs, durationMs, chunkBytes, totalBytes),
+        changedClass = false
+    )
+}
+
+/**
  * Whether a replacement resolve that found NO source ends the video.
  *
  * Only when the ladder was actually walked: a first-attempt resolve failure with

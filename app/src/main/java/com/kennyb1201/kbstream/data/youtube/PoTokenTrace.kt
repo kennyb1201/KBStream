@@ -64,6 +64,30 @@ object PoTokenTrace {
     private var lastResolveKind: String? = null
 
     /**
+     * The chunk range a googlevideo read died in, when one did (see
+     * [recordChunkDeath]). Held as its own fact rather than folded into
+     * [deathLine] because the hero writes that line, and it writes it a moment
+     * after the throw - the offset has to survive that gap.
+     */
+    private var chunkDeath: ChunkDeath? = null
+
+    /**
+     * A failed chunk read, in the terms a capture needs to act on it.
+     *
+     * [videoId] is read from the signed URL's own `id` parameter, so a
+     * full-player failure for one clip can never be quoted as another's; it is
+     * null when the URL carried none. [totalBytes] is the length the chunker
+     * believed at that moment (null when the server never said), which is what
+     * turns the offset into a media-time skip on the resume side.
+     */
+    data class ChunkDeath(
+        val videoId: String?,
+        val offsetBytes: Long,
+        val totalBytes: Long?,
+        val reason: String
+    )
+
+    /**
      * Records the last state of one context.
      *
      * [state] is [PoTokenState]'s vocabulary (`none | minted | cached |
@@ -154,6 +178,46 @@ object PoTokenTrace {
     fun resolveKind(): String? = lastResolveKind
 
     /**
+     * Records the chunk range a googlevideo read or open died in.
+     *
+     * Called from the chunked data source itself, at the moment it stops
+     * retrying - the one place the byte offset, the stream length and the
+     * reason still exist. Observation only: nothing in the retry, chunk-size or
+     * backoff logic reads this back, so VOD playback is unchanged. The line it
+     * feeds is [recordTrailerDeath]'s, not its own: an offset with no death
+     * around it is not a fact a capture can use.
+     */
+    @Synchronized
+    fun recordChunkDeath(
+        videoId: String?,
+        offsetBytes: Long,
+        totalBytes: Long?,
+        reason: String
+    ) {
+        chunkDeath = ChunkDeath(
+            videoId = videoId?.takeIf { it.isNotBlank() },
+            offsetBytes = offsetBytes.coerceAtLeast(0L),
+            totalBytes = totalBytes?.takeIf { it > 0L },
+            reason = reason
+        )
+    }
+
+    /**
+     * The recorded chunk death, when it belongs to [videoId].
+     *
+     * Equality, not "the most recent one": a trailer that dies after the full
+     * player failed on a different clip must not inherit that clip's offset.
+     * Null when either side is unknown - a death with no chunk record is said
+     * to have none rather than attributed to a guess.
+     */
+    @Synchronized
+    fun chunkDeathFor(videoId: String?): ChunkDeath? {
+        val recorded = chunkDeath ?: return null
+        val wanted = videoId?.takeIf { it.isNotBlank() } ?: return null
+        return recorded.takeIf { it.videoId == wanted }
+    }
+
+    /**
      * Records a trailer that died mid-play.
      *
      * The field case this exists for (2026-10-22: every trailer, every device,
@@ -186,6 +250,25 @@ object PoTokenTrace {
      *    death line names the resume instead of leaving the request's own line.
      *
      * Never a URL and never a token.
+     *
+     * The 2026-10-30 report (Detail hero, "dies at ~20 s on both attempts, same
+     * spot") arrived with ZERO trailer lines in either paste, and the reason was
+     * the surface, not the trace: the phone's hero never wrote one. It does now,
+     * and the line carries what settles that report on its own - where it died,
+     * which chunk range, which format, and which retry it was:
+     *
+     *  - [itag]/[chunkOffsetBytes]/[chunkTotalBytes]/[attempt] render only when
+     *    the caller knows them. A capture must not read an invented itag as a
+     *    fact, and the surfaces that predate this (the full player's trailer
+     *    session) keep the line they always wrote.
+     *  - [attempt] is 0 for the first play and 1.. for a retry; [change] says
+     *    what that retry changed - `first`, `same` for an identical re-sign, or
+     *    `class:<key>` when it re-resolved excluding the class that died.
+     *
+     * One more `resume` value joins the closed vocabulary above:
+     * `none: retries spent` - the ladder had no untried class left and the one
+     * identical replay was already spent, so no replacement was requested at
+     * all. It is the line that says "this is as far as the retry rules go".
      */
     @Synchronized
     fun recordTrailerDeath(
@@ -194,13 +277,35 @@ object PoTokenTrace {
         kind: String?,
         positionMs: Long,
         durationMs: Long,
-        resume: String
+        resume: String,
+        /** The `itag` of the format that died, when its URL named one. */
+        itag: String? = null,
+        /** Which attempt this death belongs to: 0 is the first play. */
+        attempt: Int? = null,
+        /** What the retry that produced this attempt changed (see above). */
+        change: String? = null,
+        /** The chunk byte offset the read died at, when the chunker recorded one. */
+        chunkOffsetBytes: Long? = null,
+        /** The stream's length in bytes at that moment, or null when unknown. */
+        chunkTotalBytes: Long? = null
     ) {
         val who = client?.takeIf { it.isNotBlank() } ?: "unknown"
         val shape = kind?.takeIf { it.isNotBlank() } ?: "unknown"
         val length = if (durationMs > 0L) durationMs.toString() else "?"
-        deathLine = "trailer.death: video=$videoId client=$who kind=$shape " +
-            "at=${positionMs.coerceAtLeast(0L)}/$length resume=$resume"
+        deathLine = buildString {
+            append("trailer.death: video=$videoId client=$who kind=$shape")
+            itag?.takeIf { it.isNotBlank() }?.let { append(" itag=$it") }
+            append(" at=${positionMs.coerceAtLeast(0L)}/$length")
+            if (chunkOffsetBytes != null) {
+                append(" chunk=${chunkOffsetBytes.coerceAtLeast(0L)}")
+                append("/${chunkTotalBytes?.takeIf { it > 0L } ?: "?"}")
+            }
+            if (attempt != null) {
+                append(" retry=${attempt.coerceAtLeast(0)}")
+                change?.takeIf { it.isNotBlank() }?.let { append("/$it") }
+            }
+            append(" resume=$resume")
+        }
     }
 
     /**
@@ -246,6 +351,7 @@ object PoTokenTrace {
         warmLine = null
         eventLine = null
         deathLine = null
+        chunkDeath = null
         lastResolveClient = null
         lastResolveKind = null
     }

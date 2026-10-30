@@ -9,6 +9,7 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -322,18 +323,68 @@ class YoutubeChunkedDataSourceTest {
         assertEquals("one attempt: the chunk retry loop wraps the googlevideo path only", 1, fake.opens.size)
     }
 
+    // ------------------------------------------------------- the death record
+
+    @Test
+    fun `a chunk that dies is recorded, keyed by the watch id the hero passed`() {
+        PoTokenTrace.clear()
+        val stream = ByteArray(3 * CHUNK) { it.toByte() }
+        val fake =
+            FakeUpstream(stream) { index, _ -> if (index == 0) Open.Serve else Open.Code(403) }
+        val source = dataSource(fake, videoIdHint = WATCH_ID)
+        source.open(spec(position = 0))
+
+        val failure = readUntilFailure(source)
+
+        assertTrue(
+            "a 403 mid-stream is the refusal the hero classifies: $failure",
+            failure is HttpDataSource.InvalidResponseCodeException
+        )
+        val death = PoTokenTrace.chunkDeathFor(WATCH_ID)
+        assertTrue("the read's death has to be recorded at all", death != null)
+        assertEquals(
+            "the byte offset the chunk after the served one died at",
+            CHUNK.toLong(),
+            death?.offsetBytes
+        )
+        assertTrue("and the reason, in the same shape the retry log uses",
+            death!!.reason.contains("403"))
+        assertNull(
+            "googlevideo's own `id` is the OPAQUE id and can never match a watch id",
+            PoTokenTrace.chunkDeathFor("o-abc")
+        )
+    }
+
+    @Test
+    fun `a clean end records nothing`() {
+        PoTokenTrace.clear()
+        val stream = ByteArray(2 * CHUNK) { it.toByte() }
+        val fake = FakeUpstream(stream) { _, _ -> Open.Serve }
+        val source = dataSource(fake, videoIdHint = WATCH_ID)
+        source.open(spec(position = 0, length = stream.size.toLong()))
+
+        drain(source)
+
+        assertNull(
+            "a trailer that ends is not a death, and the line must not say it is",
+            PoTokenTrace.chunkDeathFor(WATCH_ID)
+        )
+    }
+
     // ------------------------------------------------------------------ seams
 
     private fun dataSource(
         upstream: HttpDataSource,
         userAgents: List<String> = listOf("UA-of-the-signing-client"),
-        diagnostics: (url: String, userAgent: String, position: Long) -> Unit = { _, _, _ -> }
+        diagnostics: (url: String, userAgent: String, position: Long) -> Unit = { _, _, _ -> },
+        videoIdHint: String? = null
     ): YoutubeChunkedDataSourceFactory.YoutubeChunkedDataSource =
         YoutubeChunkedDataSourceFactory.YoutubeChunkedDataSource(
             upstream = upstream,
             chunkSize = CHUNK.toLong(),
             userAgentCandidates = userAgents,
-            diagnostics = diagnostics
+            diagnostics = diagnostics,
+            videoIdHint = videoIdHint
         )
 
     private fun spec(
@@ -493,6 +544,9 @@ class YoutubeChunkedDataSourceTest {
 
     private companion object {
         const val CHUNK = 1 shl 20
+
+        /** A watch id, in the shape a `trailer.death` line records. */
+        const val WATCH_ID = "aF9tV2xC1zk"
 
         const val GOOGLEVIDEO_URL =
             "https://rr1---sn-abc123.googlevideo.com/videoplayback?expire=1&id=o-abc&itag=137"

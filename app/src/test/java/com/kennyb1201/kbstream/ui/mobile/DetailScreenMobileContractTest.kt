@@ -563,20 +563,57 @@ class DetailScreenMobileContractTest {
                 mobile.contains("trailerRequest += 1")
         )
 
-        // The shared resolve, the one-shot retry, and the pool's release.
+        // The shared resolve, the retry ladder, and the pool's release.
         assertTrue(
-            "every resolve goes through the shared launcher",
-            mobile.contains("TrailerPlayerLauncher.resolvePlayableUrl(key)")
+            "every resolve goes through the shared launcher, carrying the retry's exclusions",
+            mobile.contains(
+                ".resolvePlayableUrl(key, excludeClients = pending?.excludedClients ?: emptySet())"
+            )
+        )
+        // The 2026-10-30 report: the trailer died at ~20 s at the same spot on
+        // both attempts. What made that possible was a retry that only re-signed
+        // and seeked back to the position that had just refused, so the shape
+        // that replaced it is pinned here: a planned request (a different URL
+        // class first, a skip past the death only for an identical replay), not
+        // an attempt counter.
+        assertTrue(
+            "a death is planned by the ladder rather than counted",
+            mobile.contains("heroTrailerRetryPlan(") &&
+                mobile.contains("identicalReplays = trailerIdenticalReplays") &&
+                mobile.contains("deadClient = TrailerPlayerLauncher.cachedSigningClient(key)")
+        )
+        assertFalse(
+            "the one-attempt counter it replaced must not come back",
+            Regex("trailerAttempt\\b").containsMatchIn(mobile)
         )
         assertTrue(
-            "a mid-stream failure retries once, from where it died",
-            mobile.contains("if (trailerAttempt < 1) {") &&
-                mobile.contains("trailerResumeMs = positionMs")
+            "the retry starts where the ladder says, not always where it died",
+            mobile.contains("val startAt = pending?.resumeAtMs ?: 0L") &&
+                mobile.contains("heroTrailer = HeroTrailerPlayback(source, startAt)")
         )
         assertTrue(
-            "and that position is consumed with the resolve that uses it",
-            mobile.contains("val resumeFrom = trailerResumeMs") &&
-                mobile.contains("trailerResumeMs = 0L")
+            "and a class change is offered to the resolve, which is what makes " +
+                "the retry a different request",
+            mobile.contains("trailerExcludedClients = plan.excludedClients") &&
+                mobile.contains("TrailerPlayerLauncher.invalidate(key)")
+        )
+        assertTrue(
+            "the chunk range and format that died are read for the death line",
+            mobile.contains("PoTokenTrace.chunkDeathFor(key)") &&
+                mobile.contains("itag = signedUrl?.let { googlevideoItag(it) }") &&
+                mobile.contains("kind = source?.deathKind()")
+        )
+        assertTrue(
+            "and the death is written to the trace the diagnostics report prints",
+            mobile.contains("PoTokenTrace.recordTrailerDeath(") &&
+                mobile.contains("chunkOffsetBytes = chunk?.offsetBytes")
+        )
+        assertTrue(
+            "the refusal path walks the same ladder, so a 403 mid-stream is not " +
+                "silently fatal on this surface",
+            header.contains("onIdentityBlocked = onTrailerRefused") &&
+                mobile.contains("onTrailerRefused = { positionMs, durationMs ->") &&
+                mobile.contains("requestTrailerRetry(positionMs, durationMs)")
         )
         assertTrue(
             "stopping and leaving the page silence the pooled player",
