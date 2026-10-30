@@ -452,9 +452,9 @@ class MobileBottomNavContractTest {
         }
         val mobile = mobileHome()
         // Scoped to the HEADER: the Home billboard below it draws its own icon
-        // buttons (the pager's chevrons and the trailer's close mark), and
-        // those are not the header's doors. What this test protects is that the
-        // header itself shrank to one child.
+        // button (the trailer's close mark), and that is not one of the header's
+        // doors. What this test protects is that the header itself shrank to one
+        // child.
         assertTrue(
             "the header must no longer draw any icon button; that destination " +
                 "lives in the bar",

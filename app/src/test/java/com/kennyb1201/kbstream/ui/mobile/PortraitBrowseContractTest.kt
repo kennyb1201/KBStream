@@ -192,8 +192,8 @@ class PortraitBrowseContractTest {
                 !topBar.contains("onSwitchProfile")
         )
         // The header's own body, not the whole file: the billboard below it
-        // draws icon buttons (the pager's chevrons, the trailer's close mark),
-        // and the width this test is about is the HEADER's.
+        // draws an icon button of its own (the trailer's close mark), and the
+        // width this test is about is the HEADER's.
         val header = topBar
             .substringAfter("private fun MobileTopBar()")
             .substringBefore("A full-width hero")

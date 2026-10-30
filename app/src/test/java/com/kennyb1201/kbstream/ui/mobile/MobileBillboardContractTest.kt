@@ -146,18 +146,94 @@ class MobileBillboardContractTest {
     }
 
     @Test
-    fun `manual navigation is swipe, chevrons and progress segments`() {
+    fun `manual navigation is the swipe and the progress segments`() {
         val home = mobileHome()
 
-        assertTrue(home.contains("description = \"Previous\""))
-        assertTrue(home.contains("description = \"Next\""))
-        assertTrue(home.contains("pagerState.animateScrollToPage(previous)"))
-        assertTrue(home.contains("pagerState.animateScrollToPage(next)"))
+        // The chevrons are GONE (spec 2.7): on a phone they sat on the artwork
+        // and collided with the clearlogo, so the two ways a thumb actually
+        // navigates - the swipe and the segments - have the job alone. This is
+        // the spec's "no chevron in the mobile composition", pinned rather than
+        // left to the eye on a device.
+        assertFalse("no chevron composable", home.contains("BillboardChevron"))
+        assertFalse("no previous chevron", home.contains("description = \"Previous\""))
+        assertFalse("no next chevron", home.contains("description = \"Next\""))
+
         // The segmented bar kept the dots' navigation: a segment jumps to its
         // own page and names the item it goes to.
         assertTrue(home.contains("pagerState.animateScrollToPage(index)"))
         assertTrue(home.contains("contentDescription = page.meta.name"))
         assertTrue(home.contains("segment = index,"))
+    }
+
+    // ── the premium refresh (spec 2.7) ───────────────────────────────
+
+    @Test
+    fun `the hero is a rounded card with its pills and its bar on the art`() {
+        val home = mobileHome()
+        val hero = home.substring(
+            home.indexOf("private fun MobileHero("),
+            home.indexOf("private fun MobileBillboard(")
+        )
+        val action = home.substring(
+            home.indexOf("private fun BillboardAction("),
+            home.indexOf("private fun Rail.billboardFeedKey()")
+        )
+
+        // The frame: 16dp off the screen's edge, clipped to 20dp, so the page's
+        // own background shows round the hero and the sweep, the scrim and the
+        // trailer are all cut by the same radius.
+        assertTrue(home.contains("// The frame (spec 2.7): 16dp off the screen's edge"))
+        assertTrue(home.contains(".clip(RoundedCornerShape(20.dp))"))
+
+        // The pills are DRAWN, not plated: a solid accent fill for Play, a
+        // translucent glass fill with a hairline for the secondaries. No KBCard
+        // anywhere in the action - its plate is the app's surface fill, which
+        // on a backdrop is no plate at all (the pre-refresh screenshot's bare
+        // Play/Details text).
+        assertTrue(action.contains("val contentColor = if (accent) KBVoid else KBTextHi"))
+        assertTrue(action.contains("if (accent) KBAccent else KBTextHi.copy(alpha = 0.16f)"))
+        assertTrue(
+            action.contains("if (accent) Color.Transparent else KBTextHi.copy(alpha = 0.30f)")
+        )
+        assertTrue(action.contains(".clip(CircleShape)"))
+        assertTrue(action.contains(".height(42.dp)"))
+        assertTrue(action.contains(".padding(horizontal = 18.dp)"))
+        assertTrue("the house press scale", action.contains("KB_PRESS_SPRING"))
+        assertFalse("the plate must be gone", action.contains("KBCard("))
+
+        // ...inside the image, under the meta line, riding the page's own
+        // reveal, and only on the page in front.
+        assertTrue(
+            home.contains(
+                "actions = if (index == pagerState.currentPage) pageActions else null"
+            )
+        )
+        assertTrue(hero.contains("actions?.let { pills ->"))
+        assertTrue(hero.contains("pills()"))
+        assertTrue(
+            "the column clears the segments overlay",
+            hero.contains("padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 40.dp)")
+        )
+
+        // The description is gone from a hero page, the meta line is near-white,
+        // and the scrim is lighter because the controls now live on it.
+        assertFalse(hero.contains("meta.description?.takeIf"))
+        assertTrue(hero.contains("color = KBTextHi.copy(alpha = 0.90f)"))
+        assertTrue(hero.contains("KBVoid.copy(alpha = 0.30f)"))
+        assertTrue(hero.contains("KBVoid.copy(alpha = 0.85f)"))
+        assertFalse("the heavy scrim stops must be gone", hero.contains("0.94f"))
+
+        // The segments overlay the image's bottom edge, and the count the visible
+        // "N of M" line used to draw is announced by the row instead.
+        assertTrue(home.contains(".align(Alignment.BottomCenter)"))
+        assertTrue(home.contains("padding(start = 16.dp, end = 16.dp, bottom = 10.dp)"))
+        assertTrue(
+            home.contains("\"Page \${pagerState.currentPage + 1} of \${pages.size}\"")
+        )
+        assertFalse(
+            "the visible counter Text must be deleted",
+            home.contains("text = \"\${pagerState.currentPage + 1} of \${pages.size}\"")
+        )
     }
 
     // ── the Ken Burns look (spec 2.6) ────────────────────
