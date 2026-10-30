@@ -242,7 +242,7 @@ class LocalAdvanceCardOmissionTest {
         )
         assertTrue(
             "and only aired episodes may be carded: $walk",
-            walk.contains("isAiredOrUnknown( episode.airDate )")
+            walk.contains("isAiredOrUnknown(episode.airDate)")
         )
         assertTrue(
             "the first empty season is the end of the show: $walk",
