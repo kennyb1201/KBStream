@@ -163,6 +163,14 @@ object AppPreferences {
     // (default), true = the horizontal episode rail. Screen geometry like the
     // two switches above it - see notifyDisplayPrefChanged.
     private const val KEY_DETAIL_EPISODE_RAIL = "detail_episode_rail"
+    // The phone Home billboard (see the billboard section below). Screen
+    // geometry/behaviour of ONE phone's Home, so device-local for the same
+    // reason as the three keys above it: a television has no billboard, and a
+    // phone's cycling hero says nothing about the account.
+    private const val KEY_BILLBOARD_ENABLED = "home_billboard_enabled"
+    private const val KEY_BILLBOARD_FEEDS = "home_billboard_feeds"
+    private const val KEY_BILLBOARD_CYCLE_MS = "home_billboard_cycle_ms"
+    private const val KEY_BILLBOARD_TRAILER_MODE = "home_billboard_trailer_mode"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
     private const val KEY_POSTER_EDGE = "poster_edge" // 0=straight, 1=rounded (default), 2=pill
@@ -1496,6 +1504,119 @@ object AppPreferences {
     internal fun heroTrailerDelayFromStored(raw: Long): Long =
         HERO_TRAILER_DELAY_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
             ?: DEFAULT_HERO_TRAILER_DELAY_MS
+
+    // ── Home billboard (phone hero) ───────────────────────────────────
+    //
+    // The cycling hero at the top of the phone's Home: which feed it shows,
+    // how long each page holds, and whether a page offers a trailer. All four
+    // prefs are DEVICE-LOCAL (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS): the
+    // television has no billboard, so a phone's answers are not a statement
+    // about the account, and a synced value would do nothing on the TV while
+    // letting one phone rearrange another's Home.
+
+    /** The feed key that means "TMDB trending of the day", the default. */
+    const val BILLBOARD_TRENDING_DAY_FEED = "trending_day"
+
+    /** The default feed, and what an empty selection restores. */
+    val DEFAULT_BILLBOARD_FEEDS: List<String> = listOf(BILLBOARD_TRENDING_DAY_FEED)
+
+    /**
+     * The holds the billboard offers, in milliseconds. 0 is "Manual only"
+     * (no auto-advance; swipe, chevrons and dots are the only way page to
+     * page), which is a real option rather than a hidden one.
+     */
+    val BILLBOARD_CYCLE_OPTIONS_MS = listOf(0L, 3_000L, 6_000L, 10_000L, 15_000L)
+
+    /** The hold an install starts on. */
+    const val DEFAULT_BILLBOARD_CYCLE_MS = 6_000L
+
+    fun getHomeBillboardEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BILLBOARD_ENABLED, true)
+
+    fun setHomeBillboardEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BILLBOARD_ENABLED, enabled).apply()
+        notifyDisplayPrefChanged()
+    }
+
+    /**
+     * The chosen feeds, in the order they were picked (which is the merge
+     * order), or the default when nothing is stored.
+     *
+     * A selection is never empty: clearing every feed restores
+     * [DEFAULT_BILLBOARD_FEEDS], because an empty feed is a state the picker
+     * cannot represent and Home answers it by hiding the billboard entirely.
+     */
+    fun getHomeBillboardFeeds(context: Context): List<String> =
+        billboardFeedsFromStored(prefs(context).getString(KEY_BILLBOARD_FEEDS, null))
+
+    fun setHomeBillboardFeeds(context: Context, feeds: List<String>) {
+        prefs(context).edit()
+            .putString(KEY_BILLBOARD_FEEDS, encodeBillboardFeeds(feeds))
+            .apply()
+        notifyDisplayPrefChanged()
+    }
+
+    fun getHomeBillboardCycleMs(context: Context): Long =
+        billboardCycleFromStored(
+            prefs(context).getLong(KEY_BILLBOARD_CYCLE_MS, DEFAULT_BILLBOARD_CYCLE_MS)
+        )
+
+    fun setHomeBillboardCycleMs(context: Context, ms: Long) {
+        prefs(context).edit()
+            .putLong(KEY_BILLBOARD_CYCLE_MS, billboardCycleFromStored(ms))
+            .apply()
+        notifyDisplayPrefChanged()
+    }
+
+    fun getHomeBillboardTrailerMode(context: Context): BillboardTrailerMode =
+        BillboardTrailerMode.fromStorage(
+            prefs(context).getInt(
+                KEY_BILLBOARD_TRAILER_MODE,
+                BillboardTrailerMode.OFF.storageValue
+            )
+        )
+
+    fun setHomeBillboardTrailerMode(context: Context, mode: BillboardTrailerMode) {
+        prefs(context).edit()
+            .putInt(KEY_BILLBOARD_TRAILER_MODE, mode.storageValue)
+            .apply()
+        notifyDisplayPrefChanged()
+    }
+
+    /**
+     * The stored feed list as an ordered, de-duplicated list of keys.
+     *
+     * A newline-separated String rather than a StringSet for the same reason
+     * the sports league order is one: the order IS the merge order, and a set
+     * has none. Blank entries are dropped, and an absent or all-blank value is
+     * the default feed - never "no feeds".
+     */
+    internal fun billboardFeedsFromStored(raw: String?): List<String> {
+        val parsed = raw
+            .orEmpty()
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        return parsed.ifEmpty { DEFAULT_BILLBOARD_FEEDS }
+    }
+
+    /** [billboardFeedsFromStored]'s writer: the list as one newline-separated String. */
+    internal fun encodeBillboardFeeds(feeds: List<String>): String =
+        feeds
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString("\n")
+
+    /**
+     * A stored cycle as one of [BILLBOARD_CYCLE_OPTIONS_MS], snapped to the
+     * nearest option for the same reason as the hero-trailer dwell: an older
+     * build's value has to keep meaning something close to what was picked.
+     */
+    internal fun billboardCycleFromStored(raw: Long): Long =
+        BILLBOARD_CYCLE_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
+            ?: DEFAULT_BILLBOARD_CYCLE_MS
 
     // ── 24-hour clock (player overlay clock) ──────────────────────────
     fun getUse24HourClock(context: Context): Boolean =

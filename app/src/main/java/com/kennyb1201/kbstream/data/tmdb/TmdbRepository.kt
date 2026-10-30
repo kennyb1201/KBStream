@@ -1688,6 +1688,22 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * TMDB /trending/{movie,tv}/day - the same shape as [trendingWeek].
+     *
+     * The phone Home billboard's default feed (see HomeViewModel's billboard
+     * default): a hero that opens on "what is hot today" should not read the
+     * weekly list, which is a different ranking and can be days old.
+     */
+    suspend fun trendingDay(mediaType: String, page: Int = 1): List<TmdbDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        val isTv = mediaType.lowercase() == "tv"
+        return runCatchingCancellable {
+            if (isTv) api.getTrendingTvDayDiscover(apiKey, page).results
+            else api.getTrendingMoviesDayDiscover(apiKey, page).results
+        }.getOrNull()
+    }
+
+    /**
      * TMDB "LIST" source: items of a hosted TMDB list id. Kids Mode note:
      * /list items are heterogeneous (movies + series mixed), so the ceiling
      * check keys off each item's own media type — inferred the same way the

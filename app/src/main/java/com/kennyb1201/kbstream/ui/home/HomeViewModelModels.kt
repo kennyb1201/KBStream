@@ -1,5 +1,8 @@
 package com.kennyb1201.kbstream.ui.home
 
+import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.addon.MetaPreview
+
 /*
  * Small value types HomeViewModel passes around internally. They used to be
  * private nested classes inside its multi-thousand-line body; neither carries
@@ -32,6 +35,38 @@ internal data class PendingCatalogLoad(
      * being prettified by [formatCatalogName].
      */
     val catalogUserNamed: Boolean = false
+)
+
+/**
+ * One page of the phone Home billboard, published as ONE value.
+ *
+ * Why the art and the copy share an object: the billboard's failure mode is the
+ * TV hero's old one - focus (here, a page swipe) lands a frame before a cold
+ * title's TMDB detail and artwork do, so separately-published fields let page N
+ * show page N-1's words over page N's picture, then have a second act when the
+ * art arrives. A page is therefore built off-composition and swapped in whole;
+ * the pager can only ever draw a complete page.
+ *
+ * [settled] is what tells the screen a page finished resolving. The list is
+ * seeded with every page up front (in feed order, so the pager is stable), and
+ * each one flips to true on its own as its resolve lands - which is also what
+ * lets the slot appear on the FIRST settled page while later ones fill in.
+ */
+data class BillboardPage(
+    /** Identity, from [billboardPageKey]: "series:tmdb:123". */
+    val key: String,
+    /** The rail item this page is for, as Detail wants it. */
+    val preview: MetaPreview,
+    /** The page's copy: title, meta line, synopsis. */
+    val meta: Meta,
+    /** The resolved backdrop, or null while only the poster fallback is known. */
+    val backdropUrl: String?,
+    /** TMDB's English wordmark, or null (the hero then draws the title). */
+    val logoUrl: String?,
+    /** The YouTube key the page's trailer plays, or null when TMDB has none. */
+    val trailerKey: String?,
+    /** True once this page's resolve has published everything above together. */
+    val settled: Boolean
 )
 
 /**

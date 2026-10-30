@@ -371,7 +371,17 @@ object PrefsPayloadBuilder {
         // property of that device: a living-room TV wants the picker every
         // time, a phone that only ever uses one profile does not - so picking
         // one answer on the TV must not remove the picker from the phone.
-        "show_profile_picker"
+        "show_profile_picker",
+        // The phone Home billboard: its four prefs describe ONE phone's top
+        // hero - which feed it cycles, how long a page holds, whether it plays
+        // trailers. A television has no billboard at all, so a synced value
+        // would be inert there and would let one phone rearrange another's
+        // Home from across the account. Device-local, like the screen geometry
+        // prefs beside them.
+        "home_billboard_enabled",
+        "home_billboard_feeds",
+        "home_billboard_cycle_ms",
+        "home_billboard_trailer_mode"
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"

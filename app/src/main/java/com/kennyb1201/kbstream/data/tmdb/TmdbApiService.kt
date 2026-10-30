@@ -160,6 +160,26 @@ interface TmdbApiService {
         @Query("page") page: Int = 1
     ): TmdbDiscoverResponse
 
+    /**
+     * The day's trending feed - the same discover shape as the week pair above,
+     * and the phone Home billboard's default source.
+     *
+     * Deliberately a second pair rather than a cached read of the week feed: a
+     * billboard that opens the phone is "what is hot today", and the week list
+     * is a different list that lags the day list by up to six days.
+     */
+    @GET("trending/movie/day")
+    suspend fun getTrendingMoviesDayDiscover(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("trending/tv/day")
+    suspend fun getTrendingTvDayDiscover(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
     @GET("discover/movie")
     suspend fun discoverMovieByCompany(
         // A string, not an Int: TMDB's with_companies takes pipe-joined ids

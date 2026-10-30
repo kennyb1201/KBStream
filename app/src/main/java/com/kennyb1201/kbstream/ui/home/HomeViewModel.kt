@@ -1495,6 +1495,290 @@ Log.d(
         }
     }
 
+    // ── The phone Home billboard ──────────────────────────────────────
+    //
+    // The mobile Home's hero slot is a cycling billboard (see [BillboardPage]
+    // and ui/home/BillboardRules.kt). The TV hero follows focus; a phone has no
+    // focus, so before this nothing ever drove a hero there and the slot never
+    // rendered. ADDITIVE by contract: the TV's hero flows above keep their exact
+    // behavior, and nothing below reads or writes any of them - the billboard
+    // owns its own state, and the television's hero is untouched.
+
+    /**
+     * The billboard's pages, in feed order, seeded up front and settled one by
+     * one (see [BillboardPage]).
+     */
+    private val _billboardPages =
+        MutableStateFlow<List<BillboardPage>>(emptyList())
+
+    val billboardPages: StateFlow<List<BillboardPage>> =
+        _billboardPages.asStateFlow()
+
+    /**
+     * The default feed: TMDB trending of the day, movie and TV interleaved by
+     * rank (see [billboardInterleaveFeeds]).
+     *
+     * Loaded once per Home visit at most, and only when the billboard is armed,
+     * because a viewer who turned the billboard off should not pay two TMDB
+     * calls for it on every launch.
+     */
+    private val _billboardTrendingDay =
+        MutableStateFlow<List<MetaPreview>>(emptyList())
+
+    val billboardTrendingDay: StateFlow<List<MetaPreview>> =
+        _billboardTrendingDay.asStateFlow()
+
+    private var billboardResolveJob: Job? = null
+    private var billboardTrendingJob: Job? = null
+
+    /**
+     * Bumped when the billboard's feed must not be published at all - today
+     * only a profile switch, whose pages (and settled state) belong to the
+     * profile being left. A resolve already in flight carries the epoch it
+     * started with and drops its result when it no longer matches.
+     */
+    private var billboardResolveEpoch = 0
+
+    /**
+     * Two or three resolves in flight at once, per the spec.
+     *
+     * Three, not ten: every page resolves a TMDB detail and a hero-artwork
+     * lookup, and the billboard paints behind an already-usable first page, so
+     * the rest may arrive at a browsing pace. It is also never the whole screen's
+     * worth of requests at once on a phone's connection.
+     */
+    private val billboardResolveSemaphore = Semaphore(permits = 3)
+
+    /**
+     * Empties the billboard - what a hidden slot (the toggle off) asks for, so a
+     * resolve in flight cannot publish pages over a Home that hides them.
+     */
+    fun clearBillboard() {
+        billboardResolveJob?.cancel()
+        billboardResolveJob = null
+        _billboardPages.value = emptyList()
+    }
+
+    /**
+     * Resolves [items] into billboard pages, atomically per page.
+     *
+     * The list is SEEDED immediately (feed order, so the pager's page count and
+     * order never move under a swipe) with each item's preview copy and no art;
+     * each page then flips to settled on its own as its resolve lands. A page
+     * before its art arrives draws the item's poster fallback, which is exactly
+     * what MobileHero already does with a backdrop-less title.
+     *
+     * Called from the screen's own effect, keyed on the feed, so a re-composition
+     * that carries the same feed is a no-op: art the viewer is already looking at
+     * is never re-resolved just because a watched-status tick repainted Home.
+     */
+    fun resolveBillboard(items: List<MetaPreview>) {
+        val feed = items
+            .filter { it.id.isNotBlank() }
+            .distinctBy { item -> billboardPageKey(item) }
+            .take(BILLBOARD_MAX_PAGES)
+
+        val currentKeys = _billboardPages.value.map { it.key }
+        val wantedKeys = feed.map { billboardPageKey(it) }
+        if (currentKeys == wantedKeys) {
+            val stillWorking = billboardResolveJob?.isActive == true
+            if (stillWorking || _billboardPages.value.all { it.settled }) return
+        }
+
+        billboardResolveJob?.cancel()
+        billboardResolveJob = null
+        _billboardPages.value = feed.map { item ->
+            BillboardPage(
+                key = billboardPageKey(item),
+                preview = item,
+                meta = billboardPreviewMeta(item),
+                backdropUrl = null,
+                logoUrl = null,
+                trailerKey = null,
+                settled = false
+            )
+        }
+        if (feed.isEmpty()) return
+
+        val epoch = billboardResolveEpoch
+        billboardResolveJob = viewModelScope.launch {
+            try {
+                coroutineScope {
+                    feed.forEach { item ->
+                        launch {
+                            val key = billboardPageKey(item)
+                            val resolved = billboardResolveSemaphore
+                                .withPermit { resolveBillboardPage(item) }
+                                ?: return@launch
+                            if (epoch != billboardResolveEpoch) return@launch
+                            _billboardPages.update { pages ->
+                                pages.map { page ->
+                                    if (page.key == key) resolved else page
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("HOME_BILLBOARD", "Billboard resolve failed", e)
+            }
+        }
+    }
+
+    /**
+     * Loads the default feed (TMDB trending of the day) unless one is already
+     * published, and never blanks a published feed on a failed reload.
+     */
+    fun loadBillboardTrendingDay(force: Boolean = false) {
+        if (!force && _billboardTrendingDay.value.isNotEmpty()) return
+        billboardTrendingJob?.cancel()
+        billboardTrendingJob = viewModelScope.launch {
+            val movies = safeSuspend { tmdbRepository.trendingDay("movie") }.orEmpty()
+            val shows = safeSuspend { tmdbRepository.trendingDay("tv") }.orEmpty()
+            val pages = billboardInterleaveFeeds(
+                movies.map { it.toBillboardPreview("movie") },
+                shows.map { it.toBillboardPreview("series") }
+            )
+            if (pages.isNotEmpty()) _billboardTrendingDay.value = pages
+        }
+    }
+
+    /**
+     * One page's copy, before anything is known: the rail item's own words.
+     *
+     * No add-on wordmark on purpose. The hero has never drawn an add-on's
+     * `logo` - that field is whatever language a catalog ships - so a page
+     * before its resolve shows the title text, exactly as the TV hero does
+     * until TMDB's English mark answers.
+     */
+    private fun billboardPreviewMeta(item: MetaPreview): Meta =
+        Meta(
+            id = item.id,
+            type = item.type,
+            name = item.name,
+            poster = item.poster,
+            background = item.background,
+            logo = null,
+            description = item.description,
+            releaseInfo = item.releaseInfo,
+            imdbRating = item.imdbRating
+        )
+
+    /**
+     * One page's full set: copy, backdrop, clearlogo and trailer key, built
+     * off-composition and returned as ONE value (see [BillboardPage]).
+     *
+     * The ladder is the television hero's own: TMDB detail by id shape, the
+     * add-on's meta when a catalog rail names one, then TMDB's hero artwork for
+     * the backdrop and English clearlogo, then the item's own art. It returns
+     * null rather than throwing on a failure, and a null simply leaves that page
+     * on its preview copy and poster - a billboard is never blocked by one title
+     * that could not resolve.
+     */
+    private suspend fun resolveBillboardPage(item: MetaPreview): BillboardPage? {
+        val key = billboardPageKey(item)
+        val type = item.type
+        val id = item.id.trim()
+
+        val tmdbId = when {
+            id.startsWith("tmdb:", ignoreCase = true) ->
+                id.substringAfter(":").toIntOrNull()
+            id.toIntOrNull() != null -> id.toIntOrNull()
+            else -> null
+        }
+
+        val detail = safeSuspend {
+            when {
+                tmdbId != null -> tmdbRepository.getDetailByTmdbId(tmdbId, type)
+                id.startsWith("tt", ignoreCase = true) ->
+                    // full = true: the page's trailer key rides on this object.
+                    tmdbRepository.fetchEnrichedMetaCached(id, type, full = true)
+                else -> null
+            }
+        }
+
+        // The add-on's meta only when a rail of Home actually knows which
+        // add-on this item came from. The hero's resolver falls back to probing
+        // every installed add-on for an id it cannot place, which is fine for
+        // ONE focused title and is ten speculative network walks behind a
+        // billboard: every page already has TMDB (the default feed's source is
+        // TMDB ids) and its own preview copy, so an unplaceable id simply
+        // resolves without the add-on leg.
+        val addonMeta = safeSuspend {
+            val baseUrl = findBaseUrlForMeta(item)
+            if (baseUrl.isBlank()) null
+            else repository.getMeta(baseUrl = baseUrl, type = type, id = id)
+        }
+
+        val artworkId = tmdbId ?: detail?.id
+        val artwork = artworkId
+            ?.takeIf { it > 0 }
+            ?.let { artId ->
+                safeSuspend {
+                    tmdbHeroArtworkRepository.resolve(
+                        id = "tmdb:$artId",
+                        type = type,
+                        tmdbId = artId
+                    )
+                }
+            }
+
+        val resolvedBackdrop = artwork?.backdropUrl?.takeIf { it.isNotBlank() }
+            ?: detail?.backdropPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { TmdbRepository.BACKDROP_BASE + it }
+            ?: addonMeta?.background?.takeIf { it.isNotBlank() }
+            ?: item.background?.takeIf { it.isNotBlank() }
+            ?: detail?.alternatePosterPath()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { tmdbImage(it, "w780") }
+            ?: addonMeta?.poster?.takeIf { it.isNotBlank() }
+            ?: item.poster?.takeIf { it.isNotBlank() }
+
+        // TMDB's English wordmark and nothing else - the same rule the hero
+        // follows, and the reason the add-on's own `logo` is never used here.
+        val resolvedLogo = artwork?.logoUrl?.takeIf { it.isNotBlank() }
+
+        val name = detail?.name?.trim()?.takeIf { it.isNotEmpty() }
+            ?: detail?.title?.trim()?.takeIf { it.isNotEmpty() }
+            ?: addonMeta?.name?.takeIf { it.isNotBlank() }
+            ?: item.name
+
+        val meta = Meta(
+            id = id,
+            type = type,
+            name = name,
+            poster = detail?.posterPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let(TmdbRepository.POSTER_BASE::plus)
+                ?: addonMeta?.poster?.takeIf { it.isNotBlank() }
+                ?: item.poster,
+            background = resolvedBackdrop,
+            logo = resolvedLogo,
+            description = addonMeta?.description?.trim()?.takeIf { it.isNotBlank() }
+                ?: detail?.displayDescription()
+                ?: item.description,
+            releaseInfo = addonMeta?.releaseInfo?.trim()?.takeIf { it.isNotBlank() }
+                ?: detail?.releaseYear()
+                ?: item.releaseInfo,
+            imdbRating = addonMeta?.imdbRating?.trim()?.takeIf { it.isNotBlank() }
+                ?: detail?.displayRating()
+                ?: item.imdbRating
+        )
+
+        return BillboardPage(
+            key = key,
+            preview = item,
+            meta = meta,
+            backdropUrl = resolvedBackdrop,
+            logoUrl = resolvedLogo,
+            trailerKey = heroTrailerKeyOf(detail),
+            settled = true
+        )
+    }
+
     // Prefetches hero art (TMDB detail + hero artwork: backdrop + clearlogo)
     // for rail items BEFORE the user focuses them, so the caches are hot and
     // focusing a card swaps the hero art in one frame instead of showing the
@@ -1762,6 +2046,16 @@ Log.d(
                     topPicksJob?.cancel()
                     _topPicks.value = emptyList()
                     _topPicksArt.value = emptyMap()
+
+                    // And the phone billboard, whose pages carry the feed and
+                    // the settled state of the profile being left. The epoch is
+                    // bumped BEFORE the cancel so a resolve already running
+                    // cannot publish a page over the emptied list (its launch
+                    // checked the epoch only once, at the point it lands).
+                    billboardResolveEpoch += 1
+                    billboardResolveJob?.cancel()
+                    billboardResolveJob = null
+                    _billboardPages.value = emptyList()
 
                     // Same for the caught-up Upcoming cards: they come from
                     // the account-wide Simkl feed and are only kids-filtered

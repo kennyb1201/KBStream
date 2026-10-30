@@ -20,26 +20,39 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,9 +81,12 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
@@ -103,8 +119,14 @@ import com.kennyb1201.kbstream.ui.components.touch.rememberTouchTileWidth
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_MAX_PAGES
+import com.kennyb1201.kbstream.ui.home.BillboardPage
+import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
+import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
+import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.Rail
+import com.kennyb1201.kbstream.ui.home.billboardChosenFeed
 import com.kennyb1201.kbstream.ui.home.catalogRailKey
 import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
@@ -133,6 +155,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -389,9 +413,107 @@ fun HomeScreenMobile(
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
         val error by viewModel.error.collectAsStateWithLifecycle()
 
-        val heroMeta by viewModel.heroMeta.collectAsStateWithLifecycle()
-        val heroBackdropUrl by viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
-        val heroLogoUrl by viewModel.heroLogoUrl.collectAsStateWithLifecycle()
+        // ── The billboard (what the hero slot now is) ─────────────────────
+        //
+        // The phone hero used to be an inert slot: `heroMeta` is fed by the TV
+        // screen's focus-following resolver, and a phone has no focus, so
+        // nothing ever drove one. A billboard is the driver instead - a pager
+        // of up to ten titles drawn with the SAME hero presentation, fed from
+        // the rails below or (by default) from TMDB's trending of the day.
+        //
+        // Its four prefs are DEVICE-LOCAL and read on the sync revision like
+        // every other display pref, so the manager's own controls land here
+        // without a relaunch.
+        val billboardEnabled = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeBillboardEnabled(context)
+        }
+        val billboardFeeds = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeBillboardFeeds(context)
+        }
+        val billboardCycleMs = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeBillboardCycleMs(context)
+        }
+        val billboardTrailerMode = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHomeBillboardTrailerMode(context)
+        }
+        // The delay and the mute are NOT billboard prefs: they are the existing
+        // hero-trailer settings, already pickable in Settings, and the
+        // billboard's trailer modes reuse them rather than growing a second
+        // pair that could disagree with the TV's hero.
+        val heroTrailerDelayMs = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHeroTrailerDelayMs(context)
+        }
+        val heroTrailerMuted = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHeroTrailerMuted(context)
+        }
+
+        // Every rail the billboard may be fed from, keyed the way the Home
+        // manager keys a rail - so a chip's key and this lookup cannot
+        // disagree, and a chosen rail brings the SAME items, in the same
+        // order, that its row on Home shows (already filtered for hidden
+        // titles and hide-watched above).
+        val billboardFeedSources = remember(railsShown, upNext, upcoming, topPicks) {
+            buildMap {
+                put(KBHomeOrderPrefs.BUILTIN_TOP_PICKS_FOR_YOU, topPicks)
+                put(
+                    KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                    upNext.map { item -> item.billboardPreview() }
+                )
+                put(
+                    KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+                    upcoming.map { item -> item.detail() }
+                )
+                railsShown.forEach { rail ->
+                    rail.billboardFeedKey()?.let { key -> put(key, rail.items) }
+                }
+            }
+        }
+
+        val billboardTrendingDay by
+            viewModel.billboardTrendingDay.collectAsStateWithLifecycle()
+        LaunchedEffect(billboardEnabled) {
+            // Only when the slot is armed: a viewer who turned the billboard
+            // off should not pay two TMDB calls for it on every launch.
+            if (billboardEnabled) viewModel.loadBillboardTrendingDay()
+        }
+
+        val billboardFeed = remember(
+            billboardFeedSources,
+            billboardFeeds,
+            billboardTrendingDay,
+            hiddenTitleKeys
+        ) {
+            val merged = billboardChosenFeed(
+                keys = billboardFeeds,
+                sources = billboardFeedSources,
+                defaultFeed = billboardTrendingDay
+            ) ?: billboardTrendingDay
+            merged
+                .filterNot { item ->
+                    HiddenTitles.hides(
+                        hiddenTitleKeys,
+                        item.type,
+                        item.name,
+                        item.yearOrNull,
+                        item.id
+                    )
+                }
+                .take(BILLBOARD_MAX_PAGES)
+        }
+
+        val billboardPages by viewModel.billboardPages.collectAsStateWithLifecycle()
+        LaunchedEffect(billboardEnabled, billboardFeed) {
+            if (billboardEnabled) {
+                viewModel.resolveBillboard(billboardFeed)
+            } else {
+                viewModel.clearBillboard()
+            }
+        }
+        // The slot appears on the FIRST settled page and later pages fill in as
+        // they land (see BillboardPage); an empty or all-failed feed renders
+        // nothing at all, so the rails start at the top exactly as they do
+        // today rather than leaving a blank box or an error banner.
+        val billboardVisible = billboardEnabled && billboardPages.any { page -> page.settled }
 
         // The long-press menu the rails raise. Its subject is one rail card and
         // the rail itself (for "Open in Grid").
@@ -431,13 +553,24 @@ fun HomeScreenMobile(
                     MobileTopBar()
                 }
 
-                heroMeta?.let { hero ->
-                    item(key = "hero", contentType = "hero") {
-                        MobileHero(
-                            meta = hero,
-                            backdropUrl = heroBackdropUrl,
-                            logoUrl = heroLogoUrl,
-                            onClick = { onItemClick(hero.asPreview()) }
+                if (billboardVisible) {
+                    item(key = "billboard", contentType = "hero") {
+                        MobileBillboard(
+                            pages = billboardPages,
+                            cycleMs = billboardCycleMs,
+                            trailerMode = billboardTrailerMode,
+                            trailerDelayMs = heroTrailerDelayMs,
+                            trailerMuted = heroTrailerMuted,
+                            // Play asks the Detail page to press its own Play:
+                            // the request carries this title's id, and Detail's
+                            // existing handler does the resolving (see
+                            // BillboardPlaySelection). Nothing here chooses a
+                            // stream or an episode.
+                            onPlay = { page ->
+                                BillboardPlaySelection.request(page.preview.id)
+                                onItemClick(page.preview)
+                            },
+                            onDetails = { page -> onItemClick(page.preview) }
                         )
                     }
                 }
@@ -1473,12 +1606,25 @@ private fun MobileTopBar() {
 /**
  * A full-width hero: the backdrop, the clearlogo (with the shared dark-surface
  * treatment) or the title, and the short meta line. Tapping it opens the title.
+ *
+ * One billboard page draws exactly this - the billboard is a pager of these,
+ * not a second hero design - and a page whose trailer is playing hands the
+ * shared inline player in through [trailerPlayback]. The player sits OVER the
+ * still, and its shutter is transparent, so until its first frame lands the
+ * backdrop above is what the viewer sees (the same hand-off the phone's Detail
+ * header makes). The owner still owns the stops: [onTrailerEnded] and
+ * [onStopTrailer] are the caller's callbacks, exactly as `HomeHero`'s are.
  */
 @Composable
 private fun MobileHero(
     meta: Meta,
     backdropUrl: String?,
     logoUrl: String?,
+    /** The trailer playing over this page, or null while the still shows. */
+    trailerPlayback: HeroTrailerPlayback? = null,
+    trailerMuted: Boolean = true,
+    onTrailerEnded: () -> Unit = {},
+    onStopTrailer: () -> Unit = {},
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1505,6 +1651,20 @@ private fun MobileHero(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+        // The shared hero-trailer stack, over the still. A trailer that fails to
+        // resolve never reaches here at all (the owner keeps the backdrop and
+        // shows no error UI): a failure DURING playback is what calls back, and
+        // the owner answers it the same way, by dropping to the still.
+        if (trailerPlayback != null) {
+            HeroInlineTrailerPlayer(
+                source = trailerPlayback.source,
+                muted = trailerMuted,
+                startPositionMs = trailerPlayback.startPositionMs,
+                onEnded = onTrailerEnded,
+                onFailed = { onStopTrailer() },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1518,6 +1678,23 @@ private fun MobileHero(
                     )
                 )
         )
+        // A playing trailer needs a way out that is not "press Trailer again":
+        // the page is a video surface, so a close mark on it is the affordance
+        // a thumb looks for (the same one the phone's Detail header draws).
+        if (trailerPlayback != null) {
+            IconButton(
+                onClick = onStopTrailer,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Stop trailer",
+                    tint = KBTextHi
+                )
+            }
+        }
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -1560,6 +1737,397 @@ private fun MobileHero(
             }
         }
     }
+}
+
+/**
+ * The phone Home billboard: the hero slot as a pager of up to ten titles.
+ *
+ * "Mobile billboard" = the film-strip hero every streaming app opens on. It is
+ * the SAME [MobileHero] presentation per page (backdrop, clearlogo or title,
+ * meta line, two-line description, tap to open), plus a Play and a Details
+ * button, chevrons, and page dots - and it advances on its own unless the
+ * viewer is touching it, the app is in the background, or a trailer is holding
+ * the page.
+ *
+ * Every motion rule is a state the effect KEYS on, not a flag checked inside a
+ * long-lived timer: a swipe, a chevron press, a dot press and an auto-advance
+ * all end in a new `currentPage`, which cancels the pending hold and re-arms it
+ * from the page that just became current. That is also why the timer needs no
+ * manual "restart" anywhere.
+ *
+ * The trailer is the app's one hero-trailer stack (see [HeroInlineTrailerPlayer]
+ * and TrailerPlayerLauncher), honouring the existing hero-trailer delay and
+ * mute prefs; this composable only decides WHEN a page may play one (its
+ * trailer mode). Off by default, because a page that swaps itself every few
+ * seconds is a bad place to start video nobody asked for.
+ */
+@Composable
+private fun MobileBillboard(
+    pages: List<BillboardPage>,
+    cycleMs: Long,
+    trailerMode: BillboardTrailerMode,
+    trailerDelayMs: Long,
+    trailerMuted: Boolean,
+    onPlay: (BillboardPage) -> Unit,
+    onDetails: (BillboardPage) -> Unit
+) {
+    if (pages.isEmpty()) return
+
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { pages.size })
+    val currentPage = pages.getOrNull(pagerState.currentPage)
+
+    // The trailer on the CURRENT page, or null for the still. [playbackPageKey]
+    // is the page that owns it - and it is set as soon as a trailer is ASKED
+    // for, not when its source resolves, so a resolve that lands after the
+    // viewer swiped away can tell it is late and drop its own result.
+    var playback by remember { mutableStateOf<HeroTrailerPlayback?>(null) }
+    var playbackPageKey by remember { mutableStateOf<String?>(null) }
+
+    var backgrounded by remember { mutableStateOf(false) }
+
+    fun stopTrailer() {
+        playback = null
+        // Deliberately NOT nulled here for the "still resolving" case: this is
+        // the stop, so any resolve still in flight is stale by definition.
+        playbackPageKey = null
+        TrailerPlayerPool.releaseForReuse()
+    }
+
+    fun startTrailer(index: Int) {
+        val page = pages.getOrNull(index) ?: return
+        val key = page.trailerKey?.takeIf { it.isNotBlank() } ?: return
+        val ownerKey = page.key
+        playbackPageKey = ownerKey
+        scope.launch {
+            val result = TrailerPlayerLauncher.resolvePlayableUrl(key)
+            result.onSuccess { source ->
+                if (playbackPageKey != ownerKey) return@onSuccess
+                if (pages.getOrNull(pagerState.currentPage)?.key != ownerKey) return@onSuccess
+                playback = HeroTrailerPlayback(source = source)
+            }
+            result.onFailure {
+                // Silent: the page keeps its backdrop, with no banner and no
+                // retry UI - the same failure behaviour both heroes have.
+                if (playbackPageKey == ownerKey) playbackPageKey = null
+            }
+        }
+    }
+
+    // A trailer never plays over a page the viewer has left, and never over
+    // another app: both are stops, and the pool is released with them.
+    LaunchedEffect(pagerState.currentPage) {
+        stopTrailer()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
+        backgrounded = true
+        stopTrailer()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        backgrounded = false
+    }
+    // Leaving Home entirely disposes the slot while the pooled player survives
+    // composition; without this its audio would keep playing over the next
+    // screen (the TV hero's own rule).
+    DisposableEffect(Unit) {
+        onDispose { TrailerPlayerPool.releaseForReuse() }
+    }
+
+    // Auto-play, on the existing hero-trailer delay rather than a second pref.
+    // The pending start is cancelled by this effect's keys: a page change, a
+    // drag, backgrounding, or the trailer ending all restart it, and nothing
+    // awaits a delay that outlived the page it was armed for.
+    LaunchedEffect(
+        pagerState.currentPage,
+        pagerState.isScrollInProgress,
+        trailerMode,
+        trailerDelayMs,
+        playback,
+        playbackPageKey,
+        backgrounded,
+        currentPage?.settled,
+        currentPage?.trailerKey
+    ) {
+        if (trailerMode != BillboardTrailerMode.AUTO) return@LaunchedEffect
+        if (backgrounded || pagerState.isScrollInProgress) return@LaunchedEffect
+        if (playbackPageKey != null) return@LaunchedEffect
+        val page = pages.getOrNull(pagerState.currentPage) ?: return@LaunchedEffect
+        if (!page.settled || page.trailerKey.isNullOrBlank()) return@LaunchedEffect
+        delay(trailerDelayMs)
+        startTrailer(pagerState.currentPage)
+    }
+
+    // The hold. "Manual only" (0) means no auto-advance at all - swipe,
+    // chevrons and dots are then the only way page to page, which is a real
+    // option rather than a hidden one. The timer is paused while the viewer's
+    // finger is on the pager, while the app is backgrounded, and while a
+    // trailer owns the page (including the delay before an auto-played one), so
+    // a page is never swapped out from under the video.
+    //
+    // The pace follows the SETTLED page, not `currentPage`: `currentPage` moves
+    // while a scroll is still in flight, so keying a delay on it cancelled the
+    // delay - and, because the advance itself is what moved it, could cancel a
+    // half-finished pager animation. A finger on the pager is the pause, and its
+    // release is the re-arm whether it landed on a new page or on this one.
+    val autoTrailerArmed = trailerMode == BillboardTrailerMode.AUTO &&
+        currentPage?.settled == true &&
+        !currentPage?.trailerKey.isNullOrBlank()
+    LaunchedEffect(
+        pagerState,
+        cycleMs,
+        playback,
+        playbackPageKey,
+        backgrounded,
+        pages.size,
+        autoTrailerArmed
+    ) {
+        if (cycleMs <= 0L || pages.size <= 1) return@LaunchedEffect
+        if (backgrounded || playbackPageKey != null || playback != null) {
+            return@LaunchedEffect
+        }
+        if (autoTrailerArmed) return@LaunchedEffect
+        snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }
+            .collectLatest { (page, scrolling) ->
+                if (scrolling) return@collectLatest
+                delay(cycleMs)
+                val next = (page + 1) % pages.size
+                // Launched on the composition's scope rather than awaited here:
+                // the animation makes `isScrollInProgress` true, and awaiting it
+                // would let this collector cancel the very scroll it started.
+                scope.launch { pagerState.animateScrollToPage(next) }
+            }
+    }
+
+    val canWrap = pages.size > 1
+    val pageLabel = currentPage?.meta?.name.orEmpty()
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { index ->
+                val page = pages[index]
+                MobileHero(
+                    meta = page.meta,
+                    backdropUrl = page.backdropUrl,
+                    logoUrl = page.logoUrl,
+                    trailerPlayback = if (index == pagerState.currentPage) playback else null,
+                    trailerMuted = trailerMuted,
+                    onTrailerEnded = { stopTrailer() },
+                    onStopTrailer = { stopTrailer() },
+                    onClick = { onDetails(page) }
+                )
+            }
+            if (canWrap) {
+                BillboardChevron(
+                    icon = Icons.Filled.ChevronLeft,
+                    description = "Previous",
+                    modifier = Modifier.align(Alignment.CenterStart),
+                    onClick = {
+                        scope.launch {
+                            val previous =
+                                (pagerState.currentPage - 1 + pages.size) % pages.size
+                            pagerState.animateScrollToPage(previous)
+                        }
+                    }
+                )
+                BillboardChevron(
+                    icon = Icons.Filled.ChevronRight,
+                    description = "Next",
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    onClick = {
+                        scope.launch {
+                            val next = (pagerState.currentPage + 1) % pages.size
+                            pagerState.animateScrollToPage(next)
+                        }
+                    }
+                )
+            }
+        }
+
+        if (pages.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                pages.forEachIndexed { index, page ->
+                    val selected = index == pagerState.currentPage
+                    Box(
+                        modifier = Modifier
+                            .height(24.dp)
+                            .padding(horizontal = 4.dp)
+                            .clickable {
+                                scope.launch { pagerState.animateScrollToPage(index) }
+                            }
+                            .semantics {
+                                // Each dot names the title it jumps to, so the
+                                // strip is not ten anonymous buttons.
+                                contentDescription = page.meta.name
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = if (selected) 18.dp else 8.dp, height = 8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
+                                )
+                        )
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BillboardAction(
+                label = "Play",
+                icon = Icons.Filled.PlayArrow,
+                accent = true,
+                onClick = { currentPage?.let(onPlay) }
+            )
+            BillboardAction(
+                label = "Details",
+                onClick = { currentPage?.let(onDetails) }
+            )
+            // Manual mode is the ONLY mode that draws this: with Off there is no
+            // trailer affordance at all, and with Auto-play the mode itself is
+            // the affordance.
+            if (
+                trailerMode == BillboardTrailerMode.MANUAL &&
+                !currentPage?.trailerKey.isNullOrBlank()
+            ) {
+                BillboardAction(
+                    label = if (playback != null) "Stop" else "Trailer",
+                    icon = if (playback != null) {
+                        Icons.Filled.Close
+                    } else {
+                        Icons.Filled.PlayArrow
+                    },
+                    onClick = {
+                        if (playback != null) {
+                            stopTrailer()
+                        } else {
+                            startTrailer(pagerState.currentPage)
+                        }
+                    }
+                )
+            }
+        }
+        if (pageLabel.isNotBlank() && pages.size > 1) {
+            // The pager's own reading of where it is, for a screen reader that
+            // cannot see the dots.
+            Text(
+                text = "${pagerState.currentPage + 1} of ${pages.size}",
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+            )
+        }
+    }
+}
+
+/** One chevron over the pager: the manual "previous/next" a thumb expects. */
+@Composable
+private fun BillboardChevron(
+    icon: ImageVector,
+    description: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .padding(4.dp)
+            .background(KBVoid.copy(alpha = 0.42f), CircleShape)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = KBTextHi,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/** One billboard action, in the app's own plate styling (see KBCard). */
+@Composable
+private fun BillboardAction(
+    label: String,
+    icon: ImageVector? = null,
+    accent: Boolean = false,
+    onClick: () -> Unit
+) {
+    KBCard(
+        onClick = onClick,
+        shape = KBShapeCard,
+        modifier = Modifier.height(42.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 14.dp)
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (accent) KBAccent else KBTextHi,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Text(
+                text = label,
+                color = if (accent) KBAccent else KBTextHi,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * The rail key the billboard's feed picker stores for this rail.
+ *
+ * The same key the Home manager arranges the rail by, spelled through the same
+ * functions, so a chip in the manager and the items here cannot disagree: a
+ * built catalog keys by its id, an add-on catalog by its base URL (manifest
+ * URL minus "/manifest.json"), and a rail the app builds itself (a pinned Top
+ * Today row) keys by nothing - it is never offered, exactly as it is never
+ * arrangeable.
+ */
+private fun Rail.billboardFeedKey(): String? {
+    val customId = customCatalogId?.takeIf { it.isNotBlank() }
+    if (customId != null) return KBHomeOrderPrefs.customCatalogKey(customId)
+    val base = baseUrl?.takeIf { it.isNotBlank() } ?: return null
+    return KBHomeOrderPrefs.addonKey(base, type, catalogId)
+}
+
+/** A Continue Watching card as a billboard item: the SHOW (or the film). */
+private fun UpNextItem.billboardPreview(): MetaPreview {
+    val type = parentType?.takeIf { it.isNotBlank() }
+        ?: if (season != null) "series" else "movie"
+    return MetaPreview(
+        id = if (type.equals("movie", ignoreCase = true)) id else (parentId ?: id),
+        type = type,
+        name = showTitle?.takeIf { it.isNotBlank() } ?: title,
+        poster = poster,
+        background = backdrop,
+        imdbRating = imdbRating?.let { rating -> rating.toString() }
+    )
 }
 
 /** A section heading plus its carousel, on the screen's 16dp edge. */
@@ -2006,20 +2574,6 @@ private fun mobileRailTitle(
     }
     return parts.joinToString(" · ")
 }
-
-/** The Detail-page preview the hero opens, from the detail model it carries. */
-private fun Meta.asPreview(): MetaPreview =
-    MetaPreview(
-        id = id,
-        type = type,
-        name = name,
-        poster = poster,
-        background = background,
-        description = description,
-        logo = logo,
-        releaseInfo = releaseInfo,
-        imdbRating = imdbRating
-    )
 
 /** The Detail-page preview an Upcoming card opens. */
 private fun UpcomingEpisode.detail(): MetaPreview =

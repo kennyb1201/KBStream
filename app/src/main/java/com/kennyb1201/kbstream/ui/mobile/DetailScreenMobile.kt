@@ -128,6 +128,7 @@ import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
+import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
 import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.detail.DetailViewModel
@@ -750,6 +751,43 @@ fun DetailScreenMobile(
                 resumeInfo?.season == currentSeason
             val episode = if (resumeHere) targetEpisode else episodes.firstOrNull()
             episode?.let { openEpisode(it, currentSeason) }
+        }
+
+        // ---- Home's billboard Play handoff ----
+        //
+        // The billboard's Play button is spec'd to behave EXACTLY like pressing
+        // Play on this page, so it does not play anything itself: it raises
+        // [BillboardPlaySelection] with the title's id and navigates here, and
+        // this effect calls the SAME `playCurrent()` the Play button calls. That
+        // is what keeps the two in step for free - the autoplay/picker branch
+        // under Auto-select, the movie resume, and the series' resume/next-up
+        // choice are resolved once, here, and the billboard carries no second
+        // copy of those rules.
+        //
+        // Read once, and only for the id it was raised for: a request can never
+        // start the wrong title (a stale back-stack entry, or a reused Detail
+        // view model), and a request whose navigation never happened cannot
+        // turn a later, ordinary Play press into an autoplay.
+        var billboardPlay by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(type, id) {
+            billboardPlay = BillboardPlaySelection.consume(id)
+        }
+        var billboardPlayDelivered by remember(type, id) { mutableStateOf(false) }
+        LaunchedEffect(
+            billboardPlay,
+            isLoading,
+            meta,
+            tmdbDetail,
+            episodesLoading,
+            episodes
+        ) {
+            if (!billboardPlay || billboardPlayDelivered || isLoading) return@LaunchedEffect
+            if (meta == null && tmdbDetail == null) return@LaunchedEffect
+            // A series needs its listing before it can name an episode, the
+            // same wait the Play button's own target has below.
+            if (normalizedType == "series" && episodesLoading) return@LaunchedEffect
+            billboardPlayDelivered = true
+            playCurrent()
         }
 
         /**

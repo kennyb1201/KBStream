@@ -26,11 +26,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +40,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.ui.addons.AddonsViewModel
 import com.kennyb1201.kbstream.ui.addons.HomeRailManagerRow
 import com.kennyb1201.kbstream.ui.addons.homeRailManagerRows
@@ -46,6 +50,10 @@ import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
+import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_DEFAULT_FEED_LABEL
+import com.kennyb1201.kbstream.ui.home.billboardCycleLabel
+import com.kennyb1201.kbstream.ui.home.billboardTrailerModeLabel
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -223,6 +231,10 @@ internal fun HomeManagerDialogMobile(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
+                item(key = "billboard") {
+                    BillboardSectionMobile(rows = rows)
+                }
+
                 itemsIndexed(items = visibleRows, key = { _, row -> row.key }) { index, row ->
                     ManagerRowMobile(
                         row = row,
@@ -282,6 +294,187 @@ internal fun HomeManagerDialogMobile(
         )
     }
 }
+
+/**
+ * The billboard's own controls, at the top of the Home manager.
+ *
+ * The billboard is a phone-only surface, so its four prefs are DEVICE-LOCAL
+ * (see AppPreferences' billboard section and PrefsPayloadBuilder's exclusion
+ * list) and are written straight from here rather than through the manager's
+ * rail callbacks - none of them arranges a rail. Every write ticks the display
+ * revision, which is how the open Home behind this dialog repaints.
+ *
+ * Deliberately no delay and no mute control: those are the existing hero-trailer
+ * settings in Settings, and the trailer modes below reuse them rather than
+ * growing a second pair that could disagree.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BillboardSectionMobile(rows: List<HomeRailManagerRow>) {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(AppPreferences.getHomeBillboardEnabled(context)) }
+    var feeds by remember { mutableStateOf(AppPreferences.getHomeBillboardFeeds(context)) }
+    var cycleMs by remember {
+        mutableLongStateOf(AppPreferences.getHomeBillboardCycleMs(context))
+    }
+    var trailerMode by remember {
+        mutableStateOf(AppPreferences.getHomeBillboardTrailerMode(context))
+    }
+
+    /**
+     * Writes a selection, with the picker's one invariant: it never represents
+     * an EMPTY feed, so deselecting everything restores the default.
+     */
+    fun writeFeeds(next: List<String>) {
+        val normalized = next.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
+        feeds = normalized
+        AppPreferences.setHomeBillboardFeeds(context, normalized)
+    }
+
+    fun toggleFeed(key: String) {
+        writeFeeds(if (key in feeds) feeds - key else feeds + key)
+    }
+
+    // The catalogs this manager lists that can FEED the billboard: the built-ins
+    // it draws itself, the add-on catalogs and the built catalogs. Collections
+    // and browse rows are left out because they carry no catalog items - a
+    // collection is a shelf of folders and a browse row is a set of shortcuts,
+    // so neither can name a title to put in the hero.
+    val feedRows = remember(rows) {
+        rows
+            .filter { row -> row.config != null || row.isBuiltinRail }
+            .distinctBy { it.key }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(KBShapeCard)
+            .background(KBSurface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "BILLBOARD",
+            color = KBTextHi,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "The cycling hero at the top of Home: one page per title, " +
+                "with Play and Details.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TouchChoiceChip(
+                label = "On",
+                selected = enabled,
+                onClick = {
+                    enabled = true
+                    AppPreferences.setHomeBillboardEnabled(context, true)
+                }
+            )
+            TouchChoiceChip(
+                label = "Off",
+                selected = !enabled,
+                onClick = {
+                    enabled = false
+                    AppPreferences.setHomeBillboardEnabled(context, false)
+                }
+            )
+        }
+
+        RowLabelMobile(
+            "FEED — pick several to merge them, in this order"
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TouchChoiceChip(
+                label = orderLabel(
+                    feeds.indexOf(AppPreferences.BILLBOARD_TRENDING_DAY_FEED),
+                    BILLBOARD_DEFAULT_FEED_LABEL
+                ),
+                selected = AppPreferences.BILLBOARD_TRENDING_DAY_FEED in feeds,
+                onClick = { toggleFeed(AppPreferences.BILLBOARD_TRENDING_DAY_FEED) }
+            )
+            feedRows.forEach { row ->
+                TouchChoiceChip(
+                    label = orderLabel(feeds.indexOf(row.key), shortFeedLabel(row.title)),
+                    selected = row.key in feeds,
+                    onClick = { toggleFeed(row.key) }
+                )
+            }
+        }
+
+        RowLabelMobile("HOLD — how long each page stays up")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AppPreferences.BILLBOARD_CYCLE_OPTIONS_MS.forEach { option ->
+                TouchChoiceChip(
+                    label = billboardCycleLabel(option),
+                    selected = cycleMs == option,
+                    onClick = {
+                        cycleMs = option
+                        AppPreferences.setHomeBillboardCycleMs(context, option)
+                    }
+                )
+            }
+        }
+
+        RowLabelMobile(
+            "TRAILER — auto-play waits the hero-trailer delay; mute is in Settings"
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            BillboardTrailerMode.entries.forEach { mode ->
+                TouchChoiceChip(
+                    label = billboardTrailerModeLabel(mode),
+                    selected = trailerMode == mode,
+                    onClick = {
+                        trailerMode = mode
+                        AppPreferences.setHomeBillboardTrailerMode(context, mode)
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** A small caption above one row of billboard chips. */
+@Composable
+private fun RowLabelMobile(text: String) {
+    Text(
+        text = text,
+        color = KBTextLo,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+/**
+ * A feed chip's label: the merge position when it is picked, so the order the
+ * items will be concatenated in is visible (and changeable - deselect and
+ * re-pick to move a feed later).
+ */
+private fun orderLabel(index: Int, title: String): String =
+    if (index < 0) title else "${index + 1} · $title"
+
+/**
+ * A rail's name at chip width: long catalog names are cut here rather than
+ * pushing the chip past the dialog's edge (the chip does not wrap).
+ */
+private fun shortFeedLabel(title: String): String =
+    if (title.length <= 24) title else title.take(23).trimEnd() + "…"
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

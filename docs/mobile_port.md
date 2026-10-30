@@ -563,6 +563,47 @@ When every rail is hidden the phone draws the same "All rails are hidden" card
 as TV, with MANAGE RAILS opening the rail manager through the one-shot request
 (see Add-ons below) - the one state where the manager is the only way forward.
 
+**The hero slot is a billboard now (2026-10-30).** It used to render nothing at
+all, and not by accident: the one hero composable the phone had was fed by the
+TV's `heroMeta` flows, which are published by the focus-following resolver -
+and a phone has no focus, so nothing ever drove one. The slot is now a pager of
+up to ten titles (`MobileBillboard` in `ui/mobile/HomeScreenMobile.kt`), each
+page the SAME `MobileHero` presentation (backdrop, TMDB clearlogo or the plain
+title, meta line, two-line synopsis, tap for Details) plus Play and Details
+buttons, chevrons and tappable page dots.
+
+Its feed is the viewer's choice, made in the Home manager: any built-in row, any
+add-on catalog or any built catalog, merged in the order the chips were picked,
+or - by default - TMDB's trending of the day, movie and TV interleaved by rank.
+Those are two new endpoints (`trending/movie/day`, `trending/tv/day`); nothing
+else new is fetched. A chosen catalog that is empty contributes nothing, an
+all-empty selection falls back to the day feed, and an empty day feed hides the
+slot so the rails start at the top exactly as before. Items come from the rail
+Home already shows (hidden titles and hide-watched applied), and each page is
+resolved in `HomeViewModel` two or three at a time through the hero's own
+backdrop/clearlogo ladder and published as ONE value - so page N can never show
+page N-1's words over page N's art, and the pager appears on the first page that
+settles while the rest fill in.
+
+Motion: it advances every 6 s by default (3/6/10/15 s, or **Manual only**, in
+the manager), pauses under a finger, in the background, and while a trailer owns
+the page; a swipe, a chevron or a dot re-arms it from the page it landed on.
+Trailers are the billboard's own choice (`Off` by default, `Auto-play`,
+`Manual`) and reuse the existing stack and its settings - the pooled
+`HeroInlineTrailerPlayer`, **Hero Trailer Delay** and **Mute Hero Trailers** -
+with only the current page allowed to play, stopped by any navigation, and a
+failed resolve leaving the backdrop with no error UI. Play does not resolve
+anything itself: it raises `BillboardPlaySelection` and opens Detail, which
+calls its own `playCurrent()` - so the autoplay/picker branch and a series'
+resume or next-up choice are Detail's, once.
+
+All four billboard prefs are DEVICE-LOCAL (`home_billboard_*`, excluded from
+sync): a television has no billboard, so a phone's answers say nothing about the
+account - and the TV Home hero, its trailers and its settings are untouched.
+(`BillboardFeedRulesTest` covers the merge/interleave/cap and the pref storage;
+`MobileBillboardContractTest` pins the slot gate, the motion keys, the handoff
+and the trailer modes.)
+
 Parity notes (not bugs to fix):
 - The "verify then open" step is bounded at five seconds, exactly as on TV; a
   slow TMDB answer falls through to the stored id rather than blocking the tap.

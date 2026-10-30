@@ -131,7 +131,15 @@ class HomeScreenMobileContractTest {
             "viewModel.upcomingSchedule",
             "viewModel.watchedKeys",
             "viewModel.partialWatchedKeys",
-            "viewModel.heroMeta",
+            // The hero slot is the billboard now (2026-10-30). It used to read
+            // `viewModel.heroMeta`, the TV's focus-following hero flows - and
+            // nothing on a phone ever called that resolver, so the slot was
+            // never fed and never rendered. The same slot is driven by the
+            // billboard's own pages (see MobileBillboardContractTest for the
+            // motion, the buttons and the trailer rules).
+            "viewModel.billboardPages",
+            "viewModel.billboardTrendingDay",
+            "viewModel.resolveBillboard(",
             "viewModel.markAsWatched(",
             "viewModel.markUnwatched("
         ).forEach { read ->
