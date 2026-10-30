@@ -36,6 +36,9 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material3.Icon
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.browseChipSuccessor
@@ -3877,9 +3880,34 @@ private fun SectionTitle(
             ),
             modifier = measured
         ) {
-            KBSectionHeader(
-                title = text
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KBSectionHeader(
+                    title = text
+                )
+                // The glyph is what makes the heading read as a door before it
+                // is pressed: "Upcoming" alone is the rail's caption, and the
+                // rail it titles is one next episode per show while the press
+                // opens the whole year in Library. Accent-tinted like the
+                // focus border, and INSIDE the Surface so the word and the
+                // glyph stay one target - the D-pad still stops once here.
+                // Null on every other rail: only a heading with a destination
+                // earns a glyph.
+                Icon(
+                    imageVector = Icons.Filled.CalendarMonth,
+                    // The word is on screen; the glyph says what pressing it
+                    // gets you, which is the part the heading cannot.
+                    contentDescription = "Open calendar",
+                    tint = KBAccent,
+                    modifier = Modifier
+                        // The heading's own bottom inset, so the glyph centers
+                        // on the word instead of sitting 6dp above it.
+                        .padding(bottom = 6.dp)
+                        .size(18.dp)
+                )
+            }
         }
     }
 }
