@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,6 +20,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -1580,12 +1584,33 @@ private fun MobileSection(
             // heading's own edge padding is restated here (the default one is
             // replaced, not added to) so the clickable title still lines up
             // with every other section's heading.
-            MobileSectionHeader(
-                title = title,
+            //
+            // The calendar glyph sits INSIDE that target, beside the word, the
+            // same door the TV rail's heading draws: the word names the row,
+            // the glyph says where pressing it goes (Library's Calendar pane).
+            // It is not a chip or a trailing button - the heading is still the
+            // whole target and the glyph is part of its label.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .padding(horizontal = MobileSpacing.edge)
                     .clickable(onClick = onClick)
-            )
+            ) {
+                MobileSectionHeader(
+                    title = title,
+                    // The row carries the edge padding now; `fill = false` so a
+                    // renamed heading ellipsizes instead of pushing the glyph
+                    // off the row.
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Icon(
+                    imageVector = Icons.Filled.CalendarMonth,
+                    contentDescription = "Open calendar",
+                    tint = KBAccent,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
         content()
     }

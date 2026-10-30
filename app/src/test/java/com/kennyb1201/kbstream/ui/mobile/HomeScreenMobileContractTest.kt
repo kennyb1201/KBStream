@@ -465,7 +465,8 @@ class HomeScreenMobileContractTest {
      * The Upcoming heading is a door on both form factors: the TV rail's header
      * opens Library's Calendar pane, and the phone's row is the same schedule
      * behind the same word. The heading itself stays a heading on the phone -
-     * no chip or pill wraps it - so the word is the whole target.
+     * no chip or pill wraps it - so the word is the whole target, with the
+     * calendar glyph inside that same target saying where the press goes.
      */
     @Test
     fun `the Upcoming heading opens the calendar on the phone`() {
@@ -494,6 +495,22 @@ class HomeScreenMobileContractTest {
             "the Upcoming heading must not gain a chip or button around it",
             mobile.contains("MobileSectionButton") ||
                 mobile.contains("title = upcomingTitle, trailing")
+        )
+        // The door reads as a door before it is pressed, exactly as on the TV:
+        // the glyph is part of the heading's own label, drawn inside the same
+        // clickable row, so word and glyph stay one target.
+        val section = mobile.substringAfter("private fun MobileSection(")
+            .substringBefore("private fun ContinueWatchingCard(")
+        assertTrue(
+            "the phone's door carries the calendar glyph the TV rail's does",
+            section.contains("imageVector = Icons.Filled.CalendarMonth") &&
+                section.contains("contentDescription = \"Open calendar\"")
+        )
+        assertTrue(
+            "and that glyph is drawn inside the clickable heading row",
+            section.contains(".clickable(onClick = onClick)") &&
+                section.indexOf("Icons.Filled.CalendarMonth") >
+                section.indexOf(".clickable(onClick = onClick)")
         )
         assertTrue(
             "every other section keeps a plain heading (the CW row is the only " +
