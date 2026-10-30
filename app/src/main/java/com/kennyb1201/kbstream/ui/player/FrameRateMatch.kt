@@ -945,6 +945,17 @@ internal class FrameRateMatcher(
     /** Set once [verifyEngagedMode] has put the panel back after it moved. */
     private var reassertedMode = false
 
+    /**
+     * When this session last asked for a mode by id, for [REASSERT_SETTLE_MS].
+     *
+     * A request is not instant: the panel keeps reporting its OLD mode until
+     * HDMI finishes renegotiating, and the confirm's second look is ~3.5 s out.
+     * Zero means this session never asked for one (a take-over, or nothing
+     * engaged yet), which needs no settle window - it takes the panel as it
+     * finds it.
+     */
+    private var modeRequestedAtMs = 0L
+
     /** Last look at the panel from [verifyEngagedMode]. */
     private var lastVerifyMs = 0L
 
@@ -1037,6 +1048,10 @@ internal class FrameRateMatcher(
         heldModeId = UNSET
         reassertedMode = false
         lastVerifyMs = 0L
+        // The previous source's last request says nothing about this one's
+        // panel (see modeRequestedAtMs), and carrying it over would hold this
+        // source's repair back for up to the settle window.
+        modeRequestedAtMs = 0L
         // A new source's first offer is news even when it happens to repeat
         // the previous source's rate (audit AFR C10's dedupe is per source).
         lastOfferRate = null
@@ -1082,6 +1097,20 @@ internal class FrameRateMatcher(
         if (released || heldModeId == UNSET || reassertedMode) return
         if (!isPlaybackActive()) return
         val now = SystemClock.elapsedRealtime()
+        // A request this session just made is still landing, so the panel is
+        // supposed to read its old mode. Verifying inside that window re-asks a
+        // mode the panel is already getting, and - worse - spends the ONE
+        // repair this session is allowed before the switch has been seen at all.
+        //
+        // Field capture 2026-10-29 (Onn 4K Plus): "afr asked for a mode:
+        // mode=28 ... (was 22)" immediately followed by "afr re-asked the
+        // engaged mode: mode=28 was 22", with "afr panel moved: mode=22->28"
+        // from the confirm right after. The re-ask bought nothing (the switch
+        // was under way), it made the opening renegotiate HDMI twice, and it
+        // left the session unable to repair a panel that really does leave the
+        // engaged mode later - which is the rest-of-the-film 3:2 judder this
+        // class exists to remove.
+        if (modeRequestedAtMs != 0L && now - modeRequestedAtMs < REASSERT_SETTLE_MS) return
         if (now - lastVerifyMs < VERIFY_INTERVAL_MS) return
         lastVerifyMs = now
         val display = displayOf() ?: return
@@ -1420,6 +1449,10 @@ internal class FrameRateMatcher(
         setPreferredModeId(chosen.id)
         // The mode this session holds, and the one the restore debt rides on.
         heldModeId = chosen.id
+        // Starts the settle window the hold tick must respect (see
+        // modeRequestedAtMs): until it passes, a panel reading the old mode is
+        // the switch in flight, not a panel that left.
+        modeRequestedAtMs = SystemClock.elapsedRealtime()
         restoreOnRelease = true
         FrameRateDiagnostics.addRequest(
             FrameRateMatch.describeModeSwitch(contentFps, chosen, currentModeId)
@@ -1665,6 +1698,18 @@ internal class FrameRateMatcher(
          * repair is once per session.
          */
         const val VERIFY_INTERVAL_MS = 20_000L
+
+        /**
+         * How long after a mode request the hold tick leaves the panel alone.
+         *
+         * Comfortably past the confirm's second look (~3.5 s from the request,
+         * see [CONFIRM_DELAY_MS] + [SECOND_CONFIRM_DELAY_MS]) plus a slow HDMI
+         * renegotiation, and short enough that a panel which really does leave
+         * the engaged mode is still repaired while the title is playing. The
+         * point is that the repair is spent on a panel that LEFT, never on one
+         * that is on its way.
+         */
+        const val REASSERT_SETTLE_MS = 10_000L
     }
 }
 

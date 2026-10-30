@@ -3455,7 +3455,14 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                text = "A/V sync for HDR + AVR setups",
+                                // The skip is stated where the switch is: a
+                                // tunneled session is paced by the platform, so
+                                // it cannot follow the refresh rate Match
+                                // Content Frame Rate asks the TV for - and
+                                // that pairing is the judder this line warns
+                                // about (field, 2026-10-30).
+                                text = "A/V sync for HDR + AVR setups \u00b7 " +
+                                    "off while frame-rate matching is on",
                                 color = KBTextLo,
                                 style = MaterialTheme.typography.labelSmall
                             )

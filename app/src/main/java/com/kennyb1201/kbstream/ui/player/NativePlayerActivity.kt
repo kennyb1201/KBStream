@@ -6387,13 +6387,40 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // silently ignored and the user would hear the untouched mix
                 // after having explicitly asked for it. Tuning wins.
                 val audioTuningActive = !PlayerAudioTuning.isNeutral
+                // A tunnelled session's frames are paced by the platform's
+                // tunnel, not by media3's own frame release control - and the
+                // rate request this app makes is a WINDOW ATTRIBUTE the tunnel
+                // is never told about. So the two settings contradict each
+                // other at film rates, and the field says which one loses:
+                // Onn 4K Plus, 2026-10-30, same title, same 16 Mbps source,
+                // auto buffer - matching ON dropped frames in bursts at a
+                // correct 23.976/24.000 mode (7 in 38 s, against the ~1 per 42 s
+                // the rate itself explains) and juddered, while matching OFF
+                // played clean at 60 Hz, where 3:2 pulldown absorbs the same
+                // lateness. Matching wins, the way tuning does: a tunnel that
+                // cannot be told the new rate is the tunnel that judders at it.
+                //
+                // Same gate the matcher itself uses (the setting AND a TV), so
+                // a phone - which has no matching row and never switches a
+                // panel - keeps its tunnel.
+                val frameRateMatchActive =
+                    AppPreferences.getMatchFrameRate(this) &&
+                        com.kennyb1201.kbstream.FormFactor.isTv
                 if (enableTunneling && !isLiveChannel && !audioTuningActive &&
+                    !frameRateMatchActive &&
                     audioExtMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 ) {
                     trackSelectionParameters = androidx.media3.exoplayer.trackselection.DefaultTrackSelector
                         .Parameters.Builder(this@NativePlayerActivity)
                         .setTunnelingEnabled(true).build()
                     Log.i("PLAYER_TUNNEL", "Tunneled via TrackSelector")
+                } else if (enableTunneling && frameRateMatchActive && !isLiveChannel) {
+                    Log.i(
+                        "PLAYER_TUNNEL",
+                        "Tunneling skipped: frame-rate matching is on, and a tunneled " +
+                            "session is paced by the platform instead of the rate this " +
+                            "app asked the panel for"
+                    )
                 } else if (enableTunneling && audioTuningActive) {
                     Log.i(
                         "PLAYER_TUNNEL",

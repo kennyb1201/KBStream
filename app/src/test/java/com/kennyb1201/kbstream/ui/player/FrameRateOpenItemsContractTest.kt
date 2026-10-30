@@ -224,4 +224,91 @@ class FrameRateOpenItemsContractTest {
             restore.contains("restoreOnRelease = true")
         )
     }
+
+    // ── The repair budget is never spent on a switch in flight ─────────
+
+    /**
+     * Field capture 2026-10-29 (Onn 4K Plus, 0.9.110):
+     *
+     *     session: afr asked for a mode: mode=28 ... (was 22)
+     *     session: afr re-asked the engaged mode: mode=28 was 22
+     *     session: afr panel moved: mode=22->28 ... step=MODE
+     *
+     * The hold tick ran ~a second after the request, read the panel's OLD mode
+     * (the HDMI renegotiation was still running), re-asked the same mode and
+     * spent the session's one repair doing it. The switch landed at the
+     * confirm immediately afterwards - so the extra request bought nothing, it
+     * made the opening renegotiate twice, and a panel that really does leave
+     * the engaged mode later in the film had no repair left (the 3:2 judder
+     * this class exists to remove, back for the rest of the title).
+     */
+    @Test
+    fun `the hold tick leaves a mode request alone until it can have landed`() {
+        val text = matcher()
+        val verify = text.substringAfter("fun verifyEngagedMode()")
+            .substringBefore("fun release()")
+
+        assertTrue(
+            "the settle window must gate the repair, before the repair budget " +
+                "can be spent: $verify",
+            verify.contains(
+                "if (modeRequestedAtMs != 0L && now - modeRequestedAtMs < " +
+                    "REASSERT_SETTLE_MS) return"
+            )
+        )
+        assertTrue(
+            "and it must come before this session gives up its one repair: $verify",
+            verify.indexOf("REASSERT_SETTLE_MS") < verify.indexOf("reassertedMode = true")
+        )
+        val request = text.substringAfter("private fun requestMode(")
+            .substringBefore("private fun setPreferredModeId(")
+        assertTrue(
+            "a request is what starts the window: $request",
+            request.contains("modeRequestedAtMs = SystemClock.elapsedRealtime()")
+        )
+        val begin = text.substringAfter("fun beginSource()")
+            .substringBefore("fun verifyEngagedMode()")
+        assertTrue(
+            "and a new source does not inherit the previous one's window: $begin",
+            begin.contains("modeRequestedAtMs = 0L")
+        )
+    }
+
+    // ── Tunneling and matching cannot both win ─────────────────────────
+
+    /**
+     * Field A/B (Onn 4K Plus, 2026-10-30, same title, same 16 Mbps source, auto
+     * buffer): matching ON juddered at a correct 23.976/24.000 mode and matching
+     * OFF played clean at 60 Hz.
+     *
+     * A tunnelled session's frames are paced by the platform's tunnel, and the
+     * rate this app asks for is a WINDOW attribute the tunnel is never told
+     * about - so at film rates the two settings contradict each other. Matching
+     * is the explicit request for cadence, so it wins: the tunnel is skipped for
+     * that session, which is what this pins.
+     */
+    @Test
+    fun `a tunnelled session is not used while frame-rate matching is on`() {
+        val text = player()
+        val tunnel = text.substringAfter("val audioTuningActive =")
+            .substringBefore("playWhenReady = !fromActorReturn")
+
+        assertTrue(
+            "the tunnel gate must consult the matching setting: $tunnel",
+            tunnel.contains("val frameRateMatchActive =") &&
+                tunnel.contains("AppPreferences.getMatchFrameRate(this)")
+        )
+        assertTrue(
+            "on a TV only, the same gate the matcher itself uses: $tunnel",
+            tunnel.contains("com.kennyb1201.kbstream.FormFactor.isTv")
+        )
+        assertTrue(
+            "and that flag must close the tunnel instead of only logging: $tunnel",
+            tunnel.contains("!frameRateMatchActive")
+        )
+        assertTrue(
+            "a skip a viewer can see in the report has to say why: $tunnel",
+            tunnel.contains("Tunneling skipped: frame-rate matching is on")
+        )
+    }
 }
