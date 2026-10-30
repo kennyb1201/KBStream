@@ -169,7 +169,11 @@ class SportsTier1TraceTest {
         assertTrue("and the oldest are the ones left out", !block.contains("matchup-0 "))
         assertTrue(
             "a dropped row names its gate, its channel and its title",
-            block.contains("drop GUIDE_INDEX ch=13 \"title-13\"")
+            // ch=ch-13: the fixture's channel id IS "ch-13", and the line names
+            // the row's own channel verbatim (a guide id, as the field rows are).
+            // The old expectation said "ch=13", which the renderer never printed,
+            // so this assertion failed every release build from v0.9.107 on.
+            block.contains("drop GUIDE_INDEX ch=ch-13 \"title-13\"")
         )
     }
 
