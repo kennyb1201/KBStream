@@ -426,7 +426,7 @@ class MobileBottomNavContractTest {
         val mobile = mobileHome()
         val start = mobile.indexOf("private fun MobileTopBar()")
         assertTrue("the header must exist, with no parameters left to carry a door", start >= 0)
-        val end = mobile.indexOf("A full-width hero", start)
+        val end = mobile.indexOf("One billboard page", start)
         assertTrue("the header body must be bounded by the next composable", end > start)
         return mobile.substring(start, end)
     }

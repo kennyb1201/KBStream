@@ -196,7 +196,7 @@ class PortraitBrowseContractTest {
         // width this test is about is the HEADER's.
         val header = topBar
             .substringAfter("private fun MobileTopBar()")
-            .substringBefore("A full-width hero")
+            .substringBefore("One billboard page")
         assertTrue(
             "the four icon buttons are gone from the header; that is what makes it fit",
             !header.contains("IconButton(") &&
