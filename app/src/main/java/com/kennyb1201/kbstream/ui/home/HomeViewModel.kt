@@ -3417,7 +3417,7 @@ Log.d(
             tmdbShowId = tmdbId
         )
 
-        val target =
+        val resolved =
             resolveSeriesTargetFromSharedWatchedState(
                 parentId = parentId,
                 tmdbId = tmdbId,
@@ -3425,7 +3425,7 @@ Log.d(
                 simklEpisode = null
             )
 
-        if (target == null) {
+        if (resolved == null) {
             // The show resolved, but there is nothing left to watch: the
             // profile finished it locally. Record it so its tracker twin -
             // which the tracker keeps listing until its own feed catches up -
@@ -3442,37 +3442,55 @@ Log.d(
 
         // A resume target here means the show already has an in-progress row
         // (and therefore its own card); don't duplicate it.
-        if (target.isResume) return null
+        if (resolved.isResume) return null
 
         // The cold-entry ghost. An ADVANCE card's target is by construction a
-        // DIFFERENT episode than the row it was built from, so the resolver
-        // handing back a pair that cannot be one means the evidence under it was
-        // missing - either the state was incomplete (it refused to walk and
-        // returned only the pair it knows, which for this builder is the
-        // furthest episode WATCHED) or the walk was blind to this row's id
-        // flavor (see localHistoryParentIdsWithTwinState) and stepped onto the
-        // finished episode itself.
+        // DIFFERENT episode than the row it was built from, so a resolver
+        // answer that cannot be one means the evidence under it was missing -
+        // either the state was incomplete (it refused to walk and returned only
+        // the pair it knows, which for this builder is the furthest episode
+        // WATCHED) or the walk was blind to this row's id flavor (see
+        // localHistoryParentIdsWithTwinState) and stepped onto the finished
+        // episode itself.
         //
-        // Omit the card rather than print one. Deliberately NOT recorded as
-        // caught up: unknown evidence is not "finished", and the tracker twin
-        // may be the only card naming a genuinely next episode - suppressing it
-        // here would hide the show instead of the ghost. The omission is
-        // pass-scoped: the next refreshUpNext clears the preload caches (see
-        // clearWatchedStateCaches) and re-reads, so the card returns without a
-        // restart once the reads succeed (see shouldOmitLocalAdvanceCard).
+        // That answer is never printed, but it is not the end of the card
+        // either. Hiding the show was the wrong half of the fix (field
+        // 2026-10-30: marking an episode left the card unmoved, the rail much
+        // shorter, and a show with one episode left gone for good): an
+        // unreadable watched state is common - a tracker read that timed out, an
+        // IMDb twin that did not resolve - and none of those facts say the
+        // viewer is caught up. What they DO say is that the episode to print
+        // cannot be derived from watchedness; it can still be derived from the
+        // listing, which is the next AIRED episode after the completed row (see
+        // resolveEpisodeAfterCompletedRow). That answer is different from the
+        // row by construction, so the ghost stays fixed while the show keeps its
+        // card. Only a show with nothing aired left is omitted, and it is not
+        // recorded as caught up here: unknown evidence is not "finished".
         val evidenceIncomplete =
             watchedStateMutex.withLock { parentId in watchedStateIncompleteShows }
-        if (
-            shouldOmitLocalAdvanceCard(
-                targetSeason = target.season,
-                targetEpisode = target.episode,
-                rowSeason = row.season,
-                rowEpisode = row.episode,
-                evidenceIncomplete = evidenceIncomplete
-            )
-        ) {
-            return null
-        }
+
+        val target =
+            if (
+                shouldOmitLocalAdvanceCard(
+                    targetSeason = resolved.season,
+                    targetEpisode = resolved.episode,
+                    rowSeason = row.season,
+                    rowEpisode = row.episode,
+                    evidenceIncomplete = evidenceIncomplete
+                )
+            ) {
+                val rowSeason = row.season ?: return null
+                val rowEpisode = row.episode ?: return null
+
+                resolveEpisodeAfterCompletedRow(
+                    parentId = parentId,
+                    tmdbId = tmdbId,
+                    rowSeason = rowSeason,
+                    rowEpisode = rowEpisode
+                ) ?: return null
+            } else {
+                resolved
+            }
 
         val poster =
             row.poster?.takeIf { it.isNotBlank() }
@@ -3555,6 +3573,87 @@ Log.d(
             nextEpisodeAir = detail.nextEpisodeToAir,
             tmdbId = tmdbId
         )
+    }
+
+    /**
+     * The first AIRED episode TMDB lists after one completed row, walked from
+     * that row's own season forward - the honest "next up" when the show's
+     * watched state could not be read completely.
+     *
+     * This is the fallback half of the cold-entry ghost fix. Returning the row's
+     * own episode (what the resolver can still prove) is the ghost; returning
+     * nothing hides a show the viewer is in the middle of. The listing answers
+     * neither wrong: an episode after the one just finished is different from it
+     * by construction, and it is only ever skipped when it has not aired yet.
+     *
+     * The walk stops at the first empty season: TMDB season listings are
+     * contiguous, so an empty season is the end of the show (the same rule the
+     * resolver's own forward walk uses). Counts are deliberately absent -
+     * nothing under an unreadable watched state can count episodes honestly.
+     *
+     * @param rowSeason the completed row's season.
+     * @param rowEpisode the completed row's episode number within it.
+     * @return the next aired listed episode, or null when the listing has none.
+     */
+    private suspend fun resolveEpisodeAfterCompletedRow(
+        parentId: String,
+        tmdbId: Int,
+        rowSeason: Int,
+        rowEpisode: Int
+    ): ResolvedHomeSeriesTarget? {
+
+        var season = rowSeason
+        // From the row's own season the floor is its episode; every later
+        // season starts from its first episode.
+        var floorEpisode = rowEpisode
+
+        val lastSeason = rowSeason + MAX_FORWARD_SEASON_LOOKAHEAD
+
+        while (season <= lastSeason) {
+
+            val episodes =
+                try {
+                    tmdbLookupSemaphore.withPermit {
+                        tmdbRepository.getSeasonEpisodes(
+                            tmdbId,
+                            season,
+                            parentId
+                        )
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+
+            // First empty season = end of the show (see the resolver's walk).
+            if (episodes.isEmpty()) return null
+
+            val next =
+                episodes.firstOrNull { episode ->
+                    episode.episodeNumber > floorEpisode &&
+                        isAiredOrUnknown(episode.airDate)
+                }
+
+            if (next != null) {
+                return ResolvedHomeSeriesTarget(
+                    season = season,
+                    episode = next.episodeNumber,
+                    streamId = next.streamId,
+                    airDate = next.airDate,
+                    episodeTitle = next.name,
+                    episodeDescription = next.overview,
+                    runtimeMinutes = next.runtimeMinutes,
+                    episodeThumbnail = next.thumbnail,
+                    episodeRating =
+                        next.voteAverage
+                            ?.takeIf { it > 0.0 }
+                )
+            }
+
+            season++
+            floorEpisode = 0
+        }
+
+        return null
     }
 
     /**

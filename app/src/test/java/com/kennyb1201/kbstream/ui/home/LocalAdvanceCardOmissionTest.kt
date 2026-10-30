@@ -203,6 +203,57 @@ class LocalAdvanceCardOmissionTest {
         )
     }
 
+    /**
+     * The other half of the ghost fix: an answer that cannot be printed must not
+     * take the show with it. Field 2026-10-30 reported the whole shape - a card
+     * that never moved, a rail much shorter than before, and a show with one
+     * episode left gone even after a restart.
+     */
+    @Test
+    fun `an unprovable answer falls back to the next listed episode`() {
+        val viewModel = normalized(stripComments(viewModelSource()))
+        val builder = viewModel.substringAfter("private suspend fun buildLocalNextUpItem(")
+            .substringBefore("private suspend fun kidsFilterUpNext(")
+
+        val omission = builder.substringAfter("shouldOmitLocalAdvanceCard(")
+            .substringBefore("val poster =")
+
+        assertTrue(
+            "the untrustworthy answer must be replaced by the listing's next " +
+                "episode, not dropped: $omission",
+            omission.contains("resolveEpisodeAfterCompletedRow(")
+        )
+        assertTrue(
+            "and the show may only be omitted when the listing has nothing " +
+                "aired left: $omission",
+            omission.contains("?: return null")
+        )
+    }
+
+    @Test
+    fun `the fallback walks the listing forward and skips unaired episodes`() {
+        val viewModel = normalized(stripComments(viewModelSource()))
+        val walk = viewModel.substringAfter("private suspend fun resolveEpisodeAfterCompletedRow(")
+            .substringBefore("private suspend fun kidsFilterUpNext(")
+
+        assertTrue(
+            "strictly after the completed row is what keeps the ghost out: $walk",
+            walk.contains("episode.episodeNumber > floorEpisode")
+        )
+        assertTrue(
+            "and only aired episodes may be carded: $walk",
+            walk.contains("isAiredOrUnknown( episode.airDate )")
+        )
+        assertTrue(
+            "the first empty season is the end of the show: $walk",
+            walk.contains("if (episodes.isEmpty()) return null")
+        )
+        assertTrue(
+            "later seasons start from their first episode: $walk",
+            walk.contains("floorEpisode = 0")
+        )
+    }
+
     @Test
     fun `the preload reports an unresolved twin as incomplete evidence`() {
         val viewModel = normalized(stripComments(viewModelSource()))

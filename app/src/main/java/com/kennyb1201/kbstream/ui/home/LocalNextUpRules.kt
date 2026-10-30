@@ -181,10 +181,15 @@ internal fun hasUnwatchedAiredEpisodes(
  * is by construction a different episode than the row it was built from, so a
  * target equal to the row is proof the walk was missing that row.
  *
- * Both answers are "omit", never "caught up" - the caller must not record the
- * show as finished on the strength of this (see [HomeViewModel]'s caught-up
- * recording). The omission is pass-scoped: the next refresh clears the preload
- * caches and the show returns without a restart.
+ * Neither answer may be PRINTED, and neither is "caught up" - the caller must
+ * not record the show as finished on the strength of this (see
+ * [HomeViewModel]'s caught-up recording). It must not hide the show either: an
+ * unreadable watched state says nothing about whether episodes are left, and
+ * hiding a show with one episode to go was the worse half of the bug (field
+ * 2026-10-30). The caller therefore falls back to the next AIRED episode after
+ * the row, which the listing can prove without any watched state (see
+ * `HomeViewModel.resolveEpisodeAfterCompletedRow`); only a show with nothing
+ * aired left is omitted.
  *
  * A pair-less row cannot prove self-target (there is no episode to compare),
  * so the shape stays the caller's to handle - see the write-side residual.
@@ -194,7 +199,8 @@ internal fun hasUnwatchedAiredEpisodes(
  * @param rowSeason the candidate history row's own season, null when absent.
  * @param rowEpisode the candidate history row's own episode, null when absent.
  * @param evidenceIncomplete the show's watched state could not be read fully.
- * @return true when no advance card may be printed for this candidate.
+ * @return true when this resolver answer may not be printed as an advance card
+ *   (the caller falls back to the next listed episode after the row).
  */
 internal fun shouldOmitLocalAdvanceCard(
     targetSeason: Int?,
