@@ -6403,8 +6403,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Same gate the matcher itself uses (the setting AND a TV), so
                 // a phone - which has no matching row and never switches a
                 // panel - keeps its tunnel.
+                // `this@NativePlayerActivity`, not `this`: this block is the
+                // player's own `apply`, so a bare `this` is the ExoPlayer.
                 val frameRateMatchActive =
-                    AppPreferences.getMatchFrameRate(this) &&
+                    AppPreferences.getMatchFrameRate(this@NativePlayerActivity) &&
                         com.kennyb1201.kbstream.FormFactor.isTv
                 if (enableTunneling && !isLiveChannel && !audioTuningActive &&
                     !frameRateMatchActive &&

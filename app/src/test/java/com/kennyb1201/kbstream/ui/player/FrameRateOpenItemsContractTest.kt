@@ -296,7 +296,12 @@ class FrameRateOpenItemsContractTest {
         assertTrue(
             "the tunnel gate must consult the matching setting: $tunnel",
             tunnel.contains("val frameRateMatchActive =") &&
-                tunnel.contains("AppPreferences.getMatchFrameRate(this)")
+                // Labeled on purpose: this block is the player's own `apply`,
+                // so a bare `this` is the ExoPlayer and does not compile as a
+                // Context (caught by the v0.9.111 build).
+                tunnel.contains(
+                    "AppPreferences.getMatchFrameRate(this@NativePlayerActivity)"
+                )
         )
         assertTrue(
             "on a TV only, the same gate the matcher itself uses: $tunnel",
