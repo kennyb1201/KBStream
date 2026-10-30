@@ -75,8 +75,15 @@ class HeroTrailerRetryPlanTest {
     @Test
     fun `a chunk's own length turns the skip into media time`() {
         // 5 MB of a 50 s stream: one 1 MB chunk is ~10.5 s of playback, so an
-        // identical replay has to start that far past the death.
-        val decision = plan(positionMs = 20_000L, durationMs = 50_000L, totalBytes = 5_000_000L)
+        // identical replay has to start that far past the death. No dead class
+        // is named here on purpose - this is the replay branch, which is the
+        // only one that has to compute a skip.
+        val decision = plan(
+            positionMs = 20_000L,
+            durationMs = 50_000L,
+            deadClient = null,
+            totalBytes = 5_000_000L
+        )
 
         assertEquals(HeroTrailerResumeVerdict.RESUME, decision.verdict)
         assertEquals(

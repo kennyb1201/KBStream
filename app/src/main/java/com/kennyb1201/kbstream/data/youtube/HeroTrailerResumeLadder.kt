@@ -172,7 +172,7 @@ internal fun chunkSpanMs(chunkBytes: Long, totalBytes: Long?, durationMs: Long):
 internal fun resumePastFailureMs(
     positionMs: Long,
     durationMs: Long,
-    chunkBytes: Long = CHUNK_SIZE,
+    chunkBytes: Long = YoutubeChunkedDataSourceFactory.CHUNK_SIZE,
     totalBytes: Long? = null
 ): Long {
     val at = positionMs.coerceAtLeast(0L)
@@ -206,7 +206,7 @@ internal fun heroTrailerRetryPlan(
     excludedClients: Set<String>,
     identicalReplays: Int,
     resumeAttempts: Int,
-    chunkBytes: Long = CHUNK_SIZE,
+    chunkBytes: Long = YoutubeChunkedDataSourceFactory.CHUNK_SIZE,
     totalBytes: Long? = null,
     allClientKeys: Set<String> = YouTubeClients.all.map { it.key }.toSet()
 ): HeroTrailerRetryPlan {
