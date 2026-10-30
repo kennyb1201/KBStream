@@ -146,17 +146,66 @@ class MobileBillboardContractTest {
     }
 
     @Test
-    fun `manual navigation is swipe, chevrons and dots`() {
+    fun `manual navigation is swipe, chevrons and progress segments`() {
         val home = mobileHome()
 
         assertTrue(home.contains("description = \"Previous\""))
         assertTrue(home.contains("description = \"Next\""))
         assertTrue(home.contains("pagerState.animateScrollToPage(previous)"))
         assertTrue(home.contains("pagerState.animateScrollToPage(next)"))
-        // Dots jump to their own page and each one names the item it goes to.
+        // The segmented bar kept the dots' navigation: a segment jumps to its
+        // own page and names the item it goes to.
         assertTrue(home.contains("pagerState.animateScrollToPage(index)"))
         assertTrue(home.contains("contentDescription = page.meta.name"))
-        assertTrue(home.contains("if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)"))
+        assertTrue(home.contains("segment = index,"))
+    }
+
+    // ── the Ken Burns look (spec 2.6) ────────────────────
+
+    @Test
+    fun `the backdrop sweeps on a layer and the bar fills from the same value`() {
+        val home = mobileHome()
+
+        // ONE animation drives the sweep and the current segment's fill, which
+        // is what makes "they pause together and resume from the held
+        // fraction" true by construction rather than by two clocks agreeing.
+        assertTrue(home.contains("val sweepProgress = remember { Animatable(0f) }"))
+        assertTrue(
+            home.contains(
+                "val totalMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS"
+            )
+        )
+        assertTrue(home.contains("progress = sweepProgress.value"))
+        assertTrue(home.contains("animated = animateFill"))
+
+        // The sweep is the image layer's transform only: no re-measure of the
+        // pager, and the scrim/clearlogo/copy above it do not move.
+        assertTrue(home.contains("remember(index, cycleMs) { billboardSweep(index, cycleMs) }"))
+        assertTrue(home.contains("val sweep = backdropSweep ?: return@graphicsLayer"))
+        assertTrue(home.contains("translationX = ("))
+
+        // Paused by exactly the hold's conditions, and resumed - not restarted -
+        // from where it stopped: only a PAGE change snaps back to the start.
+        assertTrue(home.contains("val sweepPaused = reducedMotion ||"))
+        assertTrue(home.contains("if (sweptPage != page) {"))
+        assertTrue(home.contains("sweepProgress.stop()"))
+        assertTrue(
+            home.contains(
+                "val remainingMs = ((1f - sweepProgress.value) * totalMs).toInt().coerceAtLeast(1)"
+            )
+        )
+
+        // The content entrance, once per page entry, replayed on a return.
+        assertTrue(home.contains("durationMillis = BILLBOARD_CONTENT_REVEAL_MS"))
+        assertTrue(home.contains("contentReveal = { reveal.value }"))
+
+        // Animations off (animator duration scale 0) : static backdrop, no
+        // entrance, segments showing position only.
+        assertTrue(home.contains("val reducedMotion = rememberReducedMotion()"))
+        // A still backdrop, not a slower one - and never a `remember` inside
+        // the `if`, which would corrupt the slot table if the setting flipped.
+        assertTrue(home.contains("backdropSweep = sweep.takeUnless { reducedMotion }"))
+        assertTrue(home.contains("val animateFill = !reducedMotion && cycleMs > 0L"))
     }
 
     // ── buttons ─────────────────────────────────────────────────────────

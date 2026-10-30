@@ -20,6 +20,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +49,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -114,19 +120,27 @@ import com.kennyb1201.kbstream.ui.components.touch.MobileSpacing
 import com.kennyb1201.kbstream.ui.components.touch.PosterCard
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRail
+import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.rememberTouchTileWidth
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_CONTENT_REVEAL_MS
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_CONTENT_RISE_DP
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_KEN_BURNS_MANUAL_MS
 import com.kennyb1201.kbstream.ui.home.BILLBOARD_MAX_PAGES
+import com.kennyb1201.kbstream.ui.home.BILLBOARD_SEGMENT_TRACK_DP
 import com.kennyb1201.kbstream.ui.home.BillboardPage
 import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
+import com.kennyb1201.kbstream.ui.home.BillboardSweep
 import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
 import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.billboardChosenFeed
+import com.kennyb1201.kbstream.ui.home.billboardSegmentFill
+import com.kennyb1201.kbstream.ui.home.billboardSweep
 import com.kennyb1201.kbstream.ui.home.catalogRailKey
 import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
@@ -1631,6 +1645,18 @@ private fun MobileHero(
     meta: Meta,
     backdropUrl: String?,
     logoUrl: String?,
+    /**
+     * The page's Ken Burns sweep (spec 2.6), or null for a still backdrop - a
+     * page that is not current, and every page when system animations are off.
+     */
+    backdropSweep: BillboardSweep? = null,
+    /**
+     * 0..1 through [backdropSweep], read INSIDE the graphics layer: a read in
+     * composition would recompose the page every frame of the sweep.
+     */
+    backdropProgress: () -> Float = { 1f },
+    /** 0..1 entrance of the content block, read inside its own layer. */
+    contentReveal: () -> Float = { 1f },
     /** The trailer playing over this page, or null while the still shows. */
     trailerPlayback: HeroTrailerPlayback? = null,
     trailerMuted: Boolean = true,
@@ -1660,7 +1686,25 @@ private fun MobileHero(
             },
             contentDescription = meta.name,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
+            // The sweep is a graphics layer on the IMAGE only: a scale and a
+            // translation are not layout, so the pager never re-measures and
+            // the scrim, the clearlogo and the copy above it stay put.
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val sweep = backdropSweep ?: return@graphicsLayer
+                    val fraction = backdropProgress().coerceIn(0f, 1f)
+                    val scale = sweep.startScale +
+                        (sweep.endScale - sweep.startScale) * fraction
+                    scaleX = scale
+                    scaleY = scale
+                    // A fraction of the image's own width, so the pan is the
+                    // same move on a 360dp phone and a tablet.
+                    translationX = (
+                        sweep.startPanFraction +
+                            (sweep.endPanFraction - sweep.startPanFraction) * fraction
+                        ) * size.width
+                }
         )
         // The shared hero-trailer stack, over the still. A trailer that fails to
         // resolve never reaches here at all (the owner keeps the backdrop and
@@ -1707,9 +1751,17 @@ private fun MobileHero(
             }
         }
         Column(
+            // The content entrance (spec 2.6): the block fades in and rises on
+            // page settle, once per page entry. A layer rather than a
+            // recomposed offset, so the rise costs nothing per frame.
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .graphicsLayer {
+                    val reveal = contentReveal().coerceIn(0f, 1f)
+                    alpha = reveal
+                    translationY = (1f - reveal) * BILLBOARD_CONTENT_RISE_DP.dp.toPx()
+                },
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             if (logo != null && !logoFailed) {
@@ -1761,10 +1813,10 @@ private fun MobileHero(
  * the page.
  *
  * Every motion rule is a state the effect KEYS on, not a flag checked inside a
- * long-lived timer: a swipe, a chevron press, a dot press and an auto-advance
- * all end in a new `currentPage`, which cancels the pending hold and re-arms it
- * from the page that just became current. That is also why the timer needs no
- * manual "restart" anywhere.
+ * long-lived timer: a swipe, a chevron press, a progress-segment press and an
+ * auto-advance all end in a new `currentPage`, which cancels the pending hold
+ * and re-arms it from the page that just became current. That is also why the
+ * timer needs no manual "restart" anywhere.
  *
  * The trailer is the app's one hero-trailer stack (see [HeroInlineTrailerPlayer]
  * and TrailerPlayerLauncher), honouring the existing hero-trailer delay and
@@ -1787,6 +1839,19 @@ private fun MobileBillboard(
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { pages.size })
     val currentPage = pages.getOrNull(pagerState.currentPage)
+
+    // "Remove animations" (system animator duration scale 0): the house helper,
+    // the same one the touch cards use. It turns OFF the sweep and the entrance
+    // and leaves the progress bar showing position without motion - the
+    // billboard is static, but it still advances on its hold.
+    val reducedMotion = rememberReducedMotion()
+
+    // ONE value drives the sweep and the current segment's fill: they cannot
+    // drift apart, and "pause together, resume from the held fraction" is a
+    // property of there being a single animation rather than two clocks that
+    // have to agree. A new page resets it; a pause only stops it.
+    val sweepProgress = remember { Animatable(0f) }
+    val reveal = remember { Animatable(if (reducedMotion) 1f else 0f) }
 
     // The trailer on the CURRENT page, or null for the still. [playbackPageKey]
     // is the page that owns it - and it is set as soon as a trailer is ASKED
@@ -1909,6 +1974,60 @@ private fun MobileBillboard(
             }
     }
 
+    // The sweep and the entrance pause with EXACTLY what the hold pauses with -
+    // a finger on the pager, the app in the background, a trailer that owns the
+    // page (or is waiting out its delay) - so the move is never playing to a
+    // screen nobody is looking at, and the fill never advances under a pause.
+    val sweepPaused = reducedMotion ||
+        backgrounded ||
+        pagerState.isScrollInProgress ||
+        playbackPageKey != null ||
+        playback != null ||
+        autoTrailerArmed
+    // The page this Animatable belongs to. It is what distinguishes a page
+    // CHANGE (snap back to the start) from a pause (hold where it is): the
+    // effect below is keyed on both, so the difference has to be data.
+    var sweptPage by remember { mutableStateOf(-1) }
+    LaunchedEffect(pagerState.settledPage, sweepPaused, cycleMs, reducedMotion) {
+        val page = pagerState.settledPage
+        if (reducedMotion) {
+            sweepProgress.snapTo(1f)
+            sweptPage = page
+            return@LaunchedEffect
+        }
+        if (sweptPage != page) {
+            sweepProgress.snapTo(0f)
+            sweptPage = page
+        }
+        if (sweepPaused) {
+            // Holds the held fraction: stop() keeps the value it reached, and
+            // the branch above only snaps when the PAGE changed.
+            sweepProgress.stop()
+            return@LaunchedEffect
+        }
+        val totalMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
+        val remainingMs = ((1f - sweepProgress.value) * totalMs).toInt().coerceAtLeast(1)
+        sweepProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
+        )
+    }
+    // One entrance per page entry, replayed when a page is returned to.
+    LaunchedEffect(pagerState.settledPage, reducedMotion) {
+        if (reducedMotion) {
+            reveal.snapTo(1f)
+            return@LaunchedEffect
+        }
+        reveal.snapTo(0f)
+        reveal.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = BILLBOARD_CONTENT_REVEAL_MS,
+                easing = FastOutSlowInEasing
+            )
+        )
+    }
+
     val canWrap = pages.size > 1
     val pageLabel = currentPage?.meta?.name.orEmpty()
 
@@ -1919,10 +2038,25 @@ private fun MobileBillboard(
                 modifier = Modifier.fillMaxWidth()
             ) { index ->
                 val page = pages[index]
+                // The sweep belongs to the page's POSITION and the dwell, so it
+                // is remembered rather than rebuilt per frame - and it is
+                // computed UNCONDITIONALLY, because a remember inside an `if`
+                // would corrupt the slot table the moment animations are
+                // turned off or back on mid-page.
+                val sweep = remember(index, cycleMs) { billboardSweep(index, cycleMs) }
                 MobileHero(
                     meta = page.meta,
                     backdropUrl = page.backdropUrl,
                     logoUrl = page.logoUrl,
+                    // Animations off is a STILL backdrop, not a slower one.
+                    backdropSweep = sweep.takeUnless { reducedMotion },
+                    // Read inside the layer, and only for the page in front: a
+                    // neighbour sliding in during a drag shows that page's own
+                    // start of the move, not the current page's progress.
+                    backdropProgress = {
+                        if (pagerState.currentPage == index) sweepProgress.value else 0f
+                    },
+                    contentReveal = { reveal.value },
                     trailerPlayback = if (index == pagerState.currentPage) playback else null,
                     trailerMuted = trailerMuted,
                     onTrailerEnded = { stopTrailer() },
@@ -1958,36 +2092,64 @@ private fun MobileBillboard(
         }
 
         if (pages.size > 1) {
+            // The segmented progress bar (spec 2.6), in the dots' place and
+            // with the dots' job intact: one segment per page, every segment
+            // tappable to its page, each naming the title it jumps to.
+            //
+            // "Manual only" and system animations off fill the current segment
+            // instead of animating it: position without motion.
+            val animateFill = !reducedMotion && cycleMs > 0L
+            val segmentColor = KBAccent
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.Center,
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 pages.forEachIndexed { index, page ->
-                    val selected = index == pagerState.currentPage
                     Box(
                         modifier = Modifier
+                            .weight(1f)
+                            // The touch target is a row high even though the
+                            // track is 3dp: a 3dp tap target is not one.
                             .height(24.dp)
-                            .padding(horizontal = 4.dp)
                             .clickable {
                                 scope.launch { pagerState.animateScrollToPage(index) }
                             }
                             .semantics {
-                                // Each dot names the title it jumps to, so the
-                                // strip is not ten anonymous buttons.
                                 contentDescription = page.meta.name
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(width = if (selected) 18.dp else 8.dp, height = 8.dp)
+                                .fillMaxWidth()
+                                .height(BILLBOARD_SEGMENT_TRACK_DP.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    if (selected) KBAccent else KBTextLo.copy(alpha = 0.35f)
-                                )
+                                // The track is the dimmed base every segment
+                                // starts as, which is exactly what an UPCOMING
+                                // page looks like; the accent fill drawn below
+                                // covers it for the pages behind and the
+                                // current page's own progress.
+                                .background(KBTextLo.copy(alpha = 0.25f))
+                                .drawBehind {
+                                    // Read in the DRAW phase: the fill advances
+                                    // every frame and must not recompose the
+                                    // bar (or the pager behind it) for it.
+                                    val fill = billboardSegmentFill(
+                                        segment = index,
+                                        current = pagerState.currentPage,
+                                        progress = sweepProgress.value,
+                                        animated = animateFill
+                                    )
+                                    if (fill > 0f) {
+                                        drawRect(
+                                            color = segmentColor,
+                                            size = Size(size.width * fill, size.height)
+                                        )
+                                    }
+                                }
                         )
                     }
                 }
@@ -1997,7 +2159,14 @@ private fun MobileBillboard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                // The buttons are part of the page's content block, so they
+                // ride the same entrance as the copy above them.
+                .graphicsLayer {
+                    val shown = reveal.value.coerceIn(0f, 1f)
+                    alpha = shown
+                    translationY = (1f - shown) * BILLBOARD_CONTENT_RISE_DP.dp.toPx()
+                },
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2037,7 +2206,7 @@ private fun MobileBillboard(
         }
         if (pageLabel.isNotBlank() && pages.size > 1) {
             // The pager's own reading of where it is, for a screen reader that
-            // cannot see the dots.
+            // cannot see the segmented bar.
             Text(
                 text = "${pagerState.currentPage + 1} of ${pages.size}",
                 color = KBTextLo,

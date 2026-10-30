@@ -137,6 +137,104 @@ internal fun billboardChosenFeed(
     return merged.ifEmpty { null }
 }
 
+// ── The Ken Burns sweep (spec 2.6) ──────────────────────────────────
+//
+// Motion is specified as numbers, so it is decided here as numbers: the pager
+// only interpolates these fields with one 0..1 value. That value is also the
+// progress bar's fill, which is what makes "the sweep and the fill pause
+// together and resume from the held fraction" true by construction rather than
+// by two timers agreeing.
+
+/** The furthest a sweep zooms, and the cap the spec names. */
+internal const val BILLBOARD_KEN_BURNS_MAX_SCALE = 1.10f
+
+/** Pan, as a fraction of the backdrop's width ("up to 2%"). */
+internal const val BILLBOARD_KEN_BURNS_PAN_FRACTION = 0.02f
+
+/**
+ * How long the sweep runs when the billboard cannot advance by itself.
+ *
+ * "Manual only" has no dwell to fill, but a backdrop still has to move
+ * somewhere and stop: ten seconds, then it holds at its end state.
+ */
+internal const val BILLBOARD_KEN_BURNS_MANUAL_MS = 10_000L
+
+/** The content block's entrance: a fade plus this much rise, once per page. */
+internal const val BILLBOARD_CONTENT_REVEAL_MS = 450
+
+/** The rise the content entrance travels, in dp. */
+internal const val BILLBOARD_CONTENT_RISE_DP = 8
+
+/** The progress bar's track, in dp. */
+internal const val BILLBOARD_SEGMENT_TRACK_DP = 3
+
+/**
+ * One page's backdrop sweep: where it starts, where it ends, how long it takes.
+ *
+ * A data class rather than a lambda so the screen can hand it to the image
+ * layer once and interpolate it per frame without allocating.
+ */
+internal data class BillboardSweep(
+    val startScale: Float,
+    val endScale: Float,
+    /** Horizontal offset at the start, as a fraction of the image's width. */
+    val startPanFraction: Float,
+    /** ...and at the end. */
+    val endPanFraction: Float,
+    val durationMs: Long
+)
+
+/**
+ * The sweep for the page at [index], over the billboard's current dwell.
+ *
+ * Direction alternates by page PARITY, per the spec: an even page zooms in
+ * while panning one way, an odd page zooms out while panning the other, so two
+ * consecutive pages never repeat the same move. The duration is the dwell
+ * itself, so the move lands exactly as the page would advance; [cycleMs] of 0
+ * ("Manual only") has no dwell, and uses [BILLBOARD_KEN_BURNS_MANUAL_MS].
+ */
+internal fun billboardSweep(index: Int, cycleMs: Long): BillboardSweep {
+    val durationMs = if (cycleMs > 0L) cycleMs else BILLBOARD_KEN_BURNS_MANUAL_MS
+    return if (index % 2 == 0) {
+        BillboardSweep(
+            startScale = 1f,
+            endScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
+            startPanFraction = 0f,
+            endPanFraction = -BILLBOARD_KEN_BURNS_PAN_FRACTION,
+            durationMs = durationMs
+        )
+    } else {
+        BillboardSweep(
+            startScale = BILLBOARD_KEN_BURNS_MAX_SCALE,
+            endScale = 1f,
+            startPanFraction = 0f,
+            endPanFraction = BILLBOARD_KEN_BURNS_PAN_FRACTION,
+            durationMs = durationMs
+        )
+    }
+}
+
+/**
+ * How full one progress segment is: 0..1.
+ *
+ * Completed pages stay full and upcoming ones stay empty, which is what makes
+ * the bar read as position; only the CURRENT segment animates, and only when
+ * there is an animation to show ([animated] is false for "Manual only" and for
+ * system animations off, where the current segment is simply full - position
+ * without motion).
+ */
+internal fun billboardSegmentFill(
+    segment: Int,
+    current: Int,
+    progress: Float,
+    animated: Boolean
+): Float = when {
+    segment < current -> 1f
+    segment > current -> 0f
+    animated -> progress.coerceIn(0f, 1f)
+    else -> 1f
+}
+
 /** A cycle option as its chip reads: "Manual only", "6s", ... */
 internal fun billboardCycleLabel(ms: Long): String =
     if (ms <= 0L) "Manual only" else "${ms / 1_000L}s"

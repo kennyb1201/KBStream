@@ -570,7 +570,7 @@ and a phone has no focus, so nothing ever drove one. The slot is now a pager of
 up to ten titles (`MobileBillboard` in `ui/mobile/HomeScreenMobile.kt`), each
 page the SAME `MobileHero` presentation (backdrop, TMDB clearlogo or the plain
 title, meta line, two-line synopsis, tap for Details) plus Play and Details
-buttons, chevrons and tappable page dots.
+buttons, chevrons and a tappable segmented progress bar.
 
 Its feed is the viewer's choice, made in the Home manager: any built-in row, any
 add-on catalog or any built catalog, merged in the order the chips were picked,
@@ -587,7 +587,17 @@ settles while the rest fill in.
 
 Motion: it advances every 6 s by default (3/6/10/15 s, or **Manual only**, in
 the manager), pauses under a finger, in the background, and while a trailer owns
-the page; a swipe, a chevron or a dot re-arms it from the page it landed on.
+the page; a swipe, a chevron or a progress segment re-arms it from the page it
+landed on. The look is a Ken Burns treatment: the backdrop zooms 1.00 -> 1.10
+and pans up to 2% of its width over the page's own dwell (a fixed 10 s under
+**Manual only**), alternating direction by page parity, applied as a graphics
+layer on the image so nothing re-measures; the copy and buttons fade and rise
+8dp once per page entry; and the progress segments fill from the same single
+animation the sweep runs on, which is what makes them pause and resume together
+from the held fraction. With system animations off there is no sweep and no
+entrance, and the segments show position only. The look lives in
+`ui/home/BillboardRules.kt` as numbers, so `BillboardSweepRulesTest` can check
+the direction alternation, the dwell and the caps without a frame clock.
 Trailers are the billboard's own choice (`Off` by default, `Auto-play`,
 `Manual`) and reuse the existing stack and its settings - the pooled
 `HeroInlineTrailerPlayer`, **Hero Trailer Delay** and **Mute Hero Trailers** -
