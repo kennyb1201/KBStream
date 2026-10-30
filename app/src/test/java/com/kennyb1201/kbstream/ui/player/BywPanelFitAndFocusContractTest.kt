@@ -377,10 +377,14 @@ class BywPanelFitAndFocusContractTest {
             build.contains("fitLevel = BYW_FIT_LEVEL_FULL") &&
                 build.contains("resetFeaturedSizing()")
         )
+        // The end landmark is the NEXT function, not a doc line: the clearance
+        // pass's own comment changed when it stopped pushing the row down, and a
+        // landmark that lives in prose is a test that breaks on a rewrite of the
+        // prose rather than on a change of behaviour.
         val reset = section(
             source(BYW),
             "private fun resetFeaturedSizing() {",
-            "/** Puts the row's own top margin back"
+            "private fun clearRowClearance()"
         )
         assertTrue(
             "and a strip the last raise hid comes back",
