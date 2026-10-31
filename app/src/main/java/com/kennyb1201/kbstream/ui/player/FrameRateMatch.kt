@@ -842,7 +842,26 @@ internal class FrameRateMatcher(
      * under a running title, which is the judder every rule in this class exists
      * to avoid. Off by default, and the setting that arms it is device-local.
      */
-    private val preferWholeRate: Boolean = false
+    private val preferWholeRate: Boolean = false,
+    /**
+     * Called when the panel is CONFIRMED to be in the mode this session holds:
+     * at the look that saw the move land, when a session takes over a panel that
+     * was already right, and when the hold tick has to re-ask a mode the panel
+     * left.
+     *
+     * Confirmed rather than requested, because a request is not a fact: HDMI
+     * renegotiation takes longer than the first look, and a panel that refuses
+     * the mode never has anything to report. [verifyEngagedMode]'s re-ask is the
+     * one request that has no confirm of its own (it is a repair of a state this
+     * session already held, not a new ask), so it reports itself.
+     */
+    private val onModeHeld: (modeId: Int, refreshRateHz: Double) -> Unit = { _, _ -> },
+    /**
+     * Called when this session stops holding the panel - [release], and a source
+     * that will never be matched taking over. Pair of [onModeHeld], so whatever
+     * the engagement started is ended here even when the player keeps running.
+     */
+    private val onModeReleased: () -> Unit = {}
 ) {
 
     private val originalPreferredModeId = activity.window.attributes.preferredDisplayModeId
@@ -1142,12 +1161,20 @@ internal class FrameRateMatcher(
         PlaybackSessionTrace.note(
             "afr re-asked the engaged mode: mode=$heldModeId was $currentModeId"
         )
+        // The re-ask has no confirm of its own (it repairs a mode this session
+        // already held), so it reports itself: whatever the engagement started is
+        // re-issued against the mode it is asking for again.
+        onModeHeld(
+            heldModeId,
+            modes.firstOrNull { it.id == heldModeId }?.refreshRate ?: 0.0
+        )
         Log.i(TAG, "panel left the engaged mode $heldModeId for $currentModeId; re-asked")
     }
 
     /** Puts the panel back. Called from the player's teardown. */
     fun release() {
         released = true
+        onModeReleased()
         cancelPending()
         deferredConfirm = null
         runCatching { clearSurfaceRate() }
@@ -1196,6 +1223,7 @@ internal class FrameRateMatcher(
     fun restoreForUnmatchedSource() {
         heldModeId = UNSET
         reassertedMode = false
+        onModeReleased()
         runCatching { clearSurfaceRate() }
             .onFailure { Log.w(TAG, "could not clear the surface frame rate", it) }
         if (!restoreOnRelease) return
@@ -1358,6 +1386,10 @@ internal class FrameRateMatcher(
                         "afr took over an already-matched panel: mode=${best.id} " +
                             "${rate(contentFps)} fps"
                     )
+                    // Engaged without asking: the panel is already in the mode,
+                    // so there is nothing to confirm and the session's hold
+                    // starts here.
+                    onModeHeld(best.id, best.refreshRate)
                     Log.i(
                         TAG,
                         "already in the best mode for ${rate(contentFps)} fps; no request made"
@@ -1555,6 +1587,12 @@ internal class FrameRateMatcher(
             "afr ${if (afterModeId != beforeModeId) "panel moved" else "panel unmoved"}: " +
                 "mode=$beforeModeId->$afterModeId at $afterRate Hz step=$step"
         )
+        // The engagement is a fact as of this look: the panel is in the held
+        // mode, so this is where the hold is reported rather than where it was
+        // asked for.
+        if (heldModeId != UNSET && afterModeId == heldModeId) {
+            onModeHeld(heldModeId, afterRate)
+        }
         when (step) {
             // Both looks are spent. Still not moved means the panel refused a
             // mode, and that is what the row has to say.

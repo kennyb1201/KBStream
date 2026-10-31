@@ -544,7 +544,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // Whether this panel's whole-number rate beats a closer fractional
             // one (audit AFR S1): a device-local answer, read when the matcher is
             // built rather than mid-film.
-            preferWholeRate = AppPreferences.getPreferWholeFrameRate(this)
+            preferWholeRate = AppPreferences.getPreferWholeFrameRate(this),
+            // Confirmed engagement only, so nothing is measured for a request
+            // the panel never took. The probe attaches to whichever player is
+            // alive at that moment: a rebuilt player is the one holding the
+            // surface the mode applies to.
+            onModeHeld = { modeId, refreshRateHz ->
+                (pacingProbe ?: PlayerPacingProbe(this).also { pacingProbe = it })
+                    .start(exoPlayer, modeId, refreshRateHz)
+            },
+            onModeReleased = { pacingProbe?.stop() }
         ).also { frameRateMatcher = it }
     }
 
@@ -715,6 +724,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // track, and null when the setting is off — which is what makes every call
     // site below a no-op rather than a check repeated at each one.
     private var frameRateMatcher: FrameRateMatcher? = null
+    // What the player's own frame release is doing while a matched mode is on
+    // the panel (2026-10-30: both matched rates judder). Diagnostics only - it
+    // writes one line per engaged session and changes nothing - and created on
+    // the first engagement so a session that never matches never pays for it.
+    private var pacingProbe: PlayerPacingProbe? = null
     // The content rate this session was last told, so a return to the player can
     // re-arm the panel from it (see [rearmFrameRateMatch]). Both halves that
     // supply a rate run once per session - the probe reads the stream's HEAD,
