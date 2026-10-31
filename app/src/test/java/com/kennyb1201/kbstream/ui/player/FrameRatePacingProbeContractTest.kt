@@ -54,7 +54,7 @@ class FrameRatePacingProbeContractTest {
         assertTrue(
             "and the hold tick's re-ask reports itself: it repairs a mode this session already " +
                 "held and never goes through confirm()",
-            window(match, "private fun verifyEngagedMode(", "fun release()").contains(
+            window(match, "fun verifyEngagedMode()", "fun release()").contains(
                 "onModeHeld("
             )
         )
