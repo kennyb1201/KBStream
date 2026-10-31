@@ -1137,43 +1137,54 @@ internal class BecauseYouWatchedUi(
     private fun rowScroll(): View? = row.parent as? View
 
     /**
-     * Holds the pick row clear of the shrunk video's corner - by narrowing the
-     * row, never by pushing it down.
+     * Holds the pick row clear of the shrunk video's corner: room below the video
+     * first, the narrower row only when there is none.
      *
-     * It used to push the row DOWN by (video height - header height). That cost
-     * the panel precisely the height the video occupies: once the header is
-     * shorter than the corner, the panel's total becomes video + row + hint
-     * whatever the fit ladder shrinks, so on a 1080p UI the ladder walked to its
-     * floor - dropping the featured strip, and with it the clearlogo and the meta
-     * line - and STILL clipped the PLAY / DETAILS pills and the hint off the
-     * bottom (field 2026-10-30: "the play and details buttons are cut off, it's
-     * missing meta and clearlogo").
+     * The row used to be narrowed and never moved: it took the header's own right
+     * inset, ended before the video's left edge, and the picks past that edge were
+     * reached by scrolling. That is right on a 1080p TV UI, where the panel is
+     * full and the corner is tall - pushing the row down there made the panel's
+     * total video + row + hint whatever the ladder shrank, so the ladder walked to
+     * its floor (dropping the strip, and with it the clearlogo and the meta line)
+     * and STILL clipped the pills off the bottom (field 2026-10-30).
      *
-     * The row is a horizontal scroll view, so it does not need to move down: it
-     * takes the header's own right inset instead, ends before the video's left
-     * edge, and the picks past that edge are reached by scrolling the row - which
-     * a focus move does on its own. The panel's height then stays header + row +
-     * hint at every level, which is what lets the fit pass keep the strip.
+     * A phone in landscape is the other shape: the corner video is only ~200dp
+     * tall, the header under it is about that same height, and the panel has
+     * height to spare - so narrowing the row bought nothing and cost the last
+     * pick its pills, which is what the field saw (2026-10-31: the row's last
+     * DETAILS read "detai" and the posters ran into the corner video). Given room,
+     * the row therefore MOVES DOWN to the video's bottom edge and keeps the full
+     * width, which puts the whole row on screen. The narrow path stays for the
+     * panel that cannot afford the height, and it is still chosen by measurement
+     * - the content as it wants to be laid out against the parent's height - never
+     * by the device it is running on.
      */
     private fun keepRowClearOfNotch() {
         if (creditsInsetPx <= 0 || creditsNotchPx <= 0) return
         val scroll = rowScroll() ?: return
         // Before the first layout the header has no measured height at all, and
-        // taking that for a header would inset the row for a frame. The layout
+        // taking that for a header would move the row for a frame. The layout
         // pass that follows calls this again with real numbers.
         if (scroll.top <= 0) return
         val params = scroll.layoutParams as? LinearLayout.LayoutParams ?: return
         val base = creditsRowBaseMargin ?: params.topMargin.also { creditsRowBaseMargin = it }
-        // Measured against the margin this layout actually used, so the header's
-        // height is the truth and not the clearance the old pass added to it.
+        // The row's top minus the margin it is wearing gives the header's height
+        // on its own, whether or not this pass has already moved the row down: the
+        // two terms grow together, so the answer cannot feed on itself and flip
+        // between the two clearances on every layout pass.
         val header = scroll.top - panel.paddingTop - params.topMargin
         // Only when the row's top is under the video: a header taller than the
-        // corner already ends below it, and insetting would give up width for
+        // corner already ends below it, and either clearance would cost room for
         // nothing.
-        val inset = if (header < creditsNotchPx) creditsInsetPx else 0
+        val underVideo = header < creditsNotchPx
+        val drop = if (underVideo) creditsNotchPx + dp(BYW_CORNER_GAP_DP) - header else 0
+        val canDrop = drop > 0 &&
+            panelContentHeight() - (params.topMargin - base) + drop <= panelAvailableHeight()
+        val topMargin = base + if (canDrop) drop else 0
+        val inset = if (underVideo && !canDrop) creditsInsetPx else 0
         var changed = false
-        if (params.topMargin != base) {
-            params.topMargin = base
+        if (params.topMargin != topMargin) {
+            params.topMargin = topMargin
             changed = true
         }
         if (params.marginEnd != inset) {
@@ -1181,6 +1192,36 @@ internal class BecauseYouWatchedUi(
             changed = true
         }
         if (changed) scroll.requestLayout()
+    }
+
+    /**
+     * The panel's height as its own content wants it, never the clipped viewport.
+     *
+     * [panel].measuredHeight cannot answer this: the panel is a `WRAP_CONTENT`
+     * child of a clipping parent, so an over-full panel measures exactly the
+     * available height and never a pixel more. The children keep their own
+     * heights, so summing those is the layout the panel would make given the room —
+     * which is what decides whether the row may move down under the video.
+     */
+    private fun panelContentHeight(): Int {
+        var total = panel.paddingTop + panel.paddingBottom
+        for (index in 0 until panel.childCount) {
+            val child = panel.getChildAt(index)
+            if (child.visibility == View.GONE) continue
+            val params = child.layoutParams as? LinearLayout.LayoutParams
+            total += child.measuredHeight + (params?.topMargin ?: 0) + (params?.bottomMargin ?: 0)
+        }
+        return total
+    }
+
+    /** The parent's measured height, less the panel's own margins. */
+    private fun panelAvailableHeight(): Int {
+        val params = panel.layoutParams as? ViewGroup.MarginLayoutParams ?: return 0
+        val parentHeight = (panel.parent as? View)?.height ?: 0
+        val available =
+            (if (parentHeight > 0) parentHeight else host.resources.displayMetrics.heightPixels) -
+                params.topMargin - params.bottomMargin
+        return available
     }
 
     /**
@@ -1811,6 +1852,16 @@ internal class BecauseYouWatchedUi(
         const val POSTER_FULL_HEIGHT_DP = 162
         const val POSTER_COMPACT_WIDTH_DP = 88
         const val POSTER_COMPACT_HEIGHT_DP = 132
+
+        /**
+         * The gap a row that moved down under the corner video keeps from it.
+         *
+         * The video is a SurfaceView with its own rounded corners, and a poster that
+         * starts on the pixel below it still reads as touching it — "the posters
+         * overlap into the pip" (field 2026-10-31). One hairline of air is all the
+         * cue needs.
+         */
+        const val BYW_CORNER_GAP_DP = 8
 
         const val STRIP_BACKDROP_FULL_DP = 108
         const val STRIP_BACKDROP_COMPACT_DP = 80

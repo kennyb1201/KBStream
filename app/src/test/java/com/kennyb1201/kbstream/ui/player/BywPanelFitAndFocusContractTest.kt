@@ -230,27 +230,58 @@ class BywPanelFitAndFocusContractTest {
         )
     }
 
+    /**
+     * The corner clearance, in both of the shapes it has to serve (field
+     * 2026-10-31). Narrowing the row and never moving it is right on a 1080p TV
+     * UI, where the panel is full and pushing the row down made the ladder run to
+     * its floor. It is wrong on a phone in landscape, where the corner video is
+     * about as tall as the header under it and the panel has height to spare: the
+     * narrowed row bought nothing and clipped the last pick's pills - the field
+     * saw the row's last DETAILS read "detai" with the posters against the corner
+     * video.
+     *
+     * The rule is therefore measured, not chosen by device: the drop is taken when
+     * the panel's own content still fits under it, and the narrow path is kept for
+     * the panel that cannot afford the height.
+     */
     @Test
-    fun `the credits corner narrows the row instead of pushing it down`() {
+    fun `the credits corner costs the row height first and width only when there is none`() {
         val clearance = section(
             source(BYW),
             "private fun keepRowClearOfNotch() {",
             "private fun fitCreditsPanel() {"
         )
         assertTrue(
-            "the row ends before the video's left edge, so the corner never costs height",
-            clearance.contains("params.marginEnd = inset") &&
-                clearance.contains("if (header < creditsNotchPx) creditsInsetPx else 0")
+            "the drop is asked for by measurement - the content as it wants to be laid " +
+                "out plus the drop, against the room the panel has - so a panel that " +
+                "cannot afford it still narrows instead",
+            clearance.contains(
+                "panelContentHeight() - (params.topMargin - base) + drop <= " +
+                    "panelAvailableHeight()"
+            )
         )
         assertTrue(
-            "and the row's own top margin goes back to its XML value",
-            clearance.contains("params.topMargin = base")
+            "and both outcomes are the two labelled lines: the row moves to the video's " +
+                "bottom edge with the full width, or it ends before the video's left edge",
+            clearance.contains("val topMargin = base + if (canDrop) drop else 0") &&
+                clearance.contains("val inset = if (underVideo && !canDrop) creditsInsetPx else 0") &&
+                clearance.contains("params.marginEnd = inset")
+        )
+        assertTrue(
+            "the header's height is the row's top minus the margin it is wearing, so the " +
+                "two terms grow together and the decision cannot feed on itself",
+            clearance.contains("val header = scroll.top - panel.paddingTop - params.topMargin")
+        )
+        assertTrue(
+            "the panel's content is summed from its children, because a clipped panel " +
+                "measures the viewport and could never answer whether the drop fits",
+            clearance.contains("private fun panelContentHeight(): Int {") &&
+                clearance.contains("total += child.measuredHeight")
         )
         assertFalse(
-            "never pushed down: that made the panel's total video + row + hint, which is " +
-                "how the ladder ran to its floor and still clipped the pills",
-            clearance.contains("params.topMargin = margin") ||
-                clearance.contains("creditsNotchPx - header)")
+            "the old unconditional inset is gone: it clipped a pick's pills whenever the " +
+                "panel had room to move the row down instead",
+            clearance.contains("if (header < creditsNotchPx) creditsInsetPx else 0")
         )
     }
 
@@ -378,9 +409,10 @@ class BywPanelFitAndFocusContractTest {
                 build.contains("resetFeaturedSizing()")
         )
         // The end landmark is the NEXT function, not a doc line: the clearance
-        // pass's own comment changed when it stopped pushing the row down, and a
-        // landmark that lives in prose is a test that breaks on a rewrite of the
-        // prose rather than on a change of behaviour.
+        // pass's own comment changed twice (when it stopped pushing the row down,
+        // and when it started again for a panel with room), and a landmark that
+        // lives in prose is a test that breaks on a rewrite of the prose rather
+        // than on a change of behaviour.
         val reset = section(
             source(BYW),
             "private fun resetFeaturedSizing() {",
