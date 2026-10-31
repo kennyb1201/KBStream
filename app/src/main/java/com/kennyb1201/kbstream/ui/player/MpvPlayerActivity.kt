@@ -43,6 +43,7 @@ import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.bundledEpisodeCount
@@ -254,6 +255,18 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
+
+    /**
+     * The load splash's backdrop url, kept so the picture can be dropped once the
+     * file has a picture and re-loaded for the next source load.
+     *
+     * Same reason as the main player's splash backdrop: a full-screen backdrop
+     * is ~8 MB that used to be held for the life of the session, on top of a
+     * demuxer cache this engine fills from the first second. This engine is
+     * opened precisely when the box is already struggling, so the block is worth
+     * releasing here even more than there.
+     */
+    private var loadingBackdropArtUrl: String? = null
     // The one shared overlay (player_chrome.xml).
     private var chrome: PlayerChrome? = null
     // The overlay clock's own 1 Hz tick: the shared chrome paints the clock and
@@ -973,6 +986,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var positionMs = 0L
     private var durationMs = 0L
 
+    /**
+     * This session's durable death marker (see [PlaybackDeathMarker]).
+     *
+     * The backup engine is opened exactly when the box is already struggling
+     * (decoder exhaustion, a handoff), which makes it the likeliest of the three
+     * to be killed outright - and a kill runs no handler, so the next launch is
+     * the only place the death can be reported from.
+     */
+    private var playbackDeathToken: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // A phone asks for landscape before the window exists - a title plays
         // sideways even though browsing follows the device; on TV this returns
@@ -1040,6 +1063,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             episode = correctedEpisode
         }
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
+        // Armed once the session is identifiable, and before libmpv is asked to
+        // open anything: a death during the open is the one with no trace. See
+        // PlaybackDeathMarker.
+        playbackDeathToken = PlaybackDeathMarker.arm(
+            this,
+            PlaybackDeathMarker.ENGINE_MPV,
+            itemName,
+            season,
+            episode,
+            currentUrl
+        )
         // The same line the main player writes: what this session files itself
         // under, next to what the id it plays says (see PlaybackSessionTrace).
         // The stored scheme goes with it, so the comparison reads the id as the
@@ -1064,6 +1098,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // Splash art, the same shape as the main player's: backdrop with the
         // clear logo over it, or the name when there is no logo art.
         (backdropUrl ?: itemPoster)?.takeIf { it.isNotBlank() }?.let { art ->
+            loadingBackdropArtUrl = art
             runCatching { loadingBackdropView?.load(art) }
         }
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
@@ -1132,6 +1167,16 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onPictureReady = {
+            // First checkpoint for the death marker: a picture exists, so a
+            // death from here is a running session (see PlaybackDeathMarker).
+            playbackDeathToken?.let {
+                PlaybackDeathMarker.noteStage(
+                    this@MpvPlayerActivity,
+                    it,
+                    PlaybackDeathMarker.STAGE_PLAYING,
+                    positionMs
+                )
+            }
             armStallWatchdog()
             // The splash follows the PICTURE, not the file open (spec C21).
             // "Ready" in the engine's own terms (FILE_LOADED, or even a playing
@@ -1143,6 +1188,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // noVideoCheck grace is unchanged and still the escape hatch.
             runOnUiThread {
                 loadingContainer?.visibility = View.GONE
+                // The backdrop goes with the splash: the picture owns the screen
+                // now, and that bitmap is freed for the demuxer cache that fills
+                // behind it (see [loadingBackdropArtUrl]).
+                loadingBackdropView?.setImageDrawable(null)
                 // The pulse dies with the splash: it must never keep running
                 // over the picture (see [startSplashLogoPulse]).
                 loadingLogoView?.clearAnimation()
@@ -6066,6 +6115,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private fun showLoading(subtitle: String) {
         loadingContainer?.visibility = View.VISIBLE
+        // Re-raised after the picture-ready hide dropped the backdrop; the image
+        // is in the loader's memory cache, so this is a decode reuse.
+        loadingBackdropArtUrl?.let { url ->
+            if (loadingBackdropView?.drawable == null) loadingBackdropView?.load(url)
+        }
         loadingTitle?.text = itemTitle()
         loadingSubtitle?.text = subtitle
         hideMpvBuffering()
@@ -6073,6 +6127,37 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // view still holds; re-showing the container has to re-start the pulse
         // with it (the picture-ready hide cleared it).
         startSplashLogoPulse()
+    }
+
+    /**
+     * The system asking for memory back while this session is open.
+     *
+     * MainApplication already answers a trim by dropping the app's caches, and
+     * that covers everything a cache owns. What it cannot reach is this engine's
+     * load splash: a hardware bitmap is held by the ImageView, not by the
+     * loader's cache, so clearing the drawable is the only handle on those ~8 MB
+     * - and if the splash is down, nothing is displaying it.
+     *
+     * The demuxer cache is native and sized once at open (see applyCacheOptions
+     * in MpvPlayerView); mpv exposes no runtime setter for it here, so it is
+     * left alone rather than rebuilt mid-session.
+     */
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Same threshold as MainApplication and the main player: the two RUNNING
+        // levels are what a foreground app gets, and newer platforms deliver
+        // MODERATE / COMPLETE instead.
+        if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+        runCatching {
+            if (loadingContainer?.visibility != View.VISIBLE) {
+                loadingBackdropView?.setImageDrawable(null)
+                Log.i(TAG, "memory trim (level $level): load splash art dropped")
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "mpv memory trim level $level: load splash art dropped"
+                )
+            }
+        }
     }
 
     /**
@@ -6213,6 +6298,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             )
         }
         loadingContainer?.visibility = View.GONE
+        // The load splash is not coming back over THIS file, so its backdrop goes
+        // with it instead of waiting behind the error card: the card is exactly
+        // the state a box short of memory sits in, and the next source load
+        // re-loads the art (see [loadingBackdropArtUrl]).
+        loadingBackdropView?.setImageDrawable(null)
         loadingLogoView?.clearAnimation()
         hideMpvBuffering()
         setControlsVisible(View.GONE)
@@ -6972,6 +7062,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     override fun onStop() {
         super.onStop()
+        // Second checkpoint for the death marker: from here the ordinary outcome
+        // is the system reclaiming a paused player, which the stage records (see
+        // PlaybackDeathMarker).
+        playbackDeathToken?.let {
+            PlaybackDeathMarker.noteStage(
+                this,
+                it,
+                PlaybackDeathMarker.STAGE_BACKGROUND,
+                positionMs
+            )
+        }
         // A hold-to-scrub has no release once the screen is left, so land it
         // here rather than leaving its timer ticking against a paused surface.
         endMpvHoldScrub()
@@ -7108,6 +7209,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // activity can still take the request.
         com.kennyb1201.kbstream.FormFactor.releasePlaybackOrientation(this)
         super.onDestroy()
+        // A destroyed activity is a finished session, so the marker goes with
+        // it - before the teardown below, any part of which can throw, and
+        // token-guarded so a successor that already armed is left alone.
+        playbackDeathToken?.let { PlaybackDeathMarker.clear(this, it) }
         // Safety net for a player that never reached onStop: leaving this
         // set would hold guide writes back for the life of the process.
         EpgWriteGate.setPlayerActive(false)

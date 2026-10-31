@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
+import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
@@ -110,6 +111,37 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // is timed into PerfTrace so the cost stays visible (see Diagnostics)
         // rather than assumed.
         startupScope.launch {
+            // The launch after a death. A process killed under playback - an OOM
+            // kill at the player's memory peak, a vendor codec abort, a native
+            // crash whose handler never ran - leaves nothing behind: the viewer
+            // is back on the launcher and Sentry has no event, because no code
+            // of ours got to run. [PlaybackDeathMarker] is the one record that
+            // survives that, so a marker still on disk here IS the previous
+            // session's death. Reported first: it is the only step in this chain
+            // whose subject cannot be reconstructed later.
+            startupStep("startup.playbackDeath", "app_create_playback_death") {
+                PlaybackDeathMarker.consume(applicationContext)?.let { death ->
+                    if (death.wasOnScreen) {
+                        CrashReporter.recordNonFatal(
+                            PlaybackDeathMarker.DeathReport(death.sentence()),
+                            mapOf(
+                                "source" to "playback_process_death",
+                                "engine" to death.engine,
+                                "stage" to death.stage
+                            )
+                        )
+                    } else {
+                        // Backgrounded: the system reclaiming a paused player is
+                        // ordinary - the external engine is background by design
+                        // for the whole film - so it belongs in the diagnostics
+                        // export, not in the crash feed.
+                        CrashReporter.recordEvent(
+                            "playback_process_death_background",
+                            death.sentence()
+                        )
+                    }
+                }
+            }
             startupStep("startup.simklWorker", "app_create_simkl_worker") {
                 scheduleSimklPeriodicSync()
             }

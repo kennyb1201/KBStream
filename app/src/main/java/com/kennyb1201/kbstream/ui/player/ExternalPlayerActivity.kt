@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
@@ -185,6 +186,16 @@ class ExternalPlayerActivity : ComponentActivity() {
     // ── Progress: measured, then refined by whatever the player reports ──────
 
     private var positionMs = 0L
+
+    /**
+     * This hand-off's durable death marker (see [PlaybackDeathMarker]).
+     *
+     * Recorded even though this engine spends the film backgrounded: the marker
+     * that survives to the next launch is the only way to tell a session the
+     * system killed from one that simply ended, and the stage it carries is what
+     * keeps the background reclaim out of the crash feed.
+     */
+    private var playbackDeathToken: String? = null
     private var durationMs = 0L
 
     /** When the stream was handed over, or 0 before the hand-off. */
@@ -389,6 +400,16 @@ class ExternalPlayerActivity : ComponentActivity() {
                 bingeScheme
             )
         )
+        // Armed before the hand-off is attempted, so a death while another app
+        // starts is still attributable to this episode. See PlaybackDeathMarker.
+        playbackDeathToken = PlaybackDeathMarker.arm(
+            this,
+            PlaybackDeathMarker.ENGINE_EXTERNAL,
+            itemName,
+            season,
+            episode,
+            currentUrl
+        )
         setupBecauseYouWatched()
         setupEndOfEpisodeHandlers()
 
@@ -461,6 +482,17 @@ class ExternalPlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // This engine is backgrounded for the whole of the film (another app is
+        // in front), so the stage is what keeps an ordinary reclaim out of the
+        // crash feed. See PlaybackDeathMarker.
+        playbackDeathToken?.let {
+            PlaybackDeathMarker.noteStage(
+                this,
+                it,
+                PlaybackDeathMarker.STAGE_BACKGROUND,
+                positionMs
+            )
+        }
         if (concluded) return
         // Leaving for any other reason (the external app coming to the front,
         // mostly) must not throw the measured position away - it is the only
@@ -474,6 +506,9 @@ class ExternalPlayerActivity : ComponentActivity() {
         // activity can still take the request.
         com.kennyb1201.kbstream.FormFactor.releasePlaybackOrientation(this)
         super.onDestroy()
+        // A destroyed activity is a finished session, so the marker goes with it
+        // (token-guarded: a successor that already armed is left alone).
+        playbackDeathToken?.let { PlaybackDeathMarker.clear(this, it) }
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         if (!concluded && !isLiveChannel && positionMs > 0L) {
             saveProgress(forceCompleted = false)

@@ -28,6 +28,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.util.TypedValue
 import androidx.media3.common.AudioAttributes
@@ -76,7 +77,9 @@ import com.kennyb1201.kbstream.data.iptv.KidsLiveTvFilter
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.memory.PlayerMemoryBudget
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
@@ -759,6 +762,35 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private lateinit var splashContainer: View
     private lateinit var splashBackdrop: ImageView
     private lateinit var splashClearLogo: ImageView
+
+    /**
+     * The splash backdrop's own url, kept so the picture can be dropped once it
+     * is no longer on screen and loaded again for the next source load.
+     *
+     * A full-screen backdrop is ~8 MB of decoded bitmap (a 1920x1080 frame at
+     * four bytes a pixel), and it was held from the first load until the
+     * activity was destroyed - through the whole session, over the top of the
+     * sample buffer that is filling to its own budget. A hardware bitmap is not
+     * held by the image loader's memory cache - only by the view that shows it -
+     * so dropping the drawable is what actually releases it, and raising the
+     * splash again re-loads it from the loader's caches rather than the network.
+     */
+    private var splashBackdropArtUrl: String? = null
+
+    /**
+     * Counts splash raises, so a fade that finishes after the splash came back
+     * cannot drop the picture it is showing.
+     */
+    private var splashArtGeneration = 0
+
+    /**
+     * The sample-buffer target this session's player was built with, in bytes.
+     *
+     * Kept for the memory-trim log line (see onTrimMemory): "the box asked for
+     * memory back" is only actionable in a field report when it says what the
+     * player was holding at the time.
+     */
+    private var bufferBudgetBytes = 0
     // Title text inside the splash, shown when the item has no clear logo.
     // Resolved lazily rather than in bindViews(): the splash's own binding sits
     // past the tooling's edit window.
@@ -1560,6 +1592,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var streamMimeType: String? = null
     private var firstFrameRendered = false
     private var firstFrameRenderedAtMs = 0L
+
+    /**
+     * This session's durable death marker (see [PlaybackDeathMarker]).
+     *
+     * A session the process is killed under runs no handler at all: the viewer
+     * lands back on the launcher and the next launch has nothing to report. This
+     * token is the handle to the on-disk note written at play and deleted at a
+     * clean exit, so the launch after a death can name the episode and the stage
+     * it died in.
+     */
+    private var playbackDeathToken: String? = null
 
     /**
      * Set once a launch that reused a cached debrid link has had that link
@@ -3696,6 +3739,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         itemName = intent.getStringExtra("item_name")
             ?.takeIf { it.isNotBlank() }
             ?: intent.getStringExtra("display_name").orEmpty()
+        // The session is identifiable from here on, so the marker is armed here
+        // rather than after the surface exists: a death on the way in is exactly
+        // the one that used to leave no trace at all.
+        playbackDeathToken = PlaybackDeathMarker.arm(
+            this,
+            PlaybackDeathMarker.ENGINE_EXO,
+            itemName,
+            season,
+            episode,
+            currentUrl
+        )
         trailerVideoId = intent
             .getStringExtra(TrailerPlayerLauncher.EXTRA_TRAILER_VIDEO_ID)
             ?.takeIf { it.isNotBlank() }
@@ -6250,14 +6304,26 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // still under the ~150MB unbounded buffering that caused the OOM
         // above, and the clamp (48-160MB) keeps every device bounded
         // regardless of heap. Low-bitrate streams never reach either bound.
-        val maxBufferBudgetBytes =
-            (Runtime.getRuntime().maxMemory() / 3)
-                .coerceIn(48L * 1024 * 1024, 160L * 1024 * 1024)
-                .toInt()
+        //
+        // The divisor above assumed the HEAP was the budget. It is not, on the
+        // boxes this ships to: android:largeHeap makes maxMemory() report a
+        // generous slice of a 1.7 GB set, so a 512 MB-heap TV box was allowed a
+        // 160 MB sample buffer - live heap, held while the decoder, the surface
+        // and the splash art are also being brought up. That is the shape of a
+        // low-memory kill, which leaves no exception for the crash reporter to
+        // see (the viewer is simply back on the launcher). The target is now the
+        // smaller of the heap's third and a sixteenth of the RAM the device
+        // reports, so it only comes down where the heap is richer than the
+        // memory behind it - and never below the figure measured to fix the
+        // high-bitrate stall (see PlayerMemoryBudget).
+        val memoryBudget = PlayerMemoryBudget.of(this)
+        val maxBufferBudgetBytes = PlayerMemoryBudget.sampleBufferBytes(memoryBudget)
+        bufferBudgetBytes = maxBufferBudgetBytes
         Log.i(
             "PLAYER_PERF",
             "Buffer budget: ${maxBufferBudgetBytes / (1024 * 1024)}MB of " +
-                "${Runtime.getRuntime().maxMemory() / (1024 * 1024)}MB heap, " +
+                "${memoryBudget.maxHeapBytes / (1024 * 1024)}MB heap on " +
+                "${memoryBudget.totalRamBytes / (1024 * 1024)}MB RAM, " +
                 "maxBuffer=${bufferDurations[1]}ms"
         )
 
@@ -7631,7 +7697,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     private fun showSplash() {
+        // Take the view back from any hide fade still in flight. hideSplash()
+        // fades the splash out and only then marks it GONE, so a rebuffer that
+        // lands inside those 200 ms used to raise the splash and have the fade
+        // take it straight back down - the viewer got the small spinner over a
+        // picture that was still filling. Cancelling the fade before raising is
+        // what makes a raise stick (KbViewMotion.fadeIn does the same thing).
+        splashContainer.animate().cancel()
+        splashContainer.alpha = 1f
         splashContainer.visibility = View.VISIBLE
+        splashArtGeneration++
+        ensureSplashBackdrop()
         // The splash is the only load indicator while it is up — never stack
         // the spinner or the reconnecting banner on top of it.
         hideBufferingSpinner()
@@ -7668,7 +7744,95 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // the way IN and then removed this one in a single frame on the way
         // out. 200ms is longer than the chrome's because it happens once per
         // playback and is the hand-off into the content.
-        KbViewMotion.fadeOut(splashContainer, 200L)
+        //
+        // The backdrop goes with the fade: once the picture owns the screen,
+        // that ~8 MB has no viewer and no purpose, and it is being held exactly
+        // while the sample buffer is filling to its budget (see
+        // splashBackdropArtUrl). Dropped AFTER the fade, so the hand-off still
+        // fades FROM the artwork, and only if no source load has raised the
+        // splash again in the meantime.
+        val generation = splashArtGeneration
+        KbViewMotion.fadeOut(splashContainer, 200L) {
+            if (generation == splashArtGeneration) {
+                splashBackdrop.setImageDrawable(null)
+            }
+        }
+    }
+
+    /**
+     * The system asking for memory back while this session is open.
+     *
+     * MainApplication already answers a trim by dropping the app's image and
+     * guide caches - the blocks that cost only a rebuild - so nothing here
+     * repeats that. What no cache owns is the player's own splash art: a
+     * hardware bitmap is held by the ImageView, not by the loader's memory
+     * cache, which is why dropping this drawable is the one thing the app-level
+     * handler cannot do from outside. Normally the backdrop is already gone by
+     * now (hideSplash drops it with the fade); this is the case where the splash
+     * is still down but the drawable was never cleared, plus the case where a
+     * trim lands during a load.
+     *
+     * The SAMPLE BUFFER is deliberately left alone. media3 1.11.1 exposes the
+     * byte target only on `DefaultLoadControl.Builder` - there is no runtime
+     * setter on `DefaultLoadControl` or on `LoadControl` - so shrinking it
+     * mid-session means rebuilding the player: a full re-open, stream
+     * re-negotiation and decoder re-init, which asks for MORE memory at the
+     * worst possible moment to give back a buffer no larger than the one it
+     * would release. The budget the player is built with is already RAM-aware
+     * (see PlayerMemoryBudget), which is the part that can be fixed safely.
+     */
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Same threshold as MainApplication: the two RUNNING levels are the
+        // ones a foreground app gets, and newer platforms deliver MODERATE /
+        // COMPLETE instead. Everything at or above this is real pressure.
+        if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+        runCatching {
+            // Read before dropping: the line is about what was held when the box
+            // asked, not about what is left afterwards.
+            val line = memoryTrimLine(level)
+            if (::splashBackdrop.isInitialized && splashContainer.visibility != View.VISIBLE) {
+                splashBackdrop.setImageDrawable(null)
+            }
+            Log.i("PLAYER_PERF", line)
+            // The trace is the record a field report is read from; it dies with
+            // the process, so this is the collaborator of the durable death
+            // marker (see PlaybackDeathMarker) rather than a replacement.
+            PlaybackSessionTrace.note(line)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun memoryTrimLine(level: Int): String {
+        val name = when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> "running_low"
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> "running_critical"
+            ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> "ui_hidden"
+            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> "background"
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> "moderate"
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "complete"
+            else -> "level_$level"
+        }
+        val held = if (bufferBudgetBytes > 0) bufferBudgetBytes / (1024 * 1024) else 0
+        val splash = if (::splashBackdrop.isInitialized && splashBackdrop.drawable != null) {
+            ", splash art held"
+        } else {
+            ""
+        }
+        return "Memory trim ($name): buffer budget ${held}MB$splash"
+    }
+
+    /**
+     * Puts the splash backdrop back when it was dropped by [hideSplash].
+     *
+     * The art is in the loader's caches, so this is a decode, not a second fetch;
+     * a splash with no widescreen art has no url and stays on the dark
+     * background + pulsing logo.
+     */
+    private fun ensureSplashBackdrop() {
+        val url = splashBackdropArtUrl ?: return
+        if (splashBackdrop.drawable == null) splashBackdrop.load(url)
     }
 
     private fun updateUIBuffering() {
@@ -7868,6 +8032,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (firstFrameRendered) return
         firstFrameRendered = true
         firstFrameRenderedAtMs = System.currentTimeMillis()
+        // The first checkpoint: from here a death is a session that had a
+        // picture, not one still loading (see PlaybackDeathMarker).
+        playbackDeathToken?.let {
+            PlaybackDeathMarker.noteStage(
+                this,
+                it,
+                PlaybackDeathMarker.STAGE_PLAYING,
+                exoPlayer?.currentPosition ?: 0L
+            )
+        }
         // Process-wide, so a later 0x80001000 in THIS or any other session can
         // tell "the pool worked and our own rebuilds wedged it" apart from "a
         // fresh pool refused this file". Only ExoPlayer reports it; MPV decodes
@@ -8631,6 +8805,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         if (resolvedBackdropUrl != null) {
             splashBackdrop.visibility = View.VISIBLE
+            splashBackdropArtUrl = resolvedBackdropUrl
             splashBackdrop.load(resolvedBackdropUrl)
             // Show splash initially before video plays on every first load —
             // including items resuming a saved position. Only skip it when
@@ -8643,6 +8818,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // No widescreen art: clear any previous frame and show the dark
             // splash (pulsing clearlogo) so no portrait/stale image flashes.
             splashBackdrop.visibility = View.GONE
+            splashBackdropArtUrl = null
             splashBackdrop.setImageDrawable(null)
             if (!fromActorReturn) {
                 showSplash()
@@ -14334,6 +14510,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     override fun onStop() {
         super.onStop()
+        // Second checkpoint: dying from here is the ordinary background reclaim
+        // unless the viewer was still watching, and the stage says which.
+        playbackDeathToken?.let {
+            PlaybackDeathMarker.noteStage(
+                this,
+                it,
+                PlaybackDeathMarker.STAGE_BACKGROUND,
+                exoPlayer?.currentPosition ?: 0L
+            )
+        }
         EpgWriteGate.setPlayerActive(false)
         // Playback is over for this SCREEN, so the panel goes back to the mode
         // the rest of the TV interface expects - but only when this session is
@@ -14462,6 +14648,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // activity can still take the request.
         com.kennyb1201.kbstream.FormFactor.releasePlaybackOrientation(this)
         super.onDestroy()
+        // A destroyed activity is a finished session, so the marker goes with
+        // it. First, because everything below is teardown that can throw, and
+        // the token guard keeps this from clearing a successor that has already
+        // armed itself.
+        playbackDeathToken?.let { PlaybackDeathMarker.clear(this, it) }
         // Safety net for a player that never reached onStop's counterpart:
         // leaving this set would hold guide writes back forever.
         EpgWriteGate.setPlayerActive(false)
