@@ -226,7 +226,113 @@ class BywPanelFitAndFocusContractTest {
             "an over-full panel measures the same clamped height at every level, so its " +
                 "bounds never change and its layout listener never fires again - without " +
                 "this re-ask the ladder stopped after one step",
-            fit.contains("OneShotPreDrawListener.add(panel) { fitCreditsPanel() }")
+            fit.contains("settleCreditsLayout()")
+        )
+    }
+
+    /**
+     * Field 2026-10-31, the TV photos: DETAILS read "DETAI" on EVERY card while
+     * the row still had slack at its right end. A card's PLAY + DETAILS pair is
+     * the one child that carries no width of its own - the poster, the name, the
+     * reason and the meta line all have one - so it was the only child a measure
+     * could squeeze. The card therefore states a width that is at least the pair
+     * plus its own side padding, and at a compact level the pair gives up its own
+     * generosity first: pill padding, then the label's size. The label's text is
+     * never touched, never ellipsized, and the poster is never shrunk to pay for
+     * it - the poster belongs to the fit ladder.
+     */
+    @Test
+    fun `a card is never narrower than its PLAY and DETAILS pair`() {
+        val src = source(BYW)
+        val width = section(
+            src,
+            "private fun applyCardWidth(refs: CardRefs) {",
+            "private fun pairWidth(buttons: View): Int {"
+        )
+        assertTrue(
+            "the width is the pair plus the card's own side padding, floored at the width " +
+                "the level wants for its poster",
+            width.contains("val wanted = posterWidth + cardPadding") &&
+                width.contains("maxOf(wanted, pair + cardPadding)")
+        )
+        assertTrue(
+            "and it is stated ON the card, so the measure that hands the card a width cannot " +
+                "squeeze the pair inside it",
+            width.contains("params.width = width") &&
+                src.contains("pair = pairWidth(refs.buttons)")
+        )
+        assertTrue(
+            "the compact steps are padding then label size, and the ladder stops at the first " +
+                "step that fits",
+            width.contains("if (compactPosters) PILL_LADDER else PILL_LADDER.take(1)") &&
+                width.contains("if (pair + cardPadding <= wanted) break")
+        )
+        assertTrue(
+            "the label itself never shrinks by truncation: no ellipsis and no line limit enter " +
+                "this decision",
+            !width.contains("ellipsize") && !width.contains("maxLines")
+        )
+        val ladder = section(src, "val PILL_LADDER = listOf(", ")")
+        val paddingStep = ladder.indexOf("PILL_PADDING_DP to PILL_TEXT_PX")
+        val tightPadding = ladder.indexOf("PILL_PADDING_TIGHT_DP to PILL_TEXT_PX")
+        val tightText = ladder.indexOf("PILL_PADDING_TIGHT_DP to PILL_TEXT_TIGHT_PX")
+        assertTrue(
+            "the order is the spec's own: 8dp padding, then 6dp, then the 9px label",
+            paddingStep >= 0 && tightPadding > paddingStep && tightText > tightPadding
+        )
+    }
+
+    /**
+     * F2/F3. The drop is how the row gets daylight under the corner video AND how
+     * the empty room below the panel gets spent - one decision, taken on measured
+     * heights. Both heights move after that decision is first taken: the strip is
+     * inserted at build time, then compacted or hidden by the ladder, and the
+     * posters step down a size with it. The panel, being a `WRAP_CONTENT` child of
+     * a clipping parent, measures the same clamped height when it is over-full, so
+     * its layout listener never fires for those changes - which is how the TV kept
+     * a "no room for the drop" verdict taken before the strip shrank, with the
+     * room it had bought sitting empty below the panel.
+     */
+    @Test
+    fun `the corner clearance is decided again on the panel's settled content`() {
+        val src = source(BYW)
+        val settle = section(
+            src,
+            "private fun settleCreditsLayout() {",
+            "/**\n     * Applies [level]'s sizes IN PLACE."
+        )
+        assertTrue(
+            "the clearance is asked for on the frame that carries the new sizes, and the fit " +
+                "pass after it",
+            settle.indexOf("keepRowClearOfNotch()") >= 0 &&
+                settle.indexOf("fitCreditsPanel()") > settle.indexOf("keepRowClearOfNotch()")
+        )
+        assertTrue(
+            "on the pre-draw, after the traversal that carries the new level",
+            settle.contains("OneShotPreDrawListener.add(panel)")
+        )
+        val fit = section(
+            src,
+            "private fun fitCreditsPanel() {",
+            "private fun settleCreditsLayout() {"
+        )
+        assertTrue(
+            "every level that is applied re-asks it, because an over-full panel does not lay " +
+                "out again by itself",
+            fit.contains("settleCreditsLayout()")
+        )
+        val build = buildBody(src)
+        assertTrue(
+            "and build asks once the featured strip is in at its full size, so the header the " +
+                "clearance reads is the real one",
+            build.indexOf("settleCreditsLayout()") >
+                build.indexOf("picks.firstOrNull()?.let { feature(it) }")
+        )
+        assertTrue(
+            "the content height the drop is measured against is every visible child plus the " +
+                "panel's own padding - the hint is what keeps the drop on screen",
+            src.contains("for (index in 0 until panel.childCount)") &&
+                src.contains("var total = panel.paddingTop + panel.paddingBottom")
         )
     }
 

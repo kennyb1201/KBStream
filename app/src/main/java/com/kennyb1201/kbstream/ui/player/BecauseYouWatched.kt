@@ -628,6 +628,9 @@ internal class BecauseYouWatchedUi(
     private class CardRefs(
         val cardView: View,
         val posterFrame: View,
+        val buttons: View,
+        val playPill: TextView,
+        val detailsPill: TextView,
         val nameView: TextView,
         val reasonView: TextView?,
         val metaView: TextView?,
@@ -1270,7 +1273,36 @@ internal class BecauseYouWatchedUi(
         // One shot, on the pre-draw of the frame that carries the new level: a
         // plain `post` can land before that traversal and step on a stale
         // measurement, which is how the ladder overshoots the level that fits.
-        OneShotPreDrawListener.add(panel) { fitCreditsPanel() }
+        // The corner clearance is re-asked with it - a level change moves the
+        // strip and the posters, and the panel's own bounds do not move at all
+        // when it is over-full, so a verdict taken off the pre-shrink header
+        // would otherwise stand for the rest of the raise (field 2026-10-31).
+        settleCreditsLayout()
+    }
+
+    /**
+     * Re-asks the corner clearance and the fit on the frame that carries the new
+     * arrangement.
+     *
+     * Both decisions are read off measured heights - the header's, which the
+     * featured strip is most of, and the panel's content - and both change when
+     * the strip is shown at build time, compacted or hidden by the fit ladder, or
+     * when the posters step down a size. The layout listener cannot be the only
+     * trigger for that: the panel is a `WRAP_CONTENT` child of a clipping parent,
+     * so an over-full panel measures the same clamped height at every level and
+     * never lays out again. That is how the TV kept the crowded narrow row after
+     * the ladder had bought room for the drop: the clearance was left holding the
+     * word it took before the strip shrank.
+     *
+     * Pre-draw, not `post`: the listener runs after the traversal that carries
+     * the new sizes, so the clearance reads real heights instead of the layout it
+     * is about to replace.
+     */
+    private fun settleCreditsLayout() {
+        OneShotPreDrawListener.add(panel) {
+            keepRowClearOfNotch()
+            fitCreditsPanel()
+        }
     }
 
     /**
@@ -1332,7 +1364,81 @@ internal class BecauseYouWatchedUi(
                     text.requestLayout()
                 }
             }
+            // ...and the card's own width follows the level as well: the pair it
+            // carries is measured against the poster this level wants.
+            applyCardWidth(refs)
         }
+    }
+
+    /**
+     * The width a card wears: never narrower than its own PLAY + DETAILS pair.
+     *
+     * The pair is the one child of a card with no width of its own - the poster,
+     * the name, the reason and the meta line all have one - so it was also the
+     * one a measure could squeeze. At the compact poster width the card wanted
+     * 100dp while the pair wanted more, and the card cut the label short on
+     * EVERY card, not only the last ("DETAI", field 2026-10-31). A card that
+     * states its own width cannot be squeezed by the measure that hands it one,
+     * and the row is a horizontal scroll, so width costs scroll length and
+     * nothing else.
+     *
+     * At a compact level the pair first gives up its own generosity - pill
+     * padding, then the label's size - so the card can stay the width the level
+     * wants; only if even the tightest step is too wide does the card grow past
+     * it. The label is never ellipsized and the poster is never shrunk to pay for
+     * a pill: the poster size is the fit ladder's business, the label is not a
+     * shrinking surface.
+     */
+    private fun applyCardWidth(refs: CardRefs) {
+        val compactPosters = fitLevel >= BYW_FIT_LEVEL_COMPACT_POSTERS
+        val posterWidth = dp(
+            if (compactPosters) POSTER_COMPACT_WIDTH_DP else POSTER_FULL_WIDTH_DP
+        )
+        val cardPadding = dp(CARD_SIDE_PADDING_DP) * 2
+        val wanted = posterWidth + cardPadding
+        val ladder = if (compactPosters) PILL_LADDER else PILL_LADDER.take(1)
+        var pair = 0
+        for ((paddingDp, textPx) in ladder) {
+            applyPillStyle(refs.playPill, paddingDp, textPx)
+            applyPillStyle(refs.detailsPill, paddingDp, textPx)
+            pair = pairWidth(refs.buttons)
+            if (pair + cardPadding <= wanted) break
+        }
+        val width = maxOf(wanted, pair + cardPadding)
+        val params = refs.cardView.layoutParams
+        if (params is LinearLayout.LayoutParams) {
+            if (params.width != width) {
+                params.width = width
+                refs.cardView.requestLayout()
+            }
+        } else {
+            refs.cardView.layoutParams = LinearLayout.LayoutParams(
+                width, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+    }
+
+    /**
+     * The pair's natural width at whatever style the ladder has just set: the
+     * two pills are measured unconstrained, which is the width they would take
+     * if nothing else had a say.
+     */
+    private fun pairWidth(buttons: View): Int {
+        val unconstrained = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        buttons.measure(unconstrained, unconstrained)
+        return buttons.measuredWidth
+    }
+
+    /**
+     * One pill at one step of the ladder: its side padding, and the label's size.
+     * Never its text, its wrap or its ellipsis - the label stays whole.
+     */
+    private fun applyPillStyle(pill: TextView, paddingDp: Int, textPx: Float) {
+        val padding = dp(paddingDp)
+        if (pill.paddingLeft != padding || pill.paddingRight != padding) {
+            pill.setPadding(padding, pill.paddingTop, padding, pill.paddingBottom)
+        }
+        if (pill.textSize != textPx) pill.textSize = textPx
     }
 
     /**
@@ -1410,6 +1516,9 @@ internal class BecauseYouWatchedUi(
         metaCache.clear()
         logoCache.clear()
         featured = null
+        // A raise is built at the full sizes; the credits fit pass may step
+        // down from here, and every step is undone by the next build.
+        fitLevel = BYW_FIT_LEVEL_FULL
         // The previous card's rightmost pill, so the row's own traversal can be
         // pinned card to card (see the RIGHT/LEFT wiring below).
         var prevDetails: TextView? = null
@@ -1418,7 +1527,9 @@ internal class BecauseYouWatchedUi(
             val card = LinearLayout(host).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                setPadding(dp(6), dp(4), dp(6), dp(8))
+                setPadding(
+                    dp(CARD_SIDE_PADDING_DP), dp(4), dp(CARD_SIDE_PADDING_DP), dp(8)
+                )
             }
 
             // Poster only: TMDB poster art already carries the title, so the
@@ -1504,22 +1615,22 @@ internal class BecauseYouWatchedUi(
             }
             val play = TextView(host).apply {
                 text = "PLAY"
-                textSize = 10f
+                textSize = PILL_TEXT_PX
                 // An id of its own, so the thumbs' DOWN wiring can name this pill
                 // (see below); nothing else reads it.
                 id = View.generateViewId()
                 isFocusable = true
                 isFocusableInTouchMode = true
-                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setPadding(dp(PILL_PADDING_DP), dp(4), dp(PILL_PADDING_DP), dp(4))
                 setTextColor(ContextCompat.getColor(host, R.color.kb_void))
             }
             val details = TextView(host).apply {
                 text = "DETAILS"
-                textSize = 10f
+                textSize = PILL_TEXT_PX
                 id = View.generateViewId()
                 isFocusable = true
                 isFocusableInTouchMode = true
-                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setPadding(dp(PILL_PADDING_DP), dp(4), dp(PILL_PADDING_DP), dp(4))
                 setTextColor(ContextCompat.getColor(host, R.color.kb_text_hi))
             }
             applyPill(play, true, false)
@@ -1559,14 +1670,22 @@ internal class BecauseYouWatchedUi(
                 dislikeThumb?.nextFocusDownId = details.id
             }
 
-            cards[pick.tmdbId] = CardRefs(
+            val refs = CardRefs(
                 cardView = card,
                 posterFrame = posterFrame,
+                buttons = buttons,
+                playPill = play,
+                detailsPill = details,
                 nameView = name,
                 reasonView = reasonView,
                 metaView = cardMeta,
                 imdbId = pick.imdbId
             )
+            cards[pick.tmdbId] = refs
+            // The card takes its width from the pair it carries, before anything
+            // is laid out: the pair is the one child with no width of its own,
+            // so it is the one a measure can squeeze (see [applyCardWidth]).
+            applyCardWidth(refs)
             pills.add(play to true)
             pills.add(details to false)
 
@@ -1595,10 +1714,10 @@ internal class BecauseYouWatchedUi(
         }
 
         // A raise always starts at full size: the cards above were just built
-        // that way, and the strip - which outlives a raise - is put back to full
-        // and visible here, because the previous raise's fit pass may have
-        // shrunk or hidden it (see [fitCreditsPanel]).
-        fitLevel = BYW_FIT_LEVEL_FULL
+        // that way (see the level reset at the top), and the strip - which
+        // outlives a raise - is put back to full and visible here, because the
+        // previous raise's fit pass may have shrunk or hidden it (see
+        // [fitCreditsPanel]).
         resetFeaturedSizing()
 
         // Reserve the strip BEFORE any pill takes focus. It used to be inserted
@@ -1609,6 +1728,12 @@ internal class BecauseYouWatchedUi(
         // 2026-10-28). Same insert, same fill; it only happens early enough to
         // be in the first measure.
         picks.firstOrNull()?.let { feature(it) }
+
+        // The strip is in and at its full size, so the header the corner
+        // clearance reads is the real one: decide on THAT, not on the pre-strip
+        // header the first layout pass saw (field 2026-10-31: the row met the
+        // corner video with no daylight while the panel had room below it).
+        settleCreditsLayout()
 
         // Clear-logo + description pass: fetch images/metadata per pick and fill
         // the featured strip as answers land (cards render instantly with
@@ -1852,6 +1977,31 @@ internal class BecauseYouWatchedUi(
         const val POSTER_FULL_HEIGHT_DP = 162
         const val POSTER_COMPACT_WIDTH_DP = 88
         const val POSTER_COMPACT_HEIGHT_DP = 132
+
+        /**
+         * The card's own side padding, and the reason a card states a width at
+         * all: PLAY + DETAILS is the one row on a card that has no width of its
+         * own, so it is the one the card could squeeze down to "DETAI" (field
+         * 2026-10-31). A card is never narrower than the pair plus this padding.
+         */
+        const val CARD_SIDE_PADDING_DP = 6
+
+        /** The pills' side padding and label size, at build time and at the tight step. */
+        const val PILL_PADDING_DP = 8
+        const val PILL_PADDING_TIGHT_DP = 6
+        const val PILL_TEXT_PX = 10f
+        const val PILL_TEXT_TIGHT_PX = 9f
+
+        /**
+         * The order the pill pair gives up its own generosity in before the card
+         * is widened past the width the level wants: side padding first, then the
+         * label's size. The text itself never changes and is never ellipsized.
+         */
+        val PILL_LADDER = listOf(
+            PILL_PADDING_DP to PILL_TEXT_PX,
+            PILL_PADDING_TIGHT_DP to PILL_TEXT_PX,
+            PILL_PADDING_TIGHT_DP to PILL_TEXT_TIGHT_PX
+        )
 
         /**
          * The gap a row that moved down under the corner video keeps from it.
