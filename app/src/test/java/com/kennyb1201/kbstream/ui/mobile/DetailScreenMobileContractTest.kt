@@ -770,4 +770,39 @@ class DetailScreenMobileContractTest {
             )
         )
     }
+
+    @Test
+    fun `the header's copy and calls to action step aside for the trailer`() {
+        val mobile = mobileDetail()
+        val header = mobile.substringAfter("private fun MobileDetailHeader(")
+            .substringBefore("/** One episode row")
+
+        // ONE animation for the title block AND the CTA row under it: the row
+        // lives in its own LazyColumn item, and a fade remembered there would
+        // replay from full alpha every time it scrolled back into view.
+        assertTrue(
+            "the fade is keyed on playback, so end, failure and stop all restore it",
+            mobile.contains("targetValue = if (heroTrailer != null) 0f else 1f")
+        )
+        assertTrue(mobile.contains("chromeAlpha = { heroChrome }"))
+        assertTrue(
+            "the CTA row takes the same fade",
+            mobile.contains(".graphicsLayer { alpha = heroChrome }")
+        )
+        assertTrue(
+            "the header's title block takes it through the layer, alpha only",
+            header.contains("alpha = chromeAlpha().coerceIn(0f, 1f)")
+        )
+
+        // The back button and the close mark are drawn before the faded column:
+        // the way out of the trailer must not be part of what fades.
+        val fadedFrom = header.indexOf("alpha = chromeAlpha()")
+        val closeMark = header.indexOf("contentDescription = \"Stop trailer\"")
+        assertTrue("the header draws its own close mark", closeMark >= 0)
+        assertTrue("the close mark must sit outside the faded column", closeMark < fadedFrom)
+        assertTrue(
+            "and so must the back button",
+            header.indexOf("MobileBackButton(") in 0 until fadedFrom
+        )
+    }
 }

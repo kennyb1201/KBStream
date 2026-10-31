@@ -1681,6 +1681,28 @@ private fun MobileHero(
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
     val logo = logoUrl?.takeIf { it.isNotBlank() }
 
+    // The chrome fade (commissioned 2026-10-30 19:59): while a trailer has this
+    // page, the copy that names the title and the pills that act on it step
+    // aside and let the video be the hero. Keyed on PLAYBACK, not on the
+    // trailer mode, so Auto and Manual behave the same - and because ended,
+    // failed and stopped all null the playback the owner passes in, that one
+    // condition is also the restore path for all three.
+    //
+    // Not drawn here: the close mark above and the segments below stay at full
+    // alpha. They are the way out of the trailer and the page's position, not
+    // decoration, and a fading exit is the one thing this must not hide.
+    //
+    // The entrance's own 450 ms, so the two read as one motion language; read
+    // INSIDE the column's layer below, so a frame of it never recomposes the
+    // block it is hiding.
+    val chrome by animateFloatAsState(
+        targetValue = if (trailerPlayback != null) 0f else 1f,
+        animationSpec = tween(
+            durationMillis = BILLBOARD_CONTENT_REVEAL_MS,
+            easing = FastOutSlowInEasing
+        )
+    )
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1788,7 +1810,12 @@ private fun MobileHero(
                 .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 40.dp)
                 .graphicsLayer {
                     val reveal = contentReveal().coerceIn(0f, 1f)
-                    alpha = reveal
+                    // One layer carries both: the reveal says how far into the
+                    // page this is, the chrome fade says whether the page's
+                    // copy belongs on screen at all. Multiplied rather than
+                    // sequenced, so a trailer that starts mid-entrance does
+                    // not snap either half.
+                    alpha = reveal * chrome
                     translationY = (1f - reveal) * BILLBOARD_CONTENT_RISE_DP.dp.toPx()
                 },
             verticalArrangement = Arrangement.spacedBy(4.dp)

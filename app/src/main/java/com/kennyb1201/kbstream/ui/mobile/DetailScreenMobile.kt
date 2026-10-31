@@ -2,6 +2,9 @@ package com.kennyb1201.kbstream.ui.mobile
 
 import android.util.Log
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -53,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -163,6 +167,17 @@ import kotlinx.coroutines.launch
 
 /** This page's log tag (see .editorconfig: no inline literals in Log calls). */
 private const val TAG = "DETAIL_HERO"
+
+/**
+ * The hero chrome's fade while a trailer plays, in ms.
+ *
+ * The billboard's content entrance is 450 ms (`BILLBOARD_CONTENT_REVEAL_MS`),
+ * and this fade is the same move on a surface that has no entrance to share it
+ * with. Kept as this file's own number rather than importing the Home hero's
+ * constant, so a change to the billboard's entrance cannot silently retime the
+ * Detail page's fade.
+ */
+private const val HERO_CHROME_FADE_MS = 450
 
 /**
  * Detail, for a finger.
@@ -1410,6 +1425,28 @@ fun DetailScreenMobile(
                 episode = downloadEpisodeNumber
             )
 
+            // The chrome fade (commissioned 2026-10-30 19:59): a playing hero
+            // trailer owns the frame, so the title block in the header and the
+            // calls to action under it step aside and let the video be the hero.
+            //
+            // Hoisted to the page rather than animated in each of the two
+            // places, so they fade on ONE clock: the buttons live in their own
+            // LazyColumn item, and an animation remembered inside that item
+            // would replay its 450 ms from full alpha every time the row
+            // scrolled back into view mid-trailer.
+            //
+            // Keyed on PLAYBACK, so ended, failed and stopped all restore the
+            // chrome through the same condition. The back button and the
+            // trailer's own close mark do not take it - one leaves the page,
+            // the other is the only way out of the trailer.
+            val heroChrome by animateFloatAsState(
+                targetValue = if (heroTrailer != null) 0f else 1f,
+                animationSpec = tween(
+                    durationMillis = HERO_CHROME_FADE_MS,
+                    easing = FastOutSlowInEasing
+                )
+            )
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 28.dp),
@@ -1453,7 +1490,8 @@ fun DetailScreenMobile(
                             requestTrailerRetry(positionMs, durationMs)
                         },
                         onCloseTrailer = { stopHeroTrailer() },
-                        onBack = { backDispatcher?.onBackPressed() }
+                        onBack = { backDispatcher?.onBackPressed() },
+                        chromeAlpha = { heroChrome }
                     )
                 }
 
@@ -1461,7 +1499,12 @@ fun DetailScreenMobile(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
+                            .padding(horizontal = 16.dp)
+                            // The same fade as the header's title block, read in
+                            // the layer so a frame of it is not a recomposition.
+                            // Alpha only: the buttons stay reachable and
+                            // announced, exactly as the spec asks.
+                            .graphicsLayer { alpha = heroChrome },
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Row(
@@ -2636,7 +2679,14 @@ private fun MobileDetailHeader(
      */
     onTrailerRefused: (positionMs: Long, durationMs: Long) -> Boolean,
     onCloseTrailer: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /**
+     * The page's chrome fade (1f = the copy is showing, 0f = a trailer has the
+     * frame). Passed in rather than animated here so the header's title block
+     * and the calls-to-action under it fade on one clock; read inside the
+     * content column's layer, so a frame of it is not a recomposition.
+     */
+    chromeAlpha: () -> Float = { 1f }
 ) {
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
 
@@ -2729,7 +2779,11 @@ private fun MobileDetailHeader(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                // The chrome fade (commissioned 2026-10-30 19:59): alpha only,
+                // so the faded copy is still there for focus order and
+                // TalkBack - it is hidden from the eye, not removed.
+                .graphicsLayer { alpha = chromeAlpha().coerceIn(0f, 1f) },
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             if (logoUrl != null && !logoFailed) {

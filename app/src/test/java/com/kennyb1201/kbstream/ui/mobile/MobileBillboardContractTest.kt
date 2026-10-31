@@ -259,6 +259,38 @@ class MobileBillboardContractTest {
         )
     }
 
+    // ── the chrome fade (commissioned 2026-10-30 19:59) ──────────────
+
+    @Test
+    fun `the copy and the pills fade while a trailer plays and the exit does not`() {
+        val home = mobileHome()
+        val hero = home.substring(
+            home.indexOf("private fun MobileHero("),
+            home.indexOf("private fun MobileBillboard(")
+        )
+
+        // ONE condition, keyed on playback and not on the trailer mode: Auto and
+        // Manual fade alike, and ended, failed and stopped all null it, so the
+        // restore path is the same condition rather than three call sites.
+        assertTrue(hero.contains("targetValue = if (trailerPlayback != null) 0f else 1f"))
+        assertTrue(
+            "the fade rides the entrance's own layer and duration",
+            hero.contains("alpha = reveal * chrome") &&
+                hero.contains("durationMillis = BILLBOARD_CONTENT_REVEAL_MS")
+        )
+
+        // The close mark is drawn BEFORE the faded column, and the segments are
+        // drawn by the billboard outside MobileHero altogether: the way out of a
+        // playing trailer and the page's position never fade with the copy.
+        val fadedFrom = hero.indexOf(".align(Alignment.BottomStart)")
+        val closeMark = hero.indexOf("contentDescription = \"Stop trailer\"")
+        assertTrue("the page draws its own close mark", closeMark >= 0)
+        assertTrue(
+            "the close mark must sit outside the faded column",
+            closeMark < fadedFrom
+        )
+    }
+
     // ── the Ken Burns look (spec 2.6) ────────────────────
 
     @Test
