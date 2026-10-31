@@ -305,7 +305,11 @@ val KBRust = Color(0xFFA8542E)   // burned sienna — season finale
 val KBSteel = Color(0xFF3E5C76)  // desaturated navy — next up
 val KBPlum = Color(0xFF6E4E7E)   // muted aubergine — new season
 
-val CardShape = RoundedCornerShape(12.dp)
+// The card corner as both a dp value and a shape: the player's end-of-episode
+// artwork is built from classic Views, which clip through an outline and need a
+// radius rather than a Shape (see PosterEdge.radiusDp). One value, both sides.
+val KBCornerCardDp = 12.dp
+val CardShape = RoundedCornerShape(KBCornerCardDp)
 
 // The corner scale. Radii had drifted to fourteen distinct literals
 // (2/3/4/5/6/8/10/12/13/14/16/18/20/999) with no rule behind which surface
@@ -326,7 +330,8 @@ val KBShapePill = RoundedCornerShape(999.dp) // avatars, fully-round pills
 // into the artwork and clips the corners of the image. This is a plain, larger
 // corner instead, so a pill poster reads as "more curved than rounded" rather
 // than as a lozenge.
-val KBShapeSoftPill = RoundedCornerShape(20.dp)
+val KBCornerSoftPillDp = 20.dp
+val KBShapeSoftPill = RoundedCornerShape(KBCornerSoftPillDp)
 
 // The screen edge: the one inset a screen lines its own content up to.
 //

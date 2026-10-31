@@ -35,6 +35,7 @@ import com.kennyb1201.kbstream.data.debrid.TorBoxResolve
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -4486,7 +4487,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         nextUpCountdown?.text = ""
 
         // The show's art first, swapped for the episode's own still when TMDB
-        // answers - the same order the main player's card uses.
+        // answers - the same order the main player's card uses. Clipped at the
+        // viewer's Poster Edges setting, like every poster in the app.
+        nextUpThumb?.let { clipToPosterEdge(it) }
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
             runCatching { nextUpThumb?.load(initialThumb) }

@@ -17,6 +17,7 @@ import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
@@ -1174,6 +1175,9 @@ class ExternalPlayerActivity : ComponentActivity() {
         nextUpEpisodeTitle?.text = "S${targetSeason}E$targetEpisode"
         nextUpCountdown?.text = ""
 
+        // The thumbnail is poster-shaped artwork, so it wears the viewer's
+        // Poster Edges setting like every poster in the app.
+        nextUpThumb?.let { clipToPosterEdge(it) }
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
             runCatching { nextUpThumb?.load(initialThumb) }

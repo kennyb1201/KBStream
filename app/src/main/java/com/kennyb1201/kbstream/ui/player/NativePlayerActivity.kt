@@ -61,6 +61,7 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
@@ -12883,7 +12884,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         nextUpCountdown.text = ""
 
         // Thumbnail: the show's artwork first, swapped for the episode still
-        // once TMDB returns it.
+        // once TMDB returns it. Clipped at the viewer's Poster Edges setting,
+        // like every poster in the app (see clipToPosterEdge).
+        clipToPosterEdge(nextUpThumb)
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
             try {

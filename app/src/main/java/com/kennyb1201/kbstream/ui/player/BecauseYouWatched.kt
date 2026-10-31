@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.OneShotPreDrawListener
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.library.TasteProfileStore
 import com.kennyb1201.kbstream.data.library.TasteSignals
@@ -1543,7 +1544,7 @@ internal class BecauseYouWatchedUi(
                 )
                 clipToOutline = true
                 setBackgroundColor(surfaceColor())
-                roundArtwork(this)
+                clipToPosterEdge(this)
             }
             val poster = ImageView(host).apply {
                 layoutParams = FrameLayout.LayoutParams(
@@ -1831,7 +1832,7 @@ internal class BecauseYouWatchedUi(
                 }
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(surfaceColor())
-                roundArtwork(this)
+                clipToPosterEdge(this)
             }
             strip.addView(backdrop)
             val textCol = LinearLayout(host).apply {
@@ -1906,35 +1907,14 @@ internal class BecauseYouWatchedUi(
         logoCache[pick.tmdbId]?.let { logo.load(it) } ?: run { logo.setImageDrawable(null) }
     }
 
-    /** Clips the pick posters and the featured backdrop to rounded corners. */
+    /** Clips the pick posters and the featured backdrop to the poster edge. */
     private fun polish() {
         cards.values.forEach { refs ->
             ((refs.cardView as? ViewGroup)?.getChildAt(0) as? View)
-                ?.let { roundArtwork(it) }
+                ?.let { clipToPosterEdge(it) }
         }
         panel.findViewWithTag<View>(TAG_FEATURED_BACKDROP)
-            ?.let { roundArtwork(it) }
-    }
-
-    /**
-     * Clips one piece of artwork - poster or backdrop - to rounded corners.
-     *
-     * A rounded outline rather than a rounded background: the theme pass re-tints
-     * these views' backgrounds, which would wipe a background-carried radius, and
-     * the clip is what makes the corners round in the first place.
-     */
-    private fun roundArtwork(view: View) {
-        if (view.outlineProvider !is RoundedArtworkOutline) {
-            view.outlineProvider = RoundedArtworkOutline(12f * density)
-        }
-        view.clipToOutline = true
-    }
-
-    private class RoundedArtworkOutline(private val radiusPx: Float) :
-        android.view.ViewOutlineProvider() {
-        override fun getOutline(view: View, outline: Outline) {
-            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
-        }
+            ?.let { clipToPosterEdge(it) }
     }
 
     private companion object {
