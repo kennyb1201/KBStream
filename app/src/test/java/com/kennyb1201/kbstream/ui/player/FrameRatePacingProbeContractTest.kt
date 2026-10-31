@@ -127,10 +127,18 @@ class FrameRatePacingProbeContractTest {
             count(probe, "PlaybackSessionTrace.note(")
         )
         assertTrue(
-            "the summary names the mode, the measured vsync, the release cadence and the content " +
-                "cadence, and ends in a verdict a report can quote",
-            probe.contains("\"pacing: \$modeText, app vsync \$vsyncText, \"") &&
-                probe.contains("content \$content\$grid\$gap — pacing=\$verdict")
+            "the summary names the engaged mode, the display's own claim, the measured vsync, the " +
+                "release cadence and the content cadence, and ends in a verdict a report can quote",
+            probe.contains("\"pacing: \$modeText, \$liveText, app vsync \$vsyncText, \"") &&
+                probe.contains("content \$content\$grid\$gap\$claim — pacing=\$verdict")
+        )
+        assertTrue(
+            "the session is named from the mode the matcher CONFIRMED, and the display's answer is " +
+                "quoted beside it: on the 2026-10-31 report the box answered with the pre-move mode " +
+                "(79 at 59.94 Hz) for a session whose measured vsync was 41.71 ms",
+            probe.contains("val modeText = engagedLabel()") &&
+                probe.contains("\"display reports mode \${mode.modeId} at ") &&
+                probe.contains("engagedModeText = \"mode \$modeId at \${ms(refreshRateHz)} Hz\"")
         )
         assertTrue(
             "and the verdict has the three answers the field table needs: paced right, paced to " +

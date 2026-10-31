@@ -88,6 +88,18 @@ internal class PlayerPacingProbe(context: Context) {
     private var engagedModeId = NO_MODE
     private var engagedRefreshRate = 0.0
 
+    /**
+     * The engaged mode as this line spells it.
+     *
+     * Built from what the MATCHER confirmed, never from `Display` at summary
+     * time: the 2026-10-31 Onn report wrote "mode 79 at 59.94 Hz, app vsync
+     * 41.71 ms" for a session that ran at mode 85 / 23.976 Hz, because the box's
+     * display object answered with the mode that was on screen BEFORE the move.
+     * The measurement was right and the label contradicted it, which is worse
+     * than no label at all.
+     */
+    private var engagedModeText = ""
+
     /** The compositor's measured vsync period, in ns. Zero until first sampled. */
     @Volatile
     private var vsyncPeriodNs = 0L
@@ -142,8 +154,9 @@ internal class PlayerPacingProbe(context: Context) {
             val rate = runCatching { display.refreshRate.toDouble() }.getOrDefault(0.0)
             if (mode.modeId == lastSeenModeId) return
             lastSeenModeId = mode.modeId
-            val line = "pacing display changed: mode=${mode.modeId} at " +
-                "${ms(mode.refreshRate.toDouble())} Hz (display says ${ms(rate)} Hz)"
+            val line = "pacing display changed: ${engagedLabel()}, display now " +
+                "mode=${mode.modeId} at ${ms(mode.refreshRate.toDouble())} Hz " +
+                "(display says ${ms(rate)} Hz)"
             PlaybackSessionTrace.note(line)
             Log.i(TAG, line)
         }
@@ -165,6 +178,7 @@ internal class PlayerPacingProbe(context: Context) {
         this.player = player
         engagedModeId = modeId
         engagedRefreshRate = refreshRateHz
+        engagedModeText = "mode $modeId at ${ms(refreshRateHz)} Hz"
         synchronized(lock) {
             releasedFrames = 0
             releaseDeltaCount = 0
@@ -252,11 +266,14 @@ internal class PlayerPacingProbe(context: Context) {
             displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
         }.getOrNull()
         val mode = runCatching { display?.mode }.getOrNull()
-        val shownRate = runCatching { display?.refreshRate?.toDouble() }.getOrNull() ?: 0.0
-        val modeText = if (mode != null) {
-            "mode ${mode.modeId} at ${ms(mode.refreshRate.toDouble())} Hz"
+        // The engaged mode is the label; the display's own answer is quoted
+        // beside it. It is a claim, not a measurement, and on this chain it has
+        // already been caught answering with the pre-move mode.
+        val modeText = engagedLabel()
+        val liveText = if (mode != null) {
+            "display reports mode ${mode.modeId} at ${ms(mode.refreshRate.toDouble())} Hz"
         } else {
-            "mode $engagedModeId at ${ms(engagedRefreshRate)} Hz"
+            "display reports no mode"
         }
         val vsync = vsyncPeriodNs
         val releaseAvg: Long
@@ -276,18 +293,40 @@ internal class PlayerPacingProbe(context: Context) {
             gapCount = gaps
         }
         if (releaseAvg <= 0L) {
-            return "pacing: $modeText, no frames observed (frames=$frames); " +
-                "display says ${ms(shownRate)} Hz"
+            return "pacing: $modeText, $liveText, no frames observed (frames=$frames)"
         }
         val span = "${ms(releaseMin / 1000_000.0)}..${ms(releaseMax / 1000_000.0)} ms"
         val content = if (contentAvg > 0L) "${ms(contentAvg / 1000.0)} ms" else "unknown"
         val grid = if (gridShare >= 0) ", on vsync grid ${gridShare}%" else ""
         val gap = if (gapCount > 0) ", gaps=$gapCount" else ""
         val vsyncText = if (vsync > 0L) "${ms(vsync / 1000_000.0)} ms" else "unknown"
+        val claim = if (mode != null && claimDisagrees(mode.refreshRate.toDouble(), vsync)) {
+            ", display claim stale"
+        } else {
+            ""
+        }
         val verdict = verdict(vsync, releaseAvg, contentAvg * 1000L)
-        return "pacing: $modeText, app vsync $vsyncText, " +
+        return "pacing: $modeText, $liveText, app vsync $vsyncText, " +
             "release ${ms(releaseAvg / 1000_000.0)} ms over $frames frames ($span), " +
-            "content $content$grid$gap — pacing=$verdict"
+            "content $content$grid$gap$claim — pacing=$verdict"
+    }
+
+    private fun engagedLabel(): String =
+        if (engagedModeText.isNotEmpty()) {
+            engagedModeText
+        } else {
+            "mode $engagedModeId at ${ms(engagedRefreshRate)} Hz"
+        }
+
+    /**
+     * True when the rate the display claims is not the rate the compositor was
+     * measured running at. The 41.71 ms session above is the case: `Display`
+     * said 59.94 Hz while every measured frame callback was 41.71 ms apart.
+     */
+    private fun claimDisagrees(claimHz: Double, vsyncNs: Long): Boolean {
+        if (claimHz <= 0.0 || vsyncNs <= 0L) return false
+        val measured = 1_000_000_000.0 / vsyncNs
+        return abs(claimHz - measured) * 20 > measured
     }
 
     /**
