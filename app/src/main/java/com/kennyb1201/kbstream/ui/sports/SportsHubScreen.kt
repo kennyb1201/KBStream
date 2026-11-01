@@ -1193,7 +1193,22 @@ private fun HubList(
             // written as the landing margin plus the breathing room on top of it
             // because the two are coupled: the spec can only bring the LAST row
             // to its margin if the list is able to scroll that far past it.
-            contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp),
+            //
+            // The TOP is the same room, and it is not the landing's to give. A
+            // scroll container clips along its scroll axis only
+            // (`clipScrollableContainer`), so a focused card's side glow
+            // survives its bounds - but at the FIRST item the list is already
+            // at offset 0, and there is no scroll left for the spec's leading
+            // margin to ask for. Every card focus lands on further down gets
+            // its room from the landing; the one at the top could only keep the
+            // room the list was born with, and it had none, so the ring on that
+            // card was sliced flat along the top edge (reported: "the focus
+            // ring doesn't show fully"). Studio, Tag and Collection keep the
+            // same top slack for the same reason.
+            contentPadding = PaddingValues(
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset + 8.dp
+            ),
             content = content
         )
     }
@@ -1248,8 +1263,13 @@ private fun HubGrid(
             verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
             horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp),
             // The same slack past the last card the list keeps, for the same
-            // reason: the landing margin needs somewhere to land.
-            contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp),
+            // reason: the landing margin needs somewhere to land - and the same
+            // top room, because the first row has no scroll above it to buy the
+            // ring's room with (see [HubList]).
+            contentPadding = PaddingValues(
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset + 8.dp
+            ),
             content = content
         )
     }

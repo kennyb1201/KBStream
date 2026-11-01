@@ -332,7 +332,23 @@ class SportsHubLayoutContractTest {
         )
         assertTrue(
             "the list keeps enough slack past its last card for that same landing",
-            flat.contains("contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp)")
+            flat.contains(
+                "contentPadding = PaddingValues( top = KBFocusRowInset, " +
+                    "bottom = KBFocusRowInset + 8.dp )"
+            )
+        )
+        // The TOP half of that slack, and the one the landing cannot supply. A
+        // vertical list clips along its scroll axis only, so the first card's
+        // side glow survives its bounds - but at the first card the list is
+        // already at offset 0, the spec's leading margin has nothing left to
+        // scroll, and the ring on that card was sliced flat along the top edge.
+        // Reported 2026-11-01: "the focus ring doesn't show in fully" on the
+        // hub's first card, which is where a live game or a section's head card
+        // sits. The padding is the only room that page has; Studio, Tag and
+        // Collection keep the same top inset for the same reason.
+        assertTrue(
+            "and it keeps the ring's room ABOVE the first card too, since no scroll can buy it",
+            flat.contains("contentPadding = PaddingValues( top = KBFocusRowInset,")
         )
     }
 
