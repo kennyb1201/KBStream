@@ -41,7 +41,9 @@ import kotlinx.coroutines.coroutineScope
  *  3. TMDB RECOMMENDATIONS (30) - TMDB's own content engine.
  *  4. SAME KEYWORDS (25) - the seed's own TMDB keywords, five of them.
  *  5. `/similar` (15) - TMDB's similarity endpoint, fetched ONLY when tiers 1-4
- *     cannot fill the row.
+ *     cannot fill the row: before gating when the raw assembly is short, or
+ *     after gating when the ceiling emptied it (see [blendWalkWithBackfill] and
+ *     the post-gate fill in [buildRecommendationBlend]).
  *
  * A candidate that several tiers agree on outscores one only a single tier
  * knows, which is what makes the row read like a recommendation rather than a
@@ -65,6 +67,11 @@ internal const val BYW_PICK_COUNT = 8
 /**
  * How many survivors the kids walk aims to hand the ceiling: twice the row, so
  * candidates the ceiling turns away still leave room for the row to fill.
+ *
+ * A pool that gates short even at this depth is walked past for another pool of
+ * the same size rather than accepted as a short row - see
+ * [blendWalkWithBackfill], which is what turned the field report's four-poster
+ * documentary row into the eight it had been built for.
  */
 internal const val BYW_KIDS_CERT_POOL = BYW_PICK_COUNT * 2
 
@@ -426,9 +433,10 @@ internal fun blendKidsGenrePool(
  *
  * A GATE, not a selector: the row is cut by [blendSelect] afterwards, so the
  * per-tier cap still applies to a kids row. Fewer survivors than the row needs
- * simply means a shorter row - it is never backfilled with content above the
- * ceiling, because the whole point of the ceiling is that the alternative is
- * worse than a gap.
+ * is backfilled by walking further down the ranked list under this same gate
+ * (see [blendWalkWithBackfill]) - never with content above the ceiling, because
+ * the whole point of the ceiling is that the alternative is worse than a gap.
+ * When the ranked list runs out the row is simply shorter.
  *
  * A null ceiling is not this profile's business: the list comes back exactly as
  * it went in and [certify] is never called, which is what keeps an ordinary
@@ -455,6 +463,70 @@ internal suspend fun blendKidsGate(
         candidates
             .filterIndexed { index, _ -> KidsMode.allowed(kidsMaxAge, ratings[index]) }
     }
+}
+
+/**
+ * The pool selection runs on: the first walk's survivors, plus - when the gates
+ * leave fewer of them than the row needs - a resumed walk past the point the
+ * first one stopped, under the very same rules.
+ *
+ * The wheel this fixes (field 2026-11-01, TV, kids profile): a documentary's
+ * end-credits row stopped at four. Nothing was wrong with the panel or its
+ * width - the blend had the answer and lost it to the ceiling. The walk hands
+ * the ceiling twice the row and stops there; the cert gate then turns most of
+ * those away (a documentary seed does not narrow the genre pool, and an unrated
+ * title is dropped on any strict ceiling), and selection only ever saw those
+ * sixteen. Ranked candidates past the sixteenth - already scored, already
+ * sitting in memory - were never examined, so a pool that gated down to four
+ * stayed four while the answer was one page further down the same list.
+ *
+ * [survive] is the surface's own per-candidate rule (the watched drop, its
+ * resolve, the demote bookkeeping) and [gate] is its ceiling. Both are injected
+ * rather than reimplemented here, which is what makes "the same gates in the
+ * same order" structural instead of a promise: there is one implementation of
+ * each, and both walks call it.
+ *
+ * The resumed walk examines at most `pickCount * 2` further candidates - the
+ * same headroom the first walk takes, because gate rejections are exactly why
+ * it is not one candidate per missing slot. It stops on the first of: the gated
+ * pool reaching [pickCount], the ranked list running out, or that bound. No
+ * gate is relaxed to fill a slot: when the list is exhausted the row is as long
+ * as the profile's own rules allow, and that is the answer.
+ */
+internal suspend fun blendWalkWithBackfill(
+    ranked: List<BlendCandidate>,
+    walkTarget: Int,
+    pickCount: Int,
+    survive: suspend (BlendCandidate) -> Boolean,
+    gate: suspend (List<BlendCandidate>) -> List<BlendCandidate>
+): List<BlendCandidate> {
+    if (pickCount <= 0 || walkTarget <= 0) return emptyList()
+
+    val survivors = ArrayList<BlendCandidate>(walkTarget)
+    var index = 0
+    while (index < ranked.size && survivors.size < walkTarget) {
+        val candidate = ranked[index]
+        index++
+        if (survive(candidate)) survivors += candidate
+    }
+    val pool = gate(survivors)
+    if (pool.size >= pickCount) return pool
+
+    // Still short after the gates. Resume from exactly where the first walk
+    // stopped, so no candidate is examined twice - a candidate is where the
+    // resolve calls in [survive] are spent.
+    val batch = ArrayList<BlendCandidate>(pickCount * 2)
+    val end = minOf(ranked.size, index + pickCount * 2)
+    while (index < end) {
+        val candidate = ranked[index]
+        index++
+        if (survive(candidate)) batch += candidate
+    }
+    if (batch.isEmpty()) return pool
+    // Gated as its own batch: the ceiling's answer is per candidate and does
+    // not depend on the rest of the list, so this is the same gate, not a
+    // second one.
+    return pool + gate(batch)
 }
 
 /**
@@ -491,8 +563,10 @@ internal fun blendReason(
  * The order of operations is the point, and every step is here once:
  * fetch the tiers, keep the seed's own kind, refuse unposter-ed entries, refuse
  * the seed, drop hidden titles where the surface says so, score and rank, apply
- * the watched rule, gate on the kids ceiling, fill from `/similar` if the row
- * is still short, cap per tier, take the pick count.
+ * the watched rule, gate on the kids ceiling, resume the walk past the point it
+ * stopped while the gated pool is still under the row, fall back to `/similar`
+ * post-gate when that pre-gate fill never ran, cap per tier, take the pick
+ * count.
  */
 internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPick> {
     val appContext = params.context.applicationContext
@@ -726,11 +800,26 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
     // above have been filtered - not merely before scoring - and TMDB's
     // similarity endpoint is the last thing asked for, never a fourth opinion
     // when three tiers already agreed.
-    if (candidates.size < params.pickCount) {
-        runCatchingCancellable { repo.getSimilar(detail.id, mediaType) }
+    //
+    // Fetched at most ONCE per build: the post-gate fill below asks for the same
+    // list, and only on a build where this branch did not run, so a row that is
+    // short both before and after the gates still costs one request.
+    var similarResults: List<TmdbRecommendationItem>? = null
+    suspend fun fetchSimilar(): List<TmdbRecommendationItem> {
+        similarResults?.let { return it }
+        val fetched = runCatchingCancellable { repo.getSimilar(detail.id, mediaType) }
             .getOrNull()
             ?.results
             .orEmpty()
+        similarResults = fetched
+        return fetched
+    }
+
+    // Whether this pre-gate fill ran at all is what the post-gate fill keys off:
+    // a fill that already ran - and found nothing - is not run a second time.
+    val similarFilledBeforeGate = candidates.size < params.pickCount
+    if (similarFilledBeforeGate) {
+        fetchSimilar()
             .filter { !it.posterPath.isNullOrBlank() && keepScripted(it.genreIds) }
             .forEach { item ->
                 add(
@@ -770,31 +859,36 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
     }
 
     val taste = params.taste
+    // Two drops that apply to every candidate whatever produced it - a tier, the
+    // resumed walk, or the post-gate `/similar` fill - so they are predicates
+    // rather than one pass over the first list.
+    val isHidden: (BlendCandidate) -> Boolean = { candidate ->
+        hiddenKeys.isNotEmpty() && HiddenTitles.hides(
+            hiddenKeys,
+            candidate.pick.type,
+            candidate.pick.name,
+            yearOf(candidate.pick),
+            "tmdb:${candidate.pick.tmdbId}",
+            candidate.pick.imdbId
+        )
+    }
+    // Taste: a title the viewer thumbed down is never recommended back to
+    // them, whatever the seed and on both surfaces - the whole of taste's
+    // effect on a single-seed blend. Filtered here, with the hidden-title
+    // drop and before ranking, so a disliked title cannot consume a pick
+    // slot the way a merely watched one used to.
+    val isDisliked: (BlendCandidate) -> Boolean = { candidate ->
+        taste.isDisliked(
+            mediaType = candidate.pick.type,
+            title = candidate.pick.name,
+            year = yearOf(candidate.pick),
+            tmdbId = candidate.pick.tmdbId,
+            imdbId = candidate.pick.imdbId
+        )
+    }
     val scored = candidates.values
-        .filter { candidate ->
-            hiddenKeys.isEmpty() || !HiddenTitles.hides(
-                hiddenKeys,
-                candidate.pick.type,
-                candidate.pick.name,
-                yearOf(candidate.pick),
-                "tmdb:${candidate.pick.tmdbId}",
-                candidate.pick.imdbId
-            )
-        }
-        // Taste: a title the viewer thumbed down is never recommended back to
-        // them, whatever the seed and on both surfaces - the whole of taste's
-        // effect on a single-seed blend. Filtered here, with the hidden-title
-        // drop and before ranking, so a disliked title cannot consume a pick
-        // slot the way a merely watched one used to.
-        .filterNot { candidate ->
-            taste.isDisliked(
-                mediaType = candidate.pick.type,
-                title = candidate.pick.name,
-                year = yearOf(candidate.pick),
-                tmdbId = candidate.pick.tmdbId,
-                imdbId = candidate.pick.imdbId
-            )
-        }
+        .filterNot { isHidden(it) }
+        .filterNot { isDisliked(it) }
         // The score that ranks: the tiers plus the profile's own bonus, floored
         // at zero. A candidate whose strongest tier is full stays cap-limited
         // exactly as before - the bonus is not tier membership.
@@ -826,10 +920,13 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
     val watchedPairs = ranked.map { rankedCandidate ->
         "tmdb:${rankedCandidate.pick.tmdbId}" to mediaType
     }
-    val repoWatchedKeys = runCatchingCancellable {
+    // Vars, not vals: the post-gate `/similar` fill below brings ids this
+    // preload never named, and asking the repository about them is what keeps
+    // its tracker read a gate on those picks too.
+    var repoWatchedKeys = runCatchingCancellable {
         watchedRepository.preloadAndGetWatchedKeys(watchedPairs)
     }.getOrNull().orEmpty()
-    val repoPartialKeys = runCatchingCancellable {
+    var repoPartialKeys = runCatchingCancellable {
         watchedRepository.preloadAndGetPartiallyWatchedKeys(watchedPairs)
     }.getOrNull().orEmpty()
 
@@ -864,10 +961,13 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
     // the surface that DROPS watched titles. The demoting surface never runs
     // it: its own tracker read answers the same question under both flavors.
     val resolveInWalk = dropWatched
-    val survivors = ArrayList<BlendCandidate>(walkTarget)
     val demoted = HashSet<Int>()
-    for (candidate in ranked) {
-        if (survivors.size >= walkTarget) break
+
+    /**
+     * One candidate's trip through the watched rule - declared once, so the
+     * resumed walk cannot apply a different one than the first walk did.
+     */
+    suspend fun survive(candidate: BlendCandidate): Boolean {
         // Cheap checks first; the resolve only runs when they say nothing.
         var imdbId: String? = null
         var isWatched = watched(candidate, imdbId = null)
@@ -878,42 +978,132 @@ internal suspend fun buildRecommendationBlend(params: BlendParams): List<BlendPi
             isWatched = watched(candidate, imdbId)
         }
         if (isWatched) {
-            if (dropWatched) continue
+            if (dropWatched) return false
             demoted += candidate.pick.tmdbId
         }
         // The id lands on the picks that survive, and only those: PLAY resolves
         // streams from it, and a null one falls back to the TMDB flavor exactly
         // as it always has.
         candidate.pick.imdbId = imdbId
-        survivors += candidate
-    }
-
-    // A watched title is demoted, not dropped, on More Like This: the two bands
-    // keep score order, and the rail still shows what the viewer has seen
-    // (badged) rather than pretending it does not exist.
-    val ordered = if (params.watchedMode == BlendWatchedMode.DEMOTE) {
-        val (fresh, seen) = survivors.partition { it.pick.tmdbId !in demoted }
-        fresh + seen
-    } else {
-        survivors
+        return true
     }
 
     val kidsCeiling = params.kidsMaxAge
     val certify = params.certify
-    val gated = if (kidsCeiling != null && certify != null) {
-        blendKidsGate(
-            candidates = blendKidsGenrePool(
-                candidates = ordered,
-                parentGenreIds = detail.genres.map { it.id }
-            ),
-            kidsMaxAge = kidsCeiling,
-            certify = certify
-        )
-    } else {
-        ordered
+
+    /**
+     * The ceiling's two gates over one batch, in the order this build has always
+     * applied them: the genre pool's cheap pre-filter, then the certification.
+     * Every path into selection goes through here - the first walk, the resumed
+     * one, and the late `/similar` fill - because there is no laxer gate waiting
+     * for a row that is short.
+     */
+    suspend fun gateKeep(batch: List<BlendCandidate>): List<BlendCandidate> =
+        if (kidsCeiling != null && certify != null) {
+            blendKidsGate(
+                candidates = blendKidsGenrePool(
+                    candidates = batch,
+                    parentGenreIds = detail.genres.map { it.id }
+                ),
+                kidsMaxAge = kidsCeiling,
+                certify = certify
+            )
+        } else {
+            batch
+        }
+
+    // Walk the ranked order and filter, resolving a candidate's IMDB id only
+    // when the cheap checks did not already answer - and when the gates leave
+    // the pool under the row, resume the same walk past the point it stopped
+    // ([blendWalkWithBackfill]). The resolve calls stay bounded by (walk target
+    // + backfill cap), never by the whole candidate list, and the row is taken
+    // AFTER the filter, so a watched title cannot consume a slot.
+    val pool = blendWalkWithBackfill(
+        ranked = ranked,
+        walkTarget = walkTarget,
+        pickCount = params.pickCount,
+        survive = { candidate -> survive(candidate) },
+        gate = { batch -> gateKeep(batch) }
+    )
+    var gated = pool
+
+    // `/similar` as a LAST resort, and only when its pre-gate fill never ran.
+    //
+    // T5 measures shortness before any gating, which is not where a short row
+    // comes from: a big raw assembly can still gate down to four. So when the
+    // assembly was at or over the row (T5 skipped), the ceiling is what emptied
+    // it, and TMDB's similarity endpoint gets one more chance - scored and
+    // merged into ranked order, then walked and gated exactly like every other
+    // candidate. If T5 already ran, its results are in the pool already and the
+    // resumed walk was the backfill; it is not asked twice.
+    if (gated.size < params.pickCount && !similarFilledBeforeGate) {
+        val late = fetchSimilar()
+            .filter { !it.posterPath.isNullOrBlank() && keepScripted(it.genreIds) }
+            // Same shapes T5 refuses, plus the ids this build already knows: a
+            // title a tier or the resumed walk already produced is one
+            // candidate, never a second copy at a different score.
+            .filter { item -> item.id != detail.id && item.id !in candidates.keys }
+            .map { item ->
+                BlendCandidate(
+                    pick = BlendPick(
+                        tmdbId = item.id,
+                        type = mediaType,
+                        name = (item.title ?: item.name).orEmpty(),
+                        posterPath = item.posterPath,
+                        backdropPath = item.backdropPath,
+                        overview = item.overview,
+                        releaseDate = item.releaseDate,
+                        firstAirDate = item.firstAirDate,
+                        voteAverage = item.voteAverage,
+                        genreIds = item.genreIds
+                    ),
+                    score = 0,
+                    order = order++,
+                    genreIds = item.genreIds,
+                    tiers = setOf(BlendTier.SIMILAR)
+                )
+            }
+            .filterNot { isHidden(it) }
+            .filterNot { isDisliked(it) }
+            .map { it.copy(score = blendTotalScore(it, seedGenreIds, affinity)) }
+        if (late.isNotEmpty()) {
+            // The repository read the first walk's candidates got, for the ids
+            // this fill has just introduced: its tracker state is a gate on
+            // these picks too, so it is asked rather than assumed absent.
+            val latePairs = late.map { candidate ->
+                "tmdb:${candidate.pick.tmdbId}" to mediaType
+            }
+            repoWatchedKeys = repoWatchedKeys + runCatchingCancellable {
+                watchedRepository.preloadAndGetWatchedKeys(latePairs)
+            }.getOrNull().orEmpty()
+            repoPartialKeys = repoPartialKeys + runCatchingCancellable {
+                watchedRepository.preloadAndGetPartiallyWatchedKeys(latePairs)
+            }.getOrNull().orEmpty()
+            gated = gated + blendWalkWithBackfill(
+                ranked = blendRank(late, seedGenreIds, affinity),
+                // One TMDB page, walked whole: the depth bound belongs to the
+                // ranked list the tiers built, not to a fill this small.
+                walkTarget = late.size,
+                pickCount = params.pickCount,
+                survive = { candidate -> survive(candidate) },
+                gate = { batch -> gateKeep(batch) }
+            )
+        }
     }
 
-    return blendSelect(gated, params.pickCount).map { candidate ->
+    // A watched title is demoted, not dropped, on More Like This: the two bands
+    // keep score order, and the rail still shows what the viewer has seen
+    // (badged) rather than pretending it does not exist. Applied to the whole
+    // pool AFTER the walk, so a backfilled title that is watched lands in the
+    // seen band instead of opening the fresh one.
+    val finalPool = if (params.watchedMode == BlendWatchedMode.DEMOTE) {
+        val (fresh, seen) = gated.partition { it.pick.tmdbId !in demoted }
+        fresh + seen
+    } else {
+        gated
+    }
+
+    return blendSelect(finalPool, params.pickCount).map { candidate ->
         candidate.pick.copy(
             reason = blendReason(candidate, seedPeople, seedName)
         )
