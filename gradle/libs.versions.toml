@@ -13,7 +13,7 @@
 [versions]
 # --- Build toolchain (plugin versions; see [plugins]) ---
 agp = "9.4.1"
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 ksp = "2.3.12"
 sentry-gradle = "6.23.0"
 ktlint = "14.2.0"
