@@ -1317,6 +1317,15 @@ private fun HubGrid(
  * clip is eating MORE of it than that, so a sub-pixel remeasurement can never
  * move a card that is already sitting, while a card flush with the edge - the
  * case the viewer reports - gets its border and glow back.
+ *
+ * The room is measured on the DRAWN card (the glow and the focus growth
+ * included), which is one thing; a card too tall to keep BOTH margins is the
+ * other, and it is where the two pages above have nothing to say. No landing
+ * exists for such a card that leaves it fully on screen, so the spec picks the
+ * edge it keeps: the LEADING one, whatever direction focus arrived from. It is
+ * the edge the ring reads on - the team row and the score sit under it - and the
+ * alternative, paying the trailing shortfall first because that is the order a
+ * fitting card needs, sliced the ring off the top of every tall card.
  */
 @OptIn(ExperimentalFoundationApi::class)
 internal class SportsCardBringIntoViewSpec(
@@ -1389,7 +1398,21 @@ internal class SportsCardBringIntoViewSpec(
         // sitting. A card off the viewport is landed exactly as it always was.
         val inside = drawnOffset >= 0f && trailingEdge <= containerSize
         val floor = if (inside) deadzone else 0f
+        // A card too tall for both margins has no landing that keeps both
+        // edges, so one of them is chosen - and it is the LEADING one, from
+        // either arrival direction. Paying the trailing shortfall first (which
+        // is right for a card that fits) put the drawn bottom on the margin and
+        // left the top under the clip: the ring was cut along the top edge of
+        // every tall card, whichever row it was in (reported 2026-11-01 on
+        // 0.9.132). The top is where the teams, the score and the ring's most
+        // visible run are; the venue and channel lines it costs are secondary.
+        // A fitting card is untouched by this and still lands on the nearest
+        // edge, because it has room for both.
+        val fits = abs(size) + 2f * overhangPx <= containerSize - 2f * margin
         return when {
+            // Too tall: the drawn top goes to the margin and the bottom runs
+            // past the viewport, which is the deliberate sacrifice.
+            !fits -> -shortOfLeading
             // Past the bottom room: scroll forward just far enough to clear it.
             shortOfTrailing > floor -> shortOfTrailing
             // Above the top one: back off by the same amount.

@@ -666,6 +666,94 @@ class SportsHubLayoutContractTest {
     }
 
     @Test
+    fun `a card too tall for both margins keeps its LEADING edge, from either direction`() {
+        // 2026-11-01, build 0.9.132, every league with a tall card: the ring was
+        // cut along the TOP, on the second card as much as the first. A card
+        // whose drawn height leaves no room for both margins cannot show both,
+        // and the arithmetic paid the trailing shortfall first - so arriving
+        // from below put the drawn bottom on the margin and the top under the
+        // clip. The edge that is kept is the leading one, because that is where
+        // the teams, the score and the ring's most visible run are.
+        val height = 1900f
+        val overhang = GLOW_PX + (ROW_SCALE - 1f) * height / 2f
+        val margin = INSET_PX.coerceAtMost(VIEWPORT / 3f)
+        assertTrue(
+            "the premise: this card's drawn self is taller than the room both margins leave",
+            height + 2f * overhang > VIEWPORT - 2f * margin
+        )
+        // Arriving from below - the DOWN-focus direction, which is the report:
+        // its drawn top is already on screen and its drawn bottom is far past
+        // it, which used to be answered with the trailing shortfall.
+        val fromBelow = drawnSpec.calculateScrollDistance(
+            offset = 900f,
+            size = height,
+            containerSize = VIEWPORT
+        )
+        assertEquals(
+            "the drawn top lands on the margin, not the drawn bottom",
+            margin,
+            900f - fromBelow - overhang,
+            TOLERANCE
+        )
+        assertEquals(
+            "and the landing asks for nothing more",
+            0f,
+            drawnSpec.calculateScrollDistance(
+                offset = 900f - fromBelow,
+                size = height,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        // Arriving from above: the same edge wins, so no tall card anywhere is
+        // landed with its ring sliced off at the top.
+        val fromAbove = drawnSpec.calculateScrollDistance(
+            offset = -400f,
+            size = height,
+            containerSize = VIEWPORT
+        )
+        assertEquals(
+            "arriving from above keeps the same edge",
+            margin,
+            -400f - fromAbove - overhang,
+            TOLERANCE
+        )
+    }
+
+    @Test
+    fun `a card with room for both margins still lands on the nearest edge`() {
+        // The half the too-tall rule must not touch: a card that fits is landed
+        // exactly as the drawn-rect accounting landed it - the trailing edge
+        // from below, the leading edge from above, both on the same margin.
+        val height = 300f
+        val overhang = GLOW_PX + (ROW_SCALE - 1f) * height / 2f
+        val below = drawnSpec.calculateScrollDistance(
+            offset = VIEWPORT + 200f,
+            size = height,
+            containerSize = VIEWPORT
+        )
+        assertTrue("a fitting card below the viewport is still pulled up", below > 0f)
+        assertEquals(
+            "and lands its drawn bottom on the margin",
+            VIEWPORT - INSET_PX,
+            VIEWPORT + 200f - below + height + overhang,
+            TOLERANCE
+        )
+        val above = drawnSpec.calculateScrollDistance(
+            offset = -100f,
+            size = height,
+            containerSize = VIEWPORT
+        )
+        assertTrue("and one above it is backed off", above < 0f)
+        assertEquals(
+            "onto the leading margin, drawn edge and all",
+            INSET_PX,
+            -100f - above - overhang,
+            TOLERANCE
+        )
+    }
+
+    @Test
     fun `every scroll body in the hub installs the drawn-rect spec, and no other one exists`() {
         // Three containers draw focusable KBCards under a clip: the games grid,
         // the standings list and the detail sheets' body. Each hands its scroll
