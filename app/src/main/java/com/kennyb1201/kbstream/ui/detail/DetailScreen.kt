@@ -5733,6 +5733,14 @@ fun DetailScreen(
                                             // one-line answer, never a
                                             // match percentage.
                                             captionReason = rec.reason,
+                                            // Both badges are keyed on
+                                            // [normalizedType], never on the
+                                            // route's own spelling: the sets
+                                            // are filed under "series::…",
+                                            // while a show's route says "tv",
+                                            // so every key built from `type`
+                                            // missed and the whole rail came up
+                                            // bare (checkmark, eye and all).
                                             isWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -5744,7 +5752,7 @@ fun DetailScreen(
                                                     imdbId ->
                                                     viewModel.watchedKey(
                                                         imdbId,
-                                                        type.lowercase()
+                                                        normalizedType
                                                     ) in watchedKeys
                                                 } == true ||
                                                 // Same fallback as the
@@ -5752,7 +5760,7 @@ fun DetailScreen(
                                                 viewModel.watchedKey(
                                                     WatchedStatusKeys
                                                         .tmdbKeyId(rec.id),
-                                                    type.lowercase()
+                                                    normalizedType
                                                 ) in watchedKeys,
                                             isPartiallyWatched =
                                                 resolvedPosterIds[
@@ -5765,13 +5773,13 @@ fun DetailScreen(
                                                     imdbId ->
                                                     viewModel.watchedKey(
                                                         imdbId,
-                                                        type.lowercase()
+                                                        normalizedType
                                                     ) in partialWatchedKeys
                                                 } == true ||
                                                 viewModel.watchedKey(
                                                     WatchedStatusKeys
                                                         .tmdbKeyId(rec.id),
-                                                    type.lowercase()
+                                                    normalizedType
                                                 ) in partialWatchedKeys,
                                             onClick = {
                                                 scope.launch {
@@ -5808,7 +5816,12 @@ fun DetailScreen(
                                                 posterMenu =
                                                     PosterMenuTarget(
                                                         tmdbId = rec.id,
-                                                        mediaType = type,
+                                                        // The rail's own
+                                                        // spelling, so the
+                                                        // toggle matches the
+                                                        // badge it sits on (see
+                                                        // the rail's isWatched).
+                                                        mediaType = normalizedType,
                                                         name = rec.title
                                                             ?: rec.name
                                                             ?: "",

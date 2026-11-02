@@ -1336,7 +1336,16 @@ fun DetailScreenMobile(
         // screen resolved for the poster (the one the trackers key on), then
         // the poster's own `tmdb:<n>` one, for a title TMDB has no IMDb id for.
         fun posterIsWatched(tmdbId: Int, mediaType: String, keys: Set<String>): Boolean {
-            val type = mediaType.lowercase()
+            // The badges' own spelling, not the caller's: the sets are filed
+            // under "series::…" while the route says "tv", so a key built from
+            // the raw type missed on every show and the rail came up bare. Same
+            // mapping as the TV page's `normalizedType`, and the same one the
+            // refresh keys its lookups with.
+            val type = when (mediaType.lowercase()) {
+                "movie", "anime.movie" -> "movie"
+                "series", "tv", "show", "anime", "anime.series" -> "series"
+                else -> normalizedType
+            }
             val imdbId = resolvedPosterIds[viewModel.posterLookupKey(tmdbId, type)]
             return (imdbId != null && viewModel.watchedKey(imdbId, type) in keys) ||
                 viewModel.watchedKey(WatchedStatusKeys.tmdbKeyId(tmdbId), type) in keys
@@ -2122,13 +2131,13 @@ fun DetailScreenMobile(
                                     RecommendationTile(
                                         modifier = Modifier.animateItem(),
                                         item = item,
-                                        mediaType = type,
-                                        isWatched = isPosterWatched(item.id, type),
+                                        mediaType = normalizedType,
+                                        isWatched = isPosterWatched(item.id, normalizedType),
                                         onClick = { openRecommendation(item) },
                                         onLongClick = {
                                             posterMenu = PosterMenuTarget(
                                                 tmdbId = item.id,
-                                                mediaType = type,
+                                                mediaType = normalizedType,
                                                 name = item.title
                                                     ?: item.name
                                                     ?: ""

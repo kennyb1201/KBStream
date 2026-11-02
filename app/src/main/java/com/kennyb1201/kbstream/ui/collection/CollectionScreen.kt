@@ -510,7 +510,12 @@ fun CollectionScreen(
                         imdbId,
                         "movie"
                     ) in watchedKeys
-                } == true
+                // Both flavors the badge reads: a part whose IMDb resolution
+                // never landed is watched under its own `tmdb:` key, and the
+                // toggle must not offer to mark what the poster already shows
+                // as watched.
+                } == true ||
+                    viewModel.watchedKey("tmdb:${part.id}", "movie") in watchedKeys
 
             PosterContextMenu(
                 title = part.title
