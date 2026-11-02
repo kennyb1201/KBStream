@@ -91,9 +91,26 @@ internal data class BywPick(
     var imdbId: String? = null
 )
 
-/** The parent type the player carries, as TMDB spells it. */
-internal fun bywMediaType(parentType: String): String = when (parentType.lowercase()) {
-    "series", "show", "tv" -> "series"
+/**
+ * The parent type the player carries, as the two types every other surface
+ * writes: `series` | `movie`.
+ *
+ * ANIME IS THE ONE LIST THAT IS EASY TO MISS HERE, and missing it cost the
+ * panel its thumbs. Anime catalogs spell a show `anime` (and `anime.series`; only
+ * their films are `anime.movie`), and every other surface normalizes that to
+ * `series` - Detail, the poster menus, the hidden and taste stores, the episode
+ * endpoints. This function was the one place that read only `series`/`show`/`tv`
+ * and filed everything else as a film, so an anime session asked the taste store
+ * for `movie::tmdb:<n>` while the Detail page it was liked on had written
+ * `series::tmdb:<n>`. The two never met, the IMDB flavor was resolved from the
+ * wrong endpoint (movie, for a show's TMDB id, so it came back empty), the name
+ * fallback could not bridge them either (its key carries the type) - and the
+ * thumbs opened unlit on a title the viewer had already liked, lighting only
+ * after a press wrote the panel's own spelling. The blend's seed got the same
+ * wrong type, so the picks were anime films' similar titles for an anime show.
+ */
+internal fun bywMediaType(parentType: String): String = when (parentType.trim().lowercase()) {
+    "series", "show", "tv", "anime", "anime.series" -> "series"
     else -> "movie"
 }
 
