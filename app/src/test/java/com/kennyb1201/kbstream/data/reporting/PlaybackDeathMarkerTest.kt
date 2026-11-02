@@ -71,6 +71,24 @@ class PlaybackDeathMarkerTest {
     }
 
     @Test
+    fun `a death the platform explained says why, and an unexplained one reads as it always did`() {
+        val playing = death.copy(stage = PlaybackDeathMarker.STAGE_PLAYING)
+
+        assertEquals(
+            "the cause is the fact that decides what to do about the death",
+            "exo playback: the process died with the player playing — " +
+                "\"Severance S2E5\" at 0:00, open 0:02, source cdn.example.com" +
+                " — exit: native crash (signal 11)",
+            playing.sentence(ProcessExit("native crash (signal 11)", deliberate = false))
+        )
+        assertEquals(
+            "with no record the sentence must not gain an empty tail",
+            playing.sentence(),
+            playing.sentence(null)
+        )
+    }
+
+    @Test
     fun `a session with no source host still says source unknown`() {
         assertTrue(death.copy(sourceHost = "").sentence().endsWith("source unknown"))
     }
@@ -117,6 +135,29 @@ class PlaybackDeathMarkerTest {
                 source.contains("PlaybackDeathMarker.STAGE_BACKGROUND")
             )
         }
+    }
+
+    @Test
+    fun `the launch asks the platform why, and a deliberate exit is no death`() {
+        val application = read("com/kennyb1201/kbstream/MainApplication.kt")
+
+        assertTrue(
+            "the marker cannot say why the process ended; the platform keeps that answer",
+            application.contains("ProcessExitRecord.previous(applicationContext)")
+        )
+        assertTrue(
+            "an app the installer replaced mid-session leaves the same marker a crash " +
+                "does, and must not raise a playback death",
+            application.contains("exit?.deliberate == true")
+        )
+        assertTrue(
+            "but it must still explain a session that stopped mid-episode",
+            application.contains("\"playback_process_death_deliberate\"")
+        )
+        assertTrue(
+            "the cause travels with the event, so the feed can be read by it",
+            application.contains("\"process_exit\" to (exit?.label ?: \"unknown\")")
+        )
     }
 
     @Test

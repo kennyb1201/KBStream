@@ -85,8 +85,17 @@ internal object PlaybackDeathMarker {
         val wasOnScreen: Boolean
             get() = stage != PlaybackDeathMarker.STAGE_BACKGROUND
 
-        /** The one sentence every consumer reports. */
-        fun sentence(): String = PlaybackDeathMarker.describe(this)
+        /**
+         * The one sentence every consumer reports.
+         *
+         * [exit] is the OS's account of how the process ended, when the
+         * platform kept one (see [ProcessExitRecord]). It is appended rather
+         * than woven in so a launch with no record reads exactly as it did
+         * before - the facts in this sentence are the marker's own, and the
+         * cause is an addition, not a replacement.
+         */
+        fun sentence(exit: ProcessExit? = null): String =
+            PlaybackDeathMarker.describe(this, exit)
     }
 
     /**
@@ -205,9 +214,9 @@ internal object PlaybackDeathMarker {
      * One line, because it is read on a TV-sized diagnostics screen and inside a
      * Sentry event title: engine, what the player was doing, the episode, and
      * the two clocks that say whether it died on the way in or deep into a
-     * session.
+     * session - plus, when the platform recorded one, the cause [exit].
      */
-    internal fun describe(death: Death): String {
+    internal fun describe(death: Death, exit: ProcessExit? = null): String {
         val doing = when (death.stage) {
             STAGE_LOADING -> "still loading (no picture yet)"
             STAGE_PLAYING -> "playing"
@@ -215,9 +224,10 @@ internal object PlaybackDeathMarker {
             else -> death.stage
         }
         val source = death.sourceHost.ifBlank { "unknown" }
+        val cause = exit?.let { " — exit: ${it.label}" }.orEmpty()
         return "${death.engine} playback: the process died with the player $doing — " +
             "\"${death.label}\" at ${clock(death.positionMs)}, " +
-            "open ${clock(death.openForMs)}, source $source"
+            "open ${clock(death.openForMs)}, source $source$cause"
     }
 
     /** `mm:ss`, or `h:mm:ss` past an hour. Negative reads as zero. */
