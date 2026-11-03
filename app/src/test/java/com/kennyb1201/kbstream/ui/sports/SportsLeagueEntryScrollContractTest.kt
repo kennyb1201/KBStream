@@ -153,8 +153,10 @@ class SportsLeagueEntryScrollContractTest {
     @Test
     fun `the D-pad lands on a card the switch left visible`() {
         assertTrue(
-            "the grid reports whether it holds focus",
-            leagueBody.contains(".onFocusChanged { gridHasFocus = it.hasFocus }")
+            "the grid reports whether it holds focus - to this switch effect, and to the " +
+                "screen's fallback scroll, which must not move a card that already has it",
+            leagueBody.contains(".onFocusChanged { gridHasFocus = it.hasFocus") &&
+                leagueBody.contains("onGridFocusChanged(it.hasFocus)")
         )
         assertTrue(
             "only a grid that had focus is repaired - a tab press must keep the tab row's focus",
