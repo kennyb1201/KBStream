@@ -194,7 +194,6 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import com.kennyb1201.kbstream.ui.mobile.DetailScreenMobile
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
