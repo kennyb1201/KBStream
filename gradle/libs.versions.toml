@@ -12,10 +12,10 @@
 
 [versions]
 # --- Build toolchain (plugin versions; see [plugins]) ---
-agp = "9.4.1"
+agp = "9.5.0"
 kotlin = "2.4.21"
 ksp = "2.3.12"
-sentry-gradle = "6.23.0"
+sentry-gradle = "6.25.0"
 ktlint = "14.2.0"
 baseline-profile = "1.5.0"
 
@@ -24,7 +24,7 @@ core-ktx = "1.19.1"
 security-crypto = "1.1.0"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
-paging-compose = "3.5.1"
+paging-compose = "3.5.3"
 compose-bom = "2026.09.00"
 tv-material = "1.1.0"
 tv-foundation = "1.0.0"
@@ -42,7 +42,7 @@ work = "2.12.0"
 
 # --- HTTP / JSON / images ---
 retrofit = "3.0.0"
-okhttp = "5.5.0"
+okhttp = "5.5.1"
 moshi = "1.15.2"
 zxing = "3.5.4"
 coil = "3.6.3"
@@ -50,9 +50,9 @@ coil = "3.6.3"
 # --- Playback / sync / reporting ---
 media3 = "1.11.1"
 newpipe-extractor = "43f8e6ebeef4"
-sentry = "8.59.0"
+sentry = "8.62.0"
 supabase = "3.8.0"
-ktor = "3.6.0"
+ktor = "3.6.1"
 kotlinx-serialization = "1.12.0"
 desugar = "2.1.5"
 
