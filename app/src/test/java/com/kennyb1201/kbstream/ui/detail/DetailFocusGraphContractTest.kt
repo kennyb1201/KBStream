@@ -335,7 +335,7 @@ class DetailFocusGraphContractTest {
             "and the page answers it with the landing a restart would have made: " +
                 "its own controls, through focusTopOfPage",
             detail.contains("LaunchedEffect(handFocusBack.abandoned)") &&
-                detail.contains("hand-back abandoned ($label): landing on the page's controls") &&
+                detail.contains("hand-back abandoned (\$label): landing on the page's controls") &&
                 detail.contains("handFocusBack.clearedAbandoned()")
         )
     }
