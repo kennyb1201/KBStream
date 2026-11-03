@@ -175,8 +175,12 @@ class SportsLiveCardStabilityContractTest {
             card.contains("livePulse.value")
         )
         assertTrue(
-            "it only forwards it",
-            card.contains("GameStatusLine(game = game, livePulse = livePulse)")
+            "it only forwards it - and hands the status side the row's leftover width, so a " +
+                "long status ellipsizes instead of colliding with the chips beside it",
+            card.replace(Regex("\\s+"), " ").contains(
+                "GameStatusLine( game = game, livePulse = livePulse, " +
+                    "modifier = Modifier.weight(1f, fill = false) )"
+            )
         )
     }
 

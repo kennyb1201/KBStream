@@ -333,7 +333,7 @@ class SportsHubLayoutContractTest {
         assertTrue(
             "the list keeps enough slack past its last card for that same landing",
             flat.contains(
-                "contentPadding = PaddingValues( top = KBFocusRowInset, " +
+                "contentPadding = PaddingValues( top = 20.dp, " +
                     "bottom = KBFocusRowInset + 8.dp )"
             )
         )
@@ -346,9 +346,14 @@ class SportsHubLayoutContractTest {
         // hub's first card, which is where a live game or a section's head card
         // sits. The padding is the only room that page has; Studio, Tag and
         // Collection keep the same top inset for the same reason.
+        // 20dp, not the 16dp row inset: the room the first row needs is the
+        // card's own overhang (the 12dp glow plus the 1% of its height focus
+        // grows it by on each side), and 16dp only covers a card to 400dp. A
+        // tournament card carrying a long leaderboard is past that, which is
+        // why its top ring was still cut in the first row only.
         assertTrue(
             "and it keeps the ring's room ABOVE the first card too, since no scroll can buy it",
-            flat.contains("contentPadding = PaddingValues( top = KBFocusRowInset,")
+            flat.contains("contentPadding = PaddingValues( top = 20.dp,")
         )
     }
 
@@ -753,27 +758,199 @@ class SportsHubLayoutContractTest {
         )
     }
 
+    // ── The fallback, the first row, the status row, the picker ─────
+
+    @Test
+    fun `the D-pad fallback never scrolls a card it has already landed`() {
+        assertFalse(
+            "on a games-grid card the spec has already landed, a press is not a scroll: the " +
+                "fallback's page step is what clips a too-tall last card's top ring",
+            fallbackScrollAllowed(targetIsGamesGrid = true, gridHasFocus = true)
+        )
+        assertTrue(
+            "a standings column keeps its fallback",
+            fallbackScrollAllowed(targetIsGamesGrid = false, gridHasFocus = true)
+        )
+        assertTrue(
+            "and a grid with nothing focused in it is the case the fallback is for",
+            fallbackScrollAllowed(targetIsGamesGrid = true, gridHasFocus = false)
+        )
+        assertTrue(
+            "as is a press with neither",
+            fallbackScrollAllowed(targetIsGamesGrid = false, gridHasFocus = false)
+        )
+    }
+
+    @Test
+    fun `the grid reports its focus up, and a league switch clears it`() {
+        assertEquals(
+            "each of the three league bodies reports its grid's focus to the screen",
+            3,
+            Regex("onGridFocusChanged = \\{ gamesGridHasFocus = it \\}").findAll(source()).count()
+        )
+        assertTrue(
+            "from the grid's own focus observer, the way a standings column reports itself",
+            flat.contains("onGridFocusChanged(it.hasFocus)")
+        )
+        assertTrue(
+            "and the fallback asks the pure rule before it scrolls: the target is the games " +
+                "grid exactly when no standings column is riding the fallback",
+            flat.contains(
+                "if ( !fallbackScrollAllowed( targetIsGamesGrid = " +
+                    "standingsColumnState.value == null, gridHasFocus = gamesGridHasFocus ) ) { false }"
+            )
+        )
+        assertTrue(
+            "the flag is cleared on a league or view change, like the standings columns: a stale " +
+                "true would gate the fallback on a grid that is no longer on screen, i.e. a dead " +
+                "DOWN at the bottom of a one-column table",
+            flat.contains("standingsColumnState.value = null gamesGridHasFocus = false")
+        )
+    }
+
+    @Test
+    fun `the first row's ring room is 20dp in both card lists, and the landing's margin is untouched`() {
+        val src = source()
+        assertEquals(
+            "the grid and the standings list both keep 20dp above their first row",
+            2,
+            Regex(
+                "contentPadding = PaddingValues\\(\\s*top = 20\\.dp,\\s*" +
+                    "bottom = KBFocusRowInset \\+ 8\\.dp\\s*\\)"
+            ).findAll(src).count()
+        )
+        assertEquals(
+            "and the spec's own margin is still the row inset, at all four sites: widening it " +
+                "would move every landing in the hub",
+            4,
+            Regex("insetPx = with\\([A-Za-z]+\\) \\{ KBFocusRowInset\\.toPx\\(\\) \\}")
+                .findAll(src).count()
+        )
+    }
+
+    @Test
+    fun `a status that outgrows its row ellipsizes instead of colliding with the chips`() {
+        assertTrue(
+            "the game card's status side takes the leftover width and no more, so the " +
+                "unweighted note and broadcast chips are measured first and the status gives way",
+            flat.contains(
+                "GameStatusLine( game = game, livePulse = livePulse, " +
+                    "modifier = Modifier.weight(1f, fill = false) )"
+            )
+        )
+        val statusLine = slice("private fun GameStatusLine(", "private fun rememberLivePulse(")
+        assertEquals(
+            "all three of its branches (live, upcoming, final) are a single line",
+            3,
+            Regex("maxLines = 1").findAll(statusLine).count()
+        )
+        assertEquals(
+            "each with the ellipsis that makes the overflow readable",
+            3,
+            Regex("overflow = TextOverflow\\.Ellipsis").findAll(statusLine).count()
+        )
+
+        assertTrue(
+            "the tournament card's status side takes the leftover width the same way",
+            slice("private fun TournamentCard(", "private fun Leaderboard(")
+                .contains("modifier = Modifier.weight(1f, fill = false),")
+        )
+        assertTrue(
+            "and its own status text is one ellipsized line",
+            flat.contains(
+                "text = SportsDetailRules.statusLine(event), style = " +
+                    "MaterialTheme.typography.bodySmall, color = " +
+                    "if (event.state == GameState.LIVE) KBDanger else KBTextHi, maxLines = 1"
+            )
+        )
+    }
+
+    /**
+     * The container census.
+     *
+     * Counting spec CONSTRUCTIONS cannot see a scroll container written without
+     * one, which is exactly what the league picker was: a Column of the hub's
+     * own KBCard rows, scrolled under the default landing, invisible to the
+     * test below because no fourth construction existed. So the containers are
+     * walked here, and a new one has to either install the landing or join the
+     * two chip rows - it cannot arrive silently.
+     */
+    @Test
+    fun `every scroll container is landed, and only the two chip rows go without`() {
+        val containers = listOf(
+            "LazyVerticalGrid(",
+            "LazyColumn(",
+            "LazyRow(",
+            "verticalScroll(",
+            "horizontalScroll("
+        )
+        val funDecl = Regex("""\bfun\s+(?:[A-Za-z0-9_.]+\.)?([A-Za-z0-9_]+)\s*\(""")
+        val lines = source().lines()
+        // Function name → whether the spec provider is in force where its
+        // container is written.
+        val where = sortedMapOf<String, Boolean>()
+        var enclosing = "?"
+        var from = 0
+        lines.forEachIndexed { index, line ->
+            funDecl.find(line)?.let {
+                enclosing = it.groupValues[1]
+                from = index
+            }
+            if (containers.any { token -> line.contains(token) }) {
+                where[enclosing] = lines.subList(from, index + 1)
+                    .any { it.contains("LocalBringIntoViewSpec provides") }
+            }
+        }
+
+        assertEquals(
+            "the hub scrolls in six places: the games grid, the standings list, the sheets' " +
+                "bodies, the league picker, the league tabs and the conference chips",
+            listOf(
+                "HubGrid",
+                "HubList",
+                "LeagueTabRow",
+                "LeagueTogglesPanel",
+                "SheetScrollBody",
+                "StandingsConferenceFilter"
+            ),
+            where.keys.toList()
+        )
+
+        // The two deliberate exceptions: they scroll CHIPS, not cards, and the
+        // tab row's landing is its own KBFocusChipInset padding solution - out
+        // of scope here for the same reason it is out of the spec.
+        listOf("LeagueTabRow", "StandingsConferenceFilter").forEach { chips ->
+            assertEquals("$chips is a chip row, so it installs no card landing", false, where[chips])
+        }
+        (where.keys - setOf("LeagueTabRow", "StandingsConferenceFilter")).forEach { cards ->
+            assertEquals("$cards scrolls focusable cards, so it installs the landing", true, where[cards])
+        }
+    }
+
     @Test
     fun `every scroll body in the hub installs the drawn-rect spec, and no other one exists`() {
-        // Three containers draw focusable KBCards under a clip: the games grid,
-        // the standings list and the detail sheets' body. Each hands its scroll
-        // the same spec, at the row scale its cards actually use - and a fourth
-        // construction somewhere would be a container measuring a rect the
-        // viewer never sees.
+        // Four containers draw focusable KBCards under a clip: the games grid,
+        // the standings list, the detail sheets' body and the league picker.
+        // Each hands its scroll the same spec, at the row scale its cards
+        // actually use - and a FIFTH construction somewhere would be a
+        // container measuring a rect the viewer never sees. (That count is the
+        // half this test can see; the census below is the half that catches a
+        // container with no construction at all.)
         val installedIn = source().lineSequence()
             .filter { it.contains("SportsCardBringIntoViewSpec(") }
             // The class's own declaration line, not a construction.
             .filterNot { it.contains("internal class") }
             .count()
         assertEquals(
-            "the grid, the standings list and the sheet body, and nothing else",
-            3,
+            "the grid, the standings list, the sheet body and the league picker - and nothing else",
+            4,
             installedIn
         )
         listOf(
             "private fun HubList(" to "private fun HubGrid(",
             "private fun HubGrid(" to "internal class SportsCardBringIntoViewSpec(",
-            "private fun ColumnScope.SheetScrollBody(" to "Hand this stop's D-pad Down"
+            "private fun ColumnScope.SheetScrollBody(" to "Hand this stop's D-pad Down",
+            "private fun LeagueTogglesPanel(" to "private fun LeagueToggleRow("
         ).forEach { (start, end) ->
             val body = slice(start, end)
             assertTrue(
