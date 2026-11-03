@@ -19,6 +19,7 @@ import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
+import com.kennyb1201.kbstream.data.reporting.ProcessExitRecord
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
@@ -121,23 +122,38 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // whose subject cannot be reconstructed later.
             startupStep("startup.playbackDeath", "app_create_playback_death") {
                 PlaybackDeathMarker.consume(applicationContext)?.let { death ->
-                    if (death.wasOnScreen) {
-                        CrashReporter.recordNonFatal(
-                            PlaybackDeathMarker.DeathReport(death.sentence()),
+                    // The marker proves the session never finished; only the
+                    // platform knows why the process ended, and the answer
+                    // decides whether this is a death at all (see
+                    // ProcessExitRecord). Read before the branch: an app the
+                    // installer replaced mid-session leaves the same marker a
+                    // native abort does.
+                    val exit = ProcessExitRecord.previous(applicationContext)
+                    when {
+                        exit?.deliberate == true -> CrashReporter.recordEvent(
+                            // Force-stopped, updated, or switched off on purpose:
+                            // worth a line in the diagnostics export (it explains
+                            // a session that stopped mid-episode) and nothing in
+                            // the crash feed.
+                            "playback_process_death_deliberate",
+                            death.sentence(exit)
+                        )
+                        death.wasOnScreen -> CrashReporter.recordNonFatal(
+                            PlaybackDeathMarker.DeathReport(death.sentence(exit)),
                             mapOf(
                                 "source" to "playback_process_death",
                                 "engine" to death.engine,
-                                "stage" to death.stage
+                                "stage" to death.stage,
+                                "process_exit" to (exit?.label ?: "unknown")
                             )
                         )
-                    } else {
-                        // Backgrounded: the system reclaiming a paused player is
-                        // ordinary - the external engine is background by design
-                        // for the whole film - so it belongs in the diagnostics
-                        // export, not in the crash feed.
-                        CrashReporter.recordEvent(
+                        else -> CrashReporter.recordEvent(
+                            // Backgrounded: the system reclaiming a paused player
+                            // is ordinary - the external engine is background by
+                            // design for the whole film - so it belongs in the
+                            // diagnostics export, not in the crash feed.
                             "playback_process_death_background",
-                            death.sentence()
+                            death.sentence(exit)
                         )
                     }
                 }

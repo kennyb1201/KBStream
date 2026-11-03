@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.tmdb
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -385,6 +386,144 @@ class RecommendationBlendTest {
             TasteSignals.Snapshot(liked = TasteSignals.keysFor("movie", listOf("tmdb:603"), "Fight Club", 1999))
                 .isDisliked("movie", "Fight Club", 1999, 603)
         )
+    }
+
+    // ── the post-gate backfill (BYW, field 2026-11-01) ───────────────────
+
+    /** [size] candidates in ranked order: id 1 is the top of the list. */
+    private fun ranked(size: Int) = (1..size).map {
+        candidate(it, setOf(BlendTier.RECOMMENDATIONS), order = it)
+    }
+
+    private fun List<BlendCandidate>.ids() = map { it.pick.tmdbId }
+
+    /**
+     * The field case, as arithmetic: the walk hands the ceiling 16 survivors and
+     * certification keeps four of them, which is what a documentary seed on a
+     * strict ceiling does. Before this, selection saw those four and the row
+     * stopped - the panel showed four posters on a line built for eight.
+     */
+    @Test
+    fun `a pool the gates cut short is refilled from the candidates the walk never reached`() =
+        runBlocking {
+            val examined = ArrayList<Int>()
+            val batches = ArrayList<Int>()
+
+            val pool = blendWalkWithBackfill(
+                ranked = ranked(40),
+                walkTarget = BYW_KIDS_CERT_POOL,
+                pickCount = BYW_PICK_COUNT,
+                survive = { examined += it.pick.tmdbId; true },
+                // Four survivors per batch: the gate, not the walk, is what is
+                // starving the row.
+                gate = { batch -> batches += batch.size; batch.take(4) }
+            )
+
+            assertEquals(
+                "the row fills, and only from candidates the first walk never looked at",
+                listOf(1, 2, 3, 4, 17, 18, 19, 20),
+                pool.ids()
+            )
+            assertEquals(
+                "the walked pool keeps ranked order: the backfill appends behind it",
+                pool.ids().sorted(),
+                pool.ids()
+            )
+            assertEquals(
+                "the first walk takes twice the row, the resumed walk takes the same",
+                listOf(16, 16),
+                batches
+            )
+            assertEquals(
+                "and it examines exactly the two walks, nothing twice",
+                (1..32).toList(),
+                examined
+            )
+        }
+
+    @Test
+    fun `the resumed walk stops at the cap instead of scanning the list`() = runBlocking {
+        val examined = ArrayList<Int>()
+
+        val pool = blendWalkWithBackfill(
+            ranked = ranked(40),
+            walkTarget = BYW_KIDS_CERT_POOL,
+            pickCount = BYW_PICK_COUNT,
+            survive = { examined += it.pick.tmdbId; true },
+            // Nothing certifies at all: the row cannot fill, and the cap is what
+            // has to stop the walk - of 40 ranked candidates, 32 are examined.
+            gate = { emptyList() }
+        )
+
+        assertTrue("a pool that cannot be filled stays empty, never padded", pool.isEmpty())
+        assertEquals(
+            "sixteen walked plus at most sixteen resumed: the resolve bound is the cap's",
+            32,
+            examined.size
+        )
+    }
+
+    @Test
+    fun `a watched drop that empties the walk is backfilled under the same rule`() = runBlocking {
+        val watched = (1..12).toSet()
+        val pool = blendWalkWithBackfill(
+            ranked = ranked(40),
+            walkTarget = BYW_KIDS_CERT_POOL,
+            pickCount = BYW_PICK_COUNT,
+            survive = { it.pick.tmdbId !in watched },
+            gate = { it }
+        )
+
+        assertEquals(
+            "the first twelve are gone; the row opens at the first unwatched title",
+            13,
+            pool.first().pick.tmdbId
+        )
+        assertFalse(
+            "not one watched title came back through the backfill",
+            pool.ids().any { it in watched }
+        )
+    }
+
+    @Test
+    fun `an exhausted list is a short row, not a longer search`() = runBlocking {
+        val pool = blendWalkWithBackfill(
+            ranked = ranked(10),
+            walkTarget = BYW_KIDS_CERT_POOL,
+            pickCount = BYW_PICK_COUNT,
+            survive = { it.pick.tmdbId % 2 == 0 },
+            gate = { it }
+        )
+
+        assertEquals(
+            "five candidates exist, so the row is five - pool exhaustion is the answer",
+            listOf(2, 4, 6, 8, 10),
+            pool.ids()
+        )
+    }
+
+    /**
+     * More Like This: 30 picks, a 60-candidate walk, and demoted titles still
+     * fill it - so its gated pool already reaches its pick count. The backfill
+     * must therefore cost it nothing: no extra candidate examined, no extra IMDB
+     * resolve spent. A DEMOTE regression is a failure of this spec.
+     */
+    @Test
+    fun `a surface whose pool already fills the row examines nothing extra`() = runBlocking {
+        val examined = ArrayList<Int>()
+        var gateCalls = 0
+
+        val pool = blendWalkWithBackfill(
+            ranked = ranked(200),
+            walkTarget = 60,
+            pickCount = 30,
+            survive = { examined += it.pick.tmdbId; true },
+            gate = { gateCalls++; it }
+        )
+
+        assertEquals("sixty survivors, cut to thirty by selection", 60, pool.size)
+        assertEquals("the walk stops where it always did", 60, examined.size)
+        assertEquals("one gate, one batch - exactly as before this spec", 1, gateCalls)
     }
 
     // ── the multi-seed merge (Home's Top Picks row) ──────────────────────

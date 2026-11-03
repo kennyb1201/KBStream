@@ -586,7 +586,12 @@ fun StudioScreen(
                         imdbId,
                         menuMediaType
                     ) in watchedKeys
-                } == true
+                // Both flavors the badge reads: a title past the resolution
+                // cap badges off its own `tmdb:` key, so the toggle has to
+                // find that one too instead of offering to mark a title the
+                // poster already shows as watched.
+                } == true ||
+                    viewModel.watchedKey("tmdb:$menuTmdbId", menuMediaType) in watchedKeys
 
             PosterContextMenu(
                 title = studioItem.item.title

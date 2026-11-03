@@ -92,6 +92,29 @@ internal class DetailHandBackDriver {
     var pending by mutableStateOf<DetailHandBack?>(null)
         private set
 
+    /**
+     * The label of the last hand-back that ran out of budget, or null.
+     *
+     * The page watches this. An abandoned delivery leaves the focus wherever
+     * the framework's own fallback put it, and on this screen that fallback is
+     * the restart-at-top every hand-back exists to avoid - so the page answers
+     * it by landing the focus on its own controls explicitly (see the effect in
+     * DetailScreen). Kept as a label rather than a boolean so the log line names
+     * the surface whose return is broken.
+     */
+    var abandoned by mutableStateOf<String?>(null)
+        private set
+
+    /** Records that [label]'s hand-back was abandoned. */
+    fun recordAbandoned(label: String) {
+        abandoned = label
+    }
+
+    /** Clears the abandon record once the page has landed for it. */
+    fun clearedAbandoned() {
+        abandoned = null
+    }
+
     operator fun invoke(
         label: String,
         captured: FocusRequester?,
@@ -124,7 +147,12 @@ internal fun rememberDetailHandBack(): DetailHandBackDriver {
     val pending = driver.pending
     LaunchedEffect(pending) {
         val handBack = pending ?: return@LaunchedEffect
-        deliverDetailHandBack(handBack)
+        if (!deliverDetailHandBack(handBack)) {
+            // Out of budget: the target never came back. The page lands for it
+            // (see the driver's `abandoned`) rather than leaving the framework
+            // to restart the focus at the top of the screen.
+            driver.recordAbandoned(handBack.label)
+        }
         driver.consumed(handBack)
     }
     return driver

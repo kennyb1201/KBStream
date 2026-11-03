@@ -66,6 +66,29 @@ class FinishedTitleKeysTest {
         )
     }
 
+    /**
+     * The anime spellings, which is where this mapping was the odd one out: every
+     * other surface in the app normalizes `anime` / `anime.series` to `series`
+     * and only `anime.movie` to a film. A panel that filed an anime show as a
+     * film keyed the taste store `movie::tmdb:<n>` while Detail wrote
+     * `series::tmdb:<n>`, so its thumbs opened unlit on a title the viewer had
+     * already liked (field report).
+     */
+    @Test
+    fun `an anime catalog's own spellings land where the rest of the app puts them`() {
+        assertEquals("series", bywMediaType("anime"))
+        assertEquals("series", bywMediaType("ANIME"))
+        assertEquals("series", bywMediaType(" anime "))
+        assertEquals("series", bywMediaType("anime.series"))
+        assertEquals("movie", bywMediaType("anime.movie"))
+
+        assertEquals(
+            "an anime show must produce the series key Detail's thumbs write",
+            listOf("series::tmdb:16498"),
+            finishedTitleKeys(mediaType = bywMediaType("anime"), tmdbId = 16498, imdbId = null)
+        )
+    }
+
     @Test
     fun `the store receives id flavors, never a type-prefixed key`() {
         val finished = FinishedTitle(

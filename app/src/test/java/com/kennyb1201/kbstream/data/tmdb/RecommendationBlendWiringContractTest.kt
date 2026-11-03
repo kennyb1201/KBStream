@@ -81,16 +81,34 @@ class RecommendationBlendWiringContractTest {
     }
 
     @Test
-    fun `similar is fetched only when the other tiers leave the row short`() {
+    fun `similar is fetched once, and only when the row is short`() {
         val blend = source(BLEND)
-        val gate = blend.indexOf("if (candidates.size < params.pickCount) {")
-        val fetch = blend.indexOf("repo.getSimilar(")
+        val fetch = blend.indexOf("suspend fun fetchSimilar()")
+        val preGate = blend.indexOf(
+            "val similarFilledBeforeGate = candidates.size < params.pickCount"
+        )
+        val postGate = blend.indexOf(
+            "if (gated.size < params.pickCount && !similarFilledBeforeGate) {"
+        )
 
-        assertTrue("the shortfall gate is missing", gate >= 0)
         assertTrue("the fill fetch is missing", fetch >= 0)
-        assertTrue("`/similar` must sit inside the shortfall branch", gate < fetch)
+        assertTrue("the pre-gate shortfall test is missing", preGate >= 0)
         assertTrue(
-            "and it must be the similarity endpoint, at one call site",
+            "the post-gate shortfall fill is missing - that is the backfill's answer " +
+                "to a pool the ceiling emptied",
+            postGate >= 0
+        )
+        assertTrue("the fetch must exist before the branch that calls it", fetch < preGate)
+        assertTrue(
+            "the late fill must sit after the gated pool exists",
+            preGate < postGate
+        )
+        assertTrue(
+            "a fill that already ran - and found nothing - is never run twice",
+            blend.contains("!similarFilledBeforeGate")
+        )
+        assertTrue(
+            "and it must be the similarity endpoint, at one fetch site",
             1 == blend.split("repo.getSimilar(").size - 1
         )
         val api = source(API)
@@ -168,8 +186,8 @@ class RecommendationBlendWiringContractTest {
     @Test
     fun `the watched rule runs before the row is cut`() {
         val blend = source(BLEND)
-        val walk = blend.indexOf("for (candidate in ranked) {")
-        val select = blend.indexOf("blendSelect(gated, params.pickCount)")
+        val walk = blend.indexOf("val pool = blendWalkWithBackfill(")
+        val select = blend.indexOf("blendSelect(finalPool, params.pickCount)")
 
         assertTrue("the ranked walk is missing", walk >= 0)
         assertTrue("the selection is missing", select >= 0)
@@ -184,6 +202,50 @@ class RecommendationBlendWiringContractTest {
         assertTrue(
             "the TMDB flavor is tested first, with no lookup",
             blend.contains("localHistory.contains(\"tmdb:\$candidateTmdbId\")")
+        )
+    }
+
+    /**
+     * The BYW backfill spec (field 2026-11-01: a kids row stopped at four):
+     * when the ceiling empties the walked pool, the blend walks further - under
+     * the same gates, never past their answer. These pins exist because "no
+     * gate is relaxed for a backfill candidate" is only true if the backfill
+     * cannot reach selection by another path.
+     */
+    @Test
+    fun `a short gated pool is refilled, never by relaxing a gate`() {
+        val blend = source(BLEND)
+
+        assertTrue(
+            "the first walk and the resumed one are one function, so the gates " +
+                "(and the watched rule the walk injects) cannot drift apart",
+            blend.contains("internal suspend fun blendWalkWithBackfill(")
+        )
+        assertTrue(
+            "both walks hand the same survive closure",
+            2 == blend.split("survive = { candidate -> survive(candidate) }")
+                .size - 1
+        )
+        assertTrue(
+            "the BACKFILLED candidates reach the pool through the same gate as the walked ones",
+            blend.contains("gated = gated + blendWalkWithBackfill(")
+        )
+        assertTrue(
+            "the resumed walk is bounded at twice the row, not the whole list",
+            blend.contains("val end = minOf(ranked.size, index + pickCount * 2)")
+        )
+        assertTrue(
+            "the per-tier cap still cuts the FINAL pool",
+            blend.contains("blendSelect(finalPool, params.pickCount)")
+        )
+        assertTrue(
+            "one ceiling, one call site outside its own declaration - the backfill " +
+                "cannot certify itself",
+            2 == blend.split("blendKidsGate(").size - 1
+        )
+        assertTrue(
+            "and one resolve site: the resumed walk resolves through the walked rule",
+            1 == blend.split("repo.resolveImdbId(").size - 1
         )
     }
 

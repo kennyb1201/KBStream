@@ -599,6 +599,25 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             watchedStatusRepository.explicitWatchedOverrideKeys()
         }.getOrDefault(emptySet())
 
+    /**
+     * Every poster this page can badge, in draw order: the collection's parts
+     * and the More Like This rail's current list.
+     *
+     * Read twice per refresh pass - once as the source, once before publishing -
+     * because the rail is replaced wholesale after the page is up (the blend
+     * publishes its own picks), and a set computed from the previous list must
+     * not repaint the new one.
+     */
+    private fun posterWatchItems(normalizedType: String): List<PosterWatchItem> =
+        buildList {
+            _collection.value?.parts.orEmpty().forEach { part ->
+                add(PosterWatchItem(part.id, "movie", part.title))
+            }
+            _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
+                add(PosterWatchItem(rec.id, normalizedType, rec.title ?: rec.name))
+            }
+        }.distinct()
+
     private fun refreshPosterWatchedStatus(type: String) {
         viewModelScope.launch {
             try {
@@ -608,14 +627,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // filter below is keyed by title: a poster's watched badge
                 // must obey the same sibling-profile rule the Home rails now
                 // do (see [titleOwnedByAnotherProfile]).
-                val rawItems = buildList {
-                    _collection.value?.parts.orEmpty().forEach { part ->
-                        add(PosterWatchItem(part.id, "movie", part.title))
-                    }
-                    _tmdbDetail.value?.recommendations?.results.orEmpty().forEach { rec ->
-                        add(PosterWatchItem(rec.id, normalizedType, rec.title ?: rec.name))
-                    }
-                }.distinct()
+                val rawItems = posterWatchItems(normalizedType)
 
                 val owners = TitleProfileOwnership.snapshot(app)
                 val activeProfileId = ProfileManager.activeProfile.value?.id
@@ -720,6 +732,17 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                         )
                     }
                     .toSet()
+
+                // A rail that changed while this pass was resolving owns the
+                // badges now: the recommendation blend swaps in its own picks
+                // after the page is up, and publishing this pass's set would
+                // repaint that newer rail from the older ids - taking the
+                // checkmark and the eye back off the picks it never saw. The
+                // newer list runs its own refresh (see the blend publish).
+                if (posterWatchItems(normalizedType) != rawItems) {
+                    Log.i("KBStream", "poster watched refresh superseded")
+                    return@launch
+                }
 
                 _watchedKeys.value = watchedKeys
 
@@ -1897,6 +1920,14 @@ for ((metaAddon, response, error) in probeResults) {
                                 current.recommendations ?: TmdbRecommendations()
                                 ).copy(results = items)
                         )
+                        // The rail's badge set was built against the list this
+                        // just replaced, so the blend's own picks - backfilled
+                        // similar titles included - came up with neither the
+                        // checkmark nor the eye. Re-run the refresh against the
+                        // list now on screen; it is the cached, no-extra-
+                        // network pass, and it re-resolves only what the first
+                        // one already asked for.
+                        refreshPosterWatchedStatus(normalizedType)
                         Log.e(
                             "KBStream",
                             "recs blend type=$normalizedType id=${blendSeed.id} " +

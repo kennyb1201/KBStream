@@ -326,13 +326,30 @@ fun SportsHubScreen(
     // here (see StandingsBody/StandingsColumn) and the fallback rides on it,
     // falling back to [listState] for the one-column body and the games list.
     val standingsColumnState = remember { mutableStateOf<LazyGridState?>(null) }
+    // Whether the D-pad is on a CARD in the games grid, reported upward from
+    // LeagueBody's own grid exactly as a standings column reports itself
+    // through [standingsColumnState]. It exists for the scroll fallback below:
+    // a focused card has already been landed by the spec, so the fallback must
+    // not scroll it out of that landing (see [fallbackScrollAllowed]).
+    //
+    // A one-column standings table composes that same [listState] with no grid
+    // above it, so this flag stays false there and its fallback is untouched -
+    // which is why the gate can key on the target AND this flag rather than on
+    // the target alone.
+    var gamesGridHasFocus by remember { mutableStateOf(false) }
     // Cleared when the league changes: the columns report themselves through
     // onFocusChanged, which is not guaranteed to fire as one is disposed, so a
     // switch could leave the outgoing league's column object held here - and the
     // scroll fallback then rode a grid that is no longer on screen (a no-op
     // press at a column edge rather than a scroll).
+    //
+    // The grid's focus flag is cleared beside it, and for the same reason: the
+    // games grid is disposed when the view switches to standings, and a stale
+    // `true` here would gate the fallback on a grid that is no longer on screen
+    // - a dead DOWN at the bottom of the table.
     LaunchedEffect(selectedPath, leagueView) {
         standingsColumnState.value = null
+        gamesGridHasFocus = false
     }
 
     // A card THAT CANNOT BE PLAYED has no press to give, so a run of them is a
@@ -350,25 +367,47 @@ fun SportsHubScreen(
     // does the press become a scroll.
     val scrollByPage: (FocusDirection) -> Boolean = { direction ->
         val scrollTarget = standingsColumnState.value ?: listState
-        val info = scrollTarget.layoutInfo
-        val viewport = info.viewportSize.height -
-            info.beforeContentPadding - info.afterContentPadding
-        val canScroll = if (direction == FocusDirection.Down) {
-            scrollTarget.canScrollForward
-        } else {
-            scrollTarget.canScrollBackward
-        }
-        if (!canScroll || viewport <= 0) {
+        // A press that the platform could not turn into a focus move is the
+        // only press that becomes a scroll - but not when the viewer is on a
+        // CARD in the games grid: the spec has already landed that card, and
+        // scrolling a landed card is the one thing this fallback cannot do
+        // safely. For a too-tall last card the max-scroll clamp is not enough
+        // (the settled drawn top goes negative, i.e. the top ring is cut off a
+        // card that keeps focus), and there is no clean re-land to make after
+        // it: re-requesting focus on a node that already has it is a no-op in
+        // Compose. DOWN at the end of a list doing nothing is the standard TV
+        // answer, and it is strictly better than that clip.
+        //
+        // The standings path is never gated - its fallback rides a column
+        // state, and the one-column table reports no grid focus at all.
+        if (
+            !fallbackScrollAllowed(
+                targetIsGamesGrid = standingsColumnState.value == null,
+                gridHasFocus = gamesGridHasFocus
+            )
+        ) {
             false
         } else {
-            val row = info.visibleItemsInfo.lastOrNull()?.size?.height ?: viewport
-            val step = sportsScrollStep(rowHeight = row, viewportHeight = viewport)
-            scrollScope.launch {
-                scrollTarget.animateScrollBy(
-                    if (direction == FocusDirection.Down) step.toFloat() else -step.toFloat()
-                )
+            val info = scrollTarget.layoutInfo
+            val viewport = info.viewportSize.height -
+                info.beforeContentPadding - info.afterContentPadding
+            val canScroll = if (direction == FocusDirection.Down) {
+                scrollTarget.canScrollForward
+            } else {
+                scrollTarget.canScrollBackward
             }
-            true
+            if (!canScroll || viewport <= 0) {
+                false
+            } else {
+                val row = info.visibleItemsInfo.lastOrNull()?.size?.height ?: viewport
+                val step = sportsScrollStep(rowHeight = row, viewportHeight = viewport)
+                scrollScope.launch {
+                    scrollTarget.animateScrollBy(
+                        if (direction == FocusDirection.Down) step.toFloat() else -step.toFloat()
+                    )
+                }
+                true
+            }
         }
     }
 
@@ -723,6 +762,7 @@ fun SportsHubScreen(
                         matches = matches,
                         favoriteKeys = favoriteKeys,
                         listState = listState,
+                        onGridFocusChanged = { gamesGridHasFocus = it },
                         lineupMissing = lineupMissing,
                         matchingDone = matchingDone,
                         onOpenDetail = { detailGame = it },
@@ -797,6 +837,7 @@ fun SportsHubScreen(
                         matches = matches,
                         favoriteKeys = favoriteKeys,
                         listState = listState,
+                        onGridFocusChanged = { gamesGridHasFocus = it },
                         onOpenDetail = { detailGame = it },
                         onOpenTournamentDetail = { detailTournament = it },
                         onPlayChannels = onPlayChannels,
@@ -852,6 +893,7 @@ fun SportsHubScreen(
                     matches = matches,
                     favoriteKeys = favoriteKeys,
                     listState = listState,
+                    onGridFocusChanged = { gamesGridHasFocus = it },
                     lineupMissing = lineupMissing,
                     matchingDone = matchingDone,
                     onOpenDetail = { detailGame = it },
@@ -1205,8 +1247,20 @@ private fun HubList(
             // card was sliced flat along the top edge (reported: "the focus
             // ring doesn't show fully"). Studio, Tag and Collection keep the
             // same top slack for the same reason.
+            //
+            // 20dp, not the 16dp row inset, because the room that slack has to
+            // cover is not the inset: at scroll 0 the first card's settled
+            // DRAWN top is `padding - overhang`, where the overhang is the 12dp
+            // glow plus the focus growth (1% of the card's height on each side
+            // at KBFocusRow). 16dp covers a card to 400dp tall; a tournament
+            // card carrying a long leaderboard is past that, so its ring was
+            // still cut in the first row only. 20dp covers 800dp - every game
+            // card and a tournament card of some 35 leaderboard rows - and it
+            // moves nothing below the first row: the padding sits inside the
+            // clip, above the first item, and every other landing is the
+            // spec's, whose margin is still the 16dp row inset.
             contentPadding = PaddingValues(
-                top = KBFocusRowInset,
+                top = 20.dp,
                 bottom = KBFocusRowInset + 8.dp
             ),
             content = content
@@ -1264,16 +1318,44 @@ private fun HubGrid(
             horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp),
             // The same slack past the last card the list keeps, for the same
             // reason: the landing margin needs somewhere to land - and the same
-            // top room, because the first row has no scroll above it to buy the
-            // ring's room with (see [HubList]).
+            // 20dp of top room, because the first row has no scroll above it to
+            // buy the ring's room with (the arithmetic, and why it is 20 and not
+            // the 16dp row inset, is in [HubList]).
             contentPadding = PaddingValues(
-                top = KBFocusRowInset,
+                top = 20.dp,
                 bottom = KBFocusRowInset + 8.dp
             ),
             content = content
         )
     }
 }
+
+/**
+ * Whether the screen-level D-pad fallback (scrollByPage) may scroll: false
+ * exactly when the scroll target is the games grid AND the D-pad is already on
+ * a card in it.
+ *
+ * Those two facts together mean the press cannot be asking for a scroll at all:
+ * a focused card was landed by [SportsCardBringIntoViewSpec], and the fallback's
+ * page step is the one scroll that would move it off that landing. A too-tall
+ * last card is the case that bites - the list's max-scroll clamp leaves its
+ * drawn top above the clip, so the card keeps focus with its ring cut along the
+ * top edge - but a fitting card is landed by the same rule, and leaving it be
+ * costs nothing there either (at the end of a list, DOWN doing nothing is the
+ * standard TV answer).
+ *
+ * Nothing else is gated. The standings fallback rides a column state, so
+ * `targetIsGamesGrid` is false there; and a one-column table composes the
+ * screen's list state with no games grid above it, so `gridHasFocus` is false
+ * and its fallback behaves exactly as it always did. A press with NOTHING
+ * focused in the grid (false, false) is the case the fallback was written for
+ * and still scrolls.
+ *
+ * Pure, and separate from the press handler, so the rule can be pinned without
+ * a device or a focus tree.
+ */
+internal fun fallbackScrollAllowed(targetIsGamesGrid: Boolean, gridHasFocus: Boolean): Boolean =
+    !(targetIsGamesGrid && gridHasFocus)
 
 /**
  * Focus scrolling that keeps [KBFocusRowInset] of room between the focused card
@@ -1317,6 +1399,15 @@ private fun HubGrid(
  * clip is eating MORE of it than that, so a sub-pixel remeasurement can never
  * move a card that is already sitting, while a card flush with the edge - the
  * case the viewer reports - gets its border and glow back.
+ *
+ * The room is measured on the DRAWN card (the glow and the focus growth
+ * included), which is one thing; a card too tall to keep BOTH margins is the
+ * other, and it is where the two pages above have nothing to say. No landing
+ * exists for such a card that leaves it fully on screen, so the spec picks the
+ * edge it keeps: the LEADING one, whatever direction focus arrived from. It is
+ * the edge the ring reads on - the team row and the score sit under it - and the
+ * alternative, paying the trailing shortfall first because that is the order a
+ * fitting card needs, sliced the ring off the top of every tall card.
  */
 @OptIn(ExperimentalFoundationApi::class)
 internal class SportsCardBringIntoViewSpec(
@@ -1389,7 +1480,21 @@ internal class SportsCardBringIntoViewSpec(
         // sitting. A card off the viewport is landed exactly as it always was.
         val inside = drawnOffset >= 0f && trailingEdge <= containerSize
         val floor = if (inside) deadzone else 0f
+        // A card too tall for both margins has no landing that keeps both
+        // edges, so one of them is chosen - and it is the LEADING one, from
+        // either arrival direction. Paying the trailing shortfall first (which
+        // is right for a card that fits) put the drawn bottom on the margin and
+        // left the top under the clip: the ring was cut along the top edge of
+        // every tall card, whichever row it was in (reported 2026-11-01 on
+        // 0.9.132). The top is where the teams, the score and the ring's most
+        // visible run are; the venue and channel lines it costs are secondary.
+        // A fitting card is untouched by this and still lands on the nearest
+        // edge, because it has room for both.
+        val fits = abs(size) + 2f * overhangPx <= containerSize - 2f * margin
         return when {
+            // Too tall: the drawn top goes to the margin and the bottom runs
+            // past the viewport, which is the deliberate sacrifice.
+            !fits -> -shortOfLeading
             // Past the bottom room: scroll forward just far enough to clear it.
             shortOfTrailing > floor -> shortOfTrailing
             // Above the top one: back off by the same amount.
@@ -1416,6 +1521,16 @@ private fun LeagueBody(
     listState: LazyGridState,
     lineupMissing: Boolean,
     matchingDone: Boolean,
+    /**
+     * Reports whether the D-pad is on a card in this body's grid, for the
+     * screen's scroll fallback (see [fallbackScrollAllowed]). The standings
+     * columns report themselves the same way, through
+     * `onColumnFocusChanged`; this is the games grid's twin.
+     *
+     * Defaulted to a no-op so a caller with nothing to report - and every
+     * preview - stays a valid call site.
+     */
+    onGridFocusChanged: (Boolean) -> Unit = {},
     onOpenDetail: (SportsGame) -> Unit,
     onOpenTournamentDetail: (TournamentEvent) -> Unit,
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit,
@@ -1606,7 +1721,13 @@ private fun LeagueBody(
         columns = gameColumns,
         modifier = Modifier
             .fillMaxSize()
-            .onFocusChanged { gridHasFocus = it.hasFocus }
+            .onFocusChanged {
+                gridHasFocus = it.hasFocus
+                // The screen's fallback needs the same answer: a focused card
+                // is already landed, and the fallback must not scroll it (see
+                // fallbackScrollAllowed).
+                onGridFocusChanged(it.hasFocus)
+            }
     ) {
         if (live.isNotEmpty()) {
             item(key = "header-live", span = { GridItemSpan(maxLineSpan) }) {
@@ -1992,7 +2113,19 @@ private fun GameCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                GameStatusLine(game = game, livePulse = livePulse)
+                // The status side takes the leftover width and no more, so a
+                // long status (an UPCOMING line with the weekday, the clock and
+                // a delayed/suspended detail, plus the note and broadcast chips
+                // beside it) ellipsizes instead of being overlapped by the
+                // chips: SpaceBetween measures the unweighted chips at their
+                // full size first, then gives the weighted side what is left.
+                // A short status is unaffected - the weight only binds when the
+                // row would otherwise overflow.
+                GameStatusLine(
+                    game = game,
+                    livePulse = livePulse,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2428,9 +2561,24 @@ private fun scoreColor(game: SportsGame, team: SportsTeam): Color {
     }
 }
 
+/**
+ * The card's status line (live clock, the start time, or FINAL).
+ *
+ * Every branch is one line with an ellipsis, because the row it sits in also
+ * carries the note and broadcast chips: a status long enough to push them off
+ * the card has to give, and an ellipsis is the honest way to say so. The
+ * [modifier] is the caller's - the game card hands it the row's leftover width
+ * (`weight(1f, fill = false)`) so the line is measured against what the chips
+ * leave rather than against the whole card.
+ */
 @Composable
-private fun GameStatusLine(game: SportsGame, livePulse: State<Float>) {
+private fun GameStatusLine(
+    game: SportsGame,
+    livePulse: State<Float>,
+    modifier: Modifier = Modifier
+) {
     Row(
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -2441,7 +2589,9 @@ private fun GameStatusLine(game: SportsGame, livePulse: State<Float>) {
                     text = game.statusDetail.ifBlank { "LIVE" },
                     style = MaterialTheme.typography.labelLarge,
                     color = KBDanger,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             GameState.UPCOMING -> Text(
@@ -2449,12 +2599,16 @@ private fun GameStatusLine(game: SportsGame, livePulse: State<Float>) {
                 // respelled, so the card and the sheet can never disagree.
                 text = SportsDetailRules.statusLine(game),
                 style = MaterialTheme.typography.bodySmall,
-                color = KBTextHi
+                color = KBTextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             GameState.FINAL -> Text(
                 text = "Final",
                 style = MaterialTheme.typography.bodySmall,
-                color = KBTextLo
+                color = KBTextLo,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -2692,7 +2846,11 @@ private fun TournamentCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // The same weight the game card's status side takes: a long
+                // status gives way to the note and broadcast chips beside it
+                // instead of colliding under them.
                 Row(
+                    modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -2705,7 +2863,9 @@ private fun TournamentCard(
                         // its own sheet said "Today" for the same event.
                         text = SportsDetailRules.statusLine(event),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (event.state == GameState.LIVE) KBDanger else KBTextHi
+                        color = if (event.state == GameState.LIVE) KBDanger else KBTextHi,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Row(
@@ -4530,6 +4690,9 @@ private class LeagueRowFocus {
  * A league that is off is not fetched and has no tab: the section is absent
  * rather than empty, so turning one on is what makes it exist.
  */
+// The landing's local is an experimental foundation API, exactly as it is at
+// the hub's other three spec sites (see HubList).
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LeagueTogglesPanel(
     enabled: Set<String>,
@@ -4639,37 +4802,61 @@ private fun LeagueTogglesPanel(
             )
 
             // Whatever height is left after the heading, that line and DONE.
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // The catalog in the viewer's own order: the same list the
-                // tabs are drawn from, so what is arranged here is exactly
-                // what the hub shows, in that order.
-                val orderedLeagues = remember(order) { SportsLeagues.ordered(order) }
-                orderedLeagues.forEachIndexed { index, league ->
-                    // Keyed by path so a move carries the row's whole group -
-                    // including its focus anchors - to the new index instead of
-                    // rebinding the group at the old index to another league.
-                    key(league.path) {
-                        val leagueFocus = remember { LeagueRowFocus() }
-                        rowFocus[league.path] = leagueFocus
-                        LeagueToggleRow(
-                            league = league,
-                            checked = league.path in enabled,
-                            onToggle = { on -> onToggle(league.path, on) },
-                            canMoveUp = index > 0,
-                            canMoveDown = index < orderedLeagues.lastIndex,
-                            onMoveUp = { onMove(league.path, -1) },
-                            onMoveDown = { onMove(league.path, 1) },
-                            focusRequester = firstRow.takeIf { index == 0 }
-                                ?: leagueFocus.toggle,
-                            rowFocus = leagueFocus,
-                            onMoveFocus = { slot -> moveFocus = league.path to slot }
-                        )
+            //
+            // The hub's landing, installed here because this column draws the
+            // hub's own KBCard rows: without a spec the last toggle row was
+            // landed flush against the clip - inside the border and the glow it
+            // draws OUTSIDE its layout rectangle - so its ring was sheared off
+            // along the bottom edge. Constructed exactly as [SheetScrollBody]
+            // constructs it, because it measures the same rows: the row inset,
+            // the focus glow, and the row scale the card grows by.
+            val density = LocalDensity.current
+            val leagueListLanding = remember(density) {
+                SportsCardBringIntoViewSpec(
+                    insetPx = with(density) { KBFocusRowInset.toPx() },
+                    glowPx = with(density) { KBFocusGlow.toPx() },
+                    focusedScale = KBFocusRow
+                )
+            }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides leagueListLanding) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // The catalog in the viewer's own order: the same list the
+                    // tabs are drawn from, so what is arranged here is exactly
+                    // what the hub shows, in that order.
+                    val orderedLeagues = remember(order) { SportsLeagues.ordered(order) }
+                    orderedLeagues.forEachIndexed { index, league ->
+                        // Keyed by path so a move carries the row's whole group -
+                        // including its focus anchors - to the new index instead of
+                        // rebinding the group at the old index to another league.
+                        key(league.path) {
+                            val leagueFocus = remember { LeagueRowFocus() }
+                            rowFocus[league.path] = leagueFocus
+                            LeagueToggleRow(
+                                league = league,
+                                checked = league.path in enabled,
+                                onToggle = { on -> onToggle(league.path, on) },
+                                canMoveUp = index > 0,
+                                canMoveDown = index < orderedLeagues.lastIndex,
+                                onMoveUp = { onMove(league.path, -1) },
+                                onMoveDown = { onMove(league.path, 1) },
+                                focusRequester = firstRow.takeIf { index == 0 }
+                                    ?: leagueFocus.toggle,
+                                rowFocus = leagueFocus,
+                                onMoveFocus = { slot -> moveFocus = league.path to slot }
+                            )
+                        }
                     }
+                    // The same slack [SheetScrollBody] keeps, and for the same
+                    // reason: a row can only be brought up to the landing
+                    // margin if the list is able to scroll past it, so without
+                    // this the last toggle row stays flush with the bottom
+                    // whatever the landing asks for.
+                    Spacer(modifier = Modifier.height(KBFocusRowInset))
                 }
             }
 

@@ -82,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.android.awaitFrame
 import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -900,6 +901,11 @@ fun DetailScreen(
     val collectionRowState = rememberLazyListState()
     val mediaRowState = rememberLazyListState()
     val recsRowState = rememberLazyListState()
+    // The review rail is a chain row like every other card rail, so it needs
+    // its own scroll state for the reveal's rail-scroll step (see
+    // [railStateFor]): without one the rail could be entered by column only
+    // while the card in that column happened to be composed already.
+    val reviewsRowState = rememberLazyListState()
 
     /**
      * Where a card of the rail keyed [rowKey] sits right now: the record a
@@ -929,9 +935,52 @@ fun DetailScreen(
     }
 
     /**
+     * The horizontal scroll state of the rail named [rowKey], when the row is a
+     * single LazyRow of chips or cards.
+     *
+     * A chip rail is lazy in BOTH directions: the vertical reveal puts the rail
+     * item on screen, but the chip the press asks for can still be disposed
+     * inside it - the rail left at the far end by a RIGHT press, or by a
+     * drill-down return, whose `scrollToItem(itemIndex)` puts the returned chip
+     * at the rail's LEFT edge and disposes every chip before it. A disposed
+     * chip's requester answers false forever, so the column has to be scrolled
+     * into composition before the ask (see [revealAndFocusChipColumn]).
+     *
+     * The same mapping the drill-down return uses for its own rail; kept here so
+     * a rail added to one is visible to the other.
+     *
+     * EVERY row [focusRow] can aim at is mapped here, the review rail included:
+     * the reveal's rail-scroll step reads this mapping, so a row missing from it
+     * could only be entered while the card in the press's column happened to be
+     * composed already. A row that is not a single list item (the header above
+     * the list, the episode section that is two rails at once) has no state of
+     * its own and answers null; the reveal then asks without a rail scroll.
+     */
+    fun railStateFor(rowKey: String): LazyListState? = when (rowKey) {
+        GENRE_ROW_KEY -> genreRowState
+        KEYWORDS_ROW_KEY -> keywordsRowState
+        PEOPLE_ROW_KEY -> peopleRowState
+        NETWORK_ROW_KEY -> networkRowState
+        PRODUCTION_ROW_KEY -> productionRowState
+        COLLECTION_ROW_KEY -> collectionRowState
+        RECS_ROW_KEY -> recsRowState
+        REVIEWS_ROW_KEY -> reviewsRowState
+        MEDIA_ROW_KEY -> mediaRowState
+        else -> null
+    }
+
+    /**
      * Files a chip's [requester] under its COLUMN in the rail named [rowKey]
      * (see [focusChipColumn]). Called as the rail composes, so an index the
      * rail has not reached yet - or one a separator takes - stays null.
+     *
+     * The registry has a LIFECYCLE now. A drill-down ("More Like This") reuses
+     * this composition for a narrower title while the slots filed from the wider
+     * one stay behind, so a registration TRIMS the trailing slots the rail no
+     * longer has and the title-change effect clears the map outright. The
+     * ask-time clamp ([focusChipColumn]) is what guarantees a press can never
+     * aim past the rail; this is the hygiene that keeps the two counts from
+     * drifting apart in the first place.
      */
     fun registerChipColumn(rowKey: String, column: Int, requester: FocusRequester) {
         if (column < 0) {
@@ -939,6 +988,16 @@ fun DetailScreen(
         }
 
         val slots = chipColumnRequesters.getOrPut(rowKey) { mutableListOf() }
+        // The rail's own item count, when it has been laid out: a trailing slot
+        // past it was filed by the title this composition used to show. Best
+        // effort only - a rail that has not measured yet answers 0 and nothing
+        // is trimmed.
+        val railCount = railStateFor(rowKey)?.layoutInfo?.totalItemsCount ?: 0
+        if (railCount > 0) {
+            while (slots.size > railCount) {
+                slots.removeAt(slots.lastIndex)
+            }
+        }
         while (slots.size <= column) {
             slots.add(null)
         }
@@ -976,36 +1035,19 @@ fun DetailScreen(
     fun focusChipColumn(rowKey: String, fromColumn: Int): Boolean {
         val slots =
             chipColumnRequesters[rowKey]?.takeIf { it.isNotEmpty() } ?: return false
-        val column = DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
-        val requester = slots[column] ?: return false
+        // Clamped by what the RAIL has, not by the slots filed from it. The two
+        // are the same number while one title is being read, and stop being the
+        // same the moment a drill-down reuses this composition for a narrower
+        // one: the reveal's rail scroll already clamps by the true count, so a
+        // clamp here on the stale slot count was a second answer to the same
+        // question - one that could stop short of a column the other had
+        // already scrolled to. The rail's count wins; the slots' length is only
+        // the fallback for a rail that has not measured yet.
+        val railCount = railStateFor(rowKey)?.layoutInfo?.totalItemsCount ?: 0
+        val count = if (railCount > 0) railCount else slots.size
+        val column = DetailChipColumns.columnFor(fromColumn, count) ?: return false
+        val requester = slots.getOrNull(column) ?: return false
         return runCatching { requester.requestFocus() }.getOrDefault(false)
-    }
-
-    /**
-     * The horizontal scroll state of the rail named [rowKey], when the row is a
-     * single LazyRow of chips or cards.
-     *
-     * A chip rail is lazy in BOTH directions: the vertical reveal puts the rail
-     * item on screen, but the chip the press asks for can still be disposed
-     * inside it - the rail left at the far end by a RIGHT press, or by a
-     * drill-down return, whose `scrollToItem(itemIndex)` puts the returned chip
-     * at the rail's LEFT edge and disposes every chip before it. A disposed
-     * chip's requester answers false forever, so the column has to be scrolled
-     * into composition before the ask (see [revealAndFocusChipColumn]).
-     *
-     * The same mapping the drill-down return uses for its own rail; kept here so
-     * a rail added to one is visible to the other.
-     */
-    fun railStateFor(rowKey: String): LazyListState? = when (rowKey) {
-        GENRE_ROW_KEY -> genreRowState
-        KEYWORDS_ROW_KEY -> keywordsRowState
-        PEOPLE_ROW_KEY -> peopleRowState
-        NETWORK_ROW_KEY -> networkRowState
-        PRODUCTION_ROW_KEY -> productionRowState
-        COLLECTION_ROW_KEY -> collectionRowState
-        RECS_ROW_KEY -> recsRowState
-        MEDIA_ROW_KEY -> mediaRowState
-        else -> null
     }
 
     /**
@@ -1127,15 +1169,39 @@ fun DetailScreen(
     // Compose's fallback search then throws the ring at the Play button
     // until the edge-restore effect below lands it on the target card:
     // the visible up-then-back jump. This ZERO-SIZE, always-composed node
-    // (attached at the meta-content root, before any state swap) is parked
-    // on SYNCHRONOUSLY before the season change is applied, so the focused
-    // card's disposal never leaves focus ownerless and the fallback search
-    // never runs. It is invisible, has zero bounds, and takes part in no
-    // manual navigation because focus always leaves it within milliseconds
-    // - via the edge-restore effect (key presses) or focusSeasonOrEpisode
-    // (chip presses).
+    // (attached at the meta-content root, before any state swap) is ARMED
+    // before the season change is applied and parked on one frame later, so
+    // the focused card's disposal never leaves focus ownerless and the
+    // fallback search never runs (see armSeasonSwapSink for why the park
+    // cannot share the arm's frame). It is invisible, has zero bounds, and
+    // takes part in no manual navigation - it is only focusable while it is
+    // armed, and focus always leaves it within milliseconds, via the
+    // edge-restore effect (key presses) or focusSeasonOrEpisode (chip
+    // presses).
     val seasonSwapFocusSink = remember { FocusRequester() }
     var seasonSwapSinkArmed by remember { mutableStateOf(false) }
+
+    /**
+     * The row the last chain move was AIMED at (see [moveFocusVertical]), or
+     * null before the viewer has pressed anything on this title.
+     *
+     * It exists for one reason: the two episode effects below (the rail's
+     * auto-scroll and the per-card auto-focus) pull the focus and the scroll to
+     * the resume episode whenever the episode list changes, and at the end of a
+     * season reload that is a YANK - the viewer has already walked DOWN to the
+     * people rail, the episodes land a second later, and the focus jumps back up
+     * to a card they left (the field report of the page "snapping back"). So the
+     * episode effects fire only while the viewer has not steered away: before
+     * any chain move (null), or after a move that landed in the episode section
+     * itself. A landing anywhere else - PEOPLE, KEYWORDS, the header - means the
+     * press's own intent is where the focus belongs now, and a late episode
+     * delivery must not override it.
+     */
+    var lastChainLandingRow by remember { mutableStateOf<DetailRow?>(null) }
+
+    /** Whether the episode effects may still pull the focus and scroll. */
+    fun episodeAutoFocusAllowed(): Boolean =
+        lastChainLandingRow == null || lastChainLandingRow == DetailRow.EPISODES
 
     val meta by viewModel.meta.collectAsStateWithLifecycle()
     val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
@@ -1211,8 +1277,22 @@ fun DetailScreen(
     val vmStreamRootId by viewModel.streamRootId.collectAsStateWithLifecycle()
     val streamRootId = vmStreamRootId.ifBlank { id }
 
+    /**
+     * Forgets the season swap in flight - and DISARMS the sink with it.
+     *
+     * This is the single place an edge is cleared (a season chip taking the
+     * focus or a press on one, the edge-restore effect once it has landed), so
+     * it is also where the sink has to lose its arming: an armed sink left
+     * behind is a focusable zero-size node in the middle of the page, and the
+     * default search is free to park the D-pad on it - a remote whose every
+     * press then reads as doing nothing. Before this, only the edge-restore
+     * effect disarmed, and it returns early whenever the swap it was waiting for
+     * never arrives (a season whose episodes fail to load, a chip pressed
+     * during the swap).
+     */
     fun clearEpisodeTransitionState() {
         episodeTransitionState = EpisodeTransitionState()
+        seasonSwapSinkArmed = false
     }
 
     val hasStreamAddons by viewModel.hasStreamAddons.collectAsStateWithLifecycle()
@@ -1621,6 +1701,25 @@ fun DetailScreen(
         return false
     }
 
+    /**
+     * An abandoned hand-back's landing: the page's own, not the framework's.
+     *
+     * [deliverDetailHandBack] gives a target [DETAIL_HAND_BACK_FRAMES] frames.
+     * When it runs out, the card that raised the menu or overlay never came
+     * back, and the focus is by definition nowhere the page asked for - which
+     * the framework answers by restarting at the top of the screen, exactly the
+     * "lost my place" the driver exists to prevent. So the page lands the focus
+     * where such a restart would have: its own controls, through
+     * [focusTopOfPage]. Logged, because an abandoned hand-back means one
+     * surface's return is broken and the log is where that has to be visible.
+     */
+    LaunchedEffect(handFocusBack.abandoned) {
+        val label = handFocusBack.abandoned ?: return@LaunchedEffect
+        Log.w(TAG, "hand-back abandoned ($label): landing on the page's controls")
+        focusTopOfPage()
+        handFocusBack.clearedAbandoned()
+    }
+
     val effectiveSeason = remember(
         type,
         selectedSeason,
@@ -1704,6 +1803,17 @@ fun DetailScreen(
         userManuallyChangedSeason = false
         seasonFocusRequesters.clear()
         episodeFocusRequesters.clear()
+        // The chip-column slots go with them: a drill-down ("More Like This")
+        // reuses this composition for a new type/id, and a slot filed from the
+        // previous title's rail would otherwise be aimed at by a press on this
+        // one until the new rail happens to overwrite it (see
+        // registerChipColumn, and the ask-time clamp in focusChipColumn that
+        // makes the leftover harmless either way).
+        chipColumnRequesters.clear()
+        // And the landing record: a title's own first load has not been steered
+        // anywhere, so the episode effects below are allowed to place the focus
+        // again (see lastChainLandingRow).
+        lastChainLandingRow = null
         // A drill-down ("More Like This") reuses this composition with a new
         // type/id, so the previous title's drill-down-return latch has to go
         // with the rest of its state: left set, it would suppress the play
@@ -1961,6 +2071,11 @@ fun DetailScreen(
         userManuallyChangedSeason
     ) {
         if (
+            // Only while the viewer has not steered away from the episode
+            // section: this effect re-runs on every episodes load, and a rail
+            // dragged back to the resume episode after the D-pad had already
+            // left it is the reported scroll yank (see lastChainLandingRow).
+            episodeAutoFocusAllowed() &&
             normalizedType == "series" &&
             effectiveSeason != null &&
             !episodesLoading &&
@@ -2151,6 +2266,37 @@ fun DetailScreen(
         return false
     }
 
+    /**
+     * Arms the season-swap focus sink and parks the focus on it ONE FRAME LATER,
+     * reporting what the park answered.
+     *
+     * Both halves of that matter. The ARM has to be a recomposition ahead of the
+     * ask, because the sink's `canFocus` is what the ask reads: it is false for
+     * as long as the sink is not armed, and setting the flag does not change it
+     * until the composition that reads it has been applied. Parking in the same
+     * frame - which is what this did - therefore asked a node that was still
+     * unfocusable, the ask answered false, and nothing said so. A frame later the
+     * sink is armed (a season swap that disposes the focused card lands in that
+     * same frame) and the park engages, which is what keeps Compose's fallback
+     * search from throwing the ring at the header. The answer is LOGGED for the
+     * same reason it was silent before: a swap that did not park left the D-pad
+     * restarted at the top of the page, and nothing in the log settled whether the
+     * park had engaged.
+     */
+    fun armSeasonSwapSink(edge: EpisodeFocusEdge, targetSeason: Int) {
+        seasonSwapSinkArmed = true
+        scope.launch {
+            awaitFrame()
+            val parked =
+                runCatching { seasonSwapFocusSink.requestFocus() }.getOrDefault(false)
+            Log.i(
+                TAG,
+                "season swap sink park: edge=$edge target=$targetSeason " +
+                    "armed=$seasonSwapSinkArmed parked=$parked"
+            )
+        }
+    }
+
     LaunchedEffect(
         effectiveSeason,
         episodesLoading,
@@ -2158,6 +2304,22 @@ fun DetailScreen(
         episodeTransitionState.edge
     ) {
         val edge = episodeTransitionState.edge ?: return@LaunchedEffect
+        // A swap whose season came back in a terminal error has nothing to land
+        // on: no amount of waiting will hand it its card. The sink is disarmed
+        // (a focused node that becomes unfocusable is handed back by the
+        // framework's own fallback, where an armed-but-never-asked sink would
+        // instead be a focusable zero-size node in the middle of the page) and
+        // the edge is cleared, which leaves a later retry free to arm cleanly.
+        // The error card's own retry is the retry path - this adds no
+        // affordance of its own.
+        if (!episodesLoading && episodes.isEmpty() && episodeError != null) {
+            Log.w(
+                TAG,
+                "season swap abandoned: no episodes to land on (edge=$edge, error=$episodeError)"
+            )
+            clearEpisodeTransitionState()
+            return@LaunchedEffect
+        }
         if (episodesLoading || episodes.isEmpty()) return@LaunchedEffect
 
         val season = effectiveSeason ?: return@LaunchedEffect
@@ -2408,6 +2570,10 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): Boolean {
         val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
+        // The press's own intent, recorded where every chain move passes: the
+        // episode effects stop placing the focus once the viewer has steered to
+        // another row (see lastChainLandingRow and episodeAutoFocusAllowed).
+        lastChainLandingRow = target
         // The GENRE -> KEYWORDS handoff, logged when it does NOT happen. The
         // chain steps over a row the page does not have by design, so a title
         // with no keywords skips the row and looks exactly like a broken
@@ -2494,6 +2660,142 @@ fun DetailScreen(
     }
 
     /**
+     * The vertical handler for the page's NON-RAIL focusables.
+     *
+     * The rails answer through [detailRowVerticalFocus], which reads the chain
+     * for the row the press is standing on. Three surfaces are not rows and
+     * cannot use it: the header's action buttons and the overview's "View more"
+     * toggle each BORROW a chain position rather than owning one, and the season
+     * chips are one half of the EPISODES row, whose DOWN has to stay inside the
+     * section instead of stepping to the row beneath it. So the press is read
+     * here, in one place, and [onUp] / [onDown] say what this surface's press
+     * means. Consuming it is the point: left to the default search, each of the
+     * three could be a press into empty space - a genre-less title has nothing
+     * under the header to find, and the toggle has nothing under it on a
+     * keyword-less page - which the field reads as a dead remote.
+     */
+    fun nonRailVerticalFocus(
+        onUp: () -> Unit,
+        onDown: () -> Unit
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyDown) {
+            false
+        } else {
+            when (keyEvent.key) {
+                Key.DirectionUp -> {
+                    onUp()
+                    true
+                }
+
+                Key.DirectionDown -> {
+                    onDown()
+                    true
+                }
+
+                else -> false
+            }
+        }
+    }
+
+    /**
+     * DOWN out of a header action button: the chain's DOWN out of HEADER, aimed
+     * by this button's COLUMN in the action row.
+     *
+     * The buttons carry no row of their own - HEADER is a DESTINATION in the
+     * chain (UP out of the genre chips lands on PLAY), and its own DOWN had never
+     * been asked. Left to the default search that press found the genre chips on
+     * a title with genres and NOTHING on one without them, which is the reported
+     * dead DOWN on the page's most-used control. Borrowing HEADER's position is
+     * the smallest honest answer: the chain walks to the first row this page
+     * actually has (genres, else tags, else the episode section, else the cast),
+     * and every chip rail is entered by COLUMN exactly as it is from the genres.
+     *
+     * The handler lives on the BUTTONS, not on the row: a row-level handler sees
+     * no column (the network rail's own lesson), and the column is what decides
+     * which chip the press lands on.
+     *
+     * UP is consumed and stays here. The action row is the top of the page; the
+     * only thing above it is the system's own focus, so an UP that walked off it
+     * would be leaving the page rather than moving in it.
+     */
+    fun headerActionVerticalFocus(
+        column: Int,
+        presence: DetailRowPresence
+    ): (KeyEvent) -> Boolean =
+        nonRailVerticalFocus(
+            onUp = {},
+            onDown = {
+                startFocusMove {
+                    moveFocusVertical(
+                        DetailRow.HEADER,
+                        DetailFocusDirection.DOWN,
+                        column,
+                        presence
+                    )
+                }
+            }
+        )
+
+    /**
+     * The season chips' vertical press.
+     *
+     * UP leaves the section through the chain - the tag rail above, or the genre
+     * chips when there are no tags - exactly as an UP out of the episode row
+     * does. DOWN does NOT go through it: the chain models the season chips and
+     * the episode cards as ONE row, so its DOWN from EPISODES is the cast rail,
+     * while a viewer pressing DOWN on a chip means the episode cards directly
+     * under it (see [focusSeasonOrEpisode]).
+     *
+     * Consumed either way. The default search here was worse than nothing: any
+     * focus that lands on a chip also SELECTS its season, so a search that picked
+     * the wrong chip could re-trigger a seasonal swap (see onSeasonFocused).
+     */
+    fun seasonChipVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
+        nonRailVerticalFocus(
+            onUp = {
+                startFocusMove {
+                    moveFocusVertical(
+                        DetailRow.EPISODES,
+                        DetailFocusDirection.UP,
+                        0,
+                        presence
+                    )
+                }
+            },
+            onDown = { startFocusMove { focusSeasonOrEpisode() } }
+        )
+
+    /**
+     * The overview's "View more" toggle: the topmost focusable INSIDE the list,
+     * above every chain row.
+     *
+     * UP is the header, which is the row above the list. DOWN borrows HEADER's
+     * own chain position instead of adding an INFOBLOCK row of its own: a row for
+     * the overview would put the toggle between PLAY and the genre chips, so the
+     * common press - DOWN out of Play - would land on a text button instead of
+     * the genres, and every row's idea of what is above it would move with it.
+     *
+     * Both are consumed: on a title with no keywords (the common movie, where the
+     * toggle is also the only focusable thing in the info block) the default
+     * search under this toggle found nothing at all, and the press read as dead
+     * with the whole list one press below it.
+     */
+    fun overviewToggleVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
+        nonRailVerticalFocus(
+            onUp = { startFocusMove { focusTopOfPage() } },
+            onDown = {
+                startFocusMove {
+                    moveFocusVertical(
+                        DetailRow.HEADER,
+                        DetailFocusDirection.DOWN,
+                        0,
+                        presence
+                    )
+                }
+            }
+        )
+
+    /**
      * DOWN out of the Media row's tab strip: the card of the page that is
      * active in the column the viewer last held ([lastMediaCardColumn]), not
      * column 0 - a viewer who stepped UP out of the fifth card expects the
@@ -2513,7 +2815,16 @@ fun DetailScreen(
     suspend fun focusFirstMediaCard() {
         if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return
         if (lastMediaCardColumn != 0 && focusChipColumn(MEDIA_ROW_KEY, 0)) return
-        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_ROW_KEY, lastMediaCardColumn)
+        // Anchored on the STRIP, not on the cards row. This arm runs with the
+        // viewer standing on the strip, so the strip's own index is a hint the
+        // reveal can actually use - and the cards are the list item directly
+        // under it. Anchored on the cards' key the hint collapsed to 0 whenever
+        // that row had scrolled out of composition, and [revealRail] only
+        // searches its window of eight either side of the hint, so on a long
+        // page (a title with a dozen reviews above the row) the media cards at
+        // index ~20 were out of reach and DOWN off the strip did nothing at
+        // all.
+        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_STRIP_KEY, lastMediaCardColumn)
     }
 
     /**
@@ -3656,6 +3967,19 @@ fun DetailScreen(
                                 handFocusBack.pending == null
                             }
                     ) {
+                        // The action row's COLUMN order, named once: DOWN out of
+                        // a button lands on the rail below in this column (see
+                        // headerActionVerticalFocus). Fixed numbers rather than a
+                        // running count, so a button means the same column on a
+                        // movie (no Random episode) as on a series.
+                        val playColumn = 0
+                        val randomColumn = 1
+                        val trailerColumn = 2
+                        val libraryColumn = 3
+                        val likeColumn = 4
+                        val dislikeColumn = 5
+                        val rateColumn = 6
+
                         val openStreams: () -> Unit = {
                             // The viewer has taken the play action themselves, so
                             // retire the pending auto-play effect before this
@@ -3709,6 +4033,15 @@ fun DetailScreen(
                                 .padding(end = 8.dp)
                                 .focusRequester(
                                     playButtonFocusRequester
+                                )
+                                // DOWN is the genre chips (or the first row
+                                // this page has), in this button's column; UP
+                                // is the top of the page and stays.
+                                .onPreviewKeyEvent(
+                                    headerActionVerticalFocus(
+                                        playColumn,
+                                        detailRowPresence
+                                    )
                                 )
                         ) {
                             IconButtonBody(
@@ -3797,7 +4130,14 @@ fun DetailScreen(
                                 },
                                 shape = KBShapePill,
                                 focusedScale = KBFocusButton,
-                                modifier = Modifier.padding(end = 8.dp)
+                                modifier = Modifier
+                                    .padding(end = 8.dp)
+                                    .onPreviewKeyEvent(
+                                        headerActionVerticalFocus(
+                                            randomColumn,
+                                            detailRowPresence
+                                        )
+                                    )
                             ) {
                                 IconButtonBody(
                                     iconRes = R.drawable.ic_detail_shuffle,
@@ -3812,7 +4152,14 @@ fun DetailScreen(
                                     playTrailer(context)
                                 },
                                 shape = KBShapePill,
-                                focusedScale = KBFocusButton
+                                focusedScale = KBFocusButton,
+                                modifier = Modifier
+                                    .onPreviewKeyEvent(
+                                        headerActionVerticalFocus(
+                                            trailerColumn,
+                                            detailRowPresence
+                                        )
+                                    )
                             ) {
                                 IconButtonBody(
                                     iconRes = R.drawable.ic_detail_trailer,
@@ -3857,6 +4204,12 @@ fun DetailScreen(
                             modifier = Modifier
                                 .padding(start = 8.dp)
                                 .focusRequester(libraryButtonFocusRequester)
+                                .onPreviewKeyEvent(
+                                    headerActionVerticalFocus(
+                                        libraryColumn,
+                                        detailRowPresence
+                                    )
+                                )
                         ) {
                             IconButtonBody(
                                 iconRes = if (inLibrary) {
@@ -3887,7 +4240,14 @@ fun DetailScreen(
                             onClick = { pressTaste(TasteSignals.LIKE) },
                             shape = KBShapePill,
                             focusedScale = KBFocusButton,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .onPreviewKeyEvent(
+                                    headerActionVerticalFocus(
+                                        likeColumn,
+                                        detailRowPresence
+                                    )
+                                )
                         ) {
                             IconButtonBody(
                                 iconRes = if (tasteSignal == TasteSignals.LIKE) {
@@ -3910,7 +4270,14 @@ fun DetailScreen(
                             onClick = { pressTaste(TasteSignals.DISLIKE) },
                             shape = KBShapePill,
                             focusedScale = KBFocusButton,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .onPreviewKeyEvent(
+                                    headerActionVerticalFocus(
+                                        dislikeColumn,
+                                        detailRowPresence
+                                    )
+                                )
                         ) {
                             IconButtonBody(
                                 iconRes = if (tasteSignal == TasteSignals.DISLIKE) {
@@ -3934,7 +4301,14 @@ fun DetailScreen(
                             onClick = { ratingDialog = true },
                             shape = KBShapePill,
                             focusedScale = KBFocusButton,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .onPreviewKeyEvent(
+                                    headerActionVerticalFocus(
+                                        rateColumn,
+                                        detailRowPresence
+                                    )
+                                )
                         ) {
                             Box(
                                 modifier = Modifier
@@ -4263,6 +4637,16 @@ fun DetailScreen(
                                                 .scrollToTopOnFocus(detailListState, scope) {
                                                     handFocusBack.pending == null
                                                 }
+                                                // UP is the header, DOWN is the
+                                                // first row this page has, in
+                                                // this toggle's borrowed
+                                                // position (see
+                                                // overviewToggleVerticalFocus).
+                                                .onPreviewKeyEvent(
+                                                    overviewToggleVerticalFocus(
+                                                        detailRowPresence
+                                                    )
+                                                )
                                                 .padding(top = 8.dp)
                                         ) {
                                             Text(
@@ -4531,6 +4915,13 @@ fun DetailScreen(
                                                 seasonNum
                                         }
                                     },
+                                    // The chips answer UP and DOWN here, not
+                                    // through the default search (see
+                                    // seasonChipVerticalFocus).
+                                    chipVerticalFocus =
+                                        seasonChipVerticalFocus(
+                                            detailRowPresence
+                                        ),
                                     seasonFocusRequesters =
                                         seasonFocusRequesters,
                                     parentId = id,
@@ -4762,6 +5153,14 @@ fun DetailScreen(
                                                         episodeTransitionState.edge
                                                     ) {
                                                         if (
+                                                            // The same latch as the rail's
+                                                            // auto-scroll: this effect fires
+                                                            // again whenever the episode list
+                                                            // reloads, and by then the viewer
+                                                            // may have walked to another row -
+                                                            // dragging the focus back up to
+                                                            // this card is the reported yank.
+                                                            episodeAutoFocusAllowed() &&
                                                             shouldFocusThisCard &&
                                                             !episodesLoading &&
                                                             episodes.isNotEmpty() &&
@@ -5014,6 +5413,16 @@ fun DetailScreen(
                                                         0,
                                                         detailRowPresence
                                                     )
+                                                } else {
+                                                    // The chip took the focus,
+                                                    // so this press landed
+                                                    // inside the episode
+                                                    // section: a late episode
+                                                    // delivery may still place
+                                                    // the focus (see
+                                                    // lastChainLandingRow).
+                                                    lastChainLandingRow =
+                                                        DetailRow.EPISODES
                                                 }
                                             }
                                             true
@@ -5032,16 +5441,28 @@ fun DetailScreen(
                                                                                 edge =
                                                                                     EpisodeFocusEdge.END
                                                                             )
-                                                                        // Park focus on the
-                                                                        // root sink BEFORE the
-                                                                        // season swap disposes
-                                                                        // the focused card.
-                                                                        seasonSwapSinkArmed =
-                                                                            true
-                                                                        runCatching {
-                                                                            seasonSwapFocusSink
-                                                                                .requestFocus()
-                                                                        }
+                                                                        // Arm the
+                                                                        // root sink
+                                                                        // BEFORE the
+                                                                        // season swap
+                                                                        // disposes the
+                                                                        // focused card,
+                                                                        // and park on it
+                                                                        // a frame later -
+                                                                        // the same-frame
+                                                                        // park read a
+                                                                        // canFocus the
+                                                                        // recomposition
+                                                                        // had not applied
+                                                                        // yet (see
+                                                                        // armSeasonSwapSink).
+                                                                        armSeasonSwapSink(
+                                                                            EpisodeFocusEdge.END,
+                                                                            seasons[
+                                                                                currentSeasonIndex -
+                                                                                    1
+                                                                            ]
+                                                                        )
                                                                         selectedSeason =
                                                                             seasons[
                                                                                 currentSeasonIndex -
@@ -5065,16 +5486,28 @@ fun DetailScreen(
                                                                                 edge =
                                                                                     EpisodeFocusEdge.START
                                                                             )
-                                                                        // Park focus on the
-                                                                        // root sink BEFORE the
-                                                                        // season swap disposes
-                                                                        // the focused card.
-                                                                        seasonSwapSinkArmed =
-                                                                            true
-                                                                        runCatching {
-                                                                            seasonSwapFocusSink
-                                                                                .requestFocus()
-                                                                        }
+                                                                        // Arm the
+                                                                        // root sink
+                                                                        // BEFORE the
+                                                                        // season swap
+                                                                        // disposes the
+                                                                        // focused card,
+                                                                        // and park on it
+                                                                        // a frame later -
+                                                                        // the same-frame
+                                                                        // park read a
+                                                                        // canFocus the
+                                                                        // recomposition
+                                                                        // had not applied
+                                                                        // yet (see
+                                                                        // armSeasonSwapSink).
+                                                                        armSeasonSwapSink(
+                                                                            EpisodeFocusEdge.START,
+                                                                            seasons[
+                                                                                currentSeasonIndex +
+                                                                                    1
+                                                                            ]
+                                                                        )
                                                                         selectedSeason =
                                                                             seasons[
                                                                                 currentSeasonIndex +
@@ -5733,6 +6166,14 @@ fun DetailScreen(
                                             // one-line answer, never a
                                             // match percentage.
                                             captionReason = rec.reason,
+                                            // Both badges are keyed on
+                                            // [normalizedType], never on the
+                                            // route's own spelling: the sets
+                                            // are filed under "series::…",
+                                            // while a show's route says "tv",
+                                            // so every key built from `type`
+                                            // missed and the whole rail came up
+                                            // bare (checkmark, eye and all).
                                             isWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -5744,7 +6185,7 @@ fun DetailScreen(
                                                     imdbId ->
                                                     viewModel.watchedKey(
                                                         imdbId,
-                                                        type.lowercase()
+                                                        normalizedType
                                                     ) in watchedKeys
                                                 } == true ||
                                                 // Same fallback as the
@@ -5752,7 +6193,7 @@ fun DetailScreen(
                                                 viewModel.watchedKey(
                                                     WatchedStatusKeys
                                                         .tmdbKeyId(rec.id),
-                                                    type.lowercase()
+                                                    normalizedType
                                                 ) in watchedKeys,
                                             isPartiallyWatched =
                                                 resolvedPosterIds[
@@ -5765,13 +6206,13 @@ fun DetailScreen(
                                                     imdbId ->
                                                     viewModel.watchedKey(
                                                         imdbId,
-                                                        type.lowercase()
+                                                        normalizedType
                                                     ) in partialWatchedKeys
                                                 } == true ||
                                                 viewModel.watchedKey(
                                                     WatchedStatusKeys
                                                         .tmdbKeyId(rec.id),
-                                                    type.lowercase()
+                                                    normalizedType
                                                 ) in partialWatchedKeys,
                                             onClick = {
                                                 scope.launch {
@@ -5808,7 +6249,12 @@ fun DetailScreen(
                                                 posterMenu =
                                                     PosterMenuTarget(
                                                         tmdbId = rec.id,
-                                                        mediaType = type,
+                                                        // The rail's own
+                                                        // spelling, so the
+                                                        // toggle matches the
+                                                        // badge it sits on (see
+                                                        // the rail's isWatched).
+                                                        mediaType = normalizedType,
                                                         name = rec.title
                                                             ?: rec.name
                                                             ?: "",
@@ -5864,6 +6310,12 @@ fun DetailScreen(
 
                             item(key = REVIEWS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
+                                    // The rail's own scroll state, so the
+                                    // reveal can scroll a card in the press's
+                                    // column into composition before asking for
+                                    // it, exactly as every other chain rail
+                                    // does (see railStateFor).
+                                    state = reviewsRowState,
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -7010,7 +7462,12 @@ private fun SeasonRow(
         String,
         List<Int>,
         FocusRequester
-    ) -> Unit
+    ) -> Unit,
+    // The chip's own vertical press. Owned by the page and handed in whole
+    // rather than decided here: what UP and DOWN mean on a chip is a chain
+    // question (see seasonChipVerticalFocus), and the rail below must not grow
+    // a second idea of where the rows around it are.
+    chipVerticalFocus: (KeyEvent) -> Boolean
 ) {
     LazyRow(
         state = state,
@@ -7117,6 +7574,13 @@ private fun SeasonRow(
                     .focusRequester(
                         chipFocusRequester
                     )
+                    // UP leaves the section through the chain, DOWN is the
+                    // episode cards directly under the chips - never the chain's
+                    // DOWN, which is the cast rail (see
+                    // seasonChipVerticalFocus). Consumed either way: focusing a
+                    // chip also selects its season, so a press left to the
+                    // default search could re-trigger a swap.
+                    .onPreviewKeyEvent(chipVerticalFocus)
             )
         }
     }

@@ -13,7 +13,7 @@
 [versions]
 # --- Build toolchain (plugin versions; see [plugins]) ---
 agp = "9.5.0"
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 ksp = "2.3.12"
 sentry-gradle = "6.25.0"
 ktlint = "14.2.0"
@@ -21,7 +21,7 @@ baseline-profile = "1.5.0"
 
 # --- AndroidX / Compose ---
 core-ktx = "1.19.1"
-security-crypto = "1.1.0-alpha06"
+security-crypto = "1.1.0"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
 paging-compose = "3.5.3"
@@ -53,7 +53,7 @@ newpipe-extractor = "43f8e6ebeef4"
 sentry = "8.62.0"
 supabase = "3.8.0"
 ktor = "3.6.1"
-kotlinx-serialization = "1.11.0"
+kotlinx-serialization = "1.12.0"
 desugar = "2.1.5"
 
 # --- Tests / debug tooling ---
