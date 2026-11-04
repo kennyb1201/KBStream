@@ -31,13 +31,16 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
-import com.kennyb1201.kbstream.ui.theme.KBTextHi
+import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.delay
 
 /**
@@ -50,13 +53,15 @@ import kotlinx.coroutines.delay
  * opposite of a row inside KBStream. So the back stack is untouched, no
  * navigation event fires on entry or exit, and the switch is a Settings toggle.
  *
- * What it shows is the slide pool the caller snapshotted when it armed, one
+ * What it shows is the slide list the caller snapshotted when it armed, one
  * slide per [SCREENSAVER_DWELL_MS], each a fullscreen 16:9 backdrop sweeping
  * with the billboard's own Ken Burns move (`billboardSweep`, applied to the
  * IMAGE through a graphics layer, so the page never recomposes per frame) with
- * the title's clearlogo and, where the hero has already resolved it, the first
- * genre beneath it. Nothing here is clickable; the whole surface is one ambient
- * picture.
+ * the title's clearlogo and, where the title has resolved one, the first genre
+ * beneath it as a tracked-capitals label. The caller only hands titles whose
+ * CLEAN backdrop has resolved (the hero's ranked, textless-first artwork), so
+ * the picture here is never the promo image a rail ships. Nothing here is
+ * clickable; the whole surface is one ambient picture.
  *
  * Any key exits, and every key is CONSUMED: the press that dismisses the overlay
  * must not also move Home's focus, open a rail or start a title. The caller
@@ -212,11 +217,16 @@ internal fun HomeScreensaver(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = ScreensaverCornerPadding, bottom = ScreensaverCornerPadding),
-                    horizontalAlignment = Alignment.Start
+                    // Centered, because a fitted wordmark centers ITSELF in its
+                    // box: most clearlogos are narrower than the 380dp box, so
+                    // start-aligning the label pinned it to the box's left edge
+                    // while the art it belongs to sat in the middle.
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Backdrop + clearlogo or nothing: the pool already dropped
-                    // every title missing one, so this is the whole picture and
-                    // never a poster standing in for it.
+                    // Clean backdrop + clearlogo or nothing: the caller built
+                    // this list from titles whose resolvable artwork landed, so
+                    // this is the whole picture and never a poster, and never a
+                    // rail's raw promo frame, standing in for it.
                     AsyncImage(
                         model = slide.logo,
                         contentDescription = slide.name,
@@ -225,15 +235,24 @@ internal fun HomeScreensaver(
                             .width(ScreensaverLogoWidth)
                             .height(ScreensaverLogoHeight)
                     )
-                    // No genre until the hero has resolved one for this title:
-                    // the label never delays a slide, and a placeholder would be
-                    // text about nothing.
+                    // No genre until this title has resolved one: the label
+                    // never delays a slide, and a placeholder would be text
+                    // about nothing. An EYEBROW, not a second title line -
+                    // tracked capitals in the muted grey, one line, capped at
+                    // the wordmark's own width so a long genre ellipsizes
+                    // instead of running past the art it labels.
                     genreOf(slide)?.let { genre ->
                         Text(
-                            text = genre,
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(top = ScreensaverGenreGap)
+                            text = genre.uppercase(),
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            letterSpacing = ScreensaverGenreTracking,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(top = ScreensaverGenreGap)
+                                .width(ScreensaverLogoWidth)
                         )
                     }
                 }
@@ -251,3 +270,10 @@ private val ScreensaverLogoHeight = 104.dp
 
 /** Between the wordmark and the genre line under it, as the hero sets them. */
 private val ScreensaverGenreGap = 10.dp
+
+/**
+ * Tracking on the genre label: tracked capitals are what make a small line read
+ * as a category tag rather than as a title - the onboarding labels' 4-6sp,
+ * tightened for a line this small.
+ */
+private val ScreensaverGenreTracking = 2.sp

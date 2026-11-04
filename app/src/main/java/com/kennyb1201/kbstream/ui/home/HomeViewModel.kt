@@ -1099,29 +1099,167 @@ class HomeViewModel(
     private var heroResolveJob: Job? = null
 
     /**
-     * The first genre of every title whose hero has resolved this session,
-     * keyed `"<id>:<type>"` - the same spelling as [heroSettledKey].
+     * The first genre of every title Home has resolved this session, keyed
+     * `"<id>:<type>"` - the same spelling as [heroSettledKey].
      *
      * The TV screensaver draws a genre under a slide's wordmark, and rail items
-     * carry none of their own: the only genre Home ever learns is the one the
-     * hero resolved for the focused title. Remembering those answers is what lets
-     * the overlay read one WITHOUT starting a resolve of its own - a slide never
-     * fetches, never waits, and a title the viewer never focused is drawn with
-     * its logo alone rather than delaying the show for a caption.
+     * carry none of their own: the only genres Home ever learns are the ones its
+     * own resolves read. Two things fill this - the focused hero's resolve, and
+     * the idle wait's pass over the pool (see [warmScreensaverPool]) - so a title
+     * the viewer never focused still gets its caption.
+     *
+     * A snapshot state map, not a plain one, because the overlay reads it WHILE
+     * COMPOSING a slide: a genre that lands mid-slide (the show is minutes long,
+     * the resolve pass runs inside the wait) then redraws that slide's corner
+     * immediately instead of waiting for the next ten-second cycle to come back
+     * around. Reads are still plain lookups - no I/O, no suspension.
      */
     private val resolvedHeroGenres =
-        java.util.concurrent.ConcurrentHashMap<String, String>()
+        androidx.compose.runtime.mutableStateMapOf<String, String>()
+
+    /**
+     * The CLEAN backdrop resolved for a pool title, keyed `"<id>:<type>"`.
+     *
+     * `TmdbHeroArtworkRepository`'s answer, which ranks textless artwork first -
+     * the same picture the hero draws - rather than the rail item's raw
+     * `background`, which for the built-in TMDB rails is the title's default
+     * backdrop and routinely carries the distributor's promo copy. Only URLS that
+     * resolved are here: a title missing one is not a slide (see
+     * screensaverCleanSlides), so a raw fallback can never reach the screen.
+     *
+     * Snapshot state so an arming that happens between two frames of the show's
+     * own build reads a consistent map rather than a half-written one.
+     */
+    private val screensaverCleanBackdrops =
+        androidx.compose.runtime.mutableStateMapOf<String, String>()
 
     /**
      * The genre the hero resolved for this title, or null when it has not.
      *
      * A plain map read, no I/O and no suspension: the screensaver calls it while
-     * composing a slide.
+     * composing a slide. State-observed through [resolvedHeroGenres], so a genre
+     * that arrives mid-slide is drawn on it rather than at its next cycle.
      */
     internal fun resolvedHeroGenre(
         id: String,
         type: String
     ): String? = resolvedHeroGenres["$id:$type"]
+
+    /**
+     * The clean backdrop resolved for this title, or null when it has not.
+     *
+     * Read once, when the overlay arms: a plain lookup with no I/O, so arming
+     * never waits on the network.
+     */
+    internal fun screensaverCleanBackdrop(
+        id: String,
+        type: String
+    ): String? = screensaverCleanBackdrops["$id:$type"]
+
+    /**
+     * Resolves the pool's clean artwork and genres WHILE the viewer idles.
+     *
+     * The screensaver must never make its viewer wait: the show is armed by a
+     * timer, and the moment it arms has to be a picture, not a spinner. The idle
+     * wait is minutes long, so the work happens here instead - one bounded pass
+     * over the pool as it stands when the timer arms, writing into the two caches
+     * the overlay reads ([screensaverCleanBackdrops] for the picture and
+     * [resolvedHeroGenres] for the corner label).
+     *
+     * Bounded to [screensaverPreresolveItems]: artwork goes through the hero
+     * repository's own cache and semaphore (a rail-warmed title is a cache hit,
+     * not a request), and the detail lookups are cache-first too, so a page costs
+     * the network the titles it has not already resolved and nothing else.
+     *
+     * Deliberately independent of the focused hero: this never cancels, replaces
+     * or delays a focus resolve, and a focus resolving during the wait is
+     * unaffected by it. Failures are per title and silent - a title that could
+     * not resolve is simply not a slide, and the rest of the show still arms.
+     */
+    internal suspend fun warmScreensaverPool(items: List<MetaPreview>) {
+        var resolved = 0
+        var skipped = 0
+
+        screensaverPreresolveItems(items).forEach { item ->
+            val key = "${item.id}:${item.type}"
+            if (screensaverCleanBackdrops[key] != null && resolvedHeroGenres[key] != null) {
+                // Already warm (the rails prefetch or the hero got there first):
+                // no request, and the count says so.
+                resolved++
+                return@forEach
+            }
+
+            // The detail answers both questions: the TMDB id the images route
+            // needs (for ids that carry none of their own) and the genre list.
+            val detail = safeSuspend { screensaverDetailOf(item) }
+            val tmdbId = screensaverTmdbIdOf(item.id) ?: detail?.id
+
+            val cleanBackdrop = if (tmdbId != null && tmdbId > 0) {
+                safeSuspend {
+                    tmdbHeroArtworkRepository.resolve(
+                        id = "tmdb:$tmdbId",
+                        type = item.type,
+                        tmdbId = tmdbId
+                    )
+                }?.backdropUrl?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+
+            if (cleanBackdrop != null) {
+                screensaverCleanBackdrops[key] = cleanBackdrop
+                resolved++
+            } else {
+                skipped++
+            }
+
+            // The overlay's own rule, so the caption cannot be spelled one way
+            // here and another in the hero's resolve.
+            screensaverGenre(detail?.genres?.map { it.name })
+                ?.let { genre -> resolvedHeroGenres[key] = genre }
+        }
+
+        // Diagnostics, not UI: a page whose art did not resolve is a network or
+        // key question, and it stays a log line rather than an empty state.
+        Log.d(
+            "HOME_SAVER",
+            "Screensaver pre-resolve: $resolved resolved, $skipped skipped, " +
+                "${items.size} candidates"
+        )
+    }
+
+    /**
+     * The TMDB detail for a pool item, by the id shape it carries - the same
+     * three shapes the hero's own resolve handles: `tmdb:<id>`, a bare numeric
+     * id, and an IMDb `tt...` id. Anything else (an add-on's own id) has no
+     * TMDB source to ask, so it resolves nothing rather than guessing.
+     */
+    private suspend fun screensaverDetailOf(item: MetaPreview): TmdbDetail? {
+        val id = item.id.trim()
+        return when {
+            id.startsWith("tmdb:", ignoreCase = true) ->
+                id.substringAfter(":").toIntOrNull()?.let {
+                    tmdbRepository.getDetailByTmdbId(it, item.type)
+                }
+
+            id.toIntOrNull() != null ->
+                tmdbRepository.getDetailByTmdbId(id.toInt(), item.type)
+
+            id.startsWith("tt", ignoreCase = true) ->
+                tmdbRepository.fetchEnrichedMetaCached(id, item.type)
+
+            else -> null
+        }
+    }
+
+    /** The TMDB id an item's own id carries, or null when the detail must say. */
+    private fun screensaverTmdbIdOf(rawId: String): Int? {
+        val id = rawId.trim()
+        return when {
+            id.startsWith("tmdb:", ignoreCase = true) -> id.substringAfter(":").toIntOrNull()
+            else -> id.toIntOrNull()
+        }
+    }
 
     /**
      * Like runCatching, but for suspend calls: runCatching swallows

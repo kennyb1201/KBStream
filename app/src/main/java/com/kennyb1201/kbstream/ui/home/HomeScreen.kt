@@ -5116,7 +5116,12 @@ fun HomeScreen(
         mutableStateOf<FocusRequester?>(null)
     }
 
-    // What Home could show right now, for the arm decision only.
+    // What Home could show right now, for the arm decision and for the idle
+    // wait's resolve pass. CANDIDATES, not slides: each one still needs the
+    // clean (textless-ranked) backdrop the pass resolves, because a rail item's
+    // own `background` is the catalog's single default image - the distributor's
+    // promo art on the built-in Top 10 rails, which is exactly what the overlay
+    // must never draw.
     val screensaverPool = remember(rails) {
         screensaverSlides(rails.flatMap { rail -> rail.items })
     }
@@ -5188,6 +5193,18 @@ fun HomeScreen(
         )
     }
 
+    // The resolve pass, run DURING the wait rather than at its end: the show is
+    // armed by a timer, and the moment it arms has to be a picture, not a spin.
+    // It follows the latest pool (rails landing mid-wait restart the walk from
+    // the new order, which costs nothing - everything already resolved is a
+    // cache hit), and it dies with the same gate that stops the countdown:
+    // exiting the overlay, opening a menu, or Home pausing. It is independent of
+    // the focused hero's own resolve and never delays one.
+    LaunchedEffect(screensaverArmed, screensaverPool) {
+        if (!screensaverArmed) return@LaunchedEffect
+        viewModel.warmScreensaverPool(screensaverPool)
+    }
+
     // The wait itself: polled rather than slept, so a key press pushes the
     // deadline out and the check inside the final second still counts.
     LaunchedEffect(screensaverArmed, screensaverIdleMs) {
@@ -5198,8 +5215,16 @@ fun HomeScreen(
             if (remaining <= 0L) break
             delay(minOf(remaining, SCREENSAVER_IDLE_POLL_MS))
         }
+        // Only the titles with a clean backdrop resolved are slides, in rail
+        // order; the rail item's own art is never a fallback. Nothing resolved
+        // (no TMDB key, nothing reachable) is the same answer as an empty pool:
+        // Home stays Home, with no empty state to explain.
+        val arming = screensaverCleanSlides(latestScreensaverPool) { meta ->
+            viewModel.screensaverCleanBackdrop(meta.id, meta.type)
+        }
+        if (arming.isEmpty()) return@LaunchedEffect
         screensaverRestoreTarget = focusedCardRequester ?: lastPosterFocusRequester
-        screensaverSlidesShown = latestScreensaverPool
+        screensaverSlidesShown = arming
         screensaverVisible = true
     }
 

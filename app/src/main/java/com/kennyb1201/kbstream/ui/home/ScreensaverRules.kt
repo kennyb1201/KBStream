@@ -38,37 +38,85 @@ internal fun screensaverIdleTimeoutMs(minutes: Int): Long =
     minutes.coerceIn(1, 60) * 60_000L
 
 /**
- * Whether [this] title can be a slide: a real backdrop AND a real clearlogo.
+ * Whether [this] title can be a slide: it has its own clearlogo.
  *
- * Both are required and neither has a fallback. A poster stretched across a
- * television reads as a bug, and a bare text title on an empty frame is worse
- * than not showing the title at all - so an item missing either is skipped, and
- * a page whose items all fail this test simply never arms the overlay. That is
- * also why the pool can be empty on a viewer's Home without anything being
- * wrong: an add-on catalogs titles with no artwork, and there is nothing
- * ambient to make out of them.
+ * The logo is the one piece of art Home already owns, and the one the corner
+ * draws unchanged. The BACKDROP is not a gate any more: a rail item's
+ * `background` is whatever single image the catalog shipped - for the built-in
+ * TMDB rails that is the title's default backdrop, routinely the distributor's
+ * promo art with "NEW SEASON" and a service bug burned into it. The screensaver
+ * therefore takes its backdrop from the resolved clean artwork instead (see
+ * [screensaverCleanSlides]), so requiring a RAW backdrop here would only drop
+ * titles whose clean art exists. A title with no logo is still skipped: a bare
+ * frame is worse than not showing the title at all. A pool whose items all lack
+ * one simply never arms the overlay, which is why Home can be the whole page
+ * with no empty state to explain.
  */
 internal fun MetaPreview.hasScreensaverArt(): Boolean =
-    !background.isNullOrBlank() && !logo.isNullOrBlank()
+    !logo.isNullOrBlank()
 
 /**
- * The slides for the rails currently on Home, in rail order.
+ * The candidate pool for the rails currently on Home, in rail order.
  *
  * Rail order, not focus order and not a ranking: the overlay is a slow tour of
  * the page the viewer left, so it walks the rows top to bottom the way they are
  * drawn. The pool is snapshotted by the caller when the overlay arms - rails
  * reloading underneath it must not reshuffle a show that is already running.
+ * These are candidates, not slides: a candidate only becomes one once its clean
+ * backdrop has resolved (see [screensaverCleanSlides]).
  */
 internal fun screensaverSlides(items: List<MetaPreview>): List<MetaPreview> =
     items.filter { it.hasScreensaverArt() }
 
 /**
+ * How many pool titles the idle wait resolves before the show arms.
+ *
+ * Thirty slides at ten seconds is five minutes of unique show before the tour
+ * cycles - longer than any idle wait it can serve - and it caps both the artwork
+ * fetches and the TMDB detail calls a page can cost while nobody is watching.
+ */
+internal const val SCREENSAVER_PRERESOLVE_LIMIT = 30
+
+/**
+ * The items the pre-resolve pass walks: the pool's first
+ * [SCREENSAVER_PRERESOLVE_LIMIT], in slide order.
+ *
+ * A prefix, not a sample: the tour starts at the top of Home, so the titles the
+ * viewer is most likely to see first are the ones resolved first. The rest of
+ * the pool keeps its order and simply has no clean art yet - and an unresolved
+ * title is never shown with its raw art.
+ */
+internal fun screensaverPreresolveItems(items: List<MetaPreview>): List<MetaPreview> =
+    items.take(SCREENSAVER_PRERESOLVE_LIMIT)
+
+/**
+ * The slides the overlay shows: [items] whose CLEAN backdrop has resolved, in
+ * the same order, with that backdrop in place of the rail item's raw one.
+ *
+ * Clean or nothing. Falling back to `background` here would put the promo art
+ * the fix exists to remove back on screen, so a title whose artwork did not
+ * resolve is dropped for this show rather than drawn branded. The clearlogo is
+ * untouched: it is the rail item's own, and it is drawn over the backdrop
+ * exactly as the hero draws it.
+ */
+internal fun screensaverCleanSlides(
+    items: List<MetaPreview>,
+    cleanBackdrop: (MetaPreview) -> String?
+): List<MetaPreview> =
+    items.mapNotNull { item ->
+        val backdrop = cleanBackdrop(item)?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        item.copy(background = backdrop)
+    }
+
+/**
  * The genre the corner shows, or null to show the logo alone.
  *
  * Only the first genre, and only one that is already known: rail items carry no
- * genre of their own, so the label comes from the hero meta the focus pass has
- * already resolved. A slide whose title was never focused is drawn without a
- * genre rather than waiting for one - no slide delays the show for a label.
+ * genre of their own, so the label comes from a resolved title - either the hero
+ * the focus pass resolved, or the idle wait's own pass over the pool. A slide
+ * whose title has not resolved yet is drawn without a genre rather than waiting
+ * for one - no slide delays the show for a label.
  */
 internal fun screensaverGenre(genres: List<String>?): String? =
     genres

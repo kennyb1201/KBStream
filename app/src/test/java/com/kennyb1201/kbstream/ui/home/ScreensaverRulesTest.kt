@@ -30,16 +30,20 @@ class ScreensaverRulesTest {
     )
 
     @Test
-    fun `a slide needs both a backdrop and a clearlogo`() {
-        assertTrue("a title with both is a slide", item("a").hasScreensaverArt())
-        assertFalse("a poster alone is not a slide", item("b", logo = null).hasScreensaverArt())
-        assertFalse("a logo alone is not a slide", item("c", background = null).hasScreensaverArt())
-        assertFalse(
-            "a blank URL is the same as none - it would ask Coil for nothing",
+    fun `a candidate needs its own clearlogo - its picture comes from the resolved art`() {
+        assertTrue("a title with a logo is a candidate", item("a").hasScreensaverArt())
+        assertFalse("a poster alone is not", item("b", logo = null).hasScreensaverArt())
+        assertTrue(
+            "a rail item with no backdrop of its own is still a candidate: the " +
+                "overlay draws the resolved clean backdrop, not this one",
+            item("c", background = null).hasScreensaverArt()
+        )
+        assertTrue(
+            "and a blank one is the same as none",
             item("d", background = "  ").hasScreensaverArt()
         )
         assertFalse(
-            "and so is a blank logo",
+            "but a blank logo is not a logo",
             item("e", logo = "").hasScreensaverArt()
         )
     }
@@ -51,7 +55,7 @@ class ScreensaverRulesTest {
                 item("one"),
                 item("no-logo", logo = null),
                 item("two"),
-                item("no-backdrop", background = null),
+                item("blank-logo", logo = " "),
                 item("three")
             )
         )
@@ -63,12 +67,76 @@ class ScreensaverRulesTest {
     }
 
     @Test
-    fun `an add-on that ships no artwork never arms an empty show`() {
+    fun `an add-on that ships no clearlogo never arms an empty show`() {
         assertEquals(
             emptyList<MetaPreview>(),
-            screensaverSlides(listOf(item("a", logo = null), item("b", background = null)))
+            screensaverSlides(listOf(item("a", logo = null), item("b", logo = null)))
         )
         assertEquals(emptyList<MetaPreview>(), screensaverSlides(emptyList()))
+    }
+
+    @Test
+    fun `a slide needs a resolved clean backdrop, in rail order, with its logo kept`() {
+        val pool = listOf(item("one"), item("art-miss"), item("three"))
+        val clean = mapOf(
+            "one" to "https://img/clean-one.jpg",
+            "three" to "https://img/clean-three.jpg"
+        )
+
+        val slides = screensaverCleanSlides(pool) { clean[it.id] }
+
+        assertEquals(
+            "a title whose art did not resolve is dropped, and the order is kept",
+            listOf("one", "three"),
+            slides.map { it.id }
+        )
+        assertEquals(
+            "the shown backdrop is the resolved one, never the rail's own",
+            listOf("https://img/clean-one.jpg", "https://img/clean-three.jpg"),
+            slides.map { it.background }
+        )
+        assertEquals(
+            "the clearlogo stays the item's own",
+            listOf("https://img/logo.png", "https://img/logo.png"),
+            slides.map { it.logo }
+        )
+        assertEquals(
+            "and nothing else about the item is rewritten",
+            "Title one",
+            slides.first().name
+        )
+    }
+
+    @Test
+    fun `nothing resolved means no show at all, never the raw art`() {
+        assertEquals(
+            "no clean backdrop means no slide - a raw fallback would put the promo " +
+                "art back on screen",
+            emptyList<MetaPreview>(),
+            screensaverCleanSlides(listOf(item("a"), item("b"))) { null }
+        )
+        assertEquals(
+            "and a blank resolve is the same as none",
+            emptyList<MetaPreview>(),
+            screensaverCleanSlides(listOf(item("a"))) { "  " }
+        )
+    }
+
+    @Test
+    fun `the idle wait resolves at most the first thirty, in slide order`() {
+        val pool = (1..45).map { item("t$it") }
+        assertEquals(30, SCREENSAVER_PRERESOLVE_LIMIT)
+        assertEquals(
+            "a prefix, not a sample: the tour starts at the top of Home",
+            (1..30).map { "t$it" },
+            screensaverPreresolveItems(pool).map { it.id }
+        )
+        assertEquals(
+            "a short pool is walked whole",
+            3,
+            screensaverPreresolveItems(pool.take(3)).size
+        )
+        assertEquals(emptyList<MetaPreview>(), screensaverPreresolveItems(emptyList()))
     }
 
     @Test

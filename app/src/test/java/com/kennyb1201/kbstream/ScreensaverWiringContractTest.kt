@@ -201,9 +201,145 @@ class ScreensaverWiringContractTest {
             )
         )
         assertTrue(
-            "the art gate is backdrop AND clearlogo, with no poster fallback",
+            "the pool's own gate is the clearlogo: a rail item's backdrop is the " +
+                "catalog's single default image (the Top 10 promo art), so the " +
+                "picture is the RESOLVED one instead",
             rules.contains("fun MetaPreview.hasScreensaverArt(): Boolean") &&
-                rules.contains("!background.isNullOrBlank() && !logo.isNullOrBlank()")
+                squash(rules).contains(
+                    "fun MetaPreview.hasScreensaverArt(): Boolean = !logo.isNullOrBlank()"
+                )
+        )
+        assertTrue(
+            "and what the overlay shows is built at arm time from the clean art",
+            squash(home).contains("val arming = screensaverCleanSlides(latestScreensaverPool)") &&
+                squash(home).contains("if (arming.isEmpty()) return@LaunchedEffect") &&
+                squash(home).contains("screensaverSlidesShown = arming")
+        )
+    }
+
+    @Test
+    fun `the show draws the hero's ranked artwork, never the rail's raw backdrop`() {
+        assertTrue(
+            "the resolve has to go through the hero-artwork path, which ranks " +
+                "textless art first - the raw rail backdrop is the default promo image",
+            squash(homeVm).contains("tmdbHeroArtworkRepository.resolve(") &&
+                homeVm.contains("screensaverCleanBackdrops[key] = cleanBackdrop")
+        )
+        assertTrue(
+            "and arming reads only what RESOLVED",
+            squash(home).contains(
+                "viewModel.screensaverCleanBackdrop(meta.id, meta.type)"
+            )
+        )
+        // Bounded by the next declaration, so a hit elsewhere in the file cannot
+        // stand in for the clean-slide rule itself.
+        val clean = squash(rules).substringAfter("internal fun screensaverCleanSlides(")
+            .substringBefore("internal fun screensaverGenre(")
+        assertTrue("the clean backdrop replaces the item's background: $clean", clean.contains("item.copy(background = backdrop)"))
+        assertTrue(
+            "and a title without one is DROPPED, never shown with its raw art: $clean",
+            clean.contains("?: return@mapNotNull null")
+        )
+        assertFalse(
+            "no fallback to the rail's own background may exist on this path: $clean",
+            clean.contains("item.background")
+        )
+        assertTrue(
+            "nothing resolved is no show at all, not an empty overlay",
+            squash(home).contains("if (arming.isEmpty()) return@LaunchedEffect")
+        )
+    }
+
+    @Test
+    fun `the pool is resolved during the idle wait, never while the show arms`() {
+        val pass = squash(home)
+            .substringAfter("LaunchedEffect(screensaverArmed, screensaverPool)")
+            .substringBefore("// The wait itself")
+        assertTrue(
+            "the pass lives on the arm gate, so exiting the overlay, opening a menu " +
+                "or pausing Home cancels it: $pass",
+            pass.contains("if (!screensaverArmed) return@LaunchedEffect") &&
+                pass.contains("viewModel.warmScreensaverPool(screensaverPool)")
+        )
+        assertTrue(
+            "the pass is a suspend function over the pool, capped by the rules' bound",
+            homeVm.contains("internal suspend fun warmScreensaverPool(items: List<MetaPreview>)") &&
+                squash(homeVm).contains("screensaverPreresolveItems(items).forEach")
+        )
+        assertTrue(
+            "at most thirty titles, in slide order",
+            rules.contains("SCREENSAVER_PRERESOLVE_LIMIT = 30") &&
+                squash(rules).contains(
+                    "internal fun screensaverPreresolveItems(items: List<MetaPreview>): List<MetaPreview> = items.take(SCREENSAVER_PRERESOLVE_LIMIT)"
+                )
+        )
+        val warm = squash(homeVm)
+            .substringAfter("internal suspend fun warmScreensaverPool(")
+            .substringBefore("private suspend fun screensaverDetailOf")
+        assertTrue(
+            "a failure is per title and silent: no error state, no emptied show",
+            warm.contains("safeSuspend {") &&
+                warm.contains("skipped++")
+        )
+        assertTrue(
+            "and the counts are a log line, not the UI",
+            warm.contains("\"HOME_SAVER\"") && warm.contains("Log.d(")
+        )
+        assertFalse(
+            "it must never touch the focused hero's own job: $warm",
+            warm.contains("heroResolveJob")
+        )
+    }
+
+    @Test
+    fun `the genre map is state-observed, and the pass fills it for every slide`() {
+        assertTrue(
+            "the memo is snapshot state, so a genre landing mid-slide redraws that " +
+                "slide's corner instead of waiting a cycle",
+            squash(homeVm).contains(
+                "private val resolvedHeroGenres = androidx.compose.runtime.mutableStateMapOf<String, String>()"
+            )
+        )
+        assertTrue(
+            "the idle-wait pass writes each resolved title's first genre, by the " +
+                "overlay's own rule",
+            squash(homeVm).contains("screensaverGenre(detail?.genres?.map { it.name })") &&
+                squash(homeVm).contains("resolvedHeroGenres[key] = genre")
+        )
+        assertTrue(
+            "and the overlay still reads it without a fetch",
+            squash(home).contains("genreOf = { meta -> viewModel.resolvedHeroGenre(meta.id, meta.type) }")
+        )
+    }
+
+    @Test
+    fun `the corner label is centered on the wordmark and reads as a label`() {
+        assertTrue(
+            "a fitted wordmark centers ITSELF in its box, so the label has to be " +
+                "centered too or it pins to the box's left edge",
+            squash(overlay).contains("horizontalAlignment = Alignment.CenterHorizontally")
+        )
+        val label = squash(overlay)
+            .substringAfter("genreOf(slide)?.let { genre ->")
+            .substringBefore("private val ScreensaverCornerPadding")
+        assertTrue("the genre is drawn as tracked capitals: $label", label.contains("genre.uppercase()"))
+        assertTrue("tracked", label.contains("letterSpacing = ScreensaverGenreTracking"))
+        assertTrue(
+            "at a small, dim label size rather than the title's near-white body text",
+            label.contains("color = KBTextLo") &&
+                label.contains("style = MaterialTheme.typography.bodySmall")
+        )
+        assertTrue(
+            "one line, ellipsized: a long genre may not run past the art it labels",
+            label.contains("maxLines = 1") &&
+                label.contains("overflow = TextOverflow.Ellipsis") &&
+                label.contains("textAlign = TextAlign.Center") &&
+                label.contains(".width(ScreensaverLogoWidth)")
+        )
+        assertTrue(
+            "two letterspaced points, in the range the app's other labels use, " +
+                "tightened for this line",
+            overlay.contains("private val ScreensaverGenreTracking = 2.sp")
         )
     }
 
@@ -216,8 +352,8 @@ class ScreensaverWiringContractTest {
             )
         )
         assertTrue(
-            "what it shows is the pool it armed with, not the live rails",
-            squash(home).contains("screensaverSlidesShown = latestScreensaverPool")
+            "what it shows is the snapshot it armed with, not the live rails",
+            squash(home).contains("screensaverSlidesShown = arming")
         )
         assertTrue(
             "Back exits the overlay instead of leaving Home",
