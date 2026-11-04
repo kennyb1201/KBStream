@@ -73,7 +73,7 @@ class HiddenTitlesSyncTest {
         title: String = TITLE,
         type: String = TYPE,
         year: Int? = YEAR,
-        poster: String? = POSTER,
+        poster: String? = NEW_POSTER,
         at: Long = 100L
     ): JsonObject = buildJsonObject {
         putJsonArray("keys") {
@@ -419,7 +419,7 @@ class HiddenTitlesSyncTest {
         const val OTHER_TITLE = "The Matrix"
         const val THIRD_TITLE = "Heat"
         const val YEAR = 1999
-        const val POSTER = "https://image.tmdb.org/t/p/w500/new.jpg"
+        const val NEW_POSTER = "https://image.tmdb.org/t/p/w500/new.jpg"
         const val OLD_POSTER = "https://image.tmdb.org/t/p/w500/old.jpg"
         const val TMDB_ID = "tmdb:603"
         const val IMDB_ID = "tt0133093"
