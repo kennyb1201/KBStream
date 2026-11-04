@@ -451,7 +451,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
         )
         assertTrue(
             "and it only observes - the press still has to reach the focus system",
-            Regex("\\n\\s*}\s*\n\\s*false\\s*\n").containsMatchIn(rootHandler)
+            Regex("""\n\s*}\s*\n\s*false\s*\n""").containsMatchIn(rootHandler)
         )
     }
 
