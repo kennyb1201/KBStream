@@ -184,6 +184,13 @@ internal object SettingsSearchIndex {
             "torbox debrid cloud my list library torrent"
         ),
         SettingSearchEntry(
+            "integrations.torbox-cached-only",
+            SettingsPane.INTEGRATIONS,
+            "Cached sources only",
+            "torbox debrid cached uncached cache hide filter source picker list hash " +
+                "instant comet only"
+        ),
+        SettingSearchEntry(
             "integrations.torbox-add-missing",
             SettingsPane.INTEGRATIONS,
             // Cached only (spec S2/D7): the name says what the API does, not
