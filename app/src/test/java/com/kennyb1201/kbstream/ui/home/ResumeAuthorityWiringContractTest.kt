@@ -23,6 +23,7 @@ class ResumeAuthorityWiringContractTest {
     private val traktApi = source("com/kennyb1201/kbstream/data/trakt/TraktApiService.kt")
     private val traktRepo = source("com/kennyb1201/kbstream/data/trakt/TraktRepository.kt")
     private val home = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
+    private val arrivals = source("com/kennyb1201/kbstream/ui/home/ContinueWatchingArrivals.kt")
     private val ranking = source("com/kennyb1201/kbstream/ui/home/UpNextRanking.kt")
     private val rules = source("com/kennyb1201/kbstream/ui/home/ResumeAuthorityRules.kt")
     private val tvSettings = source("com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt")
@@ -82,12 +83,24 @@ class ResumeAuthorityWiringContractTest {
                 rules.contains("badge == UpNextBadge.CONTINUE_WATCHING") &&
                 rules.contains("preferred.ifEmpty { candidates }")
         )
+        // The tracker feeds publish one at a time now (ContinueWatchingArrivals),
+        // so their merges live in that publisher rather than in Home. Home still
+        // reads the pref once per pass and hands it to the publisher, and every
+        // merge that can contain tracker cards must carry it - a publisher that
+        // rebuilt the rail on the default authority would silently undo the
+        // toggle for the whole enriched rail.
+        val merges = Regex("dedupeAndSortUpNext\\(").findAll(arrivals).count()
         assertTrue(
             "Home reads the pref for the pass and passes it into every merge that " +
                 "can contain tracker cards",
-            Regex("dedupeAndSortUpNext\\(").findAll(home).count() >= 4 &&
-                home.contains("AppPreferences.getResumeAuthority(getApplication())") &&
-                Regex("resumeAuthority\\s*\\)").findAll(home).count() >= 3
+            home.contains("AppPreferences.getResumeAuthority(getApplication())") &&
+                home.contains("ContinueWatchingArrivals(") &&
+                home.contains("resumeAuthority = resumeAuthority,") &&
+                arrivals.contains("private val resumeAuthority: ResumeAuthority") &&
+                merges >= 2 &&
+                Regex("dedupeAndSortUpNext\\([^)]*resumeAuthority\\s*\\)")
+                    .findAll(arrivals).count() == merges &&
+                Regex("dedupeAndSortUpNext\\(").findAll(home).count() >= 1
         )
     }
 
