@@ -320,6 +320,11 @@ internal object SportsChannelMatcher {
      * networks the feed names, then the teams' own regional networks - and, when
      * nothing stronger answered, a lone team channel.
      *
+     * The channels a broadcast NAME resolves to are the one class that is never
+     * ahead of real evidence: they are a backup behind every guide and
+     * matchup-name hit, and lead only when there is nothing else (see the
+     * ordering note in the body).
+     *
      * [remembered] is the viewer's own correction memory, keyed by a team's
      * [SportsTeam.favoriteKey]. It is a lambda so the matcher stays pure - the
      * caller owns the storage - and a hit LEADs the list: the tiers below still
@@ -382,7 +387,7 @@ internal object SportsChannelMatcher {
         // at. The guide cannot know a feed is dark; the channel's own name can
         // say it is carrying the game tonight.
         val named = nameHits(game, variants, channelIndex)
-        if (guide.primary.isNotEmpty() || guide.strangers.isNotEmpty()) {
+        if (guide.primary.isNotEmpty() || guide.strangers.isNotEmpty() || guide.fill.isNotEmpty()) {
             // Where the names sit depends on what the guide found. Beside strong
             // guide hits they are the same evidence class, and they outrank a
             // STRANGER's guide row deliberately: a per-game generated channel
@@ -390,10 +395,33 @@ internal object SportsChannelMatcher {
             // a stranger's guide row is a schedule claim that survives schedule
             // changes. When the guide only has WEAK rows (a city alone), a
             // both-teams name leads them, for the same reason.
+            //
+            // The broadcast FILL-IN goes LAST, behind every class of real
+            // evidence (Kenny, 2026-11-03). It used to be folded into the guide's
+            // head: whenever the guide found hits and none of them agreed with
+            // the game's broadcast names, the fill took the whole head, and with
+            // it every slot a strong hit needed. A Red Wings @ Lightning game
+            // listed four kids channels that way - all of them fill - while two
+            // STRONG guide rows and the matchup-named ESPN+ feeds the playlist
+            // carried were capped out of the sheet entirely, so the only thing
+            // Watch could play was a channel with no program evidence behind it.
+            // A fill channel matches on a NAME alone, so it is a backup, never a
+            // displacement:
+            //
+            //  - strong evidence exists: fill falls in behind the strangers, and
+            //    disappears once four stronger feeds are listed;
+            //  - nothing strong exists at all (no agreeing hit, no both-teams
+            //    name, no strong stranger): fill still leads exactly as it did, so
+            //    a game whose only signal is its broadcast name keeps listing its
+            //    broadcast channels.
             val ordered = if (guide.strong) {
-                guide.primary + named.strong + guide.strangers
+                guide.primary + named.strong + guide.strangers + guide.fill
             } else {
-                named.strong + guide.primary + guide.strangers
+                // Fill and the agreeing head are mutually exclusive (fill is only
+                // computed when the head is empty), so this reads as "the
+                // agreeing head, else the fill": rule B's own order, untouched for
+                // a guide answer with nothing strong in it.
+                named.strong + guide.primary + guide.fill + guide.strangers
             }
             return leadWith(recalled, cap(ordered))
         }
@@ -703,9 +731,10 @@ internal object SportsChannelMatcher {
             val head = strongAgreeing.ordered(agreement)
             val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
             return GuideFeeds(
-                primary = head + fill,
+                primary = head,
                 strangers = strongStrangers.ordered(emptyMap()),
                 strong = true,
+                fill = fill,
             )
         }
 
@@ -716,9 +745,10 @@ internal object SportsChannelMatcher {
         val head = weakAgreeing.ordered(agreement)
         val fill = if (head.isEmpty()) broadcastFillIn(game, channelIndex) else emptyList()
         return GuideFeeds(
-            primary = head + fill,
+            primary = head,
             strangers = weakStrangers.ordered(emptyMap()),
             strong = false,
+            fill = fill,
         )
     }
 
@@ -726,10 +756,11 @@ internal object SportsChannelMatcher {
      * The guide's answer, SPLIT where the channel-name tier slots in.
      *
      * Same groups, same order inside each, as the single list this used to
-     * return: [primary] is what the guide leads with (its agreeing hits, and the
-     * named network's fill-in when nothing agreed) and [strangers] is everyone
-     * else it placed. The split exists only so [matches] can put the channel-name
-     * hits between the two, which is the one place the tiers now interleave.
+     * return: [primary] is the guide's agreeing hits, [strangers] is everyone
+     * else it placed, and [fill] is rule B's broadcast fill-in. The split exists
+     * so [matches] can put the channel-name hits between the two guide groups -
+     * the one place the tiers interleave - and so the fill can be ranked for what
+     * it is (see [fill]).
      */
     private data class GuideFeeds(
         val primary: List<IptvChannel>,
@@ -741,9 +772,21 @@ internal object SportsChannelMatcher {
          * so a both-teams channel name can lead a weak-only guide answer.
          */
         val strong: Boolean,
+        /**
+         * Rule B's fill-in: the game's broadcast names' own channels, kept for a
+         * guide answer that found hits but none of them agreeing with the
+         * broadcast - and never for one that did (so it is always empty beside a
+         * non-empty [primary]).
+         *
+         * Deliberately OUT of [primary] (Kenny, 2026-11-03): a fill channel's only
+         * evidence is that its name resembles a broadcast name, so [matches] ranks
+         * it behind every real hit rather than letting it occupy slots a strong
+         * guide row or a matchup-named feed needed.
+         */
+        val fill: List<IptvChannel>,
     ) {
         companion object {
-            val EMPTY = GuideFeeds(emptyList(), emptyList(), strong = false)
+            val EMPTY = GuideFeeds(emptyList(), emptyList(), strong = false, fill = emptyList())
         }
     }
 
@@ -776,6 +819,13 @@ internal object SportsChannelMatcher {
      * channel's own matchup name, the game's own broadcast names, then the team's
      * regional network. Anything else is `other` - a feed the list carries for a
      * reason this trace cannot see (a remembered pick leads the list that way).
+     *
+     * Two answers are specific to a card that listed WEAKER things than the guide
+     * had (Kenny, 2026-11-03): [Tier1GameTrace.broadcasts] is the game's own
+     * broadcast names, verbatim, and [Tier1GameTrace.lost] is every channel this
+     * game's rows graded that [listed] does NOT carry - the displaced evidence,
+     * graded and in guideFeeds' own order. Together they answer "what did the
+     * fill displace?" from one capture instead of another round of theories.
      */
     internal fun traceTier1(
         game: SportsGame,
@@ -792,6 +842,10 @@ internal object SportsChannelMatcher {
         // Best guide grade per channel: 3 a STRONG title, 2 a STRONG description,
         // 1 a WEAK row (one side by its city).
         val guideGrade = HashMap<String, Int>()
+        // How far the row that earned a channel its best grade started from
+        // kick-off: the tiebreak under the grade, the same one guideFeeds ranks a
+        // stranger's rows by.
+        val guideDistance = HashMap<String, Long>()
         programs.forEach { program ->
             if (!overlapsWindow(program, game.dateMs)) return@forEach
             val titleTokens = words(program.title)
@@ -834,23 +888,30 @@ internal object SportsChannelMatcher {
                 titleStrength != TeamNameStrength.NONE -> 3
                 else -> 2
             }
-            if (grade > (guideGrade[program.channelId] ?: 0)) guideGrade[program.channelId] = grade
+            val distance = abs(program.startMs - game.dateMs)
+            val best = guideGrade[program.channelId] ?: 0
+            val bestDistance = guideDistance[program.channelId] ?: Long.MAX_VALUE
+            if (grade > best || (grade == best && distance < bestDistance)) {
+                guideGrade[program.channelId] = grade
+                guideDistance[program.channelId] = distance
+            }
         }
         val agreement = broadcastAgreement(game, channelIndex)
         val rsnIds = (rsnNetworks(game.home, game.league) + rsnNetworks(game.away, game.league))
             .flatMap { channelIndex.channelsFor(it) }
             .mapTo(HashSet()) { it.id }
+        val listedIds = HashSet<String>(listed.size)
         val listedTiers = listed.map { channel ->
             val name = channel.displayName.ifBlank { channel.name }
+            listedIds += channel.id
+            val grade = guideGrade[channel.id]
             val nameTier = when (nameGrade(words(name), game, variants)) {
                 NameGrade.BOTH -> "name-matchup"
                 NameGrade.ONE -> "name-team"
                 NameGrade.NONE -> null
             }
             val tier = when {
-                guideGrade[channel.id] == 3 -> "guide-title"
-                guideGrade[channel.id] == 2 -> "guide-description"
-                guideGrade[channel.id] == 1 -> "guide-weak"
+                grade != null -> guideGradeLabel(grade)
                 nameTier != null -> nameTier
                 channel.id in agreement -> "network"
                 channel.id in rsnIds -> "rsn"
@@ -858,13 +919,42 @@ internal object SportsChannelMatcher {
             }
             name to tier
         }
+        // The rows the guide graded for THIS game that the card does not list:
+        // the sheets where stronger evidence existed and was capped or ordered
+        // out. Ranked the way guideFeeds ranks a stranger's rows - the best grade
+        // first, the row nearest kick-off first inside a grade - so the field
+        // capture reads as "here is what the guide had and the sheet did not".
+        val lost = guideGrade.entries
+            .filter { it.key !in listedIds && channelById.containsKey(it.key) }
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }
+                    .thenBy { guideDistance[it.key] ?: Long.MAX_VALUE }
+            )
+            .take(MAX_LOST_CHANNELS)
+            .map { (id, grade) ->
+                val channel = channelById.getValue(id)
+                channel.displayName.ifBlank { channel.name } to guideGradeLabel(grade)
+            }
         return Tier1GameTrace(
             strong = strong,
             weak = weak,
             near = near,
             drops = drops,
             listed = listedTiers,
+            broadcasts = game.broadcastNames,
+            lost = lost,
         )
+    }
+
+    /**
+     * What a guide grade is called on a ledger line - the label a listed feed and
+     * a displaced one are both printed with, so the two read alike.
+     */
+    private fun guideGradeLabel(grade: Int): String = when (grade) {
+        3 -> "guide-title"
+        2 -> "guide-description"
+        1 -> "guide-weak"
+        else -> "guide-unknown"
     }
 
     // ── Tier 1c: the channel's own name ─────────────────────────────

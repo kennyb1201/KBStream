@@ -54,6 +54,8 @@ internal class SportsTier1Ledger {
             near = trace.near,
             listed = trace.listed,
             drops = trace.drops,
+            broadcasts = trace.broadcasts,
+            lost = trace.lost,
         )
         games += entry
         trace.drops.forEach(::logDrop)
@@ -96,6 +98,21 @@ internal class SportsTier1Ledger {
             if (game.listed.isEmpty()) append(" listed=none")
             game.listed.forEach { (name, tier) ->
                 append(" ").append(name).append("=").append(tier)
+            }
+            // What the game says it is carried on, and what the guide graded that
+            // the list does not carry. Printed on every game line: the capture
+            // that needs it is the one where the sheet listed weaker feeds than
+            // the guide held, and that capture has no way to ask for more.
+            append(" broadcasts=")
+            if (game.broadcasts.isEmpty()) append("none") else append(game.broadcasts.joinToString("|"))
+            append(" lost=")
+            if (game.lost.isEmpty()) {
+                append("none")
+            } else {
+                game.lost.take(MAX_LOST_CHANNELS).forEachIndexed { index, (name, grade) ->
+                    if (index > 0) append(" ")
+                    append(name).append(":").append(grade)
+                }
             }
             game.drops.take(MAX_DROPS).forEach { drop ->
                 appendLine()
@@ -160,6 +177,10 @@ internal data class Tier1Game(
     /** Each listed feed's name and the tier that produced it, strongest first. */
     val listed: List<Pair<String, String>>,
     val drops: List<Tier1Drop>,
+    /** The game's own broadcast names, as the feed named them. */
+    val broadcasts: List<String> = emptyList(),
+    /** Guide-graded feeds this card did NOT list: name + grade, best grade first. */
+    val lost: List<Pair<String, String>> = emptyList(),
 )
 
 /**
@@ -179,7 +200,26 @@ internal data class Tier1GameTrace(
     val near: Int,
     val drops: List<Tier1Drop>,
     val listed: List<Pair<String, String>>,
+    /**
+     * The game's own broadcast names, verbatim.
+     *
+     * Printed because the field case of 2026-11-03 could not be narrowed without
+     * them: the sheet listed four kids channels, all of them fill, and which
+     * broadcast name resolved those channels was the one fact no capture held.
+     */
+    val broadcasts: List<String> = emptyList(),
+    /**
+     * The channels this game's guide rows graded that the card did NOT list, each
+     * with its grade, best grade first and nearest kick-off first inside a grade.
+     *
+     * The displaced evidence: a sheet that lists weaker feeds than the guide held
+     * is exactly the failure this names.
+     */
+    val lost: List<Pair<String, String>> = emptyList(),
 )
+
+/** How many displaced channels a game line names (see [Tier1GameTrace.lost]). */
+internal const val MAX_LOST_CHANNELS = 4
 
 /** The row's channel is not in the hub's guide index (see `guideChannelIndex`). */
 internal const val TIER1_GATE_GUIDE_INDEX = "GUIDE_INDEX"

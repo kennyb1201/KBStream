@@ -197,6 +197,83 @@ class SportsTier1TraceTest {
     }
 
     @Test
+    fun `the game line names the broadcast names and the rows the sheet left out`() {
+        // Kenny, 2026-11-03: four kids channels filled a Red Wings @ Lightning
+        // sheet, and a capture could neither name the broadcast name that resolved
+        // them nor show that stronger guide rows existed. Both are printed now:
+        // every graded channel the card does NOT list, best grade first and
+        // nearest kick-off first inside a grade, capped at four.
+        val network = channel("espn", "ESPN")
+        val titleRow = channel("tsn3", "TSN3")
+        val descriptionRow = channel("alt", "Altitude Sports")
+        val weakNear = channel("local1", "Local One")
+        val weakNext = channel("local2", "Local Two")
+        val weakCapped = channel("local3", "Local Three")
+        val fixture = game(broadcasts = listOf("ESPN", "DSN"))
+        val byId = listOf(network, titleRow, descriptionRow, weakNear, weakNext, weakCapped)
+            .associateBy { it.id }
+
+        val trace = SportsChannelMatcher.traceTier1(
+            game = fixture,
+            programs = listOf(
+                program("NHL Hockey - Winnipeg Jets at Tampa Bay Lightning", "tsn3"),
+                program(
+                    "NHL Hockey",
+                    "alt",
+                    description = "The Winnipeg Jets visit the Tampa Bay Lightning.",
+                    startMs = puckDrop + 5 * minute,
+                ),
+                program("NHL Hockey - Winnipeg at Tampa Bay", "local1"),
+                program("NHL Hockey - Winnipeg at Tampa Bay", "local2", startMs = puckDrop + 20 * minute),
+                program("NHL Hockey - Winnipeg at Tampa Bay", "local3", startMs = puckDrop + 40 * minute),
+            ),
+            channelById = byId,
+            variants = variants(fixture),
+            channelIndex = SportsChannelMatcher.ChannelIndex.of(byId.values.toList()),
+            listed = listOf(network),
+        )
+
+        assertEquals(listOf("ESPN", "DSN"), trace.broadcasts)
+        assertEquals(
+            "the four best displaced rows, in guideFeeds' own order",
+            listOf(
+                "TSN3" to "guide-title",
+                "Altitude Sports" to "guide-description",
+                "Local One" to "guide-weak",
+                "Local Two" to "guide-weak",
+            ),
+            trace.lost
+        )
+
+        val ledger = SportsTier1Ledger()
+        ledger.game("Jets @ Lightning", trace)
+        val block = ledger.render()
+        assertTrue(
+            "the line carries both fields after the listed feeds",
+            block.contains(
+                "ESPN=network broadcasts=ESPN|DSN lost=TSN3:guide-title " +
+                    "Altitude Sports:guide-description Local One:guide-weak Local Two:guide-weak"
+            )
+        )
+    }
+
+    @Test
+    fun `a card with nothing displaced and no broadcast names says so`() {
+        val ledger = SportsTier1Ledger()
+        ledger.game(
+            "Jets @ Lightning",
+            Tier1GameTrace(
+                strong = 0,
+                weak = 0,
+                near = 0,
+                drops = emptyList(),
+                listed = listOf("TSN3" to "guide-title"),
+            )
+        )
+        assertTrue(ledger.render().contains("TSN3=guide-title broadcasts=none lost=none"))
+    }
+
+    @Test
     fun `the last pass's block is what diagnostics reads`() {
         SportsTier1Trace.clear()
         assertNull("a process that has not matched yet has no block", SportsTier1Trace.block())
@@ -377,12 +454,17 @@ class SportsTier1TraceTest {
         home = SportsChannelMatcher.strongVariants(game.home),
     )
 
-    private fun program(title: String, channelId: String = "tsn3") = MatcherProgram(
+    private fun program(
+        title: String,
+        channelId: String = "tsn3",
+        description: String? = null,
+        startMs: Long = puckDrop,
+    ) = MatcherProgram(
         channelId = channelId,
         title = title,
-        startMs = puckDrop,
-        endMs = puckDrop + 150 * minute,
-        description = null,
+        startMs = startMs,
+        endMs = startMs + 150 * minute,
+        description = description,
     )
 
     /** The trace for the field row, with the TSN feed in (or out of) the playlist. */

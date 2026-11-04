@@ -1092,11 +1092,23 @@ class SportsChannelMatcherTest {
         assertEquals("the named network's row leads; the stranger stays behind", listOf(espn, stranger), feeds)
     }
 
+    // ── The fill-in ranks last (2026-11-03) ─────────────────────────
+    //
+    // The field case: Red Wings @ Lightning listed four kids channels - every one
+    // of them the broadcast fill-in, from a broadcast name no capture had ever
+    // printed - while two STRONG guide rows and the matchup-named feed the
+    // playlist carried were capped off the sheet entirely. The fill had taken the
+    // head because the guide's hits did not agree with the broadcast. A fill
+    // channel matches on a NAME alone, so it is a backup behind real evidence,
+    // never a displacement of it - and still the head when nothing stronger
+    // exists at all.
+
     @Test
-    fun `the named network is offered when no guide row names it`() {
-        // Rule B: the guide has a row for the game, but on a channel the game's
-        // broadcast name does not resolve to. The network's own feeds are still
-        // offered - ahead of the stranger - instead of the tier being skipped.
+    fun `the named network is offered behind a stronger guide row, never ahead of it`() {
+        // Rule B, amended: the guide has a row for the game on a channel the
+        // broadcast name does not resolve to, so the network's own feeds are still
+        // offered - as backups. The stranger's row is a schedule claim about this
+        // game tonight; the fill only resembles the network's name.
         val espn = channel("espn", "ESPN")
         val espn2 = channel("espn2", "ESPN2")
         val stranger = channel("other", "Some Sports Channel")
@@ -1110,7 +1122,112 @@ class SportsChannelMatcherTest {
             ),
         )
 
-        assertEquals(listOf(espn, espn2, stranger), feeds)
+        assertEquals(
+            "the stranger leads and the network still holds the backup slots",
+            listOf(stranger, espn, espn2),
+            feeds
+        )
+    }
+
+    @Test
+    fun `fill cannot take the head from two strong rows and a matchup feed`() {
+        val wings = team("DET", "Detroit Red Wings", home = false, shortName = "Red Wings")
+        val lightning = team("TB", "Tampa Bay Lightning", home = true, shortName = "Lightning")
+        val matchup = channel("lp", "Detroit Red Wings @ Tampa Bay Lightning")
+        val tsn = channel("tsn4", "TSN4")
+        val fanDuel = channel("fdsun", "FanDuel Sports Network Sun")
+        val exact = channel("3abn", "3ABN")
+        val radio = channel("3abn-radio", "3ABN Radio")
+        val proclaim = channel("3abn-proclaim", "3ABN Proclaim")
+        val kids = channel("3abn-kids", "3ABN Kids Network")
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game(wings, lightning, broadcasts = listOf("3ABN")),
+            channels = listOf(kids, proclaim, radio, exact, fanDuel, tsn, matchup),
+            programs = listOf(
+                program(
+                    "tsn4",
+                    "Detroit Red Wings at Tampa Bay Lightning",
+                    firstPitch,
+                    firstPitch + 180 * minute,
+                ),
+                program(
+                    "fdsun",
+                    "Detroit Red Wings at Tampa Bay Lightning",
+                    firstPitch + 5 * minute,
+                    firstPitch + 185 * minute,
+                ),
+            ),
+        )
+
+        assertEquals(
+            "the matchup feed leads, both strong rows follow, and only the one slot left over " +
+                "goes to the fill",
+            listOf(matchup, tsn, fanDuel, exact),
+            feeds
+        )
+        assertTrue(
+            "and no second fill channel reaches the sheet",
+            kids !in feeds && radio !in feeds && proclaim !in feeds
+        )
+    }
+
+    @Test
+    fun `fill still leads when nothing strong exists at all`() {
+        // The other half of the rule, unchanged: a game whose only signal is a
+        // broadcast name, with a guide row that agrees with nothing, still lists
+        // its broadcast channels - and still ahead of a city-only row.
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+            broadcasts = listOf("ESPN"),
+        )
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(rsn, espn, espn2),
+            programs = listOf(program("rsn", "Tampa Bay vs Florida", firstPitch, firstPitch + 180 * minute)),
+        )
+
+        assertEquals(listOf(espn, espn2, rsn), feeds)
+    }
+
+    @Test
+    fun `an ESPN+ broadcast resolves to no fill, so the sheet is unchanged`() {
+        // A streaming exclusive has no cable equivalent, so there is nothing to
+        // rank: the guide's own row is the answer, and the plain ESPN channel a
+        // playlist also holds is not silently promoted by the fix.
+        val rsn = channel("rsn", "Local Sports")
+        val espn = channel("espn", "ESPN")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN+"))
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(rsn, espn),
+            programs = listOf(program("rsn", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute)),
+        )
+
+        assertEquals(listOf(rsn), feeds)
+    }
+
+    @Test
+    fun `the no-guide branch is untouched by the fill's new rank`() {
+        // No guide row at all: that branch builds its own network list and never
+        // consults the fill, so the shape it has always had is pinned here.
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val matchup = channel("lp", "Yankees @ Red Sox")
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(espn, espn2, matchup),
+            programs = emptyList(),
+        )
+
+        assertEquals(listOf(matchup, espn, espn2), feeds)
     }
 
     @Test
