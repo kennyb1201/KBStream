@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
