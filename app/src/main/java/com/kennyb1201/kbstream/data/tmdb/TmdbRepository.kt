@@ -719,15 +719,27 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
-     * Drops every in-memory cache. All of them are rebuilt from the JSON cache
-     * table on disk (30-day TTL) or from one request, so the worst case cost is
-     * a database read -- which is what makes them worth giving back when the
-     * heap is tight, like the guide's snapshots.
+     * Drops every in-memory cache EXCEPT the season payloads. All of them are
+     * rebuilt from the JSON cache table on disk (30-day TTL) or from one
+     * request, so the worst case cost is a database read -- which is what makes
+     * them worth giving back when the heap is tight, like the guide's snapshots.
+     *
+     * The season payloads are the one exemption, and the reason is the path the
+     * viewer walks most: watch something, back out to Home, and the Continue
+     * Watching rail rebuilds - resolving every card's season/finale status from
+     * exactly these payloads. Dropping them here meant that rebuild re-read a
+     * payload per card from disk, inside the local pass, on every return from
+     * playback. Keeping them is not an unbounded commitment: the cache is
+     * capped at [MAX_SEASON_ENTRIES] and every entry expires after
+     * [seasonEpisodesCacheTtlMs], so it cannot grow past what browsing already
+     * allowed it, and a cold process still falls back to the disk rows. What
+     * this gives up is the last resort under real heap pressure - the entry cap
+     * is what keeps that bounded, and the caches that dominate the heap
+     * (artwork, detail responses) are still released here.
      */
     override fun releaseCaches() {
         detailCache.clear()
         railDetailCache.clear()
-        seasonEpisodesCache.clear()
         imdbResolutionMemoryCache.clear()
         tmdbResolutionMemoryCache.clear()
         reviewsCache.clear()

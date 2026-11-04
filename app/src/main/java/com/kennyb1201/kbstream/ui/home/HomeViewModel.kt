@@ -5226,6 +5226,41 @@ Log.d(
         _upNext.value.filter { it.historyRowId == null }
 
     /**
+     * Puts one rail snapshot on screen, and warms hero art for it.
+     *
+     * The rail now publishes once per tracker arrival (see
+     * [ContinueWatchingArrivals]), so an unchanged snapshot is skipped: a feed
+     * answering with nothing would otherwise republish the same list and walk
+     * the prefetch again for cards that are already warm.
+     *
+     * Hero art is warmed for the resume rows too: their previews often carry
+     * only a poster, so without a prefetch the hero flashes the poster as a
+     * zoomed backdrop when the user scrolls up.
+     */
+    private fun publishUpNext(
+        items: List<UpNextItem>
+    ) {
+        if (items == _upNext.value) return
+
+        _upNext.value = items
+
+        prefetchHeroArt(
+            items.mapNotNull { up ->
+                up.parentId?.let { parentId ->
+                    MetaPreview(
+                        id = parentId,
+                        type = up.parentType ?: "movie",
+                        name = up.title,
+                        poster = up.poster,
+                        background = up.backdrop,
+                        logo = up.clearLogo
+                    )
+                }
+            }
+        )
+    }
+
+    /**
      * A STORED episode stream id, re-rooted under the root this show's verified
      * TMDB record says the add-ons know it by (see
      * [rerootedEpisodeStreamId] for why the rail may not hand a history row's
@@ -5774,10 +5809,8 @@ Log.d(
                                     locallyFinishedShowKeys
                                 )
 
-                        // Publish local cards first: the enriched local rows
-                        // are ready here, so the rail shows real content while
-                        // the (potentially slow) Simkl network fetch runs.
-                        // MERGE with the Simkl cards still on screen instead of
+                        // The publisher below carries the tracker cards already
+                        // on screen into the local-first publish instead of
                         // replacing the list — replacing it made every Simkl
                         // card vanish on each Home resume until the slow
                         // re-merge finished. applyContinueWatchingDismissals
@@ -5788,146 +5821,92 @@ Log.d(
                         // its last suspension when the switch landed can
                         // still be holding the rows of the profile the user
                         // just left (its history DB stays readable through
-                        // the retire grace period). Gate this publish
-                        // exactly like the merged one below.
+                        // the retire grace period). Every publish is gated on
+                        // that version for exactly this reason.
                         // Read once per merge: the authority decides which
                         // source's position wins a title, and a change made
                         // mid-merge must not split one pass in two.
                         val resumeAuthority =
                             AppPreferences.getResumeAuthority(getApplication())
 
-                        if (
-                            localCards.isNotEmpty() &&
-                            isLatestUpNextRequest(requestVersion)
-                        ) {
-                            _upNext.value =
-                                applyContinueWatchingDismissals(
-                                    dedupeAndSortUpNext(
-                                        localCards +
-                                            withoutLocallyFinishedTrackerCards(
-                                                previousSimklUpNextItems()
-                                            ),
-                                        resumeAuthority
-                                    )
-                                )
-                            // Warm hero art for the resume rows too: their
-                            // previews often carry only a poster, so without
-                            // a prefetch the hero flashes the poster as a
-                            // zoomed backdrop when the user scrolls up.
-                            prefetchHeroArt(
-                                _upNext.value.mapNotNull { up ->
-                                    up.parentId?.let { parentId ->
-                                        MetaPreview(
-                                            id = parentId,
-                                            type = up.parentType ?: "movie",
-                                            name = up.title,
-                                            poster = up.poster,
-                                            background = up.backdrop,
-                                            logo = up.clearLogo
-                                        )
+                        // ONE publisher for the whole rail: the local cards
+                        // first, then each tracker feed the moment it answers
+                        // (see ContinueWatchingArrivals). Every publish runs the
+                        // same locally-finished filter, merge and dismissals the
+                        // single merged publish used, so the contents are the
+                        // merged publish's contents - only the timing moved.
+                        val arrivals =
+                            ContinueWatchingArrivals(
+                                localCards = localCards,
+                                resumeAuthority = resumeAuthority,
+                                previousTrackerCards = previousSimklUpNextItems(),
+                                locallyFinished = ::withoutLocallyFinishedTrackerCards,
+                                dismiss = { items -> applyContinueWatchingDismissals(items) },
+                                publish = { items ->
+                                    if (isLatestUpNextRequest(requestVersion)) {
+                                        publishUpNext(items)
                                     }
                                 }
                             )
+
+                        if (localCards.isNotEmpty()) {
+                            arrivals.publishLocal()
                         }
 
-                        // Only the chosen tracker is read here; the others stay
-                        // in the merge from their own loaders (MDBList's cache
-                        // and Simkl's feed cost nothing extra). See
-                        // ResumeAuthorityRules.
-                        val traktItems =
-                            if (resumeAuthority == ResumeAuthority.TRAKT) {
-                                loadTraktUpNextItems()
-                            } else {
-                                emptyList()
-                            }
+                        // The feeds are read CONCURRENTLY and each publishes on
+                        // arrival, so a slow tracker no longer holds the rail.
+                        // Simkl answering Failed publishes nothing: no answer is
+                        // not an empty answer, and its previous cards - seeded
+                        // into the publisher above - stay on screen. Only the
+                        // chosen tracker's Trakt feed is read (see
+                        // ResumeAuthorityRules).
+                        coroutineScope {
 
-                        val simklResult =
-                            loadSimklUpNextItems()
+                            launch {
 
-                        if (simklResult is SimklUpNextResult.Failed) {
+                                when (val simklResult = loadSimklUpNextItems()) {
 
-                            Log.w(
-                                "HOME_UPNEXT",
-                                "SIMKL failed; preserving existing Up Next data",
-                                simklResult.error
-                            )
-
-                            if (
-                                isLatestUpNextRequest(requestVersion)
-                            ) {
-
-                                // Simkl is unreachable: keep the PREVIOUS
-                                // Simkl cards on screen (stale data beats a
-                                // rail that empties out on every resume)
-                                // rather than dropping them. Removals are
-                                // still honored by applyContinueWatching
-                                // Dismissals.
-                                val mdbListItems =
-                                    loadMdbListUpNextItems()
-
-                                _upNext.value =
-                                    applyContinueWatchingDismissals(
-                                        dedupeAndSortUpNext(
-                                            localCards +
-                                                withoutLocallyFinishedTrackerCards(
-                                                    previousSimklUpNextItems() +
-                                                        mdbListItems +
-                                                        traktItems
-                                                ),
-                                            resumeAuthority
+                                    is SimklUpNextResult.Success ->
+                                        arrivals.arrive(
+                                            TrackerFeed.SIMKL,
+                                            simklResult.items
                                         )
+
+                                    SimklUpNextResult.NotConfigured ->
+                                        arrivals.arrive(
+                                            TrackerFeed.SIMKL,
+                                            emptyList()
+                                        )
+
+                                    is SimklUpNextResult.Failed ->
+                                        Log.w(
+                                            "HOME_UPNEXT",
+                                            "SIMKL failed; preserving existing Up Next data",
+                                            simklResult.error
+                                        )
+                                }
+                            }
+
+                            launch {
+
+                                if (resumeAuthority == ResumeAuthority.TRAKT) {
+                                    arrivals.arrive(
+                                        TrackerFeed.TRAKT,
+                                        loadTraktUpNextItems()
                                     )
+                                }
                             }
 
-                            return@collectLatest
-                        }
+                            // Paused MDBList sessions merge alongside the Simkl
+                            // cards; dedupe keeps the richer local/Simkl twin.
+                            launch {
 
-                        val simklItems =
-                            when (simklResult) {
-                                is SimklUpNextResult.Success -> simklResult.items
-                                SimklUpNextResult.NotConfigured -> emptyList()
-                                is SimklUpNextResult.Failed -> emptyList()
-                            }
-
-                        // Paused MDBList sessions merge alongside the Simkl
-                        // cards; dedupe keeps the richer local/Simkl twin.
-                        val mdbListItems =
-                            loadMdbListUpNextItems()
-
-                        val merged =
-                            dedupeAndSortUpNext(
-                                localCards +
-                                    withoutLocallyFinishedTrackerCards(
-                                        simklItems + mdbListItems + traktItems
-                                    ),
-                                resumeAuthority
-                            )
-
-                        if (!isLatestUpNextRequest(requestVersion)) {
-                            return@collectLatest
-                        }
-
-                        val result =
-                            if (merged.isNotEmpty()) {
-
-                                merged
-
-                            } else if (localCards.isNotEmpty()) {
-
-                                dedupeAndSortUpNext(
-                                    localCards,
-                                    resumeAuthority
+                                arrivals.arrive(
+                                    TrackerFeed.MDBLIST,
+                                    loadMdbListUpNextItems()
                                 )
-
-                            } else {
-
-                                emptyList()
                             }
-
-                        _upNext.value =
-                            applyContinueWatchingDismissals(
-                                result
-                            )
+                        }
 
                     } catch (e: kotlinx.coroutines.CancellationException) {
 
