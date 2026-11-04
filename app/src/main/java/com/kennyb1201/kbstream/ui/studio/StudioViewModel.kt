@@ -7,12 +7,15 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.tmdb.BrowseRailCache
 import com.kennyb1201.kbstream.data.tmdb.CrossBase
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.refreshedSlots
+import com.kennyb1201.kbstream.data.tmdb.sectionsInRailOrder
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
@@ -182,6 +185,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private var currentName: String? = null
 
     /**
+     * The route this ViewModel last loaded, as the session cache keys it.
+     *
+     * Only used to tell a re-entry (same route, header art still valid) from a
+     * route change (chip click, another brand), which now matters because a
+     * cache hit no longer clears state.
+     */
+    private var currentRouteKey: String? = null
+
+    /**
      * The rail load currently in flight, if any.
      *
      * A browse screen's rails stream in (see `streamBrowseSections`), which
@@ -337,7 +349,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         originalsCompanyId: Int? = null,
         // The route's label for the brand; see [currentName].
         name: String? = null,
-        genreId: Int? = null
+        genreId: Int? = null,
+        // The retry path: a manual retry means the page is wrong, so it ignores
+        // this session's cached entry for the route and replaces it.
+        refresh: Boolean = false
     ) {
         val isSameRoute =
             currentId == id &&
@@ -349,7 +364,30 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             currentGenreId == genreId &&
             _sections.value.isNotEmpty()
 
-        if (isSameRoute) return
+        if (isSameRoute && !refresh) return
+
+        // The header art belongs to the ROUTE: a genre chip or another brand
+        // re-enters the same ViewModel, and the cache-hit path below does not
+        // clear state (that is the point of it), so the previous route's logo
+        // and blurb are dropped here, before anything can draw them.
+        val routeKeyForCache =
+            BrowseRailCache.keyOf(
+                "studio",
+                id,
+                isNetwork,
+                providerId,
+                networkOrCompanyId,
+                networkIsCompany,
+                originalsCompanyId,
+                name,
+                genreId
+            )
+
+        if (currentRouteKey != null && currentRouteKey != routeKeyForCache) {
+            _logoUrls.value = emptyList()
+            _companyInfo.value = null
+        }
+        currentRouteKey = routeKeyForCache
 
         currentId = id
         currentIsNetwork = isNetwork
@@ -387,10 +425,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         // than appended to as it arrives.
         val slots = ConcurrentHashMap<Int, StudioSection>()
 
+        // The page's identity for the session cache: every id the route is
+        // keyed by, so a network and a company that share a number - and the
+        // same brand with and without a genre chip - are different pages.
+        val cacheKey = routeKeyForCache
+
         val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
             if (generation == loadGeneration) {
                 slots[index] = section
-                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                _sections.value = sectionsInRailOrder(slots)
                 // The skeleton goes as soon as there is a rail to look at: the
                 // rest of the page keeps filling in behind the viewer instead
                 // of holding the whole screen back for its slowest rail.
@@ -398,15 +441,39 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        loadJob = viewModelScope.launch {
-            _isLoading.value = true
+        _isService.value = serviceRoute
+
+        // A page this session already loaded is on screen before this call
+        // returns (see [BrowseRailCache]): the cached rails go into the SAME
+        // slots the refresh streams into, so each arriving rail replaces its
+        // cached self in place and the page never reshuffles under the viewer.
+        val cached = if (refresh) null else BrowseRailCache.rails(cacheKey)
+
+        if (cached != null) {
+            slots.putAll(cached)
+            val cachedSections = sectionsInRailOrder(slots)
             _error.value = null
-            _sections.value = emptyList()
-            _resolvedIds.value = emptyMap()
-            _pagingStates.value = emptyMap()
-            _logoUrls.value = emptyList()
-            _companyInfo.value = null
-            _isService.value = serviceRoute
+            _isLoading.value = false
+            _sections.value = cachedSections
+            _pagingStates.value = pagingStatesFor(cachedSections)
+        }
+
+        loadJob = viewModelScope.launch {
+            if (cached == null) {
+                _isLoading.value = true
+                _error.value = null
+                _sections.value = emptyList()
+                _resolvedIds.value = emptyMap()
+                _pagingStates.value = emptyMap()
+                _logoUrls.value = emptyList()
+                _companyInfo.value = null
+            } else {
+                // Rows come from the cache; badges never do (see [load]'s rule
+                // in the tag page: the watched resolution runs on every hit).
+                launch {
+                    resolveAndPreloadWatched(_sections.value)
+                }
+            }
 
             // Clear logo + blurb for the header. Networks use their own TMDB
             // endpoints (a network id is not a company id), so route by type.
@@ -479,15 +546,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 if (generation != loadGeneration) return@launch
 
                 _sections.value = result
-                _pagingStates.value = result.associate { section ->
-                    section.title to StudioRailPagingState(
-                        nextPage = 2,
-                        hasMore = section.items.isNotEmpty(),
-                        isLoadingMore = false
-                    )
-                }
+                _pagingStates.value = pagingStatesFor(result)
+                BrowseRailCache.store(cacheKey, refreshedSlots(slots, result))
             } catch (e: Exception) {
-                if (generation == loadGeneration) {
+                if (generation == loadGeneration && cached == null) {
+                    // A failed REFRESH leaves the cached page on screen - stale
+                    // beats empty, the same rule the CW rail follows for a
+                    // tracker that never answers.
                     _error.value = e.message ?: "Failed to load studio"
                 }
                 Log.e("STUDIO_VM", "load failed for id=$id isNetwork=$isNetwork", e)
@@ -513,6 +578,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+
+    /** The page's paging state, in the shape [load] derives today. */
+    private fun pagingStatesFor(
+        sections: List<StudioSection>
+    ): Map<String, StudioRailPagingState> =
+        sections.associate { section ->
+            section.title to StudioRailPagingState(
+                nextPage = 2,
+                hasMore = section.items.isNotEmpty(),
+                isLoadingMore = false
+            )
+        }
 
     fun loadMoreSection(title: String) {
         val screenId = currentId ?: return

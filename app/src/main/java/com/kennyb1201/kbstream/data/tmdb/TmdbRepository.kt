@@ -760,6 +760,11 @@ class TmdbRepository private constructor(context: Context) :
         "tmdb: detail=${detailCache.size}/$MAX_DETAIL_ENTRIES" +
             " rail=${railDetailCache.size}/$MAX_DETAIL_ENTRIES" +
             " season=${seasonEpisodesCache.size}/$MAX_SEASON_ENTRIES" +
+            // Browse pages this session can re-enter without a reload (see
+            // BrowseRailCache). Reported because it is a session-scoped cache
+            // on the re-entry path, and "the page still felt slow" reads the
+            // same whether the memo is full or empty.
+            " browse=${BrowseRailCache.pageCount()}/${BrowseRailCache.MAX_CACHED_PAGES}" +
             " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES"

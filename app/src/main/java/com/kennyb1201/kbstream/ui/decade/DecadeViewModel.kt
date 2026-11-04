@@ -7,11 +7,14 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.tmdb.BrowseRailCache
 import com.kennyb1201.kbstream.data.tmdb.CrossBase
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbGenre
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.refreshedSlots
+import com.kennyb1201.kbstream.data.tmdb.sectionsInRailOrder
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
@@ -268,14 +271,27 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             watchedStatusRepository.explicitWatchedOverrideKeys()
         }.getOrDefault(emptySet())
 
-    fun load(decadeStart: Int, genreId: Int? = null) {
+    /**
+     * Loads this decade's rails: from the session cache first, from the network
+     * behind them.
+     *
+     * The page is screen-scoped, so without a cache to reach for, every return
+     * to a decade paid for all six discover rails again behind a fresh skeleton
+     * (see [BrowseRailCache]). A re-entry of a page this session already loaded
+     * publishes its rails before this call returns and refreshes behind them.
+     *
+     * [refresh] is the retry path: a manual retry means the page is wrong, so it
+     * ignores the cached entry and replaces it on arrival.
+     */
+    fun load(decadeStart: Int, genreId: Int? = null, refresh: Boolean = false) {
         // Same-route guard so Back-restore doesn't reload and clear state.
         // The genre MUST be part of the comparison: a chip click re-enters
         // with the same decade but a new genre, and the old guard (decade
         // only) swallowed every click — the chips did nothing.
         if (currentDecadeStart == decadeStart &&
             currentGenreId == genreId &&
-            _sections.value.isNotEmpty()
+            _sections.value.isNotEmpty() &&
+            !refresh
         ) return
         currentDecadeStart = decadeStart
         currentGenreId = genreId
@@ -292,22 +308,45 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
         // than appended to as it arrives.
         val slots = ConcurrentHashMap<Int, StudioSection>()
 
+        // A decade and a decade narrowed by a genre chip are different pages.
+        val cacheKey = BrowseRailCache.keyOf("decade", decadeStart, genreId)
+
         val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
             if (generation == loadGeneration) {
                 slots[index] = section
-                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                _sections.value = sectionsInRailOrder(slots)
                 // The skeleton goes as soon as there is a rail to look at: the
                 // rest of the page keeps filling in behind the viewer.
                 _isLoading.value = false
             }
         }
 
-        loadJob = viewModelScope.launch {
-            _isLoading.value = true
+        // The cached rails go into the SAME slots the refresh streams into, so
+        // each rail that arrives replaces its cached self in place.
+        val cached = if (refresh) null else BrowseRailCache.rails(cacheKey)
+
+        if (cached != null) {
+            slots.putAll(cached)
+            val cachedSections = sectionsInRailOrder(slots)
             _error.value = null
-            _sections.value = emptyList()
-            _resolvedIds.value = emptyMap()
-            _pagingStates.value = emptyMap()
+            _isLoading.value = false
+            _sections.value = cachedSections
+            _pagingStates.value = pagingStatesFor(cachedSections)
+        }
+
+        loadJob = viewModelScope.launch {
+            if (cached == null) {
+                _isLoading.value = true
+                _error.value = null
+                _sections.value = emptyList()
+                _resolvedIds.value = emptyMap()
+                _pagingStates.value = emptyMap()
+            } else {
+                // Rows come from the cache; badges never do.
+                launch {
+                    resolveAndPreloadWatched(_sections.value)
+                }
+            }
 
             try {
                 val genreId = currentGenreId
@@ -324,15 +363,13 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 if (generation != loadGeneration) return@launch
 
                 _sections.value = result
-                _pagingStates.value = result.associate { section ->
-                    section.title to RailPagingState(
-                        nextPage = 2,
-                        hasMore = section.items.isNotEmpty(),
-                        isLoadingMore = false
-                    )
-                }
+                _pagingStates.value = pagingStatesFor(result)
+                BrowseRailCache.store(cacheKey, refreshedSlots(slots, result))
             } catch (e: Exception) {
-                if (generation == loadGeneration) {
+                if (generation == loadGeneration && cached == null) {
+                    // A failed REFRESH leaves the cached page on screen - stale
+                    // beats empty, the same rule the CW rail follows for a
+                    // tracker that never answers.
                     _error.value = e.message ?: "Failed to load decade"
                 }
                 Log.e("DECADE_VM", "load failed for decade $decadeStart", e)
@@ -348,6 +385,18 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+
+    /** The page's paging state, in the shape [load] derives today. */
+    private fun pagingStatesFor(
+        sections: List<StudioSection>
+    ): Map<String, RailPagingState> =
+        sections.associate { section ->
+            section.title to RailPagingState(
+                nextPage = 2,
+                hasMore = section.items.isNotEmpty(),
+                isLoadingMore = false
+            )
+        }
 
     fun loadMoreSection(title: String) {
         val decadeStart = currentDecadeStart ?: return

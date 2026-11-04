@@ -446,7 +446,9 @@ fun StudioScreen(
                             message = "Error: $error",
                             // Same argument list as the LaunchedEffect above
                             // (including the current chip selection, which the
-                            // VM's same-route guard compares).
+                            // VM's same-route guard compares), plus the retry
+                            // flag that keeps it off this session's cached page
+                            // for the route (see BrowseRailCache).
                             onRetry = {
                                 viewModel.load(
                                     id,
@@ -456,7 +458,8 @@ fun StudioScreen(
                                     networkIsCompany,
                                     originalsCompanyId,
                                     name,
-                                    viewModel.selectedGenreId.value
+                                    viewModel.selectedGenreId.value,
+                                    refresh = true
                                 )
                             },
                             modifier = Modifier.fillParentMaxSize()

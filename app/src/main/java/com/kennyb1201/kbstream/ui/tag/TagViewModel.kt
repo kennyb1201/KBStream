@@ -7,9 +7,12 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.tmdb.BrowseRailCache
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.refreshedSlots
+import com.kennyb1201.kbstream.data.tmdb.sectionsInRailOrder
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
@@ -244,10 +247,25 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
+    /**
+     * Loads this page's rails: from the session cache first, from the network
+     * behind them.
+     *
+     * A browse page is screen-scoped, so without a cache to reach for, every
+     * return to a genre or keyword paid for all six discover rails again behind
+     * a fresh skeleton (see [BrowseRailCache], which is where that memo lives
+     * for exactly this reason). A re-entry of a page this session already
+     * loaded publishes its rails before this call returns - no skeleton, no
+     * clear - and refreshes behind them.
+     *
+     * [refresh] is the retry path: a manual retry means the page is wrong, so it
+     * ignores the cached entry and replaces it on arrival.
+     */
     fun load(
         id: Int,
         isKeyword: Boolean,
-        type: String
+        type: String,
+        refresh: Boolean = false
     ) {
         currentId = id
         currentIsKeyword = isKeyword
@@ -260,22 +278,52 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         // than appended to as it arrives.
         val slots = ConcurrentHashMap<Int, StudioSection>()
 
+        val cacheKey =
+            BrowseRailCache.keyOf(
+                if (isKeyword) "keyword" else "genre",
+                id
+            )
+
         val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
             if (generation == loadGeneration) {
                 slots[index] = section
-                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                _sections.value = sectionsInRailOrder(slots)
                 // The skeleton goes as soon as there is a rail to look at: the
                 // rest of the page keeps filling in behind the viewer.
                 _isLoading.value = false
             }
         }
 
-        loadJob = viewModelScope.launch {
-            _isLoading.value = true
+        // The cached rails go into the SAME slots the refresh streams into, so
+        // each rail that arrives replaces its cached self in place - the page
+        // never reshuffles, and a rail that is still loading keeps its rows.
+        val cached = if (refresh) null else BrowseRailCache.rails(cacheKey)
+
+        if (cached != null) {
+            slots.putAll(cached)
+            val cachedSections = sectionsInRailOrder(slots)
             _error.value = null
-            _sections.value = emptyList()
-            _resolvedIds.value = emptyMap()
-            _pagingStates.value = emptyMap()
+            _isLoading.value = false
+            _sections.value = cachedSections
+            _pagingStates.value = pagingStatesFor(cachedSections)
+        }
+
+        loadJob = viewModelScope.launch {
+            if (cached == null) {
+                _isLoading.value = true
+                _error.value = null
+                _sections.value = emptyList()
+                _resolvedIds.value = emptyMap()
+                _pagingStates.value = emptyMap()
+            } else {
+                // Rows come from the cache; badges never do. The screen's
+                // watched resolution runs here exactly as it does on a first
+                // visit, so a title marked watched elsewhere is badged right on
+                // the re-entry (see the spec's F2 rule).
+                launch {
+                    resolveAndPreloadWatched(_sections.value)
+                }
+            }
 
             try {
                 val result = if (isKeyword) {
@@ -287,15 +335,14 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 if (generation != loadGeneration) return@launch
 
                 _sections.value = result
-                _pagingStates.value = result.associate { section ->
-                    section.title to RailPagingState(
-                        nextPage = 2,
-                        hasMore = section.items.isNotEmpty(),
-                        isLoadingMore = false
-                    )
-                }
+                _pagingStates.value = pagingStatesFor(result)
+                BrowseRailCache.store(cacheKey, refreshedSlots(slots, result))
             } catch (e: Exception) {
-                if (generation == loadGeneration) {
+                if (generation == loadGeneration && cached == null) {
+                    // A failed REFRESH leaves the page the viewer is looking at
+                    // exactly as it is - stale beats empty, the same rule the CW
+                    // rail follows for a tracker that never answers. Only a
+                    // failed first visit has no page to keep.
                     _error.value = e.message ?: "Failed to load tag"
                 }
                 Log.e("TAG_VM", "load failed", e)
@@ -311,6 +358,18 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /** The page's paging state, in the shape [load] derives today. */
+    private fun pagingStatesFor(
+        sections: List<StudioSection>
+    ): Map<String, RailPagingState> =
+        sections.associate { section ->
+            section.title to RailPagingState(
+                nextPage = 2,
+                hasMore = section.items.isNotEmpty(),
+                isLoadingMore = false
+            )
+        }
 
     fun loadMoreSection(title: String) {
         val screenId = currentId ?: return

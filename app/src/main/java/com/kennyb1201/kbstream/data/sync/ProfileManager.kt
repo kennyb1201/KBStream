@@ -275,6 +275,10 @@ object ProfileManager {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "addon reload failed on profile switch", e)
         }
+        // Browse pages remember their rails for the session so a return trip is
+        // instant (see BrowseRailCache). That memo is not per-profile, so it is
+        // part of what a switch drops with everything else above.
+        runCatching { com.kennyb1201.kbstream.data.tmdb.BrowseRailCache.clear() }
         runCatching { com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches() }
         // MDBList's key is per-profile too: its process-wide watched
         // snapshot and paused-session (Continue Watching) caches otherwise

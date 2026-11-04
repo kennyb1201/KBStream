@@ -433,10 +433,21 @@ fun TagScreen(
                     item(key = "error") {
                         KBStatusMessage(
                             message = "Error: $error",
-                            // Same argument list as the LaunchedEffect above:
-                            // a failed load leaves the VM with no sections, so
-                            // its same-route guard lets this through.
-                            onRetry = { viewModel.load(id, isKeyword, type) },
+                            // Same argument list as the LaunchedEffect above,
+                            // plus the retry flag: a failed load leaves the VM
+                            // with no sections, so its same-route guard lets
+                            // this through - and the flag keeps the retry off
+                            // this session's cached page for the route, because
+                            // "try again" means the page is wrong, not "show me
+                            // the old one again" (see BrowseRailCache).
+                            onRetry = {
+                                viewModel.load(
+                                    id,
+                                    isKeyword,
+                                    type,
+                                    refresh = true
+                                )
+                            },
                             modifier = Modifier.fillParentMaxSize()
                         )
                     }

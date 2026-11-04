@@ -452,11 +452,14 @@ fun DecadeScreen(
                             // Re-runs the load the LaunchedEffect above runs:
                             // the VM's same-route guard only skips when it
                             // already holds sections, and a failed load holds
-                            // none, so this really does re-fetch.
+                            // none, so this really does re-fetch - with the
+                            // retry flag, which keeps it off this session's
+                            // cached page for the route (see BrowseRailCache).
                             onRetry = {
                                 viewModel.load(
                                     decadeStart,
-                                    viewModel.selectedGenreId.value
+                                    viewModel.selectedGenreId.value,
+                                    refresh = true
                                 )
                             },
                             modifier = Modifier.fillParentMaxSize()
