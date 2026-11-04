@@ -7,7 +7,7 @@
 
 A media streaming app for Android TV / Fire TV. Discovers movies and series
 via TMDB, resolves playback through Stremio-style addons and KB
-collections, tracks watching across devices via Simkl and Supabase sync, and
+collections, tracks watching across devices via Simkl, Trakt, Mdblist, and Supabase sync, and
 plays it all in a native ExoPlayer-based player (including IPTV live TV with
 EPG).
 
