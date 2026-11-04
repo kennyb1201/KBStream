@@ -766,7 +766,7 @@ internal fun HeroInlineTrailerPlayer(
      * as one "the identity classifier never sees").
      *
      * The default is the old behaviour, so every surface that does not plan a
-     * retry for it (the phone's Detail hero, the billboard) keeps dropping the
+     * retry for it (the phone's Detail hero, its Home hero) keeps dropping the
      * source exactly as before.
      */
     onStalled: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> onEnded() },
@@ -1423,7 +1423,7 @@ private fun HomeHero(
     var trailerDurationMs by remember(trailerKey) { mutableLongStateOf(0L) }
 
     // The source that is mounted, kept past its own teardown: onEnded() runs
-    // BEFORE onFailed()/onIdentityBlocked(), so by the time a death is planned
+    // BEFORE onFailed / onIdentityBlocked, so by the time a death is planned
     // the playback that died is gone from state - and its shape (adaptive or
     // muxed, the signed URL's `clen`) is what the plan needs.
     var trailerMountedSource by remember(trailerKey) {

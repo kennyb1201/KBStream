@@ -309,8 +309,13 @@ class TrailerBoundaryResumeContractTest {
                 handler.contains("attempts=")
         )
         assertTrue(
-            "a replacement that resolves to NOTHING poisons only if the ladder was walked",
-            flat(home).contains("if (heroTrailerResolveFailurePoisons(pending.excludedClients)) {")
+            "a replacement that resolves to NOTHING poisons only if the ladder was " +
+                "walked - and a tokenless HOLD is not that verdict, so it is checked " +
+                "before the rule",
+            flat(home).contains(
+                "} else if ( heroTrailerResolveFailurePoisons(pending.excludedClients) ) {"
+            ) &&
+                flat(home).contains("if (error is TokenlessHoldException) {")
         )
     }
 
