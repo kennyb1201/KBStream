@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.images.ImageOverrides
@@ -186,6 +187,9 @@ fun StreamsScreen(
     val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
     val droppedByTypeGuard by viewModel.droppedByTypeGuard.collectAsStateWithLifecycle()
     val schemeResetOffer by viewModel.schemeResetOffer.collectAsStateWithLifecycle()
+    // What the Cached-only filter is hiding right now: the empty state has to be
+    // able to say "your setting hid these" rather than "this title has none".
+    val cachedOnly by viewModel.cachedOnly.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -272,7 +276,11 @@ fun StreamsScreen(
             episode = episode,
             runtimeMinutes = runtimeMinutes,
             binge = bingeIdentity,
-            addonOf = { stream -> addonOfStream(stream) }
+            addonOf = { stream -> addonOfStream(stream) },
+            // The set this install's ranker was built with (see
+            // DebridAddons.forDevice): the learned bitrate gate must never
+            // reach a debrid row.
+            debridAddons = DebridAddons.forDevice(context)
         )
 
     /*
@@ -449,6 +457,20 @@ fun StreamsScreen(
 
         droppedByTypeGuard > 0 ->
             "$droppedByTypeGuard source(s) were hidden because they did not match this title."
+
+        // The filter's own answer, and an actionable one: every hash row here is
+        // uncached, so the picker is empty BY the setting (spec F4) - not
+        // because the providers had nothing.
+        cachedOnly.hidden > 0 ->
+            "No cached sources. Cached sources only is hiding " +
+                "${cachedOnly.hidden} source(s) your TorBox account does not hold yet - " +
+                "turn it off in Settings to see them."
+
+        // The switch is on with nothing to check with: said out loud, or it
+        // reads as broken rather than unconfigured.
+        cachedOnly.keyMissing ->
+            "Cached sources only is on, but no TorBox key is set, so nothing can be " +
+                "checked. Add a key in Settings, or turn the setting off."
 
         else -> "Try another add-on or check that the provider is online."
     }

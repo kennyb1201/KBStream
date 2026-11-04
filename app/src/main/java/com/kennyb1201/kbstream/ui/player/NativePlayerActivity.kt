@@ -103,6 +103,8 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.player.fetchLanesFor
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
@@ -1560,6 +1562,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // stalls it keeps producing.
     private val rebufferDownshift = RebufferDownshiftTracker()
     private var rebufferDownshiftGivenUp = false
+
+    // The learned bitrate ceiling's half of this session (see AutoplayBitrate):
+    // a qualified stall is the one signal that lowers or creates it, and a clean
+    // play at the end raises it. Once per session - the FIRST qualified stall
+    // wins - so a film that stalls ten times does not ratchet the ceiling to
+    // nothing, and the clean write never follows a stall in the same session.
+    private var ceilingStallSeen = false
+    private var ceilingWritten = false
 
     // When the last seek was processed, so a seek's own buffering is not read
     // as a starved source (see [rebufferFollowsSeek]). 0 = no seek this session.
@@ -10315,16 +10325,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 subtitleText.background = null
                 return
             }
-            val sizes = listOf(11f, 14f, 18f)
-            // getOrElse, not []: subtitleSize is a SYNCED preference, so a blob
-            // written by another build (a fourth size that exists there and not
-            // here), a downgrade/sideload, or a corrupt value can carry an index
-            // outside this list - and the throw happens on the first cue of
-            // every launch, with no way out but clearing prefs. The MPV engine's
-            // twin already reads its size through when/else.
+            // One step list, shared with the MPV engine: its regular subtitles
+            // are sized from these same three numbers (see
+            // SubtitleOverlayStyle.mpvFontSize), so one setting cannot mean 18sp
+            // here and something else there.
+            // getOrElse, not [] (inside exoTextSp): subtitleSize is a SYNCED
+            // preference, so a blob written by another build (a fourth size that
+            // exists there and not here), a downgrade/sideload, or a corrupt value
+            // can carry an index outside this list - and the throw happens on the
+            // first cue of every launch, with no way out but clearing prefs.
             subtitleText.setTextSize(
                 TypedValue.COMPLEX_UNIT_SP,
-                sizes.getOrElse(subtitleSize) { 14f }
+                SubtitleOverlayStyle.exoTextSp(subtitleSize)
             )
             // Embedded styling (ASS BackColour, styled WebVTT) can carry its
             // own background spans on the cue text (position-driven external
@@ -14673,6 +14685,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
         releaseAssRenderer()
+        // The learned ceiling's clean-play write, read while the player still
+        // has a playhead to answer with (see AutoplayBitrate).
+        noteCleanPlaybackForCeiling()
         exoPlayer?.release()
         exoPlayer = null
         lanePool?.release()
@@ -14974,6 +14989,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val now = System.currentTimeMillis()
         rebufferDownshift.record(now)
         if (!rebufferDownshift.due(now)) return false
+        // A qualified stall is one of the two signals that teach the learned
+        // bitrate ceiling: this row could not hold its own bitrate HERE (see
+        // AutoplayBitrate). Recorded BEFORE the switch below, which re-points
+        // currentUrl at the next source and would hand this write the wrong row.
+        noteQualifiedStallForCeiling()
         val stalledCount = rebufferDownshift.count(now)
         Log.w(
             "PLAYER_STALL",
@@ -15015,6 +15035,63 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             )
         }
         return switching
+    }
+
+    /**
+     * The average bitrate of the row this session is PLAYING, or null when this
+     * session may teach the learned ceiling nothing.
+     *
+     * Read through [AutoplayBitrate.sessionEstimateMbps], which is the one rule
+     * both engines use: the row is matched by the URL actually playing, and a
+     * debrid row, a resolved hash link, or a row with no size/runtime answers
+     * null. The debrid set is the same one the ranker and the pick were given
+     * (see DebridAddons.forDevice).
+     */
+    private fun ceilingEstimateForThisSession(): Double? =
+        AutoplayBitrate.sessionEstimateMbps(
+            playedUrl = currentUrl,
+            sources = sources,
+            sourceAddons = sourceAddons,
+            runtimeMinutes = launchRuntimeMinutes,
+            debridAddons = DebridAddons.forDevice(this)
+        )
+
+    /**
+     * The session's qualified-stall half of the learned ceiling: this row could
+     * not hold its own bitrate, so auto-play should not reach for that much
+     * again on this box.
+     *
+     * Called from the one place a stall is qualified (the rebuffer downshift's
+     * due branch), once per session - a film that stalls repeatedly must not
+     * ratchet the ceiling down once per stall.
+     */
+    private fun noteQualifiedStallForCeiling() {
+        if (ceilingStallSeen) return
+        ceilingStallSeen = true
+        if (ceilingWritten) return
+        val estimate = ceilingEstimateForThisSession() ?: return
+        ceilingWritten = AppPreferences.noteQualifiedStall(this, estimate)
+    }
+
+    /**
+     * The session's clean-play half of the learned ceiling: a minute past the
+     * first frame with no qualified stall proves this row's bitrate held here,
+     * so an EXISTING ceiling rises to it (see AutoplayBitrate.afterCleanPlay).
+     *
+     * Read at session end, and only there: a clean play is a statement about a
+     * whole session, which a running one cannot make yet.
+     */
+    private fun noteCleanPlaybackForCeiling() {
+        if (isLiveChannel || ceilingStallSeen || ceilingWritten) return
+        if (!firstFrameRendered) return
+        // A session that hit a playback error is not a clean one, and one that
+        // was already torn down by onStop keeps its last playhead in
+        // [carryPositionMs] (onDestroy runs after that release).
+        if (lastPlaybackError != null) return
+        val watchedMs = (exoPlayer?.currentPosition ?: 0L).takeIf { it > 0L } ?: carryPositionMs
+        if (watchedMs < AutoplayBitrate.CLEAN_PLAY_MS) return
+        val estimate = ceilingEstimateForThisSession() ?: return
+        ceilingWritten = AppPreferences.noteCleanPlayback(this, estimate)
     }
 
     /**

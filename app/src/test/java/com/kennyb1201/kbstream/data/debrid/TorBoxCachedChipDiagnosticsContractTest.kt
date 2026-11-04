@@ -57,10 +57,13 @@ class TorBoxCachedChipDiagnosticsContractTest {
             noHash.contains("none carried an infohash")
         )
         assertTrue(
-            "and it must still return before any request is made",
+            "and it must still answer before any request is made - UNAVAILABLE, " +
+                "not an empty set, so the cached-only filter can tell \"not judged\" " +
+                "from \"none cached\"",
             noHash.indexOf("TorBoxTrace.note(") >= 0 &&
-                noHash.indexOf("return@withContext emptySet()") >= 0 &&
-                noHash.indexOf("TorBoxTrace.note(") < noHash.indexOf("return@withContext emptySet()")
+                noHash.indexOf("return@withContext TorBoxCachedAnswer.Unavailable") >= 0 &&
+                noHash.indexOf("TorBoxTrace.note(") <
+                noHash.indexOf("return@withContext TorBoxCachedAnswer.Unavailable")
         )
     }
 

@@ -126,9 +126,11 @@ class StreamsIdentityContractTest {
 
         assertTrue("an in-flight picker load is cancelled", reset.contains("loadJob?.cancel()"))
         listOf(
-            "_streams.value = emptyList()",
-            "_addonGroups.value = emptyList()",
-            "_sourceAddons.value = emptyList()",
+            // The rows, their add-on names and the tabs are cleared through the
+            // publish helpers, which is what keeps the cached-only filter's raw
+            // copy of the list from outliving the profile that fetched it.
+            "publishStreams(emptyList(), emptyList())",
+            "publishGroups(emptyList())",
             "_debug.value = emptyList()",
             "_loadedKey.value = null",
             "lastRequest = null"

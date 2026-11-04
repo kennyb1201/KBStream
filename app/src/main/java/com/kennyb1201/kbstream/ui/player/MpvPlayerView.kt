@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
+import android.util.TypedValue
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kennyb1201.kbstream.data.player.LanguageMatch
@@ -386,6 +387,24 @@ class MpvPlayerView @JvmOverloads constructor(
     private val recentErrorLinesLock = Any()
 
     private var durationSec: Double? = null
+
+    /**
+     * `video-params/h` for the file playing now, in pixels: 0 until the first
+     * frame decodes.
+     *
+     * The subtitle size is computed against it (see
+     * [SubtitleOverlayStyle.mpvFontSize]), and it is remembered here so a size
+     * change mid-playback computes against the same height the picture has,
+     * instead of falling back or waiting for another frame.
+     */
+    private var videoHeightPx = 0
+
+    /**
+     * The size index last applied, so a height arriving (or changing) can
+     * re-apply the size alone - background and position do not depend on it.
+     */
+    private var subtitleSize = SubtitleOverlayStyle.SIZE_NEUTRAL
+
     private var pauseState = false
     private var cacheStall = false
     private var lastPositionMs = 0L
@@ -1267,18 +1286,18 @@ class MpvPlayerView @JvmOverloads constructor(
     /**
      * Subtitle size / background / position, the app's three-step controls.
      * Text tracks only: an ASS track keeps the styling its author shipped (see
-     * [applyOptions]).
+     * [applyOptions]), and nothing here picks an ASS option - mpv does not let
+     * `sub-font-size` restyle a script's own typesetting.
      */
     fun applySubtitleAppearance(size: Int, background: Int, position: Int) {
-        // --sub-font-size is mpv's own scale (55 is its default), so the three
-        // steps are that +/-20% - the same neutral the main player's 14sp step
-        // sits at, so a title does not change size when it is handed over.
-        val font = when (size) {
-            0 -> 44.0
-            2 -> 66.0
-            else -> 55.0
-        }
-        styleOption("sub-font-size", font.toString())
+        // The size is COMPUTED, not a fixed table: mpv draws its own cues at a
+        // scale sized against the video's height, while the main player paints
+        // text cues at 11 / 14 / 18sp against the display's density, so the
+        // same setting came out far bigger here on the same title. Remembered
+        // so a height that arrives later can re-apply this index (see
+        // applySubtitleFontSize).
+        subtitleSize = size
+        applySubtitleFontSize()
         // The three fills are the main player's three, to the byte
         // (NativePlayerActivity.renderText paints 0x80000000, 0xE5000000 and
         // 0xB3000000): the same subtitle in the same app cannot come out 90%
@@ -1315,6 +1334,28 @@ class MpvPlayerView @JvmOverloads constructor(
                 else -> "100"
             }
         )
+    }
+
+    /**
+     * Writes `sub-font-size` for [subtitleSize] and the height in hand.
+     *
+     * Kept apart from [applySubtitleAppearance] because a height that arrives
+     * (the first frame, or a resolution switch mid-stream) changes ONLY the
+     * size: background and position were already applied and re-writing them
+     * would be a second, pointless style change.
+     *
+     * `COMPLEX_UNIT_SP` resolves through the display's scaled density, so that
+     * is what the sp step is converted with - the same conversion the main
+     * player's `renderText` gets from `setTextSize(COMPLEX_UNIT_SP, ...)`.
+     */
+    private fun applySubtitleFontSize() {
+        val pixelsPerSp = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP,
+            1f,
+            resources.displayMetrics
+        )
+        val font = SubtitleOverlayStyle.mpvFontSize(subtitleSize, pixelsPerSp, videoHeightPx)
+        styleOption("sub-font-size", font.toString())
     }
 
     /**
@@ -1735,6 +1776,11 @@ class MpvPlayerView @JvmOverloads constructor(
         // rebuilt whenever a new file (or another track) brings a different
         // one.
         MpvBackend.observeProperty("audio-params/channel-count", MpvFormat.MPV_FORMAT_INT64)
+        // The subtitle size is computed against the video's own height, so the
+        // first frame - and any resolution switch after it - has to re-apply
+        // it. Not observed until now, which left every cue at whatever size the
+        // open applied.
+        MpvBackend.observeProperty("video-params/h", MpvFormat.MPV_FORMAT_INT64)
     }
 
     // --- Surface lifecycle --------------------------------------------------
@@ -2334,6 +2380,20 @@ class MpvPlayerView @JvmOverloads constructor(
             // the channel count; the boost's limiter rides the same chain).
             "audio-params/channel-count" ->
                 if (dialogueBoost > 0 || volumeBoostDb > 0) applyAudioFilters()
+
+            // The first frame, and any resolution switch: the subtitle size is
+            // computed against this, so it moves with it. Size only - the
+            // background and the position do not depend on the height. Posted
+            // to the view rather than applied here, like the other callbacks
+            // this event thread drives: the appearance was set up on the main
+            // thread, and the write that depends on it belongs there too.
+            "video-params/h" -> {
+                val height = value.toInt().coerceAtLeast(0)
+                if (height != videoHeightPx) {
+                    videoHeightPx = height
+                    post { applySubtitleFontSize() }
+                }
+            }
         }
     }
 

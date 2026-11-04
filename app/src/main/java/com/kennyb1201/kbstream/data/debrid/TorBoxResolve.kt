@@ -144,7 +144,17 @@ internal object TorBoxResolve {
             // Shares the badge pass's memo: when the chip is already on screen
             // this answers without a request, and when it is not (a fresh
             // process, a list whose badge pass has not finished) it asks once.
-            val cached = TorBoxClient.checkCached(context, listOf(hash))
+            //
+            // Unavailable is unplayable, exactly as an empty set was: a hash
+            // nobody proved cached cannot be served off TorBox's cache, and this
+            // path adds nothing that is not already there.
+            val cached = when (val answer = TorBoxClient.checkCached(context, listOf(hash))) {
+                is TorBoxCachedAnswer.Answered -> answer.cached
+                TorBoxCachedAnswer.Unavailable -> {
+                    TorBoxTrace.note("resolve · no cached answer, left unplayable")
+                    return@withContext null
+                }
+            }
             if (hash !in cached) {
                 TorBoxTrace.note("resolve · the source is not cached, left unplayable")
                 return@withContext null

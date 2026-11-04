@@ -1145,6 +1145,21 @@ private fun IntegrationsPaneMobile(
         // is CACHED ONLY (spec S2/D7): TorBox Instant serves only torrents its
         // cache already holds, so this registers one of those and plays it.
         // Off by default (see TorBoxResolve).
+        // The listing's own filter, beside the account's other two switches
+        // (spec F1). It hides uncached HASH rows from the picker; direct links
+        // stay, and resolving, auto-play and downloads are untouched. Off by
+        // default, and inert without a key - a keyless device keeps today's
+        // list rather than an empty one.
+        SyncedToggleMobile(
+            label = "Cached sources only",
+            description = "Hide sources your TorBox account does not already hold, so the " +
+                "picker lists what will start at once. Sources with a direct link are always " +
+                "shown. Nothing else changes: uncached sources were already refused on play " +
+                "and skipped by auto-play. Needs a TorBox key; without one the list is " +
+                "unchanged.",
+            get = AppPreferences::getTorboxCachedOnly,
+            set = AppPreferences::setTorboxCachedOnly
+        )
         SyncedToggleMobile(
             label = "Add cached torrents to TorBox on play",
             description = "TorBox Instant only plays torrents its cache already holds. With " +

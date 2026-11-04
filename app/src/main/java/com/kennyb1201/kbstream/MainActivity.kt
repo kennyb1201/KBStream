@@ -77,6 +77,7 @@ import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayWalk
 import com.kennyb1201.kbstream.data.player.BingeGroupMemory
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
@@ -1712,7 +1713,11 @@ fun AppRoot(
                 episode = pending.target.episode,
                 runtimeMinutes = pending.target.runtimeMinutes,
                 binge = bingeWanted,
-                addonOf = addonOf
+                addonOf = addonOf,
+                // The same set the resolve's ranker speaks for (see
+                // DebridAddons): a debrid pick is never gated by the learned
+                // bitrate ceiling.
+                debridAddons = DebridAddons.forDevice(context)
             )
         }
         // One TOTAL budget for the walk (spec C20): the per-call timeouts stay

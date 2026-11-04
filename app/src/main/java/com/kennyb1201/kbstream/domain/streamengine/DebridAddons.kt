@@ -80,4 +80,20 @@ internal object DebridAddons {
      */
     fun servedIds(hasAccount: Boolean): Set<String> =
         if (hasAccount) normalizedIds() else emptySet()
+
+    /**
+     * [servedIds] for this install, read from the device's own configuration.
+     *
+     * The pick rule asks the same question the ranker does - is this row served
+     * by the viewer's own debrid account? - so it reads the same fact the same
+     * way. A surface that has no ranker of its own (the two pickers, which are
+     * handed an already-ranked list) uses this to hand [AutoplayPick.pick] the
+     * set its ranker counterpart would have used. One reader, so a picker and
+     * the background resolve cannot disagree about which add-ons are debrid.
+     */
+    fun forDevice(context: android.content.Context): Set<String> =
+        servedIds(
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getTorboxApiKey(context).isNotBlank()
+        )
 }

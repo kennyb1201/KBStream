@@ -672,6 +672,17 @@ object StreamRanker {
             DEBRID_TAG.containsMatchIn(text)
 
     /**
+     * [isDebridServed] for a caller that has not read the stream's text itself.
+     *
+     * The ranker reads the text once per stream (see [searchableText]) because
+     * it sorts with it; a pick rule asking whether a row is debrid-served only
+     * needs the answer, and must read the same text the sort did rather than
+     * its own copy of the fields.
+     */
+    internal fun isDebridServed(stream: Stream): Boolean =
+        isDebridServed(stream, searchableText(stream))
+
+    /**
      * True when the addon an entry came from is itself debrid-backed.
      *
      * The URL/tag rule above reads evidence the addon leaves in the entry; this

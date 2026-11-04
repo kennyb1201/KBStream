@@ -738,6 +738,9 @@ fun SettingsScreen(
     var torboxResolveCreate by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getTorboxResolveCreate(context))
     }
+    var torboxCachedOnly by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getTorboxCachedOnly(context))
+    }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
     // the rail is ten panes deep and the one being tuned is rarely the first.
@@ -1759,6 +1762,28 @@ fun SettingsScreen(
                     onToggle = {
                         torboxResolveCreate = it
                         AppPreferences.setTorboxResolveCreate(context, it)
+                    }
+                )
+
+                // ── TORBOX: CACHED SOURCES ONLY IN THE PICKER ─────────
+                // The listing's filter (spec F1). Off by default, and the
+                // description says exactly what it does NOT do, because
+                // "cached" here is about seeing, not about playing: resolving
+                // and auto-play were already cached-only on their own terms
+                // (see TorBoxResolve, AutoplayWalk).
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "Cached sources only",
+                    description = "Hide sources your TorBox account does not already hold, so " +
+                        "the picker lists what will start at once. Sources with a direct " +
+                        "link are always shown, and nothing else changes: uncached sources " +
+                        "were already refused on play and skipped by auto-play, and this does " +
+                        "not add or download anything. Needs a TorBox key; without one the " +
+                        "list is unchanged.",
+                    checked = torboxCachedOnly,
+                    onToggle = {
+                        torboxCachedOnly = it
+                        AppPreferences.setTorboxCachedOnly(context, it)
                     }
                 )
 

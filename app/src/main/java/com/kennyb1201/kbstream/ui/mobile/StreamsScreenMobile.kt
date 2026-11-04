@@ -158,6 +158,9 @@ fun StreamsScreenMobile(
         val addonFailures by viewModel.addonFailures.collectAsStateWithLifecycle()
         val droppedByTypeGuard by viewModel.droppedByTypeGuard.collectAsStateWithLifecycle()
         val schemeResetOffer by viewModel.schemeResetOffer.collectAsStateWithLifecycle()
+        // The same state the television picker reads, from the same ViewModel:
+        // the Cached-only filter is applied once, where the list is published.
+        val cachedOnly by viewModel.cachedOnly.collectAsStateWithLifecycle()
         val context = LocalContext.current
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         // This phone's downloads for the profile on screen. The rows read their
@@ -495,6 +498,18 @@ fun StreamsScreenMobile(
                         droppedByTypeGuard > 0 ->
                             "$droppedByTypeGuard source(s) were hidden because they did not " +
                                 "match this title."
+
+                        // The Cached-only filter emptied the list: a setting the
+                        // viewer can act on, named as such rather than the
+                        // generic provider hint (spec F4).
+                        cachedOnly.hidden > 0 ->
+                            "No cached sources. Cached sources only is hiding " +
+                                "${cachedOnly.hidden} source(s) your TorBox account does not " +
+                                "hold yet - turn it off in Settings to see them."
+
+                        cachedOnly.keyMissing ->
+                            "Cached sources only is on, but no TorBox key is set, so nothing " +
+                                "can be checked. Add a key in Settings, or turn the setting off."
 
                         else -> "Try another add-on or check that the provider is online."
                     }

@@ -86,7 +86,10 @@ class StreamsAddonOrderContractTest {
                 // request-ticket guard (spec C8); the CONTENT of the list is the
                 // same one the merged sources read.
                 fetch.contains("val addonGroupList = results") &&
-                fetch.contains("_addonGroups.value = addonGroupList")
+                // Published through the cached-only filter's helper (the only
+                // writer of _addonGroups), so the tab is still the same list the
+                // merged sources read before the filter is applied.
+                fetch.contains("publishGroups(addonGroupList)")
         )
         assertTrue(
             "the per-add-on slices stay filtered to the add-ons that actually answered",

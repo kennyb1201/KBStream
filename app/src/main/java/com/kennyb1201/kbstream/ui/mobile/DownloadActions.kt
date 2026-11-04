@@ -24,6 +24,7 @@ import com.kennyb1201.kbstream.data.download.DownloadTarget
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.download.WAITING_FOR_WIFI
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayPick
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -342,7 +343,11 @@ internal fun autoplayPickFor(
     episode = episode,
     runtimeMinutes = runtimeMinutes,
     binge = binge,
-    addonOf = addonOf
+    addonOf = addonOf,
+    // Read here rather than taken as a parameter, so the one phone entry point
+    // cannot be called without it: a debrid row is never gated by the learned
+    // bitrate ceiling (see DebridAddons.forDevice).
+    debridAddons = DebridAddons.forDevice(context)
 )
 
 /** The line under a download's title on the Downloads screen. */

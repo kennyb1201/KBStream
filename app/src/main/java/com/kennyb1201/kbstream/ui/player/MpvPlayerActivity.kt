@@ -63,6 +63,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
@@ -437,6 +438,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     /** Recoveries spent on the current quiet spell; cleared by real progress. */
     private var stallRecoveries = 0
+
+    // The learned bitrate ceiling's half of this session (see AutoplayBitrate):
+    // the watchdog giving up is this engine's one qualified stall, and a clean
+    // play at the end raises an existing ceiling. Once per session - the first
+    // qualified stall wins - exactly as the main player's fields of the same
+    // name do.
+    private var ceilingStallSeen = false
+    private var ceilingWritten = false
+
+    /**
+     * The engine's mirror of the main player's `firstFrameRendered`: set from
+     * [MpvPlayerView.onPictureReady], the moment mpv has a frame to draw.
+     *
+     * Read by the learned ceiling's clean-play test, which counts a minute PAST
+     * THE FIRST FRAME rather than a minute of file loaded - the open of a slow
+     * source is not minutes of sustained read (see [noteCleanPlaybackForCeiling]).
+     */
+    private var firstFrameRendered = false
     private var stallLastProgressAtMs = 0L
     private var stallLastPositionMs = 0L
     private var stallLastBufferedMs = 0L
@@ -1167,6 +1186,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onPictureReady = {
+            firstFrameRendered = true
             // First checkpoint for the death marker: a picture exists, so a
             // death from here is a running session (see PlaybackDeathMarker).
             playbackDeathToken?.let {
@@ -6585,6 +6605,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 "MPV stall gave up",
                 "$where after $stallRecoveries recoveries"
             )
+            // This engine's qualified stall: the source could not keep up after
+            // every recovery it was given, so the learned ceiling learns not to
+            // reach for that bitrate again (see AutoplayBitrate).
+            noteQualifiedStallForCeiling()
             showError(
                 "The stream stalled - no data for ${quietMs / 1000}s.",
                 "The player stopped reconnecting after ${STALL_MAX_RECOVERIES} " +
@@ -6632,6 +6656,54 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // reload cannot loop forever.
         retryCurrentSource()
         handler.postDelayed({ tickStallWatchdog(token) }, STALL_TICK_MS)
+    }
+
+    /**
+     * The average bitrate of the row this session is PLAYING, or null when this
+     * session may teach the learned ceiling nothing.
+     *
+     * Read through [AutoplayBitrate.sessionEstimateMbps], the one rule both
+     * engines use: the row is matched by the URL actually playing, and a debrid
+     * row, a resolved hash link, or a row with no size/runtime answers null. A
+     * TorBox CDN resolve says nothing about what a file host will sustain, which
+     * is why the debrid set here is the same one the ranker and the pick got.
+     */
+    private fun ceilingEstimateForThisSession(): Double? =
+        AutoplayBitrate.sessionEstimateMbps(
+            playedUrl = currentUrl,
+            sources = sources,
+            sourceAddons = sourceAddons,
+            runtimeMinutes = launchRuntimeMinutes,
+            debridAddons = DebridAddons.forDevice(this)
+        )
+
+    /**
+     * The session's qualified-stall half of the learned ceiling - here, the
+     * watchdog giving up after every recovery it had.
+     *
+     * Once per session: a film that stalls repeatedly must not ratchet the
+     * ceiling down once per stall.
+     */
+    private fun noteQualifiedStallForCeiling() {
+        if (ceilingStallSeen) return
+        ceilingStallSeen = true
+        if (ceilingWritten) return
+        val estimate = ceilingEstimateForThisSession() ?: return
+        ceilingWritten = AppPreferences.noteQualifiedStall(this, estimate)
+    }
+
+    /**
+     * The session's clean-play half of the learned ceiling: a minute in with no
+     * qualified stall raises an EXISTING ceiling to this row's bitrate (see
+     * AutoplayBitrate.afterCleanPlay). Read at session end, and only there.
+     */
+    private fun noteCleanPlaybackForCeiling() {
+        if (ceilingStallSeen || ceilingWritten) return
+        if (errorContainer?.visibility == View.VISIBLE) return
+        if (!firstFrameRendered) return
+        if (positionMs < AutoplayBitrate.CLEAN_PLAY_MS) return
+        val estimate = ceilingEstimateForThisSession() ?: return
+        ceilingWritten = AppPreferences.noteCleanPlayback(this, estimate)
     }
 
     /** Writes a stall line into the diagnostics ring the MPV errors also use. */
@@ -7241,6 +7313,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         mpvScrubHandler.removeCallbacksAndMessages(null)
         touchHintHandler.removeCallbacksAndMessages(null)
         touchHint = null
+        // The learned ceiling's clean-play write, read while the playhead and
+        // the error card still exist to answer with (see AutoplayBitrate).
+        noteCleanPlaybackForCeiling()
         surface?.release()
         surface = null
         clearChapters()

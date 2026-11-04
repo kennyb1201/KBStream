@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.TorBoxCachedAnswer
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
@@ -19,6 +20,7 @@ import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.reporting.TorBoxTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
@@ -111,6 +113,25 @@ data class ResolvedSources(
  */
 data class SchemeResetOffer(val stableShowId: String, val encoded: String)
 
+/**
+ * What the picker's cached-only filter is doing to the list on screen.
+ *
+ * Published beside the rows because the empty state has to be able to tell
+ * "this title has no sources" from "this title's sources are all uncached, and
+ * the Cached-only setting is hiding them" - the second is a setting the viewer
+ * can act on, the first is not.
+ */
+data class CachedOnlyState(
+    /** Rows hidden right now. 0 whenever the filter is not hiding anything. */
+    val hidden: Int = 0,
+    /**
+     * The setting is ON and there is no TorBox key, so no hash can be checked
+     * and nothing is hidden. Worth saying out loud: otherwise the switch looks
+     * broken rather than unconfigured.
+     */
+    val keyMissing: Boolean = false
+)
+
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(application)
@@ -179,6 +200,48 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      */
     private val _addonGroups = MutableStateFlow<List<StreamAddonGroup>>(emptyList())
     val addonGroups: StateFlow<List<StreamAddonGroup>> = _addonGroups.asStateFlow()
+
+    /**
+     * The rows this fetch produced BEFORE the cached-only filter, with their
+     * add-on names and their tabs.
+     *
+     * The filter is a VIEW over these, not a destructive drop (spec F4):
+     * switching the setting off has to bring the hidden rows back without a
+     * re-fetch, and a late badge answer has to mark the raw rows so a chip
+     * survives a later toggle. Everything published goes through
+     * [publishStreams]/[publishGroups], so the two cannot drift.
+     */
+    private var unfilteredStreams: List<Stream> = emptyList()
+    private var unfilteredAddons: List<String?> = emptyList()
+    private var unfilteredGroups: List<StreamAddonGroup> = emptyList()
+
+    /**
+     * The ANSWERED cached set for [cachedAnswerGeneration], or null while none
+     * has arrived for the current fetch.
+     *
+     * Null means "no filter yet" - never "nothing is cached": that case is an
+     * empty non-null set (see [TorBoxCachedAnswer]). Both are stamped with the
+     * generation they answered, so a late answer for a previous title is not a
+     * filter input for the new one, exactly as it is not a badge input.
+     */
+    private var cachedAnswer: Set<String>? = null
+    private var cachedAnswerGeneration = -1
+
+    /** See [CachedOnlyState]. Read by the two pickers' empty states. */
+    private val _cachedOnly = MutableStateFlow(CachedOnlyState())
+    val cachedOnly: StateFlow<CachedOnlyState> = _cachedOnly.asStateFlow()
+
+    init {
+        // The setting is a SYNCED pref, so it moves either from Settings on this
+        // device or from a sibling TV, and either way the local edit is reported
+        // on this counter (see AppPreferences.setTorboxCachedOnly). The list is
+        // a view over rows this ViewModel already holds, so a toggle re-filters
+        // in place - no fetch, no network, no lost scroll position beyond the
+        // rows that come back.
+        viewModelScope.launch {
+            PrefsPayloadApplier.revision.collect { reapplyCachedOnlyFilter() }
+        }
+    }
 
     /**
      * The add-on each entry of [streams] came from, in the same order and the
@@ -343,9 +406,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         val ticket = ++fetchGeneration
         loadJob = viewModelScope.launch {
             _isLoading.value = true
-            _streams.value = emptyList()
-            _sourceAddons.value = emptyList()
-            _addonGroups.value = emptyList()
+            // Through the publish helpers, so a previous title's cached answer
+            // cannot act on this one's rows and the held raw rows are cleared
+            // with the visible ones.
+            publishStreams(emptyList(), emptyList())
+            publishGroups(emptyList())
             _debug.value = emptyList()
 
             val debugLines = mutableListOf<String>()
@@ -359,7 +424,12 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 debugLines = debugLines,
                 onAddonResult = { incoming ->
                     if (generation == stateGeneration) {
-                        _streams.value = _streams.value + incoming
+                        // Appended to the RAW rows: the progressive paint is the
+                        // unfiltered hand on purpose (spec F3 accepts the list
+                        // shrinking once the check answers), and reading the
+                        // published value here would re-filter what is already
+                        // filtered.
+                        publishStreams(unfilteredStreams + incoming, unfilteredAddons)
                     }
                 },
                 runtimeMinutes = runtimeMinutes,
@@ -372,8 +442,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             // load could still publish over the newer one.
             if (generation != stateGeneration) return@launch
             _debug.value = debugLines
-            _streams.value = resolved.streams
-            _sourceAddons.value = resolved.addons
+            publishStreams(resolved.streams, resolved.addons)
             _addonFailures.value = resolved.failedAddons
             _droppedByTypeGuard.value = resolved.droppedByTypeGuard
             _schemeResetOffer.value = resolved.schemeResetOffer
@@ -488,9 +557,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         loadJob = null
         stateGeneration++
         fetchGeneration++
-        _streams.value = emptyList()
-        _addonGroups.value = emptyList()
-        _sourceAddons.value = emptyList()
+        publishStreams(emptyList(), emptyList())
+        publishGroups(emptyList())
         _debug.value = emptyList()
         _loadedKey.value = null
         _droppedByTypeGuard.value = 0
@@ -541,8 +609,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // bumps both tickets for this check).
         if (generation == stateGeneration && ticket == fetchGeneration) {
             _debug.value = debugLines
-            _streams.value = resolved.streams
-            _sourceAddons.value = resolved.addons
+            publishStreams(resolved.streams, resolved.addons)
             _addonFailures.value = resolved.failedAddons
             _droppedByTypeGuard.value = resolved.droppedByTypeGuard
             _schemeResetOffer.value = resolved.schemeResetOffer
@@ -584,7 +651,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // moved to another title, or a profile switch bumped both tickets - must
         // not clear the tabs the CURRENT request is drawing (spec C8).
         if (isCurrentRequest(generation)) {
-            _addonGroups.value = emptyList()
+            publishGroups(emptyList())
         }
         if (contentType == "channel") {
             val directStream = Stream(
@@ -962,7 +1029,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         // Same ticket guard as the streams themselves - see [isCurrentRequest].
         if (isCurrentRequest(generation)) {
-            _addonGroups.value = addonGroupList
+            publishGroups(addonGroupList)
         }
 
         val rankedMsg = if (useRanker) "ranked total = ${markedStreams.size}" else "unranked total = ${markedStreams.size}"
@@ -1086,22 +1153,108 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * The cached-only filter as it applies to the CURRENT fetch: the ANSWERED
+     * set when the setting is on and that answer belongs to this generation,
+     * else null (no filter).
+     *
+     * Null covers every fail-open case at once, which is why they are one
+     * expression: setting off, no answer yet for this title, and UNAVAILABLE (a
+     * missing key, no lookable hash, or a check that never got its answer) all
+     * mean "the list stands as it is". An ANSWERED empty set is NOT null here -
+     * "nothing is cached" has to hide the hash rows.
+     */
+    private fun activeCachedSet(): Set<String>? {
+        val answered = cachedAnswer ?: return null
+        if (cachedAnswerGeneration != fetchGeneration) return null
+        if (!AppPreferences.getTorboxCachedOnly(getApplication())) return null
+        return answered
+    }
+
+    /**
+     * Publishes [streams] and their add-on names through the cached-only filter.
+     *
+     * The single place rows reach the picker, so the merged list and the names
+     * beside it can never disagree about which rows exist (see
+     * [CachedOnlyVisible.alongside]), and so the raw rows are always kept for a
+     * later re-filter.
+     */
+    private fun publishStreams(streams: List<Stream>, addons: List<String?>) {
+        unfilteredStreams = streams
+        unfilteredAddons = addons
+        val cached = activeCachedSet()
+        val kept = cached?.let { CachedOnlyVisible.keptIndices(streams, it) }
+        _streams.value = if (kept == null) streams else kept.map { streams[it] }
+        _sourceAddons.value =
+            if (kept == null) addons
+            else CachedOnlyVisible.alongside(addons, streams.size, kept)
+        publishCachedOnlyState(hidden = if (kept == null) 0 else streams.size - kept.size)
+    }
+
+    /**
+     * Publishes the per-add-on tabs through the same filter, so a tab is still a
+     * view of All: same rule, same rows, same order, and a group the filter
+     * emptied is dropped (an empty tab is not a tab).
+     */
+    private fun publishGroups(groups: List<StreamAddonGroup>) {
+        unfilteredGroups = groups
+        val cached = activeCachedSet()
+        _addonGroups.value = if (cached == null) groups else CachedOnlyVisible.groups(groups, cached)
+    }
+
+    private fun publishCachedOnlyState(hidden: Int) {
+        val on = AppPreferences.getTorboxCachedOnly(getApplication())
+        _cachedOnly.value = CachedOnlyState(
+            hidden = if (on) hidden else 0,
+            keyMissing = on && !hasDebridServiceConfigured()
+        )
+    }
+
+    /**
+     * Re-publishes the rows this ViewModel already holds through the filter as
+     * the setting stands now.
+     *
+     * Called when the pref moves (this device's Settings or a sibling TV's), and
+     * the reason the filter owns no copy of the list: OFF brings the hidden rows
+     * back with no re-fetch, and ON applies the current generation's answer if
+     * there is one - never an older title's.
+     */
+    fun reapplyCachedOnlyFilter() {
+        publishStreams(unfilteredStreams, unfilteredAddons)
+        publishGroups(unfilteredGroups)
+    }
+
+    /**
      * Requests the TorBox cached-hash answer without anyone waiting for it, then
      * folds the result into the published picker state if this fetch is still
      * the current one (audit P8).
      *
      * Marking is idempotent ([TorBoxCachedBadges.mark] never doubles a chip), so
      * re-applying over a list that may have grown is safe; the generation check
-     * is what keeps a late answer for a previous title off a new target's list.
+     * is what keeps a late answer for a previous title off a new target's list -
+     * and it guards the cached-only filter in the same breath, because the raw
+     * rows this marks are the ones the filter reads.
      */
     private fun requestCachedBadges(generation: Int, hashes: List<String?>) {
         viewModelScope.launch {
-            val cached = TorBoxClient.checkCached(getApplication(), hashes)
-            if (cached.isEmpty() || generation != fetchGeneration) return@launch
-            _streams.value = TorBoxCachedBadges.mark(_streams.value, cached)
-            _addonGroups.value = _addonGroups.value.map { group ->
-                group.copy(streams = TorBoxCachedBadges.mark(group.streams, cached))
+            val answer = TorBoxClient.checkCached(getApplication(), hashes)
+            if (generation != fetchGeneration) return@launch
+            val cached = when (answer) {
+                // No chips, and NO filter: nothing was judged, so nothing may be
+                // hidden. This is the case that would otherwise empty a picker
+                // on the first failed check (spec §2).
+                TorBoxCachedAnswer.Unavailable -> return@launch
+                is TorBoxCachedAnswer.Answered -> answer.cached
             }
+            cachedAnswer = cached
+            cachedAnswerGeneration = generation
+            // An ANSWERED empty set is not an early return: it draws no chip and
+            // still hides every hash row, which is exactly what it means.
+            publishStreams(TorBoxCachedBadges.mark(unfilteredStreams, cached), unfilteredAddons)
+            publishGroups(
+                unfilteredGroups.map { group ->
+                    group.copy(streams = TorBoxCachedBadges.mark(group.streams, cached))
+                }
+            )
         }
     }
 

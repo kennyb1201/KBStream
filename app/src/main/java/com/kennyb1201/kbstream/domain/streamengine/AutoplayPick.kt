@@ -83,7 +83,21 @@ internal object AutoplayPick {
      *
      * The order is: the episode rules ([EpisodeMatch] - never a file that
      * declares another episode, never a whole season), the binge tie-break
-     * inside those tiers, then the viewer's own ceiling ([AutoPlayQuality]).
+     * inside those tiers, the viewer's own ceiling ([AutoPlayQuality]), and
+     * last the learned bitrate gate ([AutoplayBitrate]).
+     *
+     * The gate is a PICK rule like the ceiling, and it is the only new step: it
+     * may move auto-play to a lighter row the line has already proven it can
+     * hold, and it never touches a debrid pick (by host, tag, or the debrid-
+     * backed add-on set in [debridAddons]), never touches a hash row (the walk
+     * resolves it through TorBox, so the resolved link IS debrid), and never
+     * vetoes playback: when every candidate is too heavy the original pick is
+     * what starts, exactly as today.
+     *
+     * [debridAddons] is the same set the caller hands [StreamRanker.rank].
+     * Every caller must pass it: a surface that passes nothing silently
+     * disables the exemption, and an AIOStreams row would be gated like a
+     * hoster link.
      */
     fun pick(
         context: android.content.Context,
@@ -92,22 +106,37 @@ internal object AutoplayPick {
         episode: Int?,
         runtimeMinutes: Int?,
         binge: Binge,
-        addonOf: (Stream) -> String?
-    ): Stream? = AutoPlayQuality.cappedPick(
-        pick = EpisodeMatch.autoplayPick(
-            remaining,
-            season,
-            episode,
-            runtimeMinutes,
-            // A blank identity answers false for every row (see [preferBinge]),
-            // so the tier's own order stands untouched.
-            preferBinge = preferBinge(binge, addonOf)
-        ),
-        candidates = remaining,
-        season = season,
-        episode = episode,
-        runtimeMinutes = runtimeMinutes,
-        cap = com.kennyb1201.kbstream.data.settings.AppPreferences
+        addonOf: (Stream) -> String?,
+        debridAddons: Set<String> = emptySet()
+    ): Stream? {
+        val cap = com.kennyb1201.kbstream.data.settings.AppPreferences
             .getEffectiveAutoPlayQuality(context)
-    )
+        // A blank identity answers false for every row (see [preferBinge]), so
+        // the tier's own order stands untouched.
+        val preferBinge = preferBinge(binge, addonOf)
+        return AutoplayBitrate.gatedPick(
+            candidates = remaining,
+            ceilingMbps = com.kennyb1201.kbstream.data.settings.AppPreferences
+                .getLearnedSustainableMbps(context),
+            runtimeMinutes = runtimeMinutes,
+            debridAddons = debridAddons,
+            addonOf = addonOf,
+            fullPick = { rows ->
+                AutoPlayQuality.cappedPick(
+                    pick = EpisodeMatch.autoplayPick(
+                        rows,
+                        season,
+                        episode,
+                        runtimeMinutes,
+                        preferBinge = preferBinge
+                    ),
+                    candidates = rows,
+                    season = season,
+                    episode = episode,
+                    runtimeMinutes = runtimeMinutes,
+                    cap = cap
+                )
+            }
+        )
+    }
 }

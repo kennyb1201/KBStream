@@ -105,7 +105,9 @@ class PlaybackOrchestrationContractTest {
             "a resolve that finishes after a profile switch must not repaint the " +
                 "cleared picker with the pre-switch title's tabs",
             publish.contains("if (isCurrentRequest(generation)) {") &&
-                publish.contains("_addonGroups.value = addonGroupList")
+                // Published through the cached-only filter's helper, which is now
+                // the only writer of _addonGroups (see CachedOnlyPickerContractTest).
+                publish.contains("publishGroups(addonGroupList)")
         )
         val clear = source.substring(
             source.indexOf("A new target's groups replace"),

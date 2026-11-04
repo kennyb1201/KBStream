@@ -1,8 +1,14 @@
 package com.kennyb1201.kbstream.ui.player
 
 /**
- * The one mapping from the app's subtitle settings to what an IMAGE-based
- * renderer can honour.
+ * The one mapping from the app's subtitle settings to what each renderer can
+ * honour - and the one list of text sizes both engines answer to.
+ *
+ * Two questions live here, because they are the same question asked twice:
+ * what a size index means to an IMAGE-based renderer (the scale and lift
+ * below), and what it means to mpv's own text renderer ([mpvFontSize], which
+ * is stated in the main player's sp steps so the two engines cannot disagree
+ * about how big "large" is).
  *
  * Text cues are restyled directly (size, background, gravity). The other two
  * subtitle paths in the Exo player are pictures with authored pixels: Media3's
@@ -48,6 +54,64 @@ internal object SubtitleOverlayStyle {
         SIZE_SMALL -> SCALE_SMALL
         SIZE_LARGE -> SCALE_LARGE
         else -> 1f
+    }
+
+    /**
+     * The text-cue steps of the MAIN player, in sp - `renderText`'s own list.
+     *
+     * One list, two engines: the MPV engine's regular subtitles are sized from
+     * these same three numbers (see [mpvFontSize]) instead of carrying a second
+     * set of its own, because one shared setting cannot mean 18sp on one engine
+     * and something else on the other.
+     */
+    private val EXO_TEXT_SP = floatArrayOf(11f, 14f, 18f)
+
+    /** The Exo size step for a size index, in sp. Out of range reads as neutral. */
+    fun exoTextSp(sizeIndex: Int): Float =
+        EXO_TEXT_SP.getOrElse(sizeIndex) { EXO_TEXT_SP[SIZE_NEUTRAL] }
+
+    /**
+     * The height mpv's `sub-font-size` is read against: mpv sizes its own cues
+     * from the VIDEO's height, and that scale is 720p-based, so the same number
+     * on a 1080p title renders about 1.5x what it does on a 720p one.
+     *
+     * A model constant, not a measurement: if a field check shows the two
+     * engines differ by one factor at every height, this is the one number to
+     * move - never a per-resolution table.
+     */
+    const val MPV_REFERENCE_HEIGHT_PX = 720f
+
+    /**
+     * mpv's `sub-font-size` for a size index and the height of the video being
+     * played.
+     *
+     * [scaledDensity] is the sp-to-pixel factor `COMPLEX_UNIT_SP` resolves
+     * through (user font scale included), which is what [exoTextSp] is in; the
+     * pixels are then re-expressed against the video's height, which is the
+     * scale mpv draws in. So the same setting is the same rendered height on
+     * both engines - Exo's 11 / 14 / 18sp, at whatever density the screen
+     * reports.
+     *
+     * [videoHeightPx] is mpv's `video-params/h`: 0 until the first frame
+     * decodes, which is answered with [mpvFallbackFontSize] rather than a guess
+     * at the display's height - a 1080p title on a 4K panel would come out
+     * twice the size it should, which is the class of error this removes.
+     */
+    fun mpvFontSize(sizeIndex: Int, scaledDensity: Float, videoHeightPx: Int): Double {
+        if (videoHeightPx <= 0) return mpvFallbackFontSize(sizeIndex)
+        val targetPx = exoTextSp(sizeIndex) * scaledDensity
+        return (targetPx * MPV_REFERENCE_HEIGHT_PX / videoHeightPx).toDouble()
+    }
+
+    /**
+     * mpv's fixed steps for a size index, used only while the video's height is
+     * unknown: mpv's own 55 default +/-20%, which is what this engine applied
+     * unconditionally before the size was computed.
+     */
+    fun mpvFallbackFontSize(sizeIndex: Int): Double = when (sizeIndex) {
+        SIZE_SMALL -> 44.0
+        SIZE_LARGE -> 66.0
+        else -> 55.0
     }
 
     /** The lift for a position index, in dp (negative is up). */

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
+import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
 import kotlin.math.abs
 
 /**
@@ -39,6 +40,12 @@ object AppPreferences {
     // box can decode, so a stick's 1080p answer must not become the phone's
     // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
     private const val KEY_MAX_AUTO_PLAY_QUALITY = "max_auto_play_quality"
+    // The bitrate this box's line has already proven it can hold, in Mbps,
+    // learned from playback outcomes and not from any setting (see
+    // AutoplayBitrate). Absent = unbounded = today's behaviour. DEVICE-LOCAL
+    // like the ceiling above: TorBox CDN throughput on the phone says nothing
+    // about the TV's hoster links (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    private const val KEY_LEARNED_SUSTAINABLE_MBPS = "learned_sustainable_mbps"
     // How long auto-play keeps collecting stream add-ons after it already holds
     // a source it could start, before it picks from what it has. Device-local:
     // how long is worth waiting is a property of this box's add-ons and network,
@@ -132,6 +139,7 @@ object AppPreferences {
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
     private const val KEY_TORBOX_RESOLVE_CREATE = "torbox_resolve_create"
+    private const val KEY_TORBOX_CACHED_ONLY = "torbox_cached_only"
     // The account-copy stamp of the synced service credentials (see
     // SYNCED_API_KEYS), kept beside them in the encrypted, profile-scoped store.
     private const val KEY_API_KEYS_SYNCED_AT = "__api_keys_synced_at__"
@@ -223,6 +231,72 @@ object AppPreferences {
 
     fun setDefaultBufferMode(context: Context, mode: Int) {
         prefs(context).edit().putInt(KEY_DEFAULT_BUFFER_MODE, mode).apply()
+    }
+
+    // ── Learned bitrate ceiling ──────────────────────────────────────
+
+    /**
+     * The average bitrate, in Mbps, this device's line has proven it can hold —
+     * or null when nothing has been learned yet.
+     *
+     * Written only by playback outcomes (see [noteQualifiedStall] and
+     * [noteCleanPlayback]), never by a setting: the gate it feeds is the auto-
+     * play pick's, and a viewer who has never stalled anything has no ceiling at
+     * all. Deliberately not synced — it describes this box's connection, not the
+     * account.
+     */
+    fun getLearnedSustainableMbps(context: Context): Float? {
+        val p = prefs(context)
+        if (!p.contains(KEY_LEARNED_SUSTAINABLE_MBPS)) return null
+        // A synced blob from a build that wrote this key as a Long, or a corrupt
+        // value, reads as "nothing learned" rather than throwing on the first
+        // auto-play of every launch.
+        val value = try {
+            p.getFloat(KEY_LEARNED_SUSTAINABLE_MBPS, 0f)
+        } catch (_: ClassCastException) {
+            return null
+        }
+        return value.takeIf { it > 0f }
+    }
+
+    /** Replaces the learned ceiling; null clears it. */
+    fun setLearnedSustainableMbps(context: Context, mbps: Float?) {
+        if (mbps == null || mbps <= 0f) {
+            prefs(context).edit().remove(KEY_LEARNED_SUSTAINABLE_MBPS).apply()
+        } else {
+            prefs(context).edit().putFloat(KEY_LEARNED_SUSTAINABLE_MBPS, mbps).apply()
+        }
+    }
+
+    /**
+     * Records a QUALIFIED stall on a row worth [estimateMbps]: creates the
+     * ceiling, or lowers it. Returns true when the store changed.
+     *
+     * Only the engines' own qualified signals call this (Exo's rebuffer
+     * downshift, MPV's stall watchdog giving up) — a single short rebuffer, a
+     * startup burst, a seek, a pause, or an abandoned session writes nothing,
+     * which is what keeps one bad minute from capping a good line.
+     */
+    fun noteQualifiedStall(context: Context, estimateMbps: Double?): Boolean {
+        val next = AutoplayBitrate.afterStall(getLearnedSustainableMbps(context), estimateMbps)
+            ?: return false
+        setLearnedSustainableMbps(context, next)
+        return true
+    }
+
+    /**
+     * Records a clean play (60 s past the first frame, no qualified stall) of a
+     * row worth [estimateMbps]: raises an existing ceiling to it, never creates
+     * one. Returns true when the store changed.
+     *
+     * This is the way back up after a bad night: the gate never blocks a manual
+     * press, so playing the heavy row clean re-opens it for auto-play too.
+     */
+    fun noteCleanPlayback(context: Context, estimateMbps: Double?): Boolean {
+        val next = AutoplayBitrate.afterCleanPlay(getLearnedSustainableMbps(context), estimateMbps)
+            ?: return false
+        setLearnedSustainableMbps(context, next)
+        return true
     }
 
     // ── Subtitle size ────────────────────────────────────────────────
@@ -2058,6 +2132,31 @@ object AppPreferences {
 
     fun setTorboxResolveCreate(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_TORBOX_RESOLVE_CREATE, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Cached sources only, in the picker ───────────────────────────
+    // Off by default (spec F1), and deliberately so: a viewer with no TorBox
+    // key sees today's list, and so does one who wants the uncached rows on
+    // screen (to add one in TorBox's own app, say). The default is a constant
+    // here and nowhere else - the filter itself asks this question and must
+    // never bake "on" into its rule. Changing the default later is this line.
+    //
+    // This pref only ever HIDES rows in the picker (see StreamsViewModel): it
+    // does not touch resolving, auto-play, the walk or downloads, all of which
+    // already refuse an uncached hash on their own terms.
+    //
+    // Synced, like the two TorBox rows above: it is a statement about the
+    // account (what this viewer wants served from it), not about one device's
+    // screen or decoder, so setting it once covers the household's TVs.
+    fun getTorboxCachedOnly(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TORBOX_CACHED_ONLY, false)
+
+    fun setTorboxCachedOnly(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TORBOX_CACHED_ONLY, enabled).apply()
+        // Also the picker's cue to re-publish: the list is a view over the rows
+        // it already holds, so a toggle re-filters in place instead of fetching
+        // again (see StreamsViewModel.reapplyCachedOnlyFilter).
         syncDisplayPrefsBlob(context)
     }
 

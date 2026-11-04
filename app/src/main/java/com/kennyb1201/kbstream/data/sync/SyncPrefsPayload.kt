@@ -270,6 +270,10 @@ object PrefsPayloadBuilder {
         "torbox_resolve_create",             // may pressing a cached hash source add the torrent to
                                              //   the viewer's TorBox account? A statement about the
                                              //   account, not the device, so it follows them
+        "torbox_cached_only",                // should the picker list only what that account already
+                                             //   holds? The same account-level question, so the
+                                             //   household's TVs agree instead of each hiding
+                                             //   different rows
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
         "clean_sdh_captions",                // ...and whether captions keep their sound descriptions
@@ -319,6 +323,12 @@ object PrefsPayloadBuilder {
         // the source: a stick capped at 1080p must not cap the phone on the
         // same profile. Device-local, decided 2026-10-20.
         "max_auto_play_quality",
+        // The LEARNED bitrate ceiling (see AutoplayBitrate) is the same kind of
+        // fact one step further: it is what this box's line has proven it can
+        // hold, learned from its own stalls. A phone on mobile data must not
+        // cap the TV on fibre, and a TV's stall must not narrow the phone's
+        // auto-play. Device-local, decided 2026-11-03.
+        "learned_sustainable_mbps",
         // How long auto-play waits for more add-ons is about THIS box's
         // add-ons and connection: the TV on fibre can afford twenty seconds,
         // the phone on a data plan wants four. Device-local, beside the ceiling

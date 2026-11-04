@@ -54,9 +54,6 @@ internal object TorBoxClient {
      */
     internal const val CACHE_TTL_MS = 60 * 60_000L
 
-    /** A hash shorter than this cannot be a torrent infohash; skip the query. */
-    private const val MIN_HASH_LENGTH = 32
-
     // Lazy so the pure parts of this object (notably [parseCached], which the
     // unit tests exercise) can be reached without building an HTTP client.
     private val client by lazy {
@@ -117,21 +114,29 @@ internal object TorBoxClient {
     }
 
     /**
-     * The subset of [hashes] TorBox reports as cached. Empty when no key is set,
-     * the list carries no usable hashes, or every request failed — in which case
-     * nothing is badged and the picker is exactly as it was before this existed.
+     * What TorBox says about [hashes]: cached hashes when it ANSWERED, and
+     * [TorBoxCachedAnswer.Unavailable] when nothing is known (no key, no hash it
+     * could look up, or no batch answered).
+     *
+     * The distinction is load-bearing for the picker's cached-only filter and
+     * invisible to everyone else: the chip pass draws no chip for either, and
+     * the resolver plays only what it was told is cached. Carrying an empty set
+     * for "could not ask" is what let one failed check look like "none of these
+     * are cached yet" (see [TorBoxCachedAnswer]).
      */
-    suspend fun checkCached(context: Context, hashes: Collection<String?>): Set<String> =
+    suspend fun checkCached(context: Context, hashes: Collection<String?>): TorBoxCachedAnswer =
         withContext(Dispatchers.IO) {
             val apiKey = AppPreferences.getTorboxApiKey(context)
             if (apiKey.isBlank()) {
                 TorBoxTrace.note("${hashes.size} sources · no key, nothing checked")
-                return@withContext emptySet()
+                return@withContext TorBoxCachedAnswer.Unavailable
             }
 
+            // The same normalization the cached-only filter applies to its rows,
+            // so "which hashes did the check look at" and "which rows did it
+            // hide" cannot answer differently (see TorBoxCachedOnly).
             val wanted = hashes
-                .mapNotNull { it?.trim()?.lowercase() }
-                .filter { it.length >= MIN_HASH_LENGTH }
+                .mapNotNull { TorBoxCachedOnly.lookupHash(it) }
                 .toSet()
             if (wanted.isEmpty()) {
                 // The answer to "I never see a Cached chip", said in one line:
@@ -141,7 +146,7 @@ internal object TorBoxClient {
                 // picker with nothing wrong with the key, and this is how a field
                 // capture tells that case from a rejected key.
                 TorBoxTrace.note("${hashes.size} sources · none carried an infohash")
-                return@withContext emptySet()
+                return@withContext TorBoxCachedAnswer.Unavailable
             }
 
             val now = System.currentTimeMillis()
@@ -149,15 +154,33 @@ internal object TorBoxClient {
                 cache[hash]?.let { now - it.atMs >= CACHE_TTL_MS } ?: true
             }
 
+            // An empty [toQuery] is already an answer: every hash was fresh in
+            // the memo. Otherwise only a batch that came back counts, so "every
+            // request failed" stays [TorBoxCachedAnswer.Unavailable] and the
+            // cached-only filter keeps its hands off the list.
+            var answered = toQuery.isEmpty()
             toQuery.chunked(BATCH_SIZE).forEach { batch ->
                 // A failed batch is left uncached so the next fetch can retry it,
                 // rather than teaching the memo that everything is uncached.
                 val result = runCatching { query(apiKey, batch) }
                     .onFailure { TorBoxTrace.note("checkcached failed: ${it.message}") }
                     .getOrNull() ?: return@forEach
+                // One batch is enough: a partially failed check is ANSWERED for
+                // the hashes the other batches resolved, and the failed batch's
+                // hashes stay unmemoized so the next fetch asks again (spec §2).
+                answered = true
                 val stamp = System.currentTimeMillis()
                 batch.forEach { hash -> cache[hash] = Entry(cached = hash in result, atMs = stamp) }
                 pruneCache(stamp)
+            }
+
+            if (!answered) {
+                // Its own line, because this is the case the cached-only filter
+                // must NOT act on: nothing was judged, so nothing may be hidden.
+                TorBoxTrace.note(
+                    "${hashes.size} sources · ${wanted.size} with a hash · no batch answered"
+                )
+                return@withContext TorBoxCachedAnswer.Unavailable
             }
 
             val at = System.currentTimeMillis()
@@ -169,7 +192,7 @@ internal object TorBoxClient {
                 "${hashes.size} sources · ${wanted.size} with a hash · " +
                     "${cachedNow.size} cached"
             )
-            cachedNow
+            TorBoxCachedAnswer.Answered(cachedNow)
         }
 
     private fun query(apiKey: String, hashes: List<String>): Set<String> {
