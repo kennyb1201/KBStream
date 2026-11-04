@@ -271,8 +271,9 @@ class TrailerIdentityRefreshContractTest {
             )
         )
         assertTrue(
-            "the one-shot retry cap must stay",
-            flat(home).contains("if (trailerAttempt < 1) {")
+            "the retry budget stays bounded - it is the shared plan's now, not a " +
+                "one-shot same-class attempt",
+            flat(home).contains("heroTrailerRetryPlan(")
         )
     }
 

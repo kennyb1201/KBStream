@@ -215,20 +215,30 @@ class HeroTrailerResumeTest {
     }
 
     @Test
-    fun `the single-retry cap is unchanged`() {
+    fun `the ordinary failure plans through the ladder like the Detail hero`() {
         val screen = screen()
         assertTrue(
-            "one retry per trailer: a genuinely dead video must not loop",
-            screen.contains("if (trailerAttempt < 1) {")
+            "the verdict is the shared plan's, so a class that has died is never " +
+                "offered again and a genuinely dead video cannot loop",
+            screen.contains("heroTrailerRetryPlan(")
+        )
+        assertTrue(
+            "the plan's refusal leaves the backdrop up rather than replaying",
+            screen.contains("HeroTrailerResumeVerdict.RESUME")
         )
         assertTrue(
             "the retry still busts the cached (possibly stale) URL",
-            screen.contains("TrailerPlayerLauncher.invalidate(trailerKey)")
+            screen.contains("TrailerPlayerLauncher.invalidate(key)")
+        )
+        assertFalse(
+            "the one-shot same-class retry is gone - re-signing the class that " +
+                "died re-fired the read that refused",
+            screen.contains("trailerAttempt")
         )
     }
 
     @Test
-    fun `the resume position is only written when a retry will really happen`() {
+    fun `the resume position comes from the plan, so a declined retry stores none`() {
         // Bounded by the overlay that follows the player call: the onFailed
         // body ends before the composable's closing paren, and the hero's
         // first-frame backdrop overlay is the first thing after it (the
@@ -239,18 +249,15 @@ class HeroTrailerResumeTest {
             "onFailed = { positionMs ->",
             "AnimatedVisibility("
         )
-        val capAt = failed.indexOf("if (trailerAttempt < 1) {")
-        val writeAt = failed.indexOf("trailerResumeMs = positionMs")
-        assertTrue("the cap must exist", capAt >= 0)
-        assertTrue("the resume write must exist", writeAt >= 0)
         assertTrue(
-            "a position written on the capped failure would be picked up by a " +
-                "later re-arm and seek a fresh play",
-            writeAt > capAt
+            "the ordinary failure hands its position to the plan",
+            failed.contains("requestTrailerRetry(positionMs, durationMs = 0L)")
         )
-        assertTrue(
-            "and only when the retry is taken",
-            failed.indexOf("trailerAttempt += 1") > writeAt
+        assertFalse(
+            "no one-shot position is stored any more: the plan's record carries " +
+                "the resume point only when it decides a replacement is owed, so a " +
+                "declined retry cannot leave one behind for the next re-arm",
+            failed.contains("trailerResumeMs")
         )
     }
 
@@ -262,15 +269,15 @@ class HeroTrailerResumeTest {
             "if (trailerPlaying && !trailerKey.isNullOrBlank()) {"
         )
         assertTrue(
-            "the retry's resolve must read the handoff - the identity ladder's own " +
-                "record first, then the plain retry's one-shot position",
-            resolve.contains("val resumeFrom = pending?.positionMs ?: trailerResumeMs")
+            "the retry's resolve must read the handoff - the record every death " +
+                "shape now plans through (the identity ladder, an ordinary failure " +
+                "and a stall all write the same one)",
+            resolve.contains("val resumeFrom = pending?.positionMs ?: 0L")
         )
-        assertTrue(
-            "and clear the plain handoff, so no later re-arm can seek to a dead " +
-                "position (a pending resume record is NOT cleared here: it is owed " +
-                "until its resolve has an outcome)",
-            resolve.contains("if (pending == null) trailerResumeMs = 0L")
+        assertFalse(
+            "and nothing else can carry a position into this resolve: the record " +
+                "is the only handoff, and it is consumed only by its own outcome",
+            resolve.contains("trailerResumeMs")
         )
         assertTrue(
             "the start position travels with the resolved source",

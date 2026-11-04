@@ -77,6 +77,32 @@ object InnerTubeExtractor {
      */
     internal const val GVS_TOKEN_BUDGET_MS = 6_000L
 
+    /**
+     * The least time a second GVS mint may be given before it is not worth
+     * asking: the mint's own script window is ~5 s, so anything under a second
+     * cannot finish and would only delay the fallback the resolve is about to
+     * walk anyway.
+     */
+    internal const val MIN_REMINT_BUDGET_MS = 1_000L
+
+    /**
+     * Whether a resolve that ended without a GVS token did so because the MINT
+     * failed rather than because there was nothing to mint with.
+     *
+     * A cold WebView is the first case: minting is on, a visitor exists to bind
+     * the token to, and the mint still produced nothing - so the next resolve
+     * (or a re-mint) can still save it. With minting off, or with no visitor,
+     * the resolve is tokenless BY CONFIGURATION: a second mint cannot help and
+     * nothing about the resolve should differ from pre-spec behavior.
+     */
+    internal fun isColdMintTokenless(
+        gvsToken: String?,
+        visitorData: String?,
+        mintingEnabled: Boolean
+    ): Boolean = gvsToken.isNullOrBlank() &&
+        !visitorData.isNullOrBlank() &&
+        mintingEnabled
+
     private const val DEFAULT_USER_AGENT = YouTubeClients.DEFAULT_USER_AGENT
 
     /**
@@ -199,7 +225,24 @@ object InnerTubeExtractor {
      */
     internal data class ResolvedSource(
         val source: PlayableSource,
-        val client: String?
+        val client: String?,
+        /**
+         * True when this source came back WITHOUT a GVS token although the
+         * resolve could have carried one - minting enabled, a visitor to bind it
+         * to, and a mint that produced nothing (a cold WebView).
+         *
+         * Only ever set on an ADAPTIVE winner, the one shape whose tokenless
+         * death is established (the 2026-11-03 capture): its chunks hit the
+         * mid-play wall at the same spot on every surface. HLS and progressive
+         * winners are left at false, so their behavior is unchanged until a
+         * capture says their tokenless shape dies the same way.
+         *
+         * Read by [TrailerPlayerLauncher.resolvePlayableUrl], which refuses to
+         * mount such a source and walks the NewPipe chain instead. A tokenless
+         * resolve BY CONFIGURATION (minting off, no visitor) is NOT this flag:
+         * that resolve is byte-identical to pre-spec behavior.
+         */
+        val potlessByColdMint: Boolean = false
     )
 
     /**
@@ -286,8 +329,22 @@ object InnerTubeExtractor {
         val config = ensureWatchConfig(videoId, forceRefresh = forceRefreshConfig)
         // One mint per resolve covers both contexts: the WebView loads this
         // video's embed page and the page's player produces its player token
-        // and its googlevideo token together. Either may be null.
-        val tokens = mintTokens(videoId, config.visitorData)
+        // and its googlevideo token together. Either may be null - and a token
+        // the COLD WebView failed to produce gets one more GVS-only attempt,
+        // accounted against this pass's own budget (see remintGvsWhenTokenless).
+        //
+        // The scraped visitor is named once: the mint binds its tokens to it and
+        // the tokenless verdict below reads the same value. Deliberately NOT
+        // presented to the player request - that one takes the effective
+        // identity (`visitor` below), never the scrape.
+        val configVisitor = config.visitorData
+        val mintStartedAtMs = System.nanoTime()
+        val tokens = remintGvsWhenTokenless(
+            videoId = videoId,
+            visitorData = configVisitor,
+            tokens = mintTokens(videoId, configVisitor),
+            mintStartedAtMs = mintStartedAtMs
+        )
         // The request moves to the token's identity, not the other way round: a
         // token is bound to the visitor the PAGE was issued, and the scraped
         // config visitor is a different session that seeding cannot make the
@@ -296,6 +353,16 @@ object InnerTubeExtractor {
         // discard every token; presenting the effective visitor is the only
         // place the visitor enters the player request.
         val visitor = presentedVisitor(config.visitorData, tokens.visitor)
+        // What the winner will be judged by (see ResolvedSource.potlessByColdMint):
+        // a token still missing after the re-mint, with minting on and a visitor
+        // to bind it to, is a COLD MINT - not a tokenless-by-configuration
+        // resolve, which must behave exactly as it did before this spec.
+        val tokenlessByColdMint = isColdMintTokenless(
+            gvsToken = tokens.gvs,
+            visitorData = configVisitor,            mintingEnabled = runCatching { PoTokens.provider().isEnabled() }.getOrDefault(false)
+        )
+
+
 
         val progressive = mutableListOf<StreamCandidate>()
         val adaptiveVideo = mutableListOf<StreamCandidate>()
@@ -423,7 +490,8 @@ object InnerTubeExtractor {
             return ResolvedSource(
                 PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
                     .withResolveTokens(videoId, tokens, bestVideo?.client, KIND_ADAPTIVE),
-                bestVideo?.client
+                bestVideo?.client,
+                potlessByColdMint = tokenlessByColdMint
             )
         }
 
@@ -519,6 +587,93 @@ object InnerTubeExtractor {
         // visitor unchanged, so the request stays byte-identical to pre-spec.
         val visitor = runCatching { provider.effectiveVisitor(visitorData) }.getOrNull()
         return ResolveTokens(player, gvs, visitor)
+    }
+
+    /**
+     * How long a second GVS mint may take: whatever is left of the extractor's
+     * own budget, and never more than a first mint would have had.
+     *
+     * This is the accounting rule that keeps the re-mint from turning one slow
+     * resolve into two full extracts: the first attempt runs inside a
+     * [EXTRACTOR_TIMEOUT_MS] `withTimeout`, so a second mint that ignored what
+     * the first one spent could push it past that cap, and the timeout would
+     * read as "no source" and start the fresh-config retry instead of using the
+     * tokens already in hand.
+     */
+    internal fun remintBudgetMs(
+        elapsedMs: Long,
+        extractorBudgetMs: Long = EXTRACTOR_TIMEOUT_MS
+    ): Long = (extractorBudgetMs - elapsedMs.coerceAtLeast(0L))
+        .coerceAtMost(GVS_TOKEN_BUDGET_MS)
+        .coerceAtLeast(0L)
+
+    /**
+     * Whether a resolve should spend a second mint on the GVS token.
+     *
+     * All four have to hold:
+     *
+     * - the first mint produced no GVS token (a token already in hand needs no
+     *   second one);
+     * - the resolve has a visitor to bind a token to (no visitor is a
+     *   deliberate tokenless resolve, not a cold WebView);
+     * - minting is enabled (with it off, the resolve is tokenless BY
+     *   CONFIGURATION and a second mint cannot help);
+     * - enough of the extractor's budget is left for the mint to finish.
+     */
+    internal fun shouldRemintGvs(
+        gvsToken: String?,
+        visitorData: String?,
+        mintingEnabled: Boolean,
+        remainingBudgetMs: Long
+    ): Boolean = isColdMintTokenless(gvsToken, visitorData, mintingEnabled) &&
+        remainingBudgetMs >= MIN_REMINT_BUDGET_MS
+
+    /**
+     * A second, GVS-only mint for a resolve whose first mint came back tokenless.
+     *
+     * A cold WebView spends its whole [GVS_TOKEN_BUDGET_MS] on the first load and
+     * yields nothing - both captures behind this are the same shape
+     * (`pot.gvs: state=failed:timeout latency=6008ms`, `pot.player: state=none`) -
+     * and the resolve then mounts an UNDECORATED adaptive source that dies at the
+     * same spot on every surface (see TrailerPlayerLauncher's tokenless hold).
+     * The second mint runs on the session the first one left warm, which is
+     * exactly the case it can still save.
+     *
+     * GVS only, and once: the player token is a byproduct of the same session and
+     * is served from the provider's cache once the page has been minted, so a
+     * second request for it would only wait. Whatever the second attempt yields
+     * is final - no token is an answer too, and the caller hold the source
+     * instead of mounting it tokenless.
+     */
+    private suspend fun remintGvsWhenTokenless(
+        videoId: String,
+        visitorData: String?,
+        tokens: ResolveTokens,
+        mintStartedAtMs: Long
+    ): ResolveTokens {
+        val elapsedMs = (System.nanoTime() - mintStartedAtMs) / 1_000_000L
+        val budgetMs = remintBudgetMs(elapsedMs)
+        val provider = PoTokens.provider()
+        if (!shouldRemintGvs(tokens.gvs, visitorData, provider.isEnabled(), budgetMs)) {
+            return tokens
+        }
+        Log.w(
+            TAG,
+            "Tokenless resolve for $videoId; re-minting the GVS token once " +
+                "(budget=${budgetMs}ms of ${EXTRACTOR_TIMEOUT_MS}ms left)"
+        )
+        val visitor = visitorData ?: return tokens
+        val gvs = tokenWithinBudget(budgetMs) { provider.gvsToken(videoId, visitor) }
+            ?: return tokens
+        Log.w(TAG, "Re-mint produced a GVS token for $videoId; resolving with it")
+        // The page's identity is only known once a mint has observed it, and it
+        // is what the player request must present (see presentedVisitor), so it
+        // is refreshed here rather than left at the first attempt's answer.
+        val effectiveVisitor = runCatching { provider.effectiveVisitor(visitor) }.getOrNull()
+        return tokens.copy(
+            gvs = gvs,
+            visitor = effectiveVisitor ?: tokens.visitor
+        )
     }
 
     /**

@@ -4,6 +4,7 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import android.util.Log
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -45,6 +46,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -95,8 +98,19 @@ import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.youtube.HeroTrailerResumeVerdict
+import com.kennyb1201.kbstream.data.youtube.InnerTubeExtractor
+import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.PoTokenTrace
+import com.kennyb1201.kbstream.data.youtube.TokenlessHoldException
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.data.youtube.deathKind
+import com.kennyb1201.kbstream.data.youtube.googlevideoBytes
+import com.kennyb1201.kbstream.data.youtube.googlevideoItag
+import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
+import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
+import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
@@ -1314,6 +1328,25 @@ fun HomeScreenMobile(
 /** The verification budget for a resume root (the TV screen's own). */
 private const val CW_ROOT_VERIFY_TIMEOUT_MS = 5_000L
 
+/** Fire TV suppresses debug logs, so the billboard's trailer ladder is warnings. */
+private const val TAG = "BILLBOARD_TRAILER"
+
+/**
+ * The retry a billboard death asked for, held until the resolve that answers it
+ * COMPLETES: a run that is cancelled leaves the record in place instead of
+ * losing the request, and the record carries the exclusions and start position
+ * that belong to it.
+ */
+private data class BillboardTrailerRetry(
+    val resumeAtMs: Long,
+    val excludedClients: Set<String>,
+    val attempt: Int,
+    val change: String,
+    val deadClient: String?,
+    val deathPositionMs: Long,
+    val durationMs: Long
+)
+
 /**
  * An imported KB collection: the same folder tiles the TV rail draws, sized by
  * each folder's own `tileShape`.
@@ -1643,7 +1676,10 @@ private fun MobileTopBar() {
  * still, and its shutter is transparent, so until its first frame lands the
  * backdrop above is what the viewer sees (the same hand-off the phone's Detail
  * header makes). The owner still owns the stops: [onTrailerEnded] and
- * [onStopTrailer] are the caller's callbacks, exactly as `HomeHero`'s are.
+ * [onStopTrailer] are the caller's callbacks, exactly as `HomeHero`'s are, and
+ * its two death shapes - an ordinary failure and a refused identity - are
+ * [onTrailerFailed] and [onTrailerIdentityBlocked], the same pair the Detail
+ * header takes.
  */
 @Composable
 private fun MobileHero(
@@ -1665,8 +1701,26 @@ private fun MobileHero(
     /** The trailer playing over this page, or null while the still shows. */
     trailerPlayback: HeroTrailerPlayback? = null,
     trailerMuted: Boolean = true,
+    /** The trailer's video id, for the watchdog line and the chunk-death record. */
+    trailerVideoId: String? = null,
     onTrailerEnded: () -> Unit = {},
     onStopTrailer: () -> Unit = {},
+    /**
+     * The media's own clock, reported on state changes only. The death plan
+     * needs the clip's length: an identical replay's skip converts its chunk
+     * into media time with it, and the death line cannot say "died at 20 s of
+     * 140" without it.
+     */
+    onTrailerProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
+    /** Playback died mid-stream at [positionMs]: the owner plans the retry. */
+    onTrailerFailed: (positionMs: Long) -> Unit = { onStopTrailer() },
+    /**
+     * YouTube refused the client identity. The owner's ladder decides, and its
+     * answer is whether a replacement was requested - exactly as the shared
+     * player asks `HomeHero`.
+     */
+    onTrailerIdentityBlocked: (positionMs: Long, durationMs: Long) -> Boolean =
+        { _, _ -> false },
     /**
      * The page's Play / Details (and Manual mode's Trailer) pills, drawn INSIDE
      * the image under the meta line - which is the premium refresh's whole point
@@ -1759,8 +1813,13 @@ private fun MobileHero(
                 source = trailerPlayback.source,
                 muted = trailerMuted,
                 startPositionMs = trailerPlayback.startPositionMs,
+                // Joins this mount's watchdog line to the death line the owner
+                // writes for the same key.
+                videoId = trailerVideoId,
+                onProgress = onTrailerProgress,
                 onEnded = onTrailerEnded,
-                onFailed = { onStopTrailer() },
+                onFailed = onTrailerFailed,
+                onIdentityBlocked = onTrailerIdentityBlocked,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -1929,6 +1988,39 @@ private fun MobileBillboard(
     // viewer swiped away can tell it is late and drop its own result.
     var playback by remember { mutableStateOf<HeroTrailerPlayback?>(null) }
     var playbackPageKey by remember { mutableStateOf<String?>(null) }
+    // The source that is mounted, kept past its own teardown: onEnded() runs
+    // BEFORE onFailed()/onIdentityBlocked(), so by the time a death is planned
+    // the playback that died is gone from state - and its shape (adaptive or
+    // muxed, the signed URL's `clen`) is what the retry plan needs.
+    var trailerMountedSource by remember { mutableStateOf<PlayableSource?>(null) }
+
+    // The retry ladder (HeroTrailerRetryPlan), page-scoped like everything else
+    // the billboard holds about a trailer: leaving a page starts the next one
+    // clean, exactly as the phone's Detail hero does when its title changes.
+    // This surface used to answer a death by dropping the still and letting
+    // autoplay re-sign the SAME class from position 0 - the shape the
+    // persistent-death work removed everywhere else (see heroTrailerRetryPlan).
+    val ladderPageKey = pages.getOrNull(pagerState.currentPage)?.key
+    var trailerExcludedClients by remember(ladderPageKey) {
+        mutableStateOf<Set<String>>(emptySet())
+    }
+    var trailerIdenticalReplays by remember(ladderPageKey) { mutableIntStateOf(0) }
+    var trailerResumeAttempts by remember(ladderPageKey) { mutableIntStateOf(0) }
+    // The retry a death asked for, held until the resolve that answers it
+    // COMPLETES: the record carries the exclusions and the start position that
+    // belong to it.
+    var trailerPendingRetry by remember(ladderPageKey) {
+        mutableStateOf<BillboardTrailerRetry?>(null)
+    }
+    // Deaths ask for their replacement through a REQUEST counter, never a direct
+    // call: the player reports a death in two callbacks (onEnded, then
+    // onFailed/onIdentityBlocked), so a start issued from the first would be
+    // torn down by the stop in the second.
+    var trailerRetryRequest by remember(ladderPageKey) { mutableIntStateOf(0) }
+    // The clip's own length, from the player: the ordinary failure callback
+    // reports only a position, and the identical replay's skip needs the length
+    // to turn its chunk into media time.
+    var trailerDurationMs by remember(ladderPageKey) { mutableLongStateOf(0L) }
 
     var backgrounded by remember { mutableStateOf(false) }
 
@@ -1945,19 +2037,192 @@ private fun MobileBillboard(
         val key = page.trailerKey?.takeIf { it.isNotBlank() } ?: return
         val ownerKey = page.key
         playbackPageKey = ownerKey
+        // SNAPSHOT the retry this run answers; its exclusions and its start
+        // position belong together, and it is cleared only by this resolve's
+        // own outcome.
+        val pending = trailerPendingRetry
         scope.launch {
-            val result = TrailerPlayerLauncher.resolvePlayableUrl(key)
+            val result = TrailerPlayerLauncher.resolvePlayableUrl(
+                key,
+                excludeClients = pending?.excludedClients ?: emptySet()
+            )
             result.onSuccess { source ->
                 if (playbackPageKey != ownerKey) return@onSuccess
                 if (pages.getOrNull(pagerState.currentPage)?.key != ownerKey) return@onSuccess
-                playback = HeroTrailerPlayback(source = source)
+                trailerPendingRetry = null
+                trailerMountedSource = source
+                if (pending != null) {
+                    // The retry's outcome, in the trace's closed vocabulary: the
+                    // replacement resolved, signed by <client>.
+                    PoTokenTrace.recordTrailerDeath(
+                        videoId = key,
+                        client = pending.deadClient,
+                        kind = source.deathKind(),
+                        positionMs = pending.deathPositionMs,
+                        durationMs = pending.durationMs,
+                        resume = "client " +
+                            (TrailerPlayerLauncher.signingClient(key)
+                                ?: "unknown") + " ok",
+                        attempt = pending.attempt,
+                        change = pending.change
+                    )
+                }
+                playback = HeroTrailerPlayback(
+                    source = source,
+                    startPositionMs = pending?.resumeAtMs ?: 0L
+                )
             }
             result.onFailure {
                 // Silent: the page keeps its backdrop, with no banner and no
                 // retry UI - the same failure behaviour both heroes have.
                 if (playbackPageKey == ownerKey) playbackPageKey = null
+                if (pending != null) {
+                    trailerPendingRetry = null
+                    // Only a WALKED ladder whose remaining clients all failed
+                    // is a verdict; a first attempt that found nothing is an
+                    // ordinary failure and stays re-armable - and a HOLD is not
+                    // a verdict at all (a cold mint, not a refused client), so it
+                    // must stay re-armable too.
+                    if (it is TokenlessHoldException) {
+                        Log.w(
+                            TAG,
+                            "Billboard trailer key=$key held without a source to " +
+                                "mount; leaving it re-armable " +
+                                "(excluded=${pending.excludedClients.sorted()})"
+                        )
+                    } else if (heroTrailerResolveFailurePoisons(pending.excludedClients)) {
+                        TrailerPlayerLauncher.markIdentityBlocked(key)
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * Plans and starts the retry a death is owed, or declines it.
+     *
+     * Both failure shapes come through here - an ordinary mid-stream error
+     * (`onFailed`, which knows only the position) and a googlevideo 403 the
+     * classifier calls a refused identity (`onIdentityBlocked`, which also knows
+     * the duration) - through the same changed-class-first plan the phone's
+     * Detail hero uses: a class that has died is never offered again, a
+     * replacement resumes at the death, an identical replay resumes PAST it, and
+     * `MAX_IDENTICAL_REPLAYS` bounds the replay. Returning false is "leave the
+     * still up".
+     *
+     * The death line is written FIRST, before anything that can fail: a capture
+     * has to keep the fact even when the request it describes never reaches a
+     * resolve.
+     */
+    fun requestTrailerRetry(positionMs: Long, durationMs: Long): Boolean {
+        val page = pages.getOrNull(pagerState.currentPage) ?: return false
+        val key = page.trailerKey?.takeIf { it.isNotBlank() } ?: return false
+        // The refusal path knows the duration; the ordinary one is told it by
+        // the player's own clock (see onTrailerProgress).
+        val length = if (durationMs > 0L) durationMs else trailerDurationMs
+        val dead = TrailerPlayerLauncher.signingClient(key)
+        val chunk = PoTokenTrace.chunkDeathFor(key)
+        val source = trailerMountedSource
+        val signedUrl = source?.signedUrl()
+        val streamBytes = chunk?.totalBytes
+            ?: signedUrl?.let { googlevideoBytes(it) }
+        val plan = heroTrailerRetryPlan(
+            positionMs = positionMs,
+            durationMs = length,
+            deadClient = TrailerPlayerLauncher.cachedSigningClient(key),
+            excludedClients = trailerExcludedClients,
+            identicalReplays = trailerIdenticalReplays,
+            resumeAttempts = trailerResumeAttempts,
+            totalBytes = streamBytes
+        )
+        val attempt = trailerResumeAttempts
+        val change = when {
+            attempt == 0 -> "first"
+            plan.changedClass ->
+                "class:" + (plan.excludedClients - trailerExcludedClients).joinToString(",")
+
+            else -> "same"
+        }
+        PoTokenTrace.recordTrailerDeath(
+            videoId = key,
+            client = dead,
+            kind = source?.deathKind(),
+            positionMs = positionMs,
+            durationMs = length,
+            resume = if (plan.verdict == HeroTrailerResumeVerdict.RESUME) {
+                "pending"
+            } else {
+                "none: retries spent"
+            },
+            itag = signedUrl?.let { googlevideoItag(it) },
+            attempt = attempt,
+            change = change,
+            chunkOffsetBytes = chunk?.offsetBytes,
+            chunkTotalBytes = streamBytes
+        )
+        if (plan.verdict != HeroTrailerResumeVerdict.RESUME) {
+            trailerPendingRetry = null
+            Log.w(
+                TAG,
+                "Billboard trailer key=$key: no untried client left after " +
+                    "${attempt + 1} attempt(s) (excluded=${plan.excludedClients.sorted()}); " +
+                    "leaving the still up"
+            )
+            return false
+        }
+        trailerExcludedClients = plan.excludedClients
+        trailerResumeAttempts = attempt + 1
+        if (!plan.changedClass) trailerIdenticalReplays += 1
+        trailerPendingRetry = BillboardTrailerRetry(
+            resumeAtMs = plan.resumeAtMs,
+            excludedClients = plan.excludedClients,
+            attempt = attempt + 1,
+            change = change,
+            deadClient = dead,
+            deathPositionMs = positionMs,
+            durationMs = length
+        )
+        // The cached URL is the one that just died: drop it so the replacement
+        // really re-signs. This also lifts an identity block, which the plan has
+        // just decided is worth another step.
+        TrailerPlayerLauncher.invalidate(key)
+        Log.w(
+            TAG,
+            "Billboard trailer key=$key died at ${positionMs}ms; retry ${attempt + 1} " +
+                "($change) resuming at ${plan.resumeAtMs}ms " +
+                "excluded=${plan.excludedClients.sorted()}"
+        )
+        trailerRetryRequest += 1
+        return true
+    }
+
+    // The requested replacement, started after the death's callbacks have all
+    // run (see trailerRetryRequest).
+    LaunchedEffect(trailerRetryRequest) {
+        if (trailerRetryRequest == 0) return@LaunchedEffect
+        startTrailer(pagerState.currentPage)
+    }
+
+    // PO-token pre-warm for the NEXT page, on settle. The billboard was the only
+    // hero surface that never pre-warmed, so every one of its trailer mints ran
+    // on the resolve's critical path - the shape the 0.9.23 capture shows (a
+    // cold WebView spending its whole GVS budget on nothing), and the worst
+    // surface for it because a page's trailer is what the dwell buys.
+    //
+    // Fire and forget: never awaited, never a dependency of a resolve, never
+    // writing failure memory (a pre-warm warms tokens, it does not resolve).
+    //
+    // Honest limit: the default dwell is 6 s and the GVS budget is 6 s, so a
+    // warm started at settle may not finish before the next page arms. It still
+    // starts the mint earlier than turning the page would, and a completed
+    // pre-warm is a cache hit at resolve time; the resolve's own re-mint covers
+    // the rest (see InnerTubeExtractor.prewarmPoTokens).
+    val nextPageTrailerKey = pages
+        .getOrNull((pagerState.settledPage + 1) % pages.size.coerceAtLeast(1))
+        ?.trailerKey
+        ?.takeIf { it.isNotBlank() }
+    LaunchedEffect(pagerState.settledPage, nextPageTrailerKey) {
+        nextPageTrailerKey?.let { key -> InnerTubeExtractor.prewarmPoTokens(key) }
     }
 
     // A trailer never plays over a page the viewer has left, and never over
@@ -2176,7 +2441,25 @@ private fun MobileBillboard(
                     contentReveal = { reveal.value },
                     trailerPlayback = if (index == pagerState.currentPage) playback else null,
                     trailerMuted = trailerMuted,
+                    trailerVideoId = page.trailerKey,
                     onTrailerEnded = { stopTrailer() },
+                    onTrailerProgress = { _, duration ->
+                        if (duration > 0L) trailerDurationMs = duration
+                    },
+                    // A mid-play death asks the ladder for a DIFFERENT request
+                    // (see requestTrailerRetry): another client's URL class
+                    // first, and an identical re-sign only once, resumed PAST
+                    // the position that refused.
+                    onTrailerFailed = { positionMs ->
+                        requestTrailerRetry(positionMs, durationMs = 0L)
+                    },
+                    // A googlevideo 403 the classifier calls a refused identity
+                    // is a property of the URL class that signed it, not of the
+                    // video, so it walks the same ladder - and its answer is
+                    // whether a replacement was requested.
+                    onTrailerIdentityBlocked = { positionMs, durationMs ->
+                        requestTrailerRetry(positionMs, durationMs)
+                    },
                     onStopTrailer = { stopTrailer() },
                     // Only the page in front carries the pills: a neighbour
                     // sliding in must not drag its own live buttons with it.

@@ -333,35 +333,69 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             videoId,
             excludeClients = excludeClients
         )
-        if (resolved != null) {
+        if (resolved != null && !resolved.potlessByColdMint) {
             sourceCache[videoId] = CachedSource(resolved.source, resolved.client)
             resolutionFailures.remove(videoId)
             logResolved("InnerTube", resolved.source)
             return@withLock Result.success(resolved.source)
         }
-        Log.w(TAG, "InnerTube extraction failed; falling back to NewPipe")
+        if (resolved != null) {
+            // A tokenless adaptive winner is not a success: its URLs carry no
+            // `pot`, so its first chunk boundary is the wall every surface dies
+            // at (see `ResolvedSource.potlessByColdMint`). Never mount it - walk
+            // the same NewPipe/Piped chain the extraction-null path walks, which signs
+            // nothing through that wall and is already cached behind this
+            // resolver. Nothing is stored for it either: a cached tokenless
+            // source would be served back as a cache hit by the next resolve.
+            Log.w(
+                TAG,
+                "InnerTube resolved a tokenless adaptive source for $videoId; " +
+                    "not mounting it into the wall, falling back to NewPipe"
+            )
+        } else {
+            Log.w(TAG, "InnerTube extraction failed; falling back to NewPipe")
+        }
+
+        // The resolve holds (returns failure) when BOTH the InnerTube source was
+        // tokenless and NewPipe/Piped found nothing. A hold is not a failure: the
+        // next arm re-mints (the session is warm by then) and may play, so it
+        // must not be written to [resolutionFailures] - that throttle would turn
+        // one cold mint into ten minutes of guaranteed misses.
+        val heldTokenless = resolved != null
 
         // Fallback: NewPipe (with its internal Piped fallback)
-        return NewPipeManager
-            .getPlayableUrl(videoId)
-            .onSuccess { source ->
-                // NewPipe names no InnerTube client, so the entry carries none:
-                // a later death starts its exclusion from the trace's fallback
-                // rather than from a client that never signed anything.
-                sourceCache[videoId] = CachedSource(source, client = null)
-                resolutionFailures.remove(videoId)
-                logResolved("NewPipe/Piped", source)
-            }
-            .onFailure { error ->
-                if (recordFailure) {
-                    markFailed(videoId)
-                }
-                Log.e(
-                    TAG,
-                    "All trailer resolvers failed (InnerTube + NewPipe/Piped)",
-                    error
-                )
-            }
+        val fallback = NewPipeManager.getPlayableUrl(videoId)
+        fallback.onSuccess { source ->
+            // NewPipe names no InnerTube client, so the entry carries none:
+            // a later death starts its exclusion from the trace's fallback
+            // rather than from a client that never signed anything.
+            sourceCache[videoId] = CachedSource(source, client = null)
+            resolutionFailures.remove(videoId)
+            logResolved("NewPipe/Piped", source)
+        }
+        val error = fallback.exceptionOrNull() ?: return@withLock fallback
+        if (heldTokenless) {
+            // The hold's capture signature: pot=false on the resolve, no mount,
+            // no death line - and no failure memory either. Typed, because a
+            // hold is not a client verdict: an owner that poisons a video whose
+            // ladder failed must not poison one that only ran out of mint.
+            Log.w(
+                TAG,
+                "Holding trailer $videoId: no tokenless adaptive source was " +
+                    "mounted and NewPipe/Piped found nothing; the next resolve is " +
+                    "free to re-mint"
+            )
+            return@withLock Result.failure(TokenlessHoldException(videoId, error))
+        }
+        if (recordFailure) {
+            markFailed(videoId)
+        }
+        Log.e(
+            TAG,
+            "All trailer resolvers failed (InnerTube + NewPipe/Piped)",
+            error
+        )
+        return fallback
     }
 
     internal fun logResolved(resolver: String, source: PlayableSource) {
@@ -476,6 +510,26 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         }.getOrNull()
     }
 }
+
+/**
+ * The resolve found nothing it was willing to MOUNT: either it had no source at
+ * all, or its only InnerTube winner was a tokenless adaptive source (see
+ * `ResolvedSource.potlessByColdMint`) and the NewPipe/Piped fallback found
+ * nothing either.
+ *
+ * Held, not failed. Nothing is written to the failure memory, so the next arm is
+ * free to re-mint, and an owner must read this as "try again when the session is
+ * warm" rather than as a verdict about the client identity or the video - which
+ * is what poisons a hero's ladder.
+ */
+internal class TokenlessHoldException(
+    val videoId: String,
+    cause: Throwable? = null
+) : Exception(
+    "Trailer $videoId held: a tokenless adaptive source was not mounted and " +
+        "the fallback found nothing",
+    cause
+)
 
 /** A resolved source's VIDEO url: the one a trailer's format lives on. */
 internal fun PlayableSource.signedUrl(): String = when (this) {

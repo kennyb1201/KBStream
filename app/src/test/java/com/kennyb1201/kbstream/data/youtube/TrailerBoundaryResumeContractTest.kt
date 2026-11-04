@@ -315,29 +315,30 @@ class TrailerBoundaryResumeContractTest {
     }
 
     @Test
-    fun `the ordinary retry and the identity ladder do not spend each other's budget`() {
+    fun `each failure shape keeps its own decision`() {
         val handler = heroRefusalHandler()
 
-        assertFalse(
-            "a refusal must not be gated by the ordinary retry's one attempt",
-            handler.contains("trailerAttempt < 1")
+        assertTrue(
+            "a refusal keeps the identity ladder's own verdict",
+            handler.contains("heroTrailerResumeDecision(")
         )
         assertFalse(
-            "and must not spend it",
-            handler.contains("trailerAttempt += 1")
+            "and is not answered with the retry plan's replay arithmetic, which " +
+                "is about a stale or refused URL class rather than an identity",
+            handler.contains("heroTrailerRetryPlan(")
         )
         val failed = flat(
             home.substringAfter("onFailed = { positionMs ->")
                 .substringBefore("onIdentityBlocked = {")
         )
         assertTrue(
-            "the ordinary retry keeps its own cap of one",
-            failed.contains("if (trailerAttempt < 1) {") &&
-                failed.contains("trailerAttempt += 1")
+            "the ordinary failure plans like the Detail hero: changed class first, " +
+                "one identical replay, resumed past it",
+            failed.contains("requestTrailerRetry(positionMs, durationMs = 0L)")
         )
         assertFalse(
-            "and counts no identity attempt",
-            failed.contains("trailerResumeAttempts")
+            "and the one-shot same-class retry that re-fired the refusing read is gone",
+            home.contains("trailerAttempt")
         )
     }
 
@@ -389,7 +390,10 @@ class TrailerBoundaryResumeContractTest {
     @Test
     fun `a cancelled run records cancelled and leaves the request owed`() {
         val effect = heroEffect()
-        val finally = effect.substringAfter("} finally {")
+        // Bounded at the effect's own else branch: what follows the effect (the
+        // owner's retry planner) legitimately clears the record when the plan
+        // declines a replacement, and that is a different statement.
+        val finally = effect.substringAfter("} finally {").substringBefore("} else {")
 
         assertTrue(
             "cancellation is recorded, never silent",
@@ -406,7 +410,7 @@ class TrailerBoundaryResumeContractTest {
         assertTrue(
             "a resumable run re-issues the same resolve from the same position",
             flat(effect).contains(
-                "val resumeFrom = pending?.positionMs ?: trailerResumeMs"
+                "val resumeFrom = pending?.positionMs ?: 0L"
             ) && flat(effect).contains(
                 "excludeClients = pending?.excludedClients ?: emptySet()"
             )

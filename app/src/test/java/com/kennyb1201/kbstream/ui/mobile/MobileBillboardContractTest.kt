@@ -394,7 +394,14 @@ class MobileBillboardContractTest {
             home.contains("if ( trailerMode == BillboardTrailerMode.MANUAL && !currentPage?.trailerKey.isNullOrBlank() ) {")
         )
         // Playback is the app's one pooled stack, and a failure is silent.
-        assertTrue(home.contains("TrailerPlayerLauncher.resolvePlayableUrl(key)"))
+        assertTrue(
+            "the resolve is the shared one, and a death's replacement carries the " +
+                "ladder's exclusions",
+            home.contains(
+                "TrailerPlayerLauncher.resolvePlayableUrl( key, excludeClients = " +
+                    "pending?.excludedClients ?: emptySet() )"
+            )
+        )
         assertTrue(home.contains("HeroInlineTrailerPlayer("))
         assertTrue(home.contains("TrailerPlayerPool.releaseForReuse()"))
         assertTrue(home.contains("// Silent: the page keeps its backdrop, with no banner and no"))
@@ -403,7 +410,10 @@ class MobileBillboardContractTest {
         assertTrue(
             home.contains("trailerPlayback = if (index == pagerState.currentPage) playback else null")
         )
-        assertTrue(home.contains("onFailed = { onStopTrailer() }"))
+        assertTrue(
+            "a death is planned through the owner's callbacks, never surfaced as UI",
+            home.contains("onFailed = onTrailerFailed")
+        )
     }
 
     // ── the driver ──────────────────────────────────────────────────────
