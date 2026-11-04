@@ -52,7 +52,10 @@ internal const val SECTION_KEY_PREFIX = "section."
  */
 internal val TV_ONLY_SEARCH_KEYS: Set<String> = setOf(
     "playback.match-frame-rate",
-    "playback.prefer-whole-frame-rate"
+    "playback.prefer-whole-frame-rate",
+    // The screensaver is Home's TV overlay: the phone screen draws neither its
+    // toggle nor its timeout row, so the phone's results must not name it.
+    "interface.tv-screensaver"
 )
 
 /**
@@ -384,6 +387,16 @@ internal object SettingsSearchIndex {
             SettingsPane.INTERFACE,
             "Mute Hero Trailers",
             "hero trailer mute muted silent audio"
+        ),
+        // TV-only, and searchable on the TV page: a viewer who saw the overlay
+        // once (or wants it gone) looks for "screensaver", not for the pane it
+        // lives in. The phone page draws no such row and filters this key out.
+        SettingSearchEntry(
+            "interface.tv-screensaver",
+            SettingsPane.INTERFACE,
+            "TV Screensaver",
+            "screensaver screensaver ambient idle daydream burn in slideshow backdrop " +
+                "logo timeout home tv"
         ),
         SettingSearchEntry(
             "interface.24h-clock",

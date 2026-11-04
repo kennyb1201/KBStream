@@ -741,6 +741,14 @@ fun SettingsScreen(
     var torboxCachedOnly by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getTorboxCachedOnly(context))
     }
+    // Device-local, so no profile/sync key: these two are facts about this
+    // television and apply to every profile on it (see AppPreferences).
+    var screensaverEnabled by remember {
+        mutableStateOf(AppPreferences.getScreensaverEnabled(context))
+    }
+    var screensaverTimeoutMinutes by remember {
+        mutableStateOf(AppPreferences.getScreensaverTimeoutMinutes(context))
+    }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
     // the rail is ten panes deep and the one being tuned is rarely the first.
@@ -3016,6 +3024,41 @@ fun SettingsScreen(
                     onToggle = {
                         heroTrailerMuted = it
                         AppPreferences.setHeroTrailerMuted(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ── THE TV SCREENSAVER ──────────────────────────────
+                // Home's own idle overlay, not the platform's daydream: the
+                // toggle lives here because a fullscreen takeover has to be
+                // opted into, and it is on the TV page only (the phone has no
+                // Home that idles). Device-local, like the panel geometry
+                // prefs: this TV's wait applies to whoever is watching it.
+                SettingsSectionHeader("Screensaver")
+
+                ToggleRow(
+                    label = "TV Screensaver",
+                    description = "When Home is left idle, fill the screen with the artwork of " +
+                        "the titles on it (backdrop, logo and genre), moving gently from one to " +
+                        "the next. Any button brings Home back exactly where it was. Off by " +
+                        "default; a title without both a backdrop and a logo is skipped.",
+                    checked = screensaverEnabled,
+                    onToggle = { enabled ->
+                        screensaverEnabled = enabled
+                        AppPreferences.setScreensaverEnabled(context, enabled)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ScreensaverTimeoutRow(
+                    selectedMinutes = screensaverTimeoutMinutes,
+                    enabled = screensaverEnabled,
+                    chip = { text, isSelected -> PillChip(text, isSelected) },
+                    onPick = { minutes ->
+                        screensaverTimeoutMinutes = minutes
+                        AppPreferences.setScreensaverTimeoutMinutes(context, minutes)
                     }
                 )
 

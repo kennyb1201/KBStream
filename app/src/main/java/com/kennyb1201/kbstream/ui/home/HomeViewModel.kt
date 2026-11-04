@@ -1099,6 +1099,31 @@ class HomeViewModel(
     private var heroResolveJob: Job? = null
 
     /**
+     * The first genre of every title whose hero has resolved this session,
+     * keyed `"<id>:<type>"` - the same spelling as [heroSettledKey].
+     *
+     * The TV screensaver draws a genre under a slide's wordmark, and rail items
+     * carry none of their own: the only genre Home ever learns is the one the
+     * hero resolved for the focused title. Remembering those answers is what lets
+     * the overlay read one WITHOUT starting a resolve of its own - a slide never
+     * fetches, never waits, and a title the viewer never focused is drawn with
+     * its logo alone rather than delaying the show for a caption.
+     */
+    private val resolvedHeroGenres =
+        java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * The genre the hero resolved for this title, or null when it has not.
+     *
+     * A plain map read, no I/O and no suspension: the screensaver calls it while
+     * composing a slide.
+     */
+    internal fun resolvedHeroGenre(
+        id: String,
+        type: String
+    ): String? = resolvedHeroGenres["$id:$type"]
+
+    /**
      * Like runCatching, but for suspend calls: runCatching swallows
      * CancellationException along with real failures, which lets a
      * canceled coroutine keep running instead of stopping -- it then
@@ -1460,6 +1485,14 @@ Log.d(
                     // a screen that reads it can never animate over a half-set
                     // hero (see [heroSettledKey]).
                     _heroSettledKey.value = "$requestedId:$requestedType"
+
+                    // ...and the same answer, remembered for the screensaver's
+                    // corner label (see resolvedHeroGenres). The rule for
+                    // "which genre" is the overlay's own, so the caption cannot
+                    // spell it one way here and another there.
+                    screensaverGenre(finalMeta.genres)?.let { genre ->
+                        resolvedHeroGenres["$requestedId:$requestedType"] = genre
+                    }
 
                     Log.d(
                         "HOME_HERO",

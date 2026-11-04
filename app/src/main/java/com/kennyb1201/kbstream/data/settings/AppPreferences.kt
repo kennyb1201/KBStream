@@ -1692,6 +1692,60 @@ object AppPreferences {
         BILLBOARD_CYCLE_OPTIONS_MS.minByOrNull { option -> abs(option - raw) }
             ?: DEFAULT_BILLBOARD_CYCLE_MS
 
+    // ── TV screensaver (Home's idle ambient overlay) ─────────────────
+    //
+    // Device-local and sync-excluded on purpose (the same decision the
+    // screen-geometry prefs made): how long THIS television sits idle before
+    // the app takes the screen over is a fact about the panel in the room, not
+    // about the account, and it applies to every profile on it. Neither key is
+    // in SYNCED_PREF_KEYS, and neither writer publishes the display blob.
+    //
+    // Off by default: a fullscreen takeover is opt-in. A viewer who never
+    // opens Settings must never have the picture replaced under them.
+    private const val KEY_SCREENSAVER_ENABLED = "screensaver_enabled"
+    private const val KEY_SCREENSAVER_TIMEOUT_MINUTES = "screensaver_timeout"
+
+    /** Idle waits the row offers, in minutes. */
+    val SCREENSAVER_TIMEOUT_OPTIONS_MINUTES = listOf(2, 5, 10, 15)
+
+    /** The idle wait an install starts on. */
+    const val DEFAULT_SCREENSAVER_TIMEOUT_MINUTES = 5
+
+    fun getScreensaverEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SCREENSAVER_ENABLED, false)
+
+    fun setScreensaverEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SCREENSAVER_ENABLED, enabled).apply()
+    }
+
+    fun getScreensaverTimeoutMinutes(context: Context): Int =
+        screensaverTimeoutFromStored(
+            prefs(context)
+                .getInt(
+                    KEY_SCREENSAVER_TIMEOUT_MINUTES,
+                    DEFAULT_SCREENSAVER_TIMEOUT_MINUTES
+                )
+        )
+
+    fun setScreensaverTimeoutMinutes(context: Context, minutes: Int) {
+        prefs(context).edit()
+            .putInt(KEY_SCREENSAVER_TIMEOUT_MINUTES, screensaverTimeoutFromStored(minutes))
+            .apply()
+    }
+
+    /** The chip's caption for a stored wait. */
+    fun screensaverTimeoutLabel(minutes: Int): String = "$minutes min"
+
+    /**
+     * A stored wait as one of [SCREENSAVER_TIMEOUT_OPTIONS_MINUTES], snapped to
+     * the nearest option for the same reason the hero-trailer dwell is: a value
+     * written by an older build has to keep meaning something close to what was
+     * picked, and anything absurd is clamped to the offered range.
+     */
+    internal fun screensaverTimeoutFromStored(raw: Int): Int =
+        SCREENSAVER_TIMEOUT_OPTIONS_MINUTES.minByOrNull { option -> abs(option - raw) }
+            ?: DEFAULT_SCREENSAVER_TIMEOUT_MINUTES
+
     // ── 24-hour clock (player overlay clock) ──────────────────────────
     fun getUse24HourClock(context: Context): Boolean =
         prefs(context).getBoolean(KEY_USE_24H_CLOCK, false)

@@ -340,6 +340,13 @@ object PrefsPayloadBuilder {
         // reason or spend the phone's plan. Device-local, like the ceiling it
         // narrows.
         "cellular_data_saver",
+        // The TV screensaver's switch and wait are this PANEL's: how long the
+        // television in this room sits idle is not a fact about the account,
+        // and the phone has no Home that idles. Device-local (see
+        // AppPreferences), pinned here so a later "this looks synced" habit
+        // cannot put them on the wire.
+        "screensaver_enabled",
+        "screensaver_timeout",
         // `force_software_decoder` used to sit here with no accessor anywhere in
         // the app - a key nothing could read or write. Removed with the other
         // dead entries (settings reorg U4).
