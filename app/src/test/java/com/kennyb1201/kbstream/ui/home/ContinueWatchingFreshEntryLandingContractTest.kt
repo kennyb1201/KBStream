@@ -431,12 +431,27 @@ class ContinueWatchingFreshEntryLandingContractTest {
                 "it before the focused node, whether that is a card, a chip or the " +
                 "top bar",
             home.contains(".onPreviewKeyEvent { event ->") &&
-                home.contains("event.type == KeyEventType.KeyDown &&") &&
+                home.contains("event.type == KeyEventType.KeyDown") &&
                 home.contains("isHomeFocusMoveKey(event.key)")
+        )
+        // The handler does one more thing than it used to - every key-down also
+        // resets the screensaver's idle timer - so the latch is read
+        // structurally: it is set INSIDE the move-key test, and the handler
+        // still answers false at the end, which is what keeps it an observer.
+        // The file has more than one preview handler (the top bar has one), so
+        // this reads the one that CONTAINS the latch.
+        val latchAt = home.indexOf("viewerMovedFocusSinceEntry = true")
+        val rootHandler = home
+            .substring(home.lastIndexOf(".onPreviewKeyEvent { event ->", latchAt))
+            .substringBefore(".padding(")
+        assertTrue(
+            "the latch must be set only for a move key, not for every press",
+            rootHandler.contains("if (isHomeFocusMoveKey(event.key)) {") &&
+                rootHandler.contains("viewerMovedFocusSinceEntry = true")
         )
         assertTrue(
             "and it only observes - the press still has to reach the focus system",
-            home.contains("viewerMovedFocusSinceEntry = true\n                }\n                false")
+            Regex("\\n\\s*}\s*\n\\s*false\\s*\n").containsMatchIn(rootHandler)
         )
     }
 

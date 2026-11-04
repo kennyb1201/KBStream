@@ -70,10 +70,15 @@ class BackgroundToneContractTest {
             .map { it.name }
             .distinct()
             .sorted()
+        // The screensaver overlay is part of Home, not a second screen: it is a
+        // composable of HomeScreen (see HomeScreensaver), and its fullscreen
+        // black is the letterbox under ambient artwork - the same deliberate
+        // exception Home's own root makes, not a surface that has to follow the
+        // AMOLED toggle.
         assertEquals(
             "without AMOLED, Home is the app's only black screen - every other " +
                 "surface has to paint KBVoid so the toggle can reach it",
-            listOf("HomeScreen.kt"),
+            listOf("HomeScreen.kt", "HomeScreensaver.kt"),
             blackRoots
         )
     }
