@@ -1680,3 +1680,46 @@ internal object WatchedOverridesRules {
         return remoteUpdated == null || remoteUpdated >= localSyncedAt
     }
 }
+
+/**
+ * The hidden-titles merge's decisions, in one place (see
+ * `HiddenTitles.mergeFromSync`).
+ *
+ * The set is merged per TITLE and never replaced wholesale, so the only
+ * conflict it can have is a hide against an unhide of the SAME title. That is
+ * why there is one precedence rule here and no blob stamp: a stamp would bring
+ * back exactly the whole-set race the per-title timestamps remove.
+ */
+internal object HiddenTitlesRules {
+
+    /**
+     * How many removal records a device keeps, newest first.
+     *
+     * `LibraryTombstones.MAX_ENTRIES`, for the same reason: a record that grows
+     * per removal must not grow without end. Pruning can in principle let a
+     * device that has been offline for a very long time re-propagate a stale
+     * hide - the limitation the library record already accepts.
+     */
+    const val MAX_REMOVED = 2_000
+
+    /**
+     * True when a removal record wins over a hide.
+     *
+     * A tie goes to the UNHIDE: hide-then-unhide inside one millisecond must not
+     * resurrect the title on a sibling, and "the viewer took it back" is the
+     * intent a tie is most likely to carry.
+     */
+    fun tombstoneWins(hideAt: Long, tombstoneAt: Long): Boolean = tombstoneAt >= hideAt
+
+    /** True when a hide is newer than its removal record, which is then pruned. */
+    fun hideSupersedesTombstone(hideAt: Long, tombstoneAt: Long): Boolean = hideAt > tombstoneAt
+
+    /**
+     * The bulk push never publishes an empty set - but "empty" is hides AND
+     * removals, the watched-overrides gate rather than the taste one: a device
+     * whose only edit was an unhide still has something to say, and gating on
+     * hides alone would strand it (and let a fresh device blank the account's
+     * set before its first pull).
+     */
+    fun shouldPublish(hides: Int, removals: Int): Boolean = hides > 0 || removals > 0
+}

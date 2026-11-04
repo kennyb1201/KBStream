@@ -425,6 +425,15 @@ object PrefsPayloadBuilder {
      * timestamp.
      */
     const val KEY_TASTE_SIGNALS = "taste_signals"
+
+    /**
+     * The profile's hidden titles and their removal records (see
+     * `HiddenTitles`). Its own key for the taste reason - it is a per-TITLE
+     * merge, not a last-write-wins scalar blob - plus one thing taste has no
+     * half for: `removed`, the unhides, without which a sibling's older hide
+     * would put a title back on the device that just unhid it.
+     */
+    const val KEY_HIDDEN_TITLES = "hidden_titles"
     const val KEY_PROFILES = "profiles"
 
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
@@ -454,6 +463,10 @@ object PrefsPayloadBuilder {
         // SupabaseSync.pushPrefsBlobs): a device that never thumbed anything
         // must not publish an empty set over an account that has some.
         KEY_TASTE_SIGNALS to buildTasteSignals(context),
+        // Skipped by the push unless this profile has hides OR removals (see
+        // SupabaseSync.pushPrefsBlobs): a fresh device publishing its empty set
+        // would erase the account's hidden titles on every sibling.
+        KEY_HIDDEN_TITLES to buildHiddenTitles(context),
         KEY_PROFILES to com.kennyb1201.kbstream.data.sync.ProfileManager.profilesSyncBlob(context)
     )
 
@@ -1083,6 +1096,42 @@ object PrefsPayloadBuilder {
                     .orEmpty()
             )
         }
+
+    /**
+     * True when this profile has something to say about its hidden titles: a
+     * hide, or a removal record from an unhide (see
+     * [com.kennyb1201.kbstream.data.library.HiddenTitles.hasHiddenTitlesToPublish]).
+     */
+    fun hasHiddenTitlesToPublish(context: Context): Boolean =
+        com.kennyb1201.kbstream.data.library.HiddenTitles.hasHiddenTitlesToPublish(context)
+
+    /**
+     * The profile's hidden titles, as the store's own encoded text (see
+     * `HiddenTitles.encodedForSync`) plus its removal records - and the moment
+     * this blob was built.
+     *
+     * `updatedAt` is the blob's age, NOT a conflict winner: the merge resolves
+     * per title from each entry's or record's `at`, the way the taste blob's
+     * `updatedAt` is not its winner either. Blank `entries` and blank `removed`
+     * mean this profile has nothing hidden and has not unhidden anything, which
+     * the push path skips entirely.
+     */
+    fun buildHiddenTitles(context: Context): JsonObject =
+        buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(
+                "entries",
+                com.kennyb1201.kbstream.data.library.HiddenTitles
+                    .encodedForSync(context)
+                    .orEmpty()
+            )
+            put(
+                "removed",
+                com.kennyb1201.kbstream.data.library.HiddenTitles
+                    .removedEncodedForSync(context)
+                    .orEmpty()
+            )
+        }
 }
 
 /**
@@ -1223,6 +1272,8 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload, profileId)
             PrefsPayloadBuilder.KEY_TASTE_SIGNALS ->
                 applyTasteSignals(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_HIDDEN_TITLES ->
+                applyHiddenTitles(context, payload, profileId)
             PrefsPayloadBuilder.KEY_PROFILES ->
                 com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload(
                     context, payload
@@ -1333,6 +1384,28 @@ object PrefsPayloadApplier {
             .mergeFromSync(context, raw, profileId)
         if (changed > 0) {
             android.util.Log.i(TAG, "taste signals: merged $changed entr(y/ies) from the account")
+        }
+    }
+
+    /**
+     * Hidden titles apply: a per-title merge, never a replace (see
+     * `HiddenTitles.mergeFromSync`), on the taste-signals rule.
+     *
+     * Both halves blank is "this account has nothing", never "clear yours" -
+     * the same rule the taste blob follows and the reason the push side skips a
+     * profile with nothing to say. `updatedAt` is deliberately not consulted:
+     * precedence is each row's own `at`, so there is no blob stamp to race.
+     */
+    private fun applyHiddenTitles(context: Context, payload: JsonObject, profileId: String?) {
+        fun str(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        val entries = str("entries")
+        val removed = str("removed")
+        if (entries.isBlank() && removed.isBlank()) return
+        val changed = com.kennyb1201.kbstream.data.library.HiddenTitles
+            .mergeFromSync(context, entries, removed, profileId)
+        if (changed > 0) {
+            android.util.Log.i(TAG, "hidden titles: merged $changed row(s) from the account")
         }
     }
 

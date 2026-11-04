@@ -2307,6 +2307,17 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the hidden titles, on the watched-overrides gate rather than
+            // the taste one: "a device that only ever unhid still has something
+            // to say", so the test is hides OR removal records, never hides
+            // alone. Without it a fresh device pushes before its first pull and
+            // publishes an empty set over the account's hidden titles - the
+            // Simkl-session / IPTV-config / taste failure shape one more time.
+            if (key == PrefsPayloadBuilder.KEY_HIDDEN_TITLES &&
+                !PrefsPayloadBuilder.hasHiddenTitlesToPublish(context)
+            ) {
+                return@forEach
+            }
             // Display prefs are merged per key, and a blob with no per-key
             // timestamps carries no evidence of a local edit. This bulk push
             // runs on every sign-in / Sync now, so a freshly created profile
