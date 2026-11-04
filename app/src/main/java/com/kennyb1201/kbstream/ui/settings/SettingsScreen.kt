@@ -67,6 +67,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.debrid.TORBOX_VERIFIED_MARKER
 import com.kennyb1201.kbstream.data.debrid.TorBoxReview
 import com.kennyb1201.kbstream.data.debrid.TorBoxSyncStatus
 import com.kennyb1201.kbstream.data.format.DateFormats
@@ -1482,8 +1483,22 @@ fun SettingsScreen(
                             // message. The probe reads the account's own library
                             // route and names the outcome (or the HTTP code),
                             // which is the one fact neither feature reports.
+                            // Seeded from the REMEMBERED answer, so a key this
+                            // device already probed says so as soon as the row
+                            // appears instead of dropping back to "Saved" every
+                            // time Settings is reopened (see
+                            // AppPreferences.isTorboxVerified). Composed fresh on
+                            // every entry, and whenever the key is re-saved after
+                            // an edit - which is exactly when a different key
+                            // must stop borrowing the old answer.
                             var torboxVerify by remember {
-                                mutableStateOf<Pair<String?, String?>?>(null)
+                                mutableStateOf<Pair<String?, String?>?>(
+                                    if (AppPreferences.isTorboxVerified(context)) {
+                                        TORBOX_VERIFIED_MARKER to null
+                                    } else {
+                                        null
+                                    }
+                                )
                             }
                             var torboxVerifying by remember { mutableStateOf(false) }
                             val torboxVerifyScope = rememberCoroutineScope()
@@ -1496,6 +1511,9 @@ fun SettingsScreen(
                                 Text(
                                     text = when {
                                         torboxVerifying -> "Verifying…"
+                                        torboxVerify?.first == TORBOX_VERIFIED_MARKER ->
+                                            "Verified — this TV checked this key; cached " +
+                                                "sources are badged in the stream picker."
                                         torboxVerify?.first != null ->
                                             "Connected — ${torboxVerify?.first}"
                                         torboxVerify?.second != null ->
@@ -1513,7 +1531,18 @@ fun SettingsScreen(
                                         torboxVerifying = true
                                         torboxVerify = null
                                         torboxVerifyScope.launch {
-                                            torboxVerify = TorBoxClient.verifyKey(context)
+                                            val verdict = TorBoxClient.verifyKey(context)
+                                            // Remembered past this screen (and past
+                                            // the app) when the key answered, and
+                                            // forgotten when it was rejected: the
+                                            // row must not claim a verification
+                                            // that no longer holds.
+                                            if (verdict.first != null) {
+                                                AppPreferences.markTorboxVerified(context)
+                                            } else {
+                                                AppPreferences.clearTorboxVerification(context)
+                                            }
+                                            torboxVerify = verdict
                                             torboxVerifying = false
                                         }
                                     },

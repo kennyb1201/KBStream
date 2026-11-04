@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.settings
 import android.content.Context
 import android.content.SharedPreferences
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.debrid.torboxKeyFingerprint
 import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.AutoplayBitrate
@@ -140,6 +141,11 @@ object AppPreferences {
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
     private const val KEY_TORBOX_RESOLVE_CREATE = "torbox_resolve_create"
     private const val KEY_TORBOX_CACHED_ONLY = "torbox_cached_only"
+    // The TorBox key the last successful VERIFY was made for, as a digest (see
+    // torboxKeyFingerprint). Beside the key itself, in the encrypted, profile-
+    // scoped store: it is a fact about that credential, and the Settings row is
+    // the only reader.
+    private const val KEY_TORBOX_VERIFIED_FOR = "__torbox_verified_for__"
     // The account-copy stamp of the synced service credentials (see
     // SYNCED_API_KEYS), kept beside them in the encrypted, profile-scoped store.
     private const val KEY_API_KEYS_SYNCED_AT = "__api_keys_synced_at__"
@@ -2121,10 +2127,59 @@ object AppPreferences {
     }
 
     fun setTorboxApiKey(context: Context, key: String) {
-        apiKeyPrefs(context).edit().putString(KEY_TORBOX_API_KEY, key.trim()).apply()
+        val normalized = key.trim()
+        // A DIFFERENT key is a new question, so the old answer stops applying.
+        // Re-writing the SAME key must keep it: the Settings field commits on
+        // every blur (done, focus loss, paste), and wiping the record there
+        // would put the row back to "Saved" the moment the viewer tapped
+        // anywhere else - the exact report this record exists to answer.
+        val previous = storedApiKey(context, KEY_TORBOX_API_KEY)
+        apiKeyPrefs(context).edit().putString(KEY_TORBOX_API_KEY, normalized).apply()
         prefs(context).edit().remove(KEY_TORBOX_API_KEY).apply()
+        if (normalized != previous) {
+            clearTorboxVerification(context)
+        }
         stampApiKeyEdit(context, KEY_TORBOX_API_KEY, System.currentTimeMillis())
         pushApiKeysBlob()
+    }
+
+    // ── TorBox key verification, remembered ───────────────────────────
+    //
+    // VERIFY is a live read of the account, so its answer belongs to this
+    // device - but it used to live ONLY in the Settings row's own state, which
+    // dies with the screen: the viewer pressed VERIFY, saw "Connected", left
+    // Settings and came back to a row that said "Saved" again, with no way to
+    // tell a key this TV had already probed from one it had never touched. The
+    // answer is remembered against the key it was made for (a fingerprint, not
+    // the key), and a different key takes it away.
+
+    /** Records that [context]'s current TorBox key was accepted by VERIFY. */
+    fun markTorboxVerified(context: Context) {
+        val key = storedApiKey(context, KEY_TORBOX_API_KEY)
+        if (key.isBlank()) return
+        apiKeyPrefs(context).edit()
+            .putString(KEY_TORBOX_VERIFIED_FOR, torboxKeyFingerprint(key))
+            .apply()
+    }
+
+    /** Forgets a remembered verification (a rejected key, or a cleared one). */
+    fun clearTorboxVerification(context: Context) {
+        apiKeyPrefs(context).edit().remove(KEY_TORBOX_VERIFIED_FOR).apply()
+    }
+
+    /**
+     * Whether the key stored NOW is the one this device last verified.
+     *
+     * False for a blank key, a key that was replaced, and a key whose probe was
+     * rejected - the row then shows its plain "Saved" line and offers VERIFY,
+     * which is the truth: nothing has confirmed this key on this device.
+     */
+    fun isTorboxVerified(context: Context): Boolean {
+        val key = storedApiKey(context, KEY_TORBOX_API_KEY)
+        if (key.isBlank()) return false
+        val remembered =
+            apiKeyPrefs(context).getString(KEY_TORBOX_VERIFIED_FOR, "").orEmpty()
+        return remembered.isNotEmpty() && remembered == torboxKeyFingerprint(key)
     }
 
     // ── OMDb API key (awards text on the Detail screen) ──────────────

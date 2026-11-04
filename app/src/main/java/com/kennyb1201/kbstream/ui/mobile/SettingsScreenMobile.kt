@@ -68,6 +68,7 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.TORBOX_VERIFIED_MARKER
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore
 import com.kennyb1201.kbstream.data.debrid.TorBoxReview
@@ -951,7 +952,15 @@ private fun IntegrationsPaneMobile(
             // answers with what it holds (or why it said no).
             verify = { TorBoxClient.verifyKey(context) },
             savedHint = "Connected —",
-            savedDescription = "Saved — cached sources are badged, and the library sync uses this key."
+            savedDescription = "Saved — cached sources are badged, and the library sync uses this key.",
+            alreadyVerified = AppPreferences.isTorboxVerified(context),
+            onVerifyFinished = { accepted ->
+                if (accepted) {
+                    AppPreferences.markTorboxVerified(context)
+                } else {
+                    AppPreferences.clearTorboxVerification(context)
+                }
+            }
         )
 
         // ── TorBox & Library ────────────────────────────────────────────
@@ -4156,7 +4165,14 @@ private fun KeyCardMobile(
     onSave: (String) -> Unit,
     savedDescription: String,
     verify: (suspend () -> Pair<String?, String?>)? = null,
-    savedHint: String = "Connected as"
+    savedHint: String = "Connected as",
+    // Whether THIS device already verified the key it is showing. The answer
+    // used to live only in this card's own state, so leaving Settings put the
+    // row back to "Not verified yet." (see AppPreferences.isTorboxVerified).
+    alreadyVerified: Boolean = false,
+    // Called with the probe's verdict, so the caller can remember it - the card
+    // itself has nowhere to keep it: this composable dies with the screen.
+    onVerifyFinished: (Boolean) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     // Seeded from the caller's stored value and re-seeded when THAT changes: the
@@ -4169,14 +4185,22 @@ private fun KeyCardMobile(
     var saved by remember(loadedValue) { mutableStateOf(loadedValue.isNotBlank()) }
     var verifying by remember { mutableStateOf(false) }
     var verifyResult by remember(loadedValue) {
-        mutableStateOf<Pair<String?, String?>?>(null)
+        mutableStateOf<Pair<String?, String?>?>(
+            if (alreadyVerified) TORBOX_VERIFIED_MARKER to null else null
+        )
     }
 
     fun save() {
+        val changed = value.trim() != loadedValue
         onSave(value.trim())
         value = value.trim()
         saved = value.isNotBlank()
-        verifyResult = null
+        // Saving the SAME key keeps its verdict (the store keeps the record too);
+        // a changed key starts over, and the store forgets the old answer in the
+        // setter. Nulling unconditionally put the row back to "Not verified yet."
+        // on a save that changed nothing.
+        verifyResult =
+            if (!changed && alreadyVerified) TORBOX_VERIFIED_MARKER to null else null
     }
 
     Column(modifier = Modifier.padding(bottom = 14.dp)) {
@@ -4249,6 +4273,8 @@ private fun KeyCardMobile(
                     Text(
                         text = when {
                             verifying -> "Verifying…"
+                            verifyResult?.first == TORBOX_VERIFIED_MARKER ->
+                                "Verified — this device checked this key."
                             verifyResult?.first != null -> "$savedHint ${verifyResult?.first}"
                             verifyResult?.second != null -> verifyResult?.second ?: ""
                             else -> "Not verified yet."
@@ -4265,7 +4291,9 @@ private fun KeyCardMobile(
                             verifying = true
                             verifyResult = null
                             scope.launch {
-                                verifyResult = verify.invoke()
+                                val verdict = verify.invoke()
+                                onVerifyFinished(verdict.first != null)
+                                verifyResult = verdict
                                 verifying = false
                             }
                         }
