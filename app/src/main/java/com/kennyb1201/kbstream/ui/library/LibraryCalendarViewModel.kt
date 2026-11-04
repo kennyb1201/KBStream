@@ -1061,8 +1061,28 @@ class LibraryCalendarViewModel(
         /** How long the tracked-show set is trusted before it is re-read. */
         const val SHOW_SET_TTL_MS = 30L * 60L * 1000L
 
-        /** Parallel TMDB/TVmaze resolutions per month build. */
-        const val CALENDAR_CONCURRENCY = 4
+        /**
+         * Parallel TMDB/TVmaze resolutions per month build.
+         *
+         * Raised from 4 on 2026-11-04, which is the deferral the October speedup
+         * spec left open ("if a later field pass shows cold builds still
+         * permit-starved, raise it then"): Calendar was still slow on current
+         * builds with the month build unchanged in shape, and the cold month's
+         * tail is where the four permits were visible - a show costs a detail, an
+         * optional IMDb resolve, its season payloads and a TVmaze correction, so
+         * four at a time left most of a 300-show month queued behind the slowest
+         * one.
+         *
+         * 8, not 12: Home's catalog cap is 12, but a calendar show costs more per
+         * permit than a catalog row (discover is one call), and the October
+         * caution was the shared TMDB/TVmaze rate budget rather than CPU. 8 halves
+         * the permit-starved tail while staying inside the budget the app already
+         * manages; 12 is the documented follow-up with the `calendar:` line as
+         * evidence, not part of this change. Nothing else moves with the number:
+         * same per-show calls in the same order, same partial-publish throttle,
+         * same cache, same watched passes.
+         */
+        const val CALENDAR_CONCURRENCY = 8
 
         /**
          * Concurrent id resolutions for the watched union.

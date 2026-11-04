@@ -188,8 +188,11 @@ class LibraryCalendarSpeedupContractTest {
                 show.contains("val ordered = LinkedHashMap<Int, List<ResolvedEpisode>>()")
         )
         assertTrue(
-            "the calendar's own concurrency constant is untouched",
-            source(VIEW_MODEL).contains("const val CALENDAR_CONCURRENCY = 4")
+            "the month's permit count is one companion constant spent at one call " +
+                "site - the value itself is pinned by " +
+                "LibraryCalendarConcurrencyContractTest (raised 4 -> 8 on 2026-11-04)",
+            source(VIEW_MODEL).contains("const val CALENDAR_CONCURRENCY = ") &&
+                source(VIEW_MODEL).contains("Semaphore(CALENDAR_CONCURRENCY)")
         )
     }
 
