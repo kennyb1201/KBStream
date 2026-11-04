@@ -611,6 +611,22 @@ dependencies {
     // io.github.jan.supabase.auth (SessionStatus moved again, to
     // ...auth.status). 3.x also requires Ktor 3, so the engine below moved
     // with it.
+    //
+    // 3.9.0 is a FLOOR, not a preference: on 3.8.0 and earlier, an auth event
+    // (session restore or a background token refresh) that lands while a
+    // realtime channel exists but the websocket is not open reaches
+    // RealtimeImpl.getWebsocket() and throws IllegalStateException("Websocket
+    // not yet initialized") on the SDK's own supervisor scope - which carries
+    // no exception handler, so it is uncaught and kills the process (Sentry
+    // ANDROID-Y on 0.9.136, a fatal in NativePlayerActivity). Realtime's hop
+    // through subscribe()/updateAuth() suspends across the token refresh, so
+    // the socket can also be closed underneath it by the SDK's own reconnect
+    // or heartbeat logic; app-side ordering (connecting before session
+    // restore, see SupabaseSync.startClient) narrows the window but cannot
+    // close it. 3.9.0 makes the websocket nullable with a check at every use
+    // AND installs a CoroutineExceptionHandler on that scope, so a race logs
+    // and reconnects instead of dying. Pinned by RealtimeConnectContractTest;
+    // do not downgrade without re-reading that test.
     implementation(platform(libs.supabase.bom))
     implementation(libs.supabase.auth)
     implementation(libs.supabase.postgrest)

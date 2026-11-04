@@ -302,6 +302,12 @@ object SupabaseSync {
         // channel that would need it. Dispatched rather than awaited so a slow
         // or refused handshake cannot hold up session restore, and guarded so
         // a realtime failure stays a log line instead of taking sync down.
+        //
+        // This ordering is no longer the whole defence: 3.8.0 still died this
+        // way (Sentry ANDROID-Y on 0.9.136) when the SDK closed the socket
+        // underneath an auth fan-out. The library floor is what makes that
+        // non-fatal now - see the supabase block in app/build.gradle.kts and
+        // RealtimeConnectContractTest.
         scope.launch {
             runCatching { client?.realtime?.connect() }
                 .onFailure { Log.w(TAG, "realtime connect failed: ${Redaction.text(it.message)}") }
