@@ -54,8 +54,8 @@ EPG).
   toggles: hide addon management, kid-safe Live TV channel filter, PIN to
   leave the profile, daily watch-time limit, and a bedtime lock — each with
   parent-PIN override where relevant.
-- **Integrations** — Simkl (watch history sync + live scrobbling),
-  MDBList ratings, IPTV (M3U + XMLTV EPG), YouTube trailers.
+- **Integrations** — Simkl (watch history sync + live scrobbling), Trakt (watch history sync + live scrobbling, Mdblist (watch history sync + live scrobbling)
+  MDBList ratings, Omdb awards, IPTV (M3U + XMLTV EPG), YouTube trailers.
 - **Diagnostics** — Settings → About → Copy diagnostics writes a report of the
   build, device, account and sync health, and of where this session's time
   went: the slowest operations, ranked by name. Network time is filed under the
