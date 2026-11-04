@@ -252,6 +252,25 @@ class CachedOnlyPickerContractTest {
         }
     }
 
+    // ── The toggle collector is constructed LAST ─────────────────────────────
+
+    @Test
+    fun `the revision collector is constructed after every published state flow`() {
+        val viewModel = source(VIEW_MODEL)
+        val init = viewModel.indexOf("init {")
+        val collector = viewModel.indexOf("PrefsPayloadApplier.revision.collect")
+        val lastFlow = viewModel.lastIndexOf("= MutableStateFlow(")
+        assertTrue("the collector is gone from the ViewModel", collector > 0)
+        assertTrue(
+            "`revision` is a StateFlow, so collect emits at once and that first pass " +
+                "publishes through _streams/_sourceAddons/_addonGroups/_cachedOnly. The " +
+                "init block has to sit AFTER the last MutableStateFlow declaration, or " +
+                "construction dereferences a null field: Sentry ANDROID-15 on 0.9.141, " +
+                "a fatal NPE in publishStreams on every picker open.",
+            init > lastFlow && collector > init
+        )
+    }
+
     private fun findSourceRoot(): File {
         val prefixes = listOf("", "app/")
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile

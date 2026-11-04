@@ -231,18 +231,6 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private val _cachedOnly = MutableStateFlow(CachedOnlyState())
     val cachedOnly: StateFlow<CachedOnlyState> = _cachedOnly.asStateFlow()
 
-    init {
-        // The setting is a SYNCED pref, so it moves either from Settings on this
-        // device or from a sibling TV, and either way the local edit is reported
-        // on this counter (see AppPreferences.setTorboxCachedOnly). The list is
-        // a view over rows this ViewModel already holds, so a toggle re-filters
-        // in place - no fetch, no network, no lost scroll position beyond the
-        // rows that come back.
-        viewModelScope.launch {
-            PrefsPayloadApplier.revision.collect { reapplyCachedOnlyFilter() }
-        }
-    }
-
     /**
      * The add-on each entry of [streams] came from, in the same order and the
      * same length (null when unknown). Published beside [streams] so a caller
@@ -359,6 +347,25 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * ticket is still the newest.
      */
     private var stateGeneration = 0
+
+    init {
+        // The setting is a SYNCED pref, so it moves either from Settings on this
+        // device or from a sibling TV, and either way the local edit is reported
+        // on this counter (see AppPreferences.setTorboxCachedOnly). The list is
+        // a view over rows this ViewModel already holds, so a toggle re-filters
+        // in place - no fetch, no network, no lost scroll position beyond the
+        // rows that come back.
+        //
+        // LAST initializer on purpose: `revision` is a StateFlow, so collect
+        // emits its current value immediately, and that first pass publishes
+        // through every state flow below/beside this point. Declared above them
+        // it ran against null fields and crashed every picker open with an NPE
+        // in publishStreams (Sentry ANDROID-15, 0.9.141), so the block must stay
+        // after the last MutableStateFlow in this class.
+        viewModelScope.launch {
+            PrefsPayloadApplier.revision.collect { reapplyCachedOnlyFilter() }
+        }
+    }
 
     private sealed class AddonLoadResult {
         /**
