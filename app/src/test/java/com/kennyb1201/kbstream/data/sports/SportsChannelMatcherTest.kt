@@ -168,11 +168,12 @@ class SportsChannelMatcherTest {
     }
 
     @Test
-    fun `the named network leads a guide hit that does not agree with it`() {
+    fun `a guide hit the named network does not agree with leads it`() {
         // The game says ESPN carries it; the guide's only row is on YES. The
-        // network still gets its vote in the list - ahead of the stranger's
-        // claim, which is what the field report asked for - and the guide hit
-        // stays behind it as a backup rather than being dropped.
+        // stranger's row is a schedule claim about this game tonight, while the
+        // fill-in only resembles the network's name, so the row leads and the
+        // network keeps its vote as the backup behind it rather than being
+        // dropped (the fill ranks last, 2026-11-03).
         val yes = channel("yes", "YES Network")
         val espn = channel("espn", "ESPN")
         val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
@@ -185,7 +186,7 @@ class SportsChannelMatcherTest {
             ),
         )
 
-        assertEquals(listOf(espn, yes), feeds)
+        assertEquals(listOf(yes, espn), feeds)
     }
 
     @Test
