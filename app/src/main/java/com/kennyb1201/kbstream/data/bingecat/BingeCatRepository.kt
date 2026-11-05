@@ -62,14 +62,86 @@ data class BingeCatSnapshot(
 )
 
 /**
+ * One public-list discovery read's answer.
+ *
+ * The gates are states, not errors, exactly as they are for the reads and
+ * writes: `NeedsReapproval` is a grant that never asked for `search:read` (the
+ * screen turns it into a reconnect prompt), and `NotReady` is "no token, so
+ * nothing was asked". Only [Failed] is a fault, and it carries the kind rather
+ * than a message so the screen owns the wording.
+ */
+sealed interface BingeCatPublicBrowse<out T> {
+    data class Loaded<T>(val value: T) : BingeCatPublicBrowse<T>
+
+    data object NeedsReapproval : BingeCatPublicBrowse<Nothing>
+
+    data object NotReady : BingeCatPublicBrowse<Nothing>
+
+    data class Failed(val reason: String) : BingeCatPublicBrowse<Nothing>
+}
+
+/**
+ * Whether a public list's titles can be read BEFORE it is imported (spec Q4).
+ *
+ * The contract has no public-list items route: the only list-items read is
+ * `/lists/{ref}/items`, addressed by a TYPED ref (`internal:N`, `external:N`,
+ * `tmdb:N`, `global:N`). A public list's key is not documented to be one, so
+ * the screen probes that read once and says which of these two worlds it is in
+ * - it never draws a title grid out of `cover_posters`, which are artwork.
+ */
+sealed interface BingeCatTitleProbe {
+    /** Q4a: the ref resolved, so the titles are readable before import. */
+    data class Titles(val rows: List<BingeCatRow>) : BingeCatTitleProbe
+
+    /** Q4b: the ref did not resolve - titles appear after import, via Library. */
+    data object NotAddressable : BingeCatTitleProbe
+
+    /** The probe could not be answered (network, 429); the detail is still usable. */
+    data class Failed(val reason: String) : BingeCatTitleProbe
+}
+
+/** One import attempt: the gates, the answer, and the first poll's wait. */
+sealed interface BingeCatImportAttempt {
+    /** BingeCat answered about the one list that was sent. */
+    data class Answered(
+        val feedback: BingeCatImportFeedback,
+        /** The acceptance's own `Retry-After`, for the first job poll. */
+        val retryAfterSeconds: Long
+    ) : BingeCatImportAttempt
+
+    /** The grant has no `lists:write`: re-connect, nothing was attempted. */
+    data object NeedsReapproval : BingeCatImportAttempt
+
+    /** Not connected, or no mapped profile: nothing was attempted. */
+    data object NotReady : BingeCatImportAttempt
+
+    /** A request was attempted and failed (network, 429, HTTP code, park). */
+    data class Failed(val reason: String) : BingeCatImportAttempt
+}
+
+/** One job poll: a verdict, or why there is none. */
+sealed interface BingeCatJobPoll {
+    data class Status(
+        val outcome: BingeCatJobOutcome,
+        /** Seconds to wait before the next poll (the job's `Retry-After`). */
+        val retryAfterSeconds: Long
+    ) : BingeCatJobPoll
+
+    /** The poll could not read the job; the caller decides whether to retry. */
+    data class Failed(val reason: String) : BingeCatJobPoll
+}
+
+/**
  * BingeCat, read-only, as this app speaks to it.
  *
  * The connect grant, the proactive refresh, the disconnect, the per-profile
  * mapping, the three reads v1 ships (watchlist + saved list + lists, and history
  * for the section's own watched marker), and the two write legs: watched
  * history (step 2, `history:write`) and the watchlist/user-list saves (step 3,
- * `lists:write`). Nothing else writes: no list creation, no settings call, no
- * imports (see [BingeCatConfig.SCOPES] for exactly what is asked).
+ * `lists:write`), plus step 6's public-list browse and import (discovery on
+ * `search:read`, the import on `lists:write`). Nothing else writes: no settings
+ * call, no publishing switch, no BingeCat Stremio addon (see
+ * [BingeCatConfig.SCOPES] for exactly what is asked).
  *
  * Three structural rules, each answering a specific failure:
  *
@@ -93,6 +165,9 @@ class BingeCatRepository private constructor(private val context: Context?) {
         const val CACHE_TTL_MS = 30L * 60L * 1_000L
 
         private const val PAGE_SIZE = 100
+
+        /** Public-list discovery pages: the contract's own SearchLimit ceiling. */
+        private const val PUBLIC_LIST_PAGE_SIZE = 50
 
         /** A hard ceiling on any paged walk, so a bad header cannot spin. */
         private const val MAX_PAGES = 10
@@ -1176,6 +1251,436 @@ class BingeCatRepository private constructor(private val context: Context?) {
             service.history(authorization = auth, profileId = mapped, limit = PAGE_SIZE)
         } ?: return null
         return body.items.mapNotNull { bingecatHistoryRow(it)?.watchedKey() }.toSet()
+    }
+
+    // ── Public lists (step 6: browse from Settings, import into the profile) ──
+    //
+    // The management surface behind Settings → BingeCat. Discovery is guarded by
+    // `search:read` and the import by `lists:write`, so the two legs have their
+    // own gates; the reads are account-agnostic (no profile in the path) while
+    // the import is pinned to the mapped profile like every other write. Nothing
+    // here touches Home: an imported list is the profile's own list afterwards,
+    // and Library shows it through its ordinary list read.
+
+    /** The category tree as this process last read it (null before any read). */
+    @Volatile
+    private var cachedCategories: List<BingeCatPublicCategory>? = null
+
+    @Volatile
+    private var categoriesReadAtMs: Long = 0L
+
+    /** True when the stored grant carries `search:read`, discovery's own scope. */
+    fun hasPublicListsScope(): Boolean =
+        BingeCatWriteRules.hasPublicListsScope(store.scope())
+
+    /** The last-read tree, for a screen that paints before it can wait. */
+    fun cachedPublicCategories(): List<BingeCatPublicCategory>? = cachedCategories
+
+    /**
+     * The category tree, cached stale-while-revalidate (spec F2).
+     *
+     * Categories change slowly, so a tree read within [CACHE_TTL_MS] answers
+     * without a request, and a FAILED refresh keeps the stale tree instead of
+     * blanking the screen - the failure is recorded in diagnostics, which is
+     * where a slow-drift bug is looked for.
+     */
+    suspend fun publicCategories(
+        nowMs: Long = System.currentTimeMillis()
+    ): BingeCatPublicBrowse<List<BingeCatPublicCategory>> {
+        val stale = cachedCategories
+        if (stale != null && nowMs - categoriesReadAtMs < CACHE_TTL_MS) {
+            return BingeCatPublicBrowse.Loaded(stale)
+        }
+        val result = browseRead("categories", "public-categories") { auth ->
+            service.publicListCategories(auth)
+        }.mapLoaded { it.categories }
+        return when (result) {
+            is BingeCatPublicBrowse.Loaded -> {
+                cachedCategories = result.value
+                categoriesReadAtMs = nowMs
+                result
+            }
+
+            is BingeCatPublicBrowse.Failed -> stale?.let { BingeCatPublicBrowse.Loaded(it) } ?: result
+
+            else -> result
+        }
+    }
+
+    /** One category's list cards. `subcategory` drills into a child of the tree. */
+    suspend fun publicListsInCategory(
+        slug: String,
+        subcategory: String? = null
+    ): BingeCatPublicBrowse<List<BingeCatPublicListRow>> {
+        if (slug.isBlank()) return BingeCatPublicBrowse.Failed("no-category")
+        return browseRead("category $slug", "public-category") { auth ->
+            service.publicListsInCategory(
+                authorization = auth,
+                slug = slug,
+                subcategory = subcategory,
+                type = BingeCatPublicListRules.categoryTypeWire(),
+                limit = PUBLIC_LIST_PAGE_SIZE
+            )
+        }.mapLoaded { it.lists }
+    }
+
+    /**
+     * Public-list SEARCH - lists, never titles.
+     *
+     * The contract's `type` is `movie | series | anime | all` here (its category
+     * route spells the same idea `movies | shows`), which is why the filter has
+     * its own enum rather than sharing a string with the browse route.
+     */
+    suspend fun searchPublicLists(
+        query: String,
+        type: BingeCatSearchType = BingeCatSearchType.ALL
+    ): BingeCatPublicBrowse<List<BingeCatPublicSearchResult>> {
+        val trimmed = query.trim()
+        if (!BingeCatPublicListRules.searchEnabled(trimmed)) {
+            return BingeCatPublicBrowse.Loaded(emptyList())
+        }
+        return browseRead("search $trimmed", "public-search") { auth ->
+            service.searchPublicLists(
+                authorization = auth,
+                query = trimmed,
+                type = type.wireValue,
+                limit = PUBLIC_LIST_PAGE_SIZE
+            )
+        }
+    }
+
+    /**
+     * Reads a public list's titles through `/lists/{ref}/items` (spec Q4).
+     *
+     * This IS the test call: the route is the only list-items read the contract
+     * has, and its `ref` is a typed grammar. A 400/404/422 therefore means this
+     * list's ref is not addressable - Q4b, titles only after import - and is
+     * reported as [BingeCatTitleProbe.NotAddressable] rather than as an error.
+     * Nothing is inferred from a cover collage: those are artwork.
+     */
+    suspend fun publicListTitles(ref: String): BingeCatTitleProbe {
+        if (ref.isBlank()) return BingeCatTitleProbe.NotAddressable
+        if (!isConfigured()) return BingeCatTitleProbe.NotAddressable
+        if (!hasToken()) return BingeCatTitleProbe.NotAddressable
+        val token = ensureFreshToken()
+            ?: return BingeCatTitleProbe.Failed("no-token")
+        var response = runCatchingCancellable {
+            service.listItems("Bearer $token", ref, page = 1, limit = PAGE_SIZE)
+        }.getOrNull() ?: return BingeCatTitleProbe.Failed("network")
+        if (response.code() == 401) {
+            val refreshed = ensureFreshToken(force = true)
+            if (refreshed != null) {
+                response = runCatchingCancellable {
+                    service.listItems("Bearer $refreshed", ref, page = 1, limit = PAGE_SIZE)
+                }.getOrNull() ?: return BingeCatTitleProbe.Failed("network")
+            }
+            if (response.code() == 401) {
+                store.clear()
+                cached = null
+                BingeCatTrace.recordSession(false)
+                return BingeCatTitleProbe.Failed("401")
+            }
+        }
+        if (response.code() == 429) {
+            BingeCatTrace.recordPublicListError("429")
+            return BingeCatTitleProbe.Failed("429")
+        }
+        return when {
+            response.isSuccessful -> {
+                val body = response.body()
+                val rows = body?.items.orEmpty().mapNotNull { bingecatListRow(it) }
+                BingeCatTitleProbe.Titles(rows)
+            }
+            // The ref grammar did not accept this list's key: Q4b.
+            response.code() == 400 || response.code() == 404 || response.code() == 422 ->
+                BingeCatTitleProbe.NotAddressable
+
+            response.code() == 403 -> {
+                BingeCatTrace.recordPublicListError("403-scope")
+                BingeCatTrace.recordNeedsReapproval(true)
+                BingeCatTitleProbe.Failed("403-scope")
+            }
+
+            else -> {
+                BingeCatTrace.recordPublicListError("http:${response.code()}")
+                BingeCatTitleProbe.Failed("http:${response.code()}")
+            }
+        }
+    }
+
+    /**
+     * Imports ONE public list into the mapped profile, as a job.
+     *
+     * The gates run before the request (connect + mapping, then `lists:write`),
+     * the failure contract is the list writes' one (401 refreshes once and then
+     * drops the session, 429 parks, 403 converges to needs-reapproval), and a
+     * success drops this profile's BingeCat snapshot so the Library re-reads its
+     * lists on the next open. One list per call, so [importId] is what every
+     * verdict in the answer is about.
+     */
+    suspend fun importPublicList(
+        importId: String,
+        mode: BingeCatImportMode
+    ): BingeCatImportAttempt {
+        if (importId.isBlank()) return BingeCatImportAttempt.Failed("no-list")
+        val mapped = if (isReady()) mappedProfileId() else null
+        if (mapped == null) return BingeCatImportAttempt.NotReady
+        if (!hasListsWriteScope()) {
+            BingeCatTrace.recordNeedsReapproval(true)
+            BingeCatTrace.recordImportFailure("403-scope")
+            Log.i(TAG, "import skipped: grant has no ${BingeCatConfig.LISTS_WRITE_SCOPE} ($importId)")
+            return BingeCatImportAttempt.NeedsReapproval
+        }
+        BingeCatTrace.recordNeedsReapproval(false)
+        val parkedMs = bingeCatWriteParkMs()
+        if (parkedMs > 0L) {
+            BingeCatTrace.recordImportFailure("429")
+            Log.i(TAG, "import skipped: parked for ${parkedMs}ms after a 429 ($importId)")
+            return BingeCatImportAttempt.Failed("429")
+        }
+        BingeCatTrace.recordImportAttempt()
+        return try {
+            val token = ensureFreshToken()
+            if (token == null) {
+                BingeCatTrace.recordImportFailure("no-token")
+                return BingeCatImportAttempt.Failed("no-token")
+            }
+            val body = BingeCatPublicListImportRequest(
+                lists = listOf(
+                    BingeCatPublicListImportItem(id = importId, importMode = mode.wireValue)
+                ),
+                enabled = true
+            )
+            var response = sendImport(token, mapped, body)
+            if (response == null) {
+                BingeCatTrace.recordImportFailure("network")
+                return BingeCatImportAttempt.Failed("network")
+            }
+            if (response.code() == 401) {
+                val refreshed = ensureFreshToken(force = true)
+                if (refreshed != null) response = sendImport(refreshed, mapped, body)
+                if (response == null) {
+                    BingeCatTrace.recordImportFailure("network")
+                    return BingeCatImportAttempt.Failed("network")
+                }
+                if (response.code() == 401) {
+                    store.clear()
+                    cached = null
+                    BingeCatTrace.recordSession(false)
+                    BingeCatTrace.recordImportFailure("401")
+                    return BingeCatImportAttempt.Failed("401")
+                }
+            }
+            val retryAfter = BingeCatPublicListRules.pollSeconds(
+                response.headers()["Retry-After"]
+            )
+            when {
+                response.isSuccessful -> {
+                    val accepted = response.body()
+                    if (accepted == null) {
+                        BingeCatTrace.recordImportFailure("empty")
+                        Log.w(TAG, "import answered with no body ($importId)")
+                        return BingeCatImportAttempt.Failed("empty")
+                    }
+                    // The imported list only reaches Library through the
+                    // profile's own list read, so that read must not be served
+                    // from the pre-import snapshot.
+                    cached = null
+                    val feedback = BingeCatPublicListRules.feedbackFor(accepted, importId)
+                    // Diagnostics names the REASON CLASS for each verdict: a
+                    // started/already-imported import is a success, and the two
+                    // refusals are failures even though the request answered.
+                    when (feedback) {
+                        is BingeCatImportFeedback.Started -> BingeCatTrace.recordImportSuccess(
+                            "$importId ${mode.wireValue} job=${feedback.jobId ?: "accepted"}"
+                        )
+
+                        BingeCatImportFeedback.AlreadyImported ->
+                            BingeCatTrace.recordImportSuccess("$importId already-imported")
+
+                        BingeCatImportFeedback.NotFound ->
+                            BingeCatTrace.recordImportFailure("not-found")
+
+                        is BingeCatImportFeedback.NotImportable ->
+                            BingeCatTrace.recordImportFailure("not-importable")
+                    }
+                    Log.i(TAG, "import ok: $importId ${mode.wireValue} -> $feedback")
+                    BingeCatImportAttempt.Answered(feedback, retryAfter)
+                }
+
+                noteBingeCatWriteRateLimit(
+                    response.code(),
+                    response.headers()["Retry-After"]
+                ) -> {
+                    BingeCatTrace.recordImportFailure("429")
+                    Log.w(TAG, "import rate-limited: 429, leg parked ($importId)")
+                    BingeCatImportAttempt.Failed("429")
+                }
+
+                response.code() == 403 -> {
+                    BingeCatTrace.recordNeedsReapproval(true)
+                    BingeCatTrace.recordImportFailure("403-scope")
+                    Log.w(TAG, "import refused: 403 scope, needs re-approval ($importId)")
+                    BingeCatImportAttempt.NeedsReapproval
+                }
+
+                // `import_already_running` is a state, not a fault: BingeCat
+                // runs one import per profile, and the answer is to wait.
+                response.code() == 409 -> {
+                    BingeCatTrace.recordImportFailure("409-import-running")
+                    BingeCatImportAttempt.Failed("import-running")
+                }
+
+                else -> {
+                    val code = oauthError(response)
+                    val raw = runCatching { response.errorBody()?.string() }.getOrNull()
+                    BingeCatTrace.recordImportFailure(
+                        code?.let { "http:${response.code()}:$it" } ?: "http:${response.code()}"
+                    )
+                    Log.e(
+                        TAG,
+                        "import failed: code=${response.code()} error=$code body=$raw ($importId)"
+                    )
+                    BingeCatImportAttempt.Failed(code ?: "http:${response.code()}")
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            BingeCatTrace.recordImportFailure(error.javaClass.simpleName)
+            Log.e(TAG, "import error ($importId): ${error.message}", error)
+            BingeCatImportAttempt.Failed(error.javaClass.simpleName)
+        }
+    }
+
+    private suspend fun sendImport(
+        token: String,
+        profileId: Long,
+        body: BingeCatPublicListImportRequest
+    ): Response<BingeCatPublicListImportAccepted>? = runCatchingCancellable {
+        service.importPublicLists("Bearer $token", profileId, body)
+    }.getOrNull()
+
+    /**
+     * One poll of the job an import was accepted as.
+     *
+     * Polled by the `status_url` the acceptance named (never by building a path
+     * from the id), with the reads' 401 rule. A 429 or a transport fault is
+     * [BingeCatJobPoll.Failed] and leaves the caller's loop to decide; the wait
+     * between polls is the job's own `Retry-After`.
+     */
+    suspend fun pollImportJob(statusUrl: String): BingeCatJobPoll {
+        if (statusUrl.isBlank()) return BingeCatJobPoll.Failed("no-job-url")
+        val token = ensureFreshToken() ?: return BingeCatJobPoll.Failed("no-token")
+        var response = runCatchingCancellable {
+            service.job("Bearer $token", statusUrl)
+        }.getOrNull() ?: return BingeCatJobPoll.Failed("network")
+        if (response.code() == 401) {
+            val refreshed = ensureFreshToken(force = true)
+            if (refreshed != null) {
+                response = runCatchingCancellable {
+                    service.job("Bearer $refreshed", statusUrl)
+                }.getOrNull() ?: return BingeCatJobPoll.Failed("network")
+            }
+            if (response.code() == 401) {
+                store.clear()
+                cached = null
+                BingeCatTrace.recordSession(false)
+                return BingeCatJobPoll.Failed("401")
+            }
+        }
+        if (response.code() == 429) {
+            BingeCatTrace.recordImportFailure("429-poll")
+            return BingeCatJobPoll.Failed("429")
+        }
+        if (!response.isSuccessful) {
+            BingeCatTrace.recordImportFailure("http:${response.code()}-poll")
+            return BingeCatJobPoll.Failed("http:${response.code()}")
+        }
+        val body = response.body() ?: return BingeCatJobPoll.Failed("empty")
+        return BingeCatJobPoll.Status(
+            outcome = BingeCatPublicListRules.jobOutcome(body.status, body.error),
+            retryAfterSeconds = BingeCatPublicListRules.pollSeconds(
+                response.headers()["Retry-After"]
+            )
+        )
+    }
+
+    /**
+     * One discovery read with a live token, on the reads' failure contract.
+     *
+     * The scope gate runs BEFORE the request: a grant that never asked for
+     * `search:read` is the reconnect STATE, not a 403 to discover at runtime.
+     */
+    private suspend fun <T> browseRead(
+        label: String,
+        traceLabel: String,
+        call: suspend (String) -> Response<T>
+    ): BingeCatPublicBrowse<T> {
+        if (!isConfigured() || !hasToken()) return BingeCatPublicBrowse.NotReady
+        if (!hasPublicListsScope()) {
+            BingeCatTrace.recordNeedsReapproval(true)
+            BingeCatTrace.recordPublicListError("403-scope")
+            Log.i(
+                TAG,
+                "public-list read skipped: grant has no ${BingeCatConfig.PUBLIC_LISTS_SCOPE} ($label)"
+            )
+            return BingeCatPublicBrowse.NeedsReapproval
+        }
+        BingeCatTrace.recordPublicListRead()
+        val token = ensureFreshToken() ?: run {
+            BingeCatTrace.recordPublicListError("no-token")
+            return BingeCatPublicBrowse.Failed("no-token")
+        }
+        var response = runCatchingCancellable { call("Bearer $token") }.getOrNull()
+        if (response == null) {
+            BingeCatTrace.recordPublicListError("network")
+            Log.w(TAG, "public-list read failed: network ($label)")
+            return BingeCatPublicBrowse.Failed("network")
+        }
+        if (response.code() == 401) {
+            val refreshed = ensureFreshToken(force = true)
+            if (refreshed != null) {
+                response = runCatchingCancellable { call("Bearer $refreshed") }.getOrNull()
+            }
+            if (response == null) {
+                BingeCatTrace.recordPublicListError("network")
+                return BingeCatPublicBrowse.Failed("network")
+            }
+            if (response.code() == 401) {
+                store.clear()
+                cached = null
+                BingeCatTrace.recordSession(false)
+                BingeCatTrace.recordPublicListError("401")
+                return BingeCatPublicBrowse.Failed("401")
+            }
+        }
+        if (response.code() == 403) {
+            BingeCatTrace.recordNeedsReapproval(true)
+            BingeCatTrace.recordPublicListError("403-scope")
+            return BingeCatPublicBrowse.NeedsReapproval
+        }
+        if (response.code() == 429) {
+            BingeCatTrace.recordPublicListError("429")
+            return BingeCatPublicBrowse.Failed("429")
+        }
+        val body = response.body()
+        if (!response.isSuccessful || body == null) {
+            BingeCatTrace.recordPublicListError("http:${response.code()}")
+            Log.w(TAG, "public-list read failed: code=${response.code()} ($label/$traceLabel)")
+            return BingeCatPublicBrowse.Failed("http:${response.code()}")
+        }
+        return BingeCatPublicBrowse.Loaded(body)
+    }
+
+    /** Maps a loaded discovery answer, keeping every gate's own answer. */
+    private fun <T, R> BingeCatPublicBrowse<T>.mapLoaded(
+        transform: (T) -> R
+    ): BingeCatPublicBrowse<R> = when (this) {
+        is BingeCatPublicBrowse.Loaded -> BingeCatPublicBrowse.Loaded(transform(value))
+        BingeCatPublicBrowse.NeedsReapproval -> BingeCatPublicBrowse.NeedsReapproval
+        BingeCatPublicBrowse.NotReady -> BingeCatPublicBrowse.NotReady
+        is BingeCatPublicBrowse.Failed -> this
     }
 
     // ── Plumbing ─────────────────────────────────────────────────────────

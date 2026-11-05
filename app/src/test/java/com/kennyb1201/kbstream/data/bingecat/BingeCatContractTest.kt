@@ -82,7 +82,7 @@ class BingeCatContractTest {
     }
 
     @Test
-    fun `the scopes are the three reads and the two writes`() {
+    fun `the scopes are the three reads and the two writes and discovery`() {
         val declared = config
             .substringAfter("const val SCOPES =")
             .substringAfter("\"")
@@ -91,13 +91,16 @@ class BingeCatContractTest {
             .filter { it.isNotBlank() }
         assertEquals(
             "the three reads plus the two writes - step 2's history and step 3's " +
-                "lists; settings:read and search:read stay out at every step of the roadmap",
+                "lists - plus search:read, which BingeCat guards public-list DISCOVERY " +
+                "with (step 6). settings:read stays out: nothing here reads account " +
+                "settings",
             listOf(
                 "profiles:read",
                 "lists:read",
                 "history:read",
                 "history:write",
-                "lists:write"
+                "lists:write",
+                "search:read"
             ),
             declared
         )

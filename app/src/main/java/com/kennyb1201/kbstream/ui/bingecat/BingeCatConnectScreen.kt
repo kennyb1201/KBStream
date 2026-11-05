@@ -60,6 +60,12 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 fun BingeCatConnectScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
+    /**
+     * Settings → BingeCat → Browse public lists (step 6). The browser is its own
+     * surface with its own level stack; this page is its entry, which is where
+     * the spec puts it ("alongside the connect screen").
+     */
+    onBrowsePublicLists: () -> Unit = {},
     vm: BingeCatViewModel = viewModel()
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
@@ -192,6 +198,11 @@ fun BingeCatConnectScreen(
                                 // disconnect: the grant stays.
                                 showPicker = true
                             }
+                            // Entry to the public-lists browser. It sits in the
+                            // connected section (it reads with this session) and
+                            // needs no mapping to BROWSE; the import inside asks
+                            // for the mapping and the `lists:write` scope itself.
+                            KBButton(label = "BROWSE PUBLIC LISTS") { onBrowsePublicLists() }
                             KBButton(
                                 label = if (uiState.isDisconnecting) "DISCONNECTING…" else "DISCONNECT",
                                 enabled = !uiState.isDisconnecting,
@@ -227,6 +238,9 @@ fun BingeCatConnectScreen(
                         uiState.profilesError?.let { BingeCatErrorLine(it) }
                         uiState.statusMessage?.let { BingeCatStatusLine(it) }
                         uiState.errorMessage?.let { BingeCatErrorLine(it) }
+                        // Browse is available before the mapping (reading public
+                        // lists takes no profile); only importing needs one.
+                        KBButton(label = "BROWSE PUBLIC LISTS") { onBrowsePublicLists() }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             KBButton(label = "NOT NOW") { vm.skipMapping() }
                             KBButton(

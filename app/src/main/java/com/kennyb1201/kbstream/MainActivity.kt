@@ -2786,9 +2786,40 @@ fun AppRoot(
         }
 
         is Screen.BingeCat -> {
-            com.kennyb1201.kbstream.ui.bingecat.BingeCatConnectScreen(
-                onBack = { screen = stableBackDestination(current.returnTo) }
-            )
+            // The public-lists browser lives INSIDE Settings → BingeCat: its own
+            // level stack and its own Back, with the connect page one press away.
+            // The ViewModel is activity-scoped so that opening a title's Detail
+            // and coming back returns to the level the viewer left - and so an
+            // import already following its job is not restarted by the trip.
+            val publicListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel =
+                viewModel()
+            val publicListsState by publicListsVm.uiState.collectAsStateWithLifecycle()
+            if (publicListsState.browsing) {
+                com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsScreen(
+                    // Leaving the BingeCat page from the browser's root closes
+                    // the browser, so the next visit to the BingeCat row lands on
+                    // the connect page rather than resuming a browse.
+                    onBack = {
+                        publicListsVm.close()
+                        screen = stableBackDestination(current.returnTo)
+                    },
+                    onOpenTitle = { mediaType, id ->
+                        // The same Detail any Library or rail row opens, and Back
+                        // returns here (see [Screen.Detail.returnTo]).
+                        screen = Screen.Detail(
+                            type = mediaType,
+                            id = id,
+                            returnTo = current
+                        )
+                    },
+                    vm = publicListsVm
+                )
+            } else {
+                com.kennyb1201.kbstream.ui.bingecat.BingeCatConnectScreen(
+                    onBack = { screen = stableBackDestination(current.returnTo) },
+                    onBrowsePublicLists = { publicListsVm.open() }
+                )
+            }
         }
 
         is Screen.Simkl -> {

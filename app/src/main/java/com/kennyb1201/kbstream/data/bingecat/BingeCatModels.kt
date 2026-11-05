@@ -408,6 +408,179 @@ data class BingeCatListItemsRemoved(
     @Json(name = "item_count") val itemCount: Int = 0
 )
 
+// ── Public lists (step 6) ─────────────────────────────────────────
+//
+// Read from the live contract (`/api/v1/public-lists/...`, 2026-11-05), which
+// also answers the spec's Q4 for the wire shape: a public list's titles are NOT
+// a route of their own. The only list-items read is `/lists/{ref}/items`, and
+// its `ref` is the TYPED grammar `internal:N | external:N | tmdb:N | global:N` -
+// a public list's `key`/`id` is not documented to be one. The screen therefore
+// probes that read and falls back to "titles appear after import" (see
+// [BingeCatPublicListItemProbe]); nothing here fabricates a title grid.
+//
+// The discover routes are guarded by `search:read` (see
+// [BingeCatConfig.PUBLIC_LISTS_SCOPE]) and the import by `lists:write`.
+
+/** `GET /api/v1/public-lists/categories` - the category tree. */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicCategoriesResponse(
+    val categories: List<BingeCatPublicCategory> = emptyList()
+)
+
+/**
+ * One node of that tree. `children` is the same shape, one level down (the
+ * contract recurses rather than naming depths), and `list_counts` is an
+ * open-keyed map of counts per type (`all`, `movies`, `shows`, `anime`).
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicCategory(
+    val id: Long? = null,
+    val slug: String? = null,
+    val name: String? = null,
+    val description: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "icon_name") val iconName: String? = null,
+    @Json(name = "list_counts") val listCounts: Map<String, Int> = emptyMap(),
+    @Json(name = "lists_updated_at") val listsUpdatedAt: String? = null,
+    val children: List<BingeCatPublicCategory> = emptyList()
+) {
+    /** The subcategory slugs this node drills into; empty for a leaf. */
+    val childSlugs: List<String>
+        get() = children.mapNotNull { it.slug?.takeIf { slug -> slug.isNotBlank() } }
+}
+
+/** `GET /api/v1/public-lists/categories/{slug}`. */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicCategoryResponse(
+    val category: BingeCatPublicCategoryRef? = null,
+    val lists: List<BingeCatPublicListRow> = emptyList()
+)
+
+/** Which level of the tree the answer was for. */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicCategoryRef(
+    val slug: String? = null,
+    val subcategory: String? = null
+)
+
+/**
+ * One list card inside a category.
+ *
+ * `key` is the row's identity - the spec's Q4 also asks whether it is what the
+ * import accepts; the search result's `id` is the documented selection key
+ * ([BingeCatPublicListImportItem.id]), so an import started from a row sends
+ * its `key` and the repository reports what the server said about it.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicListRow(
+    val key: String? = null,
+    val source: String? = null,
+    val name: String? = null,
+    val description: String? = null,
+    val owner: String? = null,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "item_count") val itemCount: Int? = null,
+    @Json(name = "movie_count") val movieCount: Int? = null,
+    @Json(name = "series_count") val seriesCount: Int? = null,
+    val likes: Int? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "cover_posters") val coverPosters: List<String> = emptyList(),
+    @Json(name = "updated_at") val updatedAt: String? = null
+)
+
+/**
+ * `GET /api/v1/public-lists/search` - an ARRAY of results (not a wrapper).
+ *
+ * `id` is the stable selection key the import takes; `owner` is the one nested
+ * object in this family (a row's `owner` is a plain string).
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicSearchResult(
+    val id: String? = null,
+    val provider: String? = null,
+    val name: String? = null,
+    val description: String? = null,
+    val owner: BingeCatPublicOwner? = null,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "item_count") val itemCount: Int? = null,
+    @Json(name = "movie_count") val movieCount: Int? = null,
+    @Json(name = "series_count") val seriesCount: Int? = null,
+    val likes: Int = 0,
+    @Json(name = "added_count") val addedCount: Int = 0,
+    @Json(name = "is_official") val isOfficial: Boolean = false,
+    @Json(name = "source_url") val sourceUrl: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "cover_posters") val coverPosters: List<String> = emptyList()
+)
+
+/** A search result's owner: a username and/or a display name. */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicOwner(
+    val username: String? = null,
+    @Json(name = "display_name") val displayName: String? = null
+)
+
+/**
+ * `PublicListImportRequest`: ONE list per call in v1.
+ *
+ * The contract takes 1-50; this app sends one, so every per-list verdict
+ * (`not_found` / `already_imported` / `not_importable`) is attributable to the
+ * card the viewer pressed.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicListImportRequest(
+    val lists: List<BingeCatPublicListImportItem>,
+    val enabled: Boolean = true
+)
+
+/** One `lists[]` entry: the selection key and the mode its import uses. */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicListImportItem(
+    val id: String,
+    @Json(name = "import_mode") val importMode: String?
+)
+
+/**
+ * `PublicListImportAccepted` - the job, plus the lists that were left out.
+ *
+ * A 200 (instead of 202) carries `job = null`: nothing was left to import, and
+ * the three arrays say why. That is the response the "Already in your lists"
+ * card reads, not an error.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatPublicListImportAccepted(
+    val job: BingeCatAcceptedJob? = null,
+    @Json(name = "not_found") val notFound: List<String> = emptyList(),
+    @Json(name = "already_imported") val alreadyImported: List<String> = emptyList(),
+    @Json(name = "not_importable") val notImportable: List<String> = emptyList()
+)
+
+/** The accepted job's identity and where to poll it. */
+@JsonClass(generateAdapter = true)
+data class BingeCatAcceptedJob(
+    val id: String? = null,
+    val status: String? = null,
+    @Json(name = "status_url") val statusUrl: String? = null
+)
+
+/**
+ * `GET /api/v1/jobs/{job_id}` (and whatever `status_url` points at).
+ *
+ * `status` is the job's state and `error` its stable failure CODE (never a
+ * message): `failed`, `partial`, `interrupted`, `list_limit_reached`. The
+ * result object is free-form per kind and is not modelled - the import's
+ * outcome is the list appearing in the Library, which the profile's list read
+ * answers.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatJob(
+    val id: String? = null,
+    val kind: String? = null,
+    val status: String? = null,
+    val error: String? = null,
+    @Json(name = "updated_at") val updatedAt: String? = null
+)
+
 /** A device-code request's body. Public client: no `client_secret`. */
 @JsonClass(generateAdapter = true)
 data class BingeCatDeviceCodeRequest(

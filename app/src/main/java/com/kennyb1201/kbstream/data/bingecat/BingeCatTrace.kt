@@ -73,6 +73,32 @@ object BingeCatTrace {
     @Volatile
     private var lastListWriteDetail: String = NONE
 
+    // ── Public lists (step 6) ─────────────────────────────────────────
+    //
+    // Counted apart from the list writes for the reason those are counted
+    // apart from the history writes: discovery runs on `search:read` and the
+    // import on `lists:write`, so "browsing is broken" and "importing is
+    // broken" are different reports. The import's detail names the list and its
+    // mode - never a token, an id from the account's own sessions, or a title.
+
+    @Volatile
+    private var publicListReads: Int = 0
+
+    @Volatile
+    private var lastPublicListError: String = NONE
+
+    @Volatile
+    private var importsAttempted: Int = 0
+
+    @Volatile
+    private var importsSucceeded: Int = 0
+
+    @Volatile
+    private var lastImportError: String = NONE
+
+    @Volatile
+    private var lastImportDetail: String = NONE
+
     fun recordSession(connected: Boolean) {
         this.connected = connected
     }
@@ -145,6 +171,43 @@ object BingeCatTrace {
         lastListWriteError = kind
     }
 
+    /** A public-list discovery read that reached the network. */
+    fun recordPublicListRead() {
+        publicListReads += 1
+    }
+
+    /**
+     * A public-list read that did not answer.
+     *
+     * @param kind one of `401`, `429`, `403-scope`, `network`, `no-token`,
+     * `http:<code>` - the same vocabulary every other BingeCat leg uses
+     */
+    fun recordPublicListError(kind: String) {
+        lastPublicListError = kind
+    }
+
+    /** An import that reached the network (or should have). */
+    fun recordImportAttempt() {
+        importsAttempted += 1
+    }
+
+    /** An import BingeCat answered about, with the list and mode it names. */
+    fun recordImportSuccess(detail: String) {
+        importsSucceeded += 1
+        lastImportError = NONE
+        lastImportDetail = detail.ifBlank { NONE }
+    }
+
+    /**
+     * An import that did not land.
+     *
+     * @param kind one of `401`, `429`, `403-scope`, `409-import-running`,
+     * `network`, `no-token`, `http:<code>[:<error code>]`, or a failure class name
+     */
+    fun recordImportFailure(kind: String) {
+        lastImportError = kind
+    }
+
     /** The needs-reapproval state a step-1 grant (or a 403) puts the tracker in. */
     fun recordNeedsReapproval(needed: Boolean) {
         needsReapproval = needed
@@ -166,7 +229,11 @@ object BingeCatTrace {
                 "list_writes=$listWritesAttempted/$listWritesSucceeded " +
                 "last_list_write_error=$lastListWriteError " +
                 "last_list_write=$lastListWriteDetail " +
-                "needs_reapproval=${if (needsReapproval) "yes" else "no"}"
+                "needs_reapproval=${if (needsReapproval) "yes" else "no"} " +
+                "public_list_reads=$publicListReads " +
+                "last_public_list_error=$lastPublicListError " +
+                "imports=$importsAttempted/$importsSucceeded " +
+                "last_import_error=$lastImportError last_import=$lastImportDetail"
         )
     }
 
@@ -186,5 +253,11 @@ object BingeCatTrace {
         lastListWriteError = NONE
         lastListWriteDetail = NONE
         needsReapproval = false
+        publicListReads = 0
+        lastPublicListError = NONE
+        importsAttempted = 0
+        importsSucceeded = 0
+        lastImportError = NONE
+        lastImportDetail = NONE
     }
 }

@@ -12,6 +12,7 @@ import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Url
 
 /**
  * BingeCat's OAuth surface and v1's reads.
@@ -22,12 +23,17 @@ import retrofit2.http.Query
  * approved), and a data read has to be able to keep its cache on a 429 rather
  * than throw into a screen.
  *
- * Every path here is the **explicit profile form**. The root `sync/...`,
- * `calendar` and `search` routes follow BingeCat's *active* profile - on the
- * web - so using one would serve whoever last touched the account in a browser
- * instead of the profile this KBStream profile is mapped to. The mapping is
- * enforced by the shape of the API, not by a convention: there is no root-form
- * call in the interface at all.
+ * Every PROFILE-SCOPED path here is the **explicit profile form**. The root
+ * `sync/...`, `calendar` and `search` routes follow BingeCat's *active* profile -
+ * on the web - so using one would serve whoever last touched the account in a
+ * browser instead of the profile this KBStream profile is mapped to. The
+ * mapping is enforced by the shape of the API, not by a convention: no
+ * profile-scoped call in this interface has a root form.
+ *
+ * The paths that are NOT profile-scoped are deliberate, and none of them can
+ * serve another profile's data: a list is addressed by its own `ref`, public
+ * lists are account-agnostic discovery (`search:read`), and a job is addressed
+ * by the absolute `status_url` its acceptance carried.
  */
 interface BingeCatApiService {
 
@@ -201,6 +207,76 @@ interface BingeCatApiService {
         @Path("ref") ref: String,
         @Body body: BingeCatListItemsWrite
     ): Response<BingeCatListItemsRemoved>
+
+    // ── Public lists (step 6) ─────────────────────────────────────────
+    //
+    // Discovery (categories, a category's lists, search) is guarded by
+    // `search:read`; the import is the ordinary `lists:write` write, pinned to
+    // the mapped profile like every other write here. The three reads take no
+    // profile at all - public lists are account-agnostic - so they use the
+    // bearer token and nothing else.
+
+    /** `GET /api/v1/public-lists/categories` - the tree, cached until re-read. */
+    @GET("api/v1/public-lists/categories")
+    suspend fun publicListCategories(
+        @Header("Authorization") authorization: String
+    ): Response<BingeCatPublicCategoriesResponse>
+
+    /**
+     * `GET /api/v1/public-lists/categories/{slug}` - one level's list cards.
+     *
+     * `subcategory` is the drill-down the tree's `children` name, and `type` is
+     * the contract's `all | movies | shows | anime` filter (its own spelling -
+     * search uses `movie | series | anime`).
+     */
+    @GET("api/v1/public-lists/categories/{slug}")
+    suspend fun publicListsInCategory(
+        @Header("Authorization") authorization: String,
+        @Path("slug") slug: String,
+        @Query("subcategory") subcategory: String? = null,
+        @Query("type") type: String = "all",
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 50
+    ): Response<BingeCatPublicCategoryResponse>
+
+    /**
+     * `GET /api/v1/public-lists/search` - an ARRAY of list cards, never titles.
+     *
+     * `limit` is the contract's SearchLimit (max 50, default 20).
+     */
+    @GET("api/v1/public-lists/search")
+    suspend fun searchPublicLists(
+        @Header("Authorization") authorization: String,
+        @Query("q") query: String,
+        @Query("type") type: String = "all",
+        @Query("category") category: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 20
+    ): Response<List<BingeCatPublicSearchResult>>
+
+    /**
+     * `POST /api/v1/profiles/{profileId}/public-lists/import` - a JOB, not a
+     * finished list (`202` + `Location` + `Retry-After`).
+     */
+    @POST("api/v1/profiles/{profileId}/public-lists/import")
+    suspend fun importPublicLists(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        @Body body: BingeCatPublicListImportRequest
+    ): Response<BingeCatPublicListImportAccepted>
+
+    /**
+     * One job, by the `status_url` its acceptance carried.
+     *
+     * `@Url` rather than a path: the contract names an absolute status URL, and
+     * building it from an id would encode an assumption about the route (the
+     * contract lets a job's `kind` move its status endpoint).
+     */
+    @GET
+    suspend fun job(
+        @Header("Authorization") authorization: String,
+        @Url url: String
+    ): Response<BingeCatJob>
 
     /** The watched timeline, cursor-paged (`next_cursor`). */
     @GET("api/v1/profiles/{profileId}/history")

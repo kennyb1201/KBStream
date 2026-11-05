@@ -48,8 +48,10 @@ object BingeCatConfig {
      * `history:write` is what turns the connection into a tracker (completion
      * scrobbles and the mark-as-watched/unwatched mirror); `lists:write` is what
      * lets the Library button save and unsave a title on the profile's watchlist
-     * and user lists. `settings:read` and `search:read` stay out at every scope
-     * of the roadmap.
+     * and user lists. `search:read` is what BingeCat guards its public-list
+     * discovery routes with (categories, a category's lists, list search), so
+     * browsing public lists cannot be done without it; `settings:read` stays
+     * out, since nothing here reads account settings.
      *
      * Widening this string does NOT widen an existing grant: OAuth never adds a
      * scope silently, so a viewer who connected under step 1 keeps a read-only
@@ -59,7 +61,7 @@ object BingeCatConfig {
      * re-connect prompt).
      */
     const val SCOPES =
-        "profiles:read lists:read history:read history:write lists:write"
+        "profiles:read lists:read history:read history:write lists:write search:read"
 
     /** The write scope the tracker's gates check for on the stored grant. */
     const val WRITE_SCOPE = "history:write"
@@ -72,6 +74,17 @@ object BingeCatConfig {
      * that asked for "the write scope" would be wrong for one of them.
      */
     const val LISTS_WRITE_SCOPE = "lists:write"
+
+    /**
+     * The scope BingeCat guards public-list discovery with (step 6).
+     *
+     * Its own constant because it gates a different surface from either write
+     * leg: a step-3 grant can import (it holds `lists:write`) and cannot browse
+     * to find the list, and a read-only grant cannot do either. The browse
+     * screen asks this question and turns the answer into the same re-connect
+     * prompt the writes use, instead of earning a bare 403.
+     */
+    const val PUBLIC_LISTS_SCOPE = "search:read"
 
     /**
      * The scope whose absence from the developer app breaks the most of v1,

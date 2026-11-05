@@ -1075,7 +1075,8 @@ fun SettingsScreen(
                     NavigationRow(
                         label = "BingeCat",
                         description = "Read your BingeCat watchlist, saved list and lists, and " +
-                            "record what you watch - per BingeCat profile",
+                            "record what you watch - per BingeCat profile. Browse BingeCat's " +
+                            "public lists and import one into your profile there.",
                         onClick = onOpenBingeCat
                     )
 

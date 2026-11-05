@@ -59,6 +59,18 @@ object BingeCatWriteRules {
     fun hasListsWriteScope(scope: String?): Boolean =
         grants(scope, BingeCatConfig.LISTS_WRITE_SCOPE)
 
+    /**
+     * Whether [scope] allows public-list discovery (step 6) - the gate the
+     * browse screen asks BEFORE it calls anything.
+     *
+     * A third gate rather than a re-use of either write one: a grant approved
+     * before `search:read` was asked for holds `lists:write` and can import, but
+     * cannot discover a list to import. Asking the wrong question would either
+     * attempt a call that can only 403, or hide a state the reconnect fixes.
+     */
+    fun hasPublicListsScope(scope: String?): Boolean =
+        grants(scope, BingeCatConfig.PUBLIC_LISTS_SCOPE)
+
     /** [scope] as a set, parsed leniently on separators but exactly on values. */
     private fun grants(scope: String?, wanted: String): Boolean =
         scope.orEmpty()
