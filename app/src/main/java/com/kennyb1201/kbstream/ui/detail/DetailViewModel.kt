@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.addon.VideoEntry
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.history.TitleProfileOwnership
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
@@ -2782,6 +2783,25 @@ for ((metaAddon, response, error) in probeResults) {
                 }
             }
 
+            // 6. BingeCat, step 2's fourth leg: the season long-press is one
+            // `seasons[]` entry, so the whole season is one write. Its gate
+            // (ready + history:write) decides whether a request is attempted
+            // at all, and its failures are swallowed like the legs above.
+            runCatchingCancellable {
+                BingeCatRepository.getInstance(getApplication()).pushWatchedSeason(
+                    showImdbId = parentId,
+                    season = season,
+                    title = showName.takeIf { it.isNotBlank() },
+                    tmdbId = showTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeasonWatched bingecat failed s=$season",
+                    e
+                )
+            }
+
             refreshPostersAfterWatchedChange()
 
             // This path writes its own DB rows and pushes its own tracker
@@ -2979,6 +2999,22 @@ for ((metaAddon, response, error) in probeResults) {
                     )
                 }
             }
+
+            // 7. And the same removal on BingeCat: one seasons[] entry, the
+            // write's mirror of the season mark above.
+            runCatchingCancellable {
+                BingeCatRepository.getInstance(getApplication()).removeWatchedSeason(
+                    showImdbId = parentId,
+                    season = season,
+                    tmdbId = showTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeasonUnwatched bingecat failed s=$season",
+                    e
+                )
+            }
         }
     }
 
@@ -3087,6 +3123,32 @@ for ((metaAddon, response, error) in probeResults) {
                     )
                 }
             }
+        }
+
+        // BingeCat is rewritten the same way, because a whole-show mark is one
+        // ids-only entry there too: drop the show, then re-add the episodes
+        // that are still watched.
+        runCatchingCancellable {
+            val bingecat = BingeCatRepository.getInstance(appContext)
+            bingecat.removeWatchedShow(
+                showImdbId = parentId,
+                tmdbId = showTmdbId
+            )
+            remainingBySeason.forEach { (season, episodes) ->
+                bingecat.pushWatchedEpisodes(
+                    showImdbId = parentId,
+                    season = season,
+                    episodes = episodes,
+                    title = titleOrNull,
+                    tmdbId = showTmdbId
+                )
+            }
+        }.onFailure { e ->
+            Log.e(
+                "KBStream",
+                "rewriteTrackers bingecat rewrite failed",
+                e
+            )
         }
 
         if (MdbListClient.isConfigured(appContext)) {
@@ -3479,6 +3541,37 @@ for ((metaAddon, response, error) in probeResults) {
                 }
             }
 
+            // BingeCat, the same whole-show write (or the same per-season
+            // episode lists when unaired seasons were swept). One batch per
+            // season/list: the action is one mark, not one call per episode.
+            runCatchingCancellable {
+                val bingecat = BingeCatRepository.getInstance(getApplication())
+                val markTitle = showName.takeIf { it.isNotBlank() }
+                if (sweptUnaired) {
+                    seasonsToMark.forEach { (season, episodes) ->
+                        bingecat.pushWatchedEpisodes(
+                            showImdbId = parentId,
+                            season = season,
+                            episodes = episodes,
+                            title = markTitle,
+                            tmdbId = showTmdbId
+                        )
+                    }
+                } else {
+                    bingecat.pushWatchedShow(
+                        showImdbId = parentId,
+                        title = markTitle,
+                        tmdbId = showTmdbId
+                    )
+                }
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSeriesWatched bingecat show push failed",
+                    e
+                )
+            }
+
             if (MdbListClient.isConfigured(getApplication())) {
                 runCatchingCancellable {
                     if (sweptUnaired) {
@@ -3805,6 +3898,23 @@ for ((metaAddon, response, error) in probeResults) {
                         e
                     )
                 }
+            }
+
+            // BingeCat, the same removal: the episodes of this season, solved
+            // by the batch rather than one call each.
+            runCatchingCancellable {
+                BingeCatRepository.getInstance(getApplication()).removeWatchedEpisodes(
+                    showImdbId = parentId,
+                    season = season,
+                    episodes = validEpisodes,
+                    tmdbId = showTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "KBStream",
+                    "markSpecificEpisodesUnwatched bingecat failed s=$season",
+                    e
+                )
             }
 
             // 5. Mirror the removal to MDBList when a key is set: one

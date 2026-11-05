@@ -62,8 +62,10 @@ class PlaybackOrchestrationContractTest {
         }
         val native = playerSource("NativePlayerActivity.kt")
         assertTrue(
-            "the native latch resets on a Simkl OR MDBList OR Trakt failure",
-            native.contains("if (!ok || !mdbListOk || !traktOk) {")
+            "the native latch resets on a Simkl OR MDBList OR Trakt OR BingeCat " +
+                "failure (BingeCat is the fourth leg since step 2, and it answers true " +
+                "when nothing was attempted, so a gated leg never resets it)",
+            native.contains("if (!ok || !mdbListOk || !traktOk || !bingecatOk) {")
         )
     }
 

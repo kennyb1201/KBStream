@@ -164,6 +164,123 @@ data class BingeCatHistoryItem(
     val media: BingeCatMedia? get() = if (type == "movie") movie else show
 }
 
+// ── History writes (step 2) ───────────────────────────────────────────
+//
+// Taken from the live contract (`/api/v1/profiles/{profile_id}/sync/history`
+// and `.../history/remove`, both guarded by `history:write`): one batch carries
+// whichever of movies/shows/seasons/episodes the action produced, each entry
+// identified by [BingeCatIds] and optionally timestamped. The response is
+// COUNTS, not rows: `added`/`updated` (or `deleted`) plus the selectors the
+// server could not resolve, which are logged rather than retried.
+
+/**
+ * One history mutation: the add and remove bodies share this shape.
+ *
+ * A null list is ABSENT on the wire (Moshi does not serialise nulls), which is
+ * what the contract's `additionalProperties: false` wants: an empty batch is a
+ * request that can only fail.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryBatch(
+    val movies: List<BingeCatHistoryMovie>? = null,
+    val shows: List<BingeCatHistoryShow>? = null,
+    val seasons: List<BingeCatHistorySeason>? = null,
+    val episodes: List<BingeCatHistoryEpisode>? = null
+) {
+    /** True when nothing was put in the batch, so no request should be made. */
+    val isEmpty: Boolean
+        get() = movies.isNullOrEmpty() && shows.isNullOrEmpty() &&
+            seasons.isNullOrEmpty() && episodes.isNullOrEmpty()
+}
+
+/** `movies[]`: a finished movie. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryMovie(
+    val ids: BingeCatIds,
+    @Json(name = "watched_at") val watchedAt: String? = null
+)
+
+/** `shows[]`: a whole-show mark (no `seasons` = every episode, as Simkl's is). */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryShow(
+    val ids: BingeCatIds,
+    @Json(name = "watched_at") val watchedAt: String? = null
+)
+
+/** `seasons[]`: one whole season, which is what a season long-press means. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistorySeason(
+    val ids: BingeCatIds,
+    val season: Int,
+    @Json(name = "watched_at") val watchedAt: String? = null
+)
+
+/** `episodes[]`: one play of one episode of a show. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryEpisode(
+    val ids: BingeCatIds,
+    val season: Int,
+    val episode: Int,
+    @Json(name = "watched_at") val watchedAt: String? = null
+)
+
+/** `HistoryAddResponse`: what the write committed, and what it could not find. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryAddResponse(
+    val added: BingeCatHistoryCounts? = null,
+    val updated: BingeCatHistoryCounts? = null,
+    @Json(name = "not_found") val notFound: BingeCatNotFoundSelection? = null
+)
+
+/** `HistoryRemoveResponse`: what the removal deleted, and what it could not find. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryRemoveResponse(
+    val deleted: BingeCatDeleteCounts? = null,
+    @Json(name = "not_found") val notFound: BingeCatNotFoundSelection? = null
+)
+
+/** `added`/`updated` counts. Movies and episodes are the only two kinds. */
+@JsonClass(generateAdapter = true)
+data class BingeCatHistoryCounts(
+    val movies: Int = 0,
+    val episodes: Int = 0
+)
+
+/** `deleted` counts, which name every selector kind. */
+@JsonClass(generateAdapter = true)
+data class BingeCatDeleteCounts(
+    val movies: Int = 0,
+    val shows: Int = 0,
+    val seasons: Int = 0,
+    val episodes: Int = 0
+)
+
+/**
+ * The selectors a batch could not resolve.
+ *
+ * Logged, never a failure: a partially committed batch still counts as a write
+ * for the entries it committed, and the unresolved ones are a diagnostics note
+ * rather than a retry trigger. The entries themselves are free-form per the
+ * contract, so they are counted, not modelled.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatNotFoundSelection(
+    val movies: List<BingeCatUnresolvedRef>? = null,
+    val shows: List<BingeCatUnresolvedRef>? = null,
+    val seasons: List<BingeCatUnresolvedRef>? = null,
+    val episodes: List<BingeCatUnresolvedRef>? = null
+) {
+    val total: Int
+        get() = (movies?.size ?: 0) + (shows?.size ?: 0) +
+            (seasons?.size ?: 0) + (episodes?.size ?: 0)
+}
+
+/** One unresolved selector. Its shape varies by kind; only the count matters here. */
+@JsonClass(generateAdapter = true)
+data class BingeCatUnresolvedRef(
+    @Json(name = "id") val id: Long? = null
+)
+
 /** A device-code request's body. Public client: no `client_secret`. */
 @JsonClass(generateAdapter = true)
 data class BingeCatDeviceCodeRequest(

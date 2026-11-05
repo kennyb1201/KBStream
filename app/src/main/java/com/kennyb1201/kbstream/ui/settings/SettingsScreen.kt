@@ -1065,16 +1065,17 @@ fun SettingsScreen(
                         }
                     )
 
-                    // Read-only, and deliberately NOT in that tie-break's family:
-                    // BingeCat is read for its own lists, and nothing is written
-                    // back (v1 ships no history:write), so it is not a tracker
-                    // and not a resume source. It sits at the end of the section
-                    // so the Resume Source row stays the last thing the trackers
-                    // above it end on.
+                    // A tracker since step 2 (history:write): it records finished
+                    // plays and the explicit marks in the mapped BingeCat
+                    // profile, and still reads its own lists for the Library.
+                    // Not a resume source, and still outside that tie-break's
+                    // family. It sits at the end of the section so the Resume
+                    // Source row stays the last thing the trackers above it end
+                    // on.
                     NavigationRow(
                         label = "BingeCat",
-                        description = "Read your BingeCat watchlist, saved list and lists in the " +
-                            "Library tab - read-only, per BingeCat profile",
+                        description = "Read your BingeCat watchlist, saved list and lists, and " +
+                            "record what you watch - per BingeCat profile",
                         onClick = onOpenBingeCat
                     )
 

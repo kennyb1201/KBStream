@@ -31,6 +31,29 @@ object BingeCatTrace {
     @Volatile
     private var counts: String = "none"
 
+    // ── Writes (step 2) ───────────────────────────────────────────────
+    //
+    // A tracker's failures are all soft, so the only evidence a write leg
+    // exists - and which way it failed - is this line: counting attempts apart
+    // from successes is what separates "nothing is connected" from "every
+    // write is 403-scoped", and the flag is the state the connect screen
+    // prompts for.
+
+    @Volatile
+    private var writesAttempted: Int = 0
+
+    @Volatile
+    private var writesSucceeded: Int = 0
+
+    @Volatile
+    private var lastWriteError: String = NONE
+
+    @Volatile
+    private var lastWriteDetail: String = NONE
+
+    @Volatile
+    private var needsReapproval: Boolean = false
+
     fun recordSession(connected: Boolean) {
         this.connected = connected
     }
@@ -58,6 +81,33 @@ object BingeCatTrace {
         lastError = kind
     }
 
+    /** A write that reached the network (or should have). */
+    fun recordWriteAttempt() {
+        writesAttempted += 1
+    }
+
+    /** A committed batch, with the contract's own committed/unresolved counts. */
+    fun recordWriteSuccess(detail: String) {
+        writesSucceeded += 1
+        lastWriteError = NONE
+        lastWriteDetail = detail.ifBlank { NONE }
+    }
+
+    /**
+     * A write that did not commit.
+     *
+     * @param kind one of `401`, `429`, `403-scope`, `network`, `no-token`,
+     * `http:<code>`, or a failure class name
+     */
+    fun recordWriteFailure(kind: String) {
+        lastWriteError = kind
+    }
+
+    /** The needs-reapproval state a step-1 grant (or a 403) puts the tracker in. */
+    fun recordNeedsReapproval(needed: Boolean) {
+        needsReapproval = needed
+    }
+
     fun lines(): List<String> {
         val refreshed = if (lastRefreshAtMs > 0L) {
             "${(System.currentTimeMillis() - lastRefreshAtMs) / 60_000L} min ago"
@@ -67,7 +117,11 @@ object BingeCatTrace {
         return listOf(
             "connected=${if (connected) "yes" else "no"} " +
                 "mapped=${mappedProfile ?: "unmapped"} " +
-                "last_refresh=$refreshed last_error=$lastError cached=$counts"
+                "last_refresh=$refreshed last_error=$lastError cached=$counts" +
+                " writes=$writesAttempted/$writesSucceeded " +
+                "last_write_error=$lastWriteError " +
+                "last_write=$lastWriteDetail " +
+                "needs_reapproval=${if (needsReapproval) "yes" else "no"}"
         )
     }
 
@@ -78,5 +132,10 @@ object BingeCatTrace {
         lastRefreshAtMs = 0L
         lastError = NONE
         counts = "none"
+        writesAttempted = 0
+        writesSucceeded = 0
+        lastWriteError = NONE
+        lastWriteDetail = NONE
+        needsReapproval = false
     }
 }

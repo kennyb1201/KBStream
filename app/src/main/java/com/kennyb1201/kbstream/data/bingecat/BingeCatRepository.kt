@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.bingecat
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
@@ -83,6 +84,8 @@ data class BingeCatSnapshot(
  *    list from a fresh one because both are the viewer's own list.
  */
 class BingeCatRepository private constructor(private val context: Context?) {
+
+    private val TAG = "BINGECAT_REPO"
 
     companion object {
         /** Revalidate at most once per half hour per profile (spec F3). */
@@ -173,6 +176,24 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     /** True when this profile may make a data request at all. */
     fun isReady(): Boolean = isConfigured() && hasToken() && mappedProfileId() != null
+
+    /**
+     * Whether the stored grant carries `history:write` (step 2's gate 2).
+     *
+     * A step-1 grant - the three read scopes - never gains the write scope
+     * silently: OAuth only widens on a fresh approval. The tracker therefore
+     * reads this instead of attempting a write that would earn a 403, and the
+     * connect screen turns it into the re-connect prompt.
+     */
+    fun hasWriteScope(): Boolean = BingeCatWriteRules.hasWriteScope(store.scope())
+
+    /**
+     * True while this profile is connected and mapped but the grant cannot
+     * write: the one state that needs a re-approval, and the only one the
+     * connect screen prompts for (never for unmapped or disconnected).
+     */
+    fun needsReapproval(): Boolean =
+        isConfigured() && hasToken() && mappedProfileId() != null && !hasWriteScope()
 
     // ── Device flow ──────────────────────────────────────────────────────
 
@@ -396,6 +417,229 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 PrefsPayloadBuilder.buildBingeCatAuth(appContext)
             )
         }
+    }
+
+    // ── Writes (step 2) ──────────────────────────────────────────────────
+    //
+    // The verbs the fan-out calls, in Simkl's spelling so a call site reads the
+    // same either side of the tracker: push/removeWatched{Movie,Show,Episode,
+    // Episodes,Season}. Their bodies live in BingeCatHistoryWrites.kt (one
+    // action -> the field of the batch that fits it); the gate, the retry rules
+    // and the cache rule live in [submitHistory] below, because they need this
+    // class's token, service and snapshot.
+
+    /** A finished movie. False only when a write was attempted and failed. */
+    suspend fun pushWatchedMovie(
+        imdbId: String,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean = pushWatchedMovieImpl(imdbId, title, tmdbId)
+
+    /** A whole-show mark ("Mark as Watched" on a series). */
+    suspend fun pushWatchedShow(
+        showImdbId: String,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean = pushWatchedShowImpl(showImdbId, title, tmdbId)
+
+    /** One finished episode. */
+    suspend fun pushWatchedEpisode(
+        showImdbId: String,
+        season: Int,
+        episode: Int,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean = pushWatchedEpisodeImpl(showImdbId, season, episode, title, tmdbId)
+
+    /** The finished episodes of one file, in ONE batch (the covered-episode case). */
+    suspend fun pushWatchedEpisodes(
+        showImdbId: String,
+        season: Int,
+        episodes: List<Int>,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean = pushWatchedEpisodesImpl(showImdbId, season, episodes, title, tmdbId)
+
+    /** A whole season (the season long-press). */
+    suspend fun pushWatchedSeason(
+        showImdbId: String,
+        season: Int,
+        title: String? = null,
+        tmdbId: Int? = null
+    ): Boolean = pushWatchedSeasonImpl(showImdbId, season, title, tmdbId)
+
+    suspend fun removeWatchedMovie(imdbId: String, tmdbId: Int? = null): Boolean =
+        removeWatchedMovieImpl(imdbId, tmdbId)
+
+    suspend fun removeWatchedShow(showImdbId: String, tmdbId: Int? = null): Boolean =
+        removeWatchedShowImpl(showImdbId, tmdbId)
+
+    suspend fun removeWatchedEpisodes(
+        showImdbId: String,
+        season: Int,
+        episodes: List<Int>,
+        tmdbId: Int? = null
+    ): Boolean = removeWatchedEpisodesImpl(showImdbId, season, episodes, tmdbId)
+
+    suspend fun removeWatchedSeason(
+        showImdbId: String,
+        season: Int,
+        tmdbId: Int? = null
+    ): Boolean = removeWatchedSeasonImpl(showImdbId, season, tmdbId)
+
+    /**
+     * One history batch, with the tracker's whole failure contract.
+     *
+     * The gates are checked in order and a failed gate means no request at all:
+     * an unmapped (or disconnected) profile is silent, and a grant without
+     * `history:write` is the needs-reapproval STATE rather than an error. Both
+     * answer TRUE - "nothing was attempted, so nothing failed" - the same rule
+     * the MDBList leg already uses for a missing key, because a `false` here
+     * would reset the player's completion latch on every tick forever over a
+     * condition no retry can fix.
+     *
+     * The failure contract itself is the reads' one, plus a park: a 401
+     * refreshes once (single flight) and drops the session on a second, a 429
+     * parks the leg for its `Retry-After` instead of storming, and a 403
+     * converges to needs-reapproval with no retry. Never throws: a cancelled
+     * coroutine rethrows, everything else is logged and answered false.
+     *
+     * On success it drops ONLY this profile's BingeCat snapshot, so the next
+     * Library open re-reads and badges the play that was just written. Local
+     * playback sessions, Continue Watching / Up Next and the other trackers are
+     * not BingeCat's to touch.
+     */
+    internal suspend fun submitHistory(
+        add: Boolean,
+        batch: BingeCatHistoryBatch,
+        label: String
+    ): Boolean {
+        if (batch.isEmpty) return false
+        val mapped = if (isReady()) mappedProfileId() else null
+        if (mapped == null) {
+            // Unmapped, disconnected or unconfigured: no request, no error.
+            return true
+        }
+        if (!hasWriteScope()) {
+            // A step-1 grant: the steady state until the viewer reconnects.
+            BingeCatTrace.recordNeedsReapproval(true)
+            Log.i(TAG, "write skipped: grant has no ${BingeCatConfig.WRITE_SCOPE} ($label)")
+            return true
+        }
+        BingeCatTrace.recordNeedsReapproval(false)
+        val parkedMs = bingeCatWriteParkMs()
+        if (parkedMs > 0L) {
+            BingeCatTrace.recordWriteFailure("429")
+            Log.i(TAG, "write skipped: parked for ${parkedMs}ms after a 429 ($label)")
+            return false
+        }
+        BingeCatTrace.recordWriteAttempt()
+        return try {
+            val token = ensureFreshToken()
+            if (token == null) {
+                BingeCatTrace.recordWriteFailure("no-token")
+                Log.e(TAG, "write skipped: no token ($label)")
+                return false
+            }
+            var response = send(batch, add, token, mapped)
+            if (response == null) {
+                BingeCatTrace.recordWriteFailure("network")
+                Log.e(TAG, "write failed: network ($label)")
+                return false
+            }
+            if (response.code() == 401) {
+                val refreshed = ensureFreshToken(force = true)
+                if (refreshed != null) response = send(batch, add, refreshed, mapped)
+                if (response == null) {
+                    BingeCatTrace.recordWriteFailure("network")
+                    return false
+                }
+                if (response.code() == 401) {
+                    // The reads' rule, kept for writes: degrade to disconnected,
+                    // never to anonymous calls, so the next screen reads a real
+                    // state instead of a token the server has already refused.
+                    store.clear()
+                    cached = null
+                    BingeCatTrace.recordSession(false)
+                    BingeCatTrace.recordWriteFailure("401")
+                    Log.e(TAG, "write failed: 401 after refresh, session dropped ($label)")
+                    return false
+                }
+            }
+            when {
+                response.isSuccessful -> {
+                    // ONLY BingeCat's own cache: the play is now in the profile's
+                    // history, so the next open re-reads and badges it.
+                    cached = null
+                    BingeCatTrace.recordWriteSuccess(writeResultLabel(response.body()))
+                    Log.i(TAG, "write ok: $label ${writeResultLabel(response.body())}")
+                    true
+                }
+
+                noteBingeCatWriteRateLimit(
+                    response.code(),
+                    response.headers()["Retry-After"]
+                ) -> {
+                    BingeCatTrace.recordWriteFailure("429")
+                    Log.w(TAG, "write rate-limited: 429, leg parked ($label)")
+                    false
+                }
+
+                response.code() == 403 -> {
+                    // The grant lost the scope server-side: the same state gate
+                    // 2 describes, with no retry that could change it.
+                    BingeCatTrace.recordNeedsReapproval(true)
+                    BingeCatTrace.recordWriteFailure("403-scope")
+                    Log.w(TAG, "write refused: 403 scope, needs re-approval ($label)")
+                    true
+                }
+
+                else -> {
+                    val body = runCatching { response.errorBody()?.string() }.getOrNull()
+                    BingeCatTrace.recordWriteFailure("http:${response.code()}")
+                    Log.e(TAG, "write failed: code=${response.code()} body=$body ($label)")
+                    false
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            BingeCatTrace.recordWriteFailure(error.javaClass.simpleName)
+            Log.e(TAG, "write error ($label): ${error.message}", error)
+            false
+        }
+    }
+
+    private suspend fun send(
+        batch: BingeCatHistoryBatch,
+        add: Boolean,
+        token: String,
+        profileId: Long
+    ): Response<*>? = runCatchingCancellable {
+        if (add) {
+            service.addHistory("Bearer $token", profileId, batch)
+        } else {
+            service.removeHistory("Bearer $token", profileId, batch)
+        }
+    }.getOrNull()
+
+    /** What a committed batch says it wrote, for the log line and diagnostics. */
+    private fun writeResultLabel(body: Any?): String = when (body) {
+        is BingeCatHistoryAddResponse -> {
+            val added = body.added ?: BingeCatHistoryCounts()
+            val updated = body.updated ?: BingeCatHistoryCounts()
+            "added=${added.movies}m/${added.episodes}e " +
+                "updated=${updated.movies}m/${updated.episodes}e " +
+                "unresolved=${body.notFound?.total ?: 0}"
+        }
+
+        is BingeCatHistoryRemoveResponse -> {
+            val deleted = body.deleted ?: BingeCatDeleteCounts()
+            "deleted=${deleted.movies}m/${deleted.shows}s/${deleted.seasons}n/" +
+                "${deleted.episodes}e unresolved=${body.notFound?.total ?: 0}"
+        }
+
+        else -> ""
     }
 
     // ── Reads ────────────────────────────────────────────────────────────

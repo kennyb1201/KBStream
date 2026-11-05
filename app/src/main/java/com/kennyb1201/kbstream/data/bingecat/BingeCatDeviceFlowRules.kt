@@ -128,7 +128,8 @@ object BingeCatDeviceFlowRules {
      * dead end and a two-tap fix in the app's own settings.
      */
     fun scopeRejectionMessage(scopeLine: String = BingeCatConfig.SCOPES): String =
-        "This BingeCat app is not allowed the scopes v1 needs ($scopeLine). " +
-            "Enable ${BingeCatConfig.REQUIRED_LISTS_SCOPE} on the app in BingeCat's " +
-            "developer settings, then try again."
+        "This BingeCat app is not allowed the scopes it needs ($scopeLine). " +
+            "Enable ${BingeCatConfig.REQUIRED_LISTS_SCOPE} and " +
+            "${BingeCatConfig.WRITE_SCOPE} on the app in BingeCat's developer " +
+            "settings, then try again."
 }

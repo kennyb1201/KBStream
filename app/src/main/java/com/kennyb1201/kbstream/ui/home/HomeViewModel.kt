@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -2443,6 +2444,20 @@ Log.d(
                             "result=$removedFromSimkl"
                     )
 
+                }
+
+                // BingeCat, the same removal: a title mounted to the mapped
+                // BingeCat profile is cleared there too, or its own history
+                // would keep the play the rail card was built from. Silent,
+                // like the leg above.
+                runCatchingCancellable {
+                    val bingecat = BingeCatRepository.getInstance(getApplication())
+                    when (item.parentType?.lowercase()) {
+                        "movie" -> bingecat.removeWatchedMovie(imdbId = parentId)
+                        "series", "tv" -> bingecat.removeWatchedShow(showImdbId = parentId)
+                    }
+                }.onFailure { e ->
+                    Log.e("HOME_UPNEXT", "BingeCat removal failed title=${item.title}", e)
                 }
 
                 clearTrackerPlaybackSessions(item, parentId)

@@ -58,9 +58,18 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
             isConfigured = repository.isConfigured(),
             isConnected = connected,
             isMapped = mappedId != null,
+            // Only a connected AND mapped profile can be "needs re-approval";
+            // the repository's own rule, so the screen and the write gate can
+            // never disagree about when tracking is off.
+            needsReapproval = connected && mappedId != null && repository.needsReapproval(),
             mappedProfileId = mappedId,
             mappedProfileName = if (mappedId != null) repository.mappedProfileName() else null,
-            statusMessage = if (connected) "Connected to BingeCat." else null
+            statusMessage = when {
+                connected && mappedId != null && repository.needsReapproval() ->
+                    "BingeCat tracking is off: this grant predates the write scope."
+                connected -> "Connected to BingeCat."
+                else -> null
+            }
         )
     }
 
@@ -95,6 +104,7 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         val next = initialState()
         if (next.isConnected == _uiState.value.isConnected &&
             next.isMapped == _uiState.value.isMapped &&
+            next.needsReapproval == _uiState.value.needsReapproval &&
             next.userCode == null
         ) {
             // The early return exists to keep a GENUINELY in-flight request or
@@ -205,20 +215,40 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
                         // the account approved it, but this device has no
                         // token, and showing a picker over that would file a
                         // mapping for a session that does not exist.
+                        // Re-approval is NOT a disconnect (spec P2): the
+                        // mapping and its cached rows survive a new token, so
+                        // an already-mapped profile stays mapped and goes
+                        // straight back to being a tracker. Only a profile
+                        // with no mapping needs the picker.
+                        val stillMapped = if (result.saveError == null) {
+                            repository.mappedProfileId()
+                        } else {
+                            null
+                        }
                         _uiState.value = _uiState.value.copy(
                             isPolling = false,
                             userCode = null,
                             verificationUrl = null,
                             secondsLeft = 0,
                             isConnected = result.saveError == null,
-                            isMapped = false,
-                            mappedProfileId = null,
-                            mappedProfileName = null,
+                            isMapped = stillMapped != null,
+                            needsReapproval = false,
+                            mappedProfileId = stillMapped,
+                            mappedProfileName = if (stillMapped != null) {
+                                repository.mappedProfileName()
+                            } else {
+                                null
+                            },
                             statusMessage = result.saveError
-                                ?: "Approved. Pick the BingeCat profile this KBStream profile reads.",
+                                ?: if (stillMapped != null) {
+                                    "Approved. BingeCat tracking is on for this profile."
+                                } else {
+                                    "Approved. Pick the BingeCat profile this KBStream " +
+                                        "profile reads."
+                                },
                             errorMessage = result.saveError
                         )
-                        if (result.saveError == null) loadProfiles()
+                        if (result.saveError == null && stillMapped == null) loadProfiles()
                         return@launch
                     }
 

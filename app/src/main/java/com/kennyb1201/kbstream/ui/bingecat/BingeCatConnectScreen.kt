@@ -115,7 +115,8 @@ fun BingeCatConnectScreen(
 
                 Text(
                     text = "Reads your BingeCat watchlist, saved list, lists, and watched " +
-                        "history for the profile you pick. Nothing is written back.",
+                        "history for the profile you pick, and records what you watch there - " +
+                        "finished plays and the titles you mark watched or unwatched.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -143,15 +144,39 @@ fun BingeCatConnectScreen(
                     }
 
                     uiState.isConnected && uiState.isMapped -> {
-                        BingeCatPanel(
-                            title = "Account connected",
-                            message = uiState.mappedProfileName?.let {
-                                "Reading BingeCat profile $it."
-                            } ?: "This KBStream profile is mapped to a BingeCat profile."
-                        )
+                        if (uiState.needsReapproval) {
+                            // A grant issued under step 1's three read scopes.
+                            // Tracking cannot write with it, and no retry can
+                            // change that: the fix is a fresh approval (the
+                            // mapping and cached rows survive it).
+                            BingeCatPanel(
+                                title = "Tracking needs a reconnect",
+                                message = "BingeCat tracking is off - this connection was " +
+                                    "approved before KBStream asked to record plays. " +
+                                    "Reconnect to let KBStream record what you watch; your " +
+                                    "profile choice and cached rows are kept."
+                            )
+                        } else {
+                            BingeCatPanel(
+                                title = "Account connected",
+                                message = uiState.mappedProfileName?.let {
+                                    "Reading and recording BingeCat profile $it."
+                                } ?: "This KBStream profile is mapped to a BingeCat profile."
+                            )
+                        }
                         uiState.statusMessage?.let { BingeCatStatusLine(it) }
                         uiState.errorMessage?.let { BingeCatErrorLine(it) }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (uiState.needsReapproval) {
+                                KBButton(
+                                    label = if (uiState.isRequestingCode) {
+                                        "REQUESTING…"
+                                    } else {
+                                        "RECONNECT"
+                                    },
+                                    enabled = !uiState.isRequestingCode
+                                ) { vm.requestCode() }
+                            }
                             KBButton(label = "CHANGE PROFILE") {
                                 // Reopening the picker is a mapping change, not a
                                 // disconnect: the grant stays.

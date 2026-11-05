@@ -89,6 +89,26 @@ interface BingeCatApiService {
         @Query("limit") limit: Int = 100
     ): Response<BingeCatListItemsResponse>
 
+    /**
+     * The add-play write (`history:write`), profile-pinned exactly like the
+     * reads: a root-form write would file the viewer's play into whatever
+     * profile BingeCat last had open in a browser.
+     */
+    @POST("api/v1/profiles/{profileId}/sync/history")
+    suspend fun addHistory(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        @Body body: BingeCatHistoryBatch
+    ): Response<BingeCatHistoryAddResponse>
+
+    /** The remove-play write (`history:write`), the add's mirror and also profile-pinned. */
+    @POST("api/v1/profiles/{profileId}/sync/history/remove")
+    suspend fun removeHistory(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        @Body body: BingeCatHistoryBatch
+    ): Response<BingeCatHistoryRemoveResponse>
+
     /** The watched timeline, cursor-paged (`next_cursor`). */
     @GET("api/v1/profiles/{profileId}/history")
     suspend fun history(

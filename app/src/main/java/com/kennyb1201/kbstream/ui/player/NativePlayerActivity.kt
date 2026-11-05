@@ -68,6 +68,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.download.DownloadsManager
 import com.kennyb1201.kbstream.data.iptv.ChannelRecall
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -14272,6 +14273,48 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             val traktOk = runCatchingCancellable { syncCompletionToTrakt() }
                 .onFailure { Log.w(TAG, "Trakt completion sync error: ${it.message}") }
                 .getOrDefault(false)
+            // BingeCat, the fourth leg (step 2): the same movie/episode
+            // identity the legs above were given, written once as a completed
+            // play. "Nothing attempted" (unconnected, unmapped, or a grant
+            // without history:write) is not a failure - it answers true - so a
+            // condition no retry can fix never resets the latch below.
+            val bingecatOk = runCatchingCancellable {
+                if (!PlaybackHistoryWriter.sessionStillActive(
+                        this@NativePlayerActivity, sessionProfileId
+                    )
+                ) {
+                    true
+                } else {
+                    val bingecat = BingeCatRepository.getInstance(this@NativePlayerActivity)
+                    val tmdb = resolveParentTmdbId()
+                    when (parentType.lowercase()) {
+                        "movie" -> bingecat.pushWatchedMovie(
+                            imdbId = parentId,
+                            title = itemName,
+                            tmdbId = tmdb
+                        )
+
+                        "series", "show", "tv" -> {
+                            val s = season
+                            val e = episode
+                            if (s != null && e != null) {
+                                bingecat.pushWatchedEpisodes(
+                                    showImdbId = parentId,
+                                    season = s,
+                                    episodes = coveredTmdbEpisodes(e),
+                                    title = itemName,
+                                    tmdbId = tmdb
+                                )
+                            } else {
+                                true
+                            }
+                        }
+
+                        else -> true
+                    }
+                }
+            }.onFailure { Log.w(TAG, "BingeCat completion sync error: ${it.message}") }
+                .getOrDefault(false)
             // The latch is shared by all three legs, so ANY failed leg releases
             // it and the next completion tick re-posts the whole completion
             // in-session. Previously only a Simkl failure retried, and a
@@ -14287,19 +14330,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
                 "completion", "trakt", traktOk
             )
-            if (!ok || !mdbListOk || !traktOk) {
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "bingecat", bingecatOk
+            )
+            if (!ok || !mdbListOk || !traktOk || !bingecatOk) {
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
                     "tracker",
-                    "completion leg failed (simkl=$ok mdblist=$mdbListOk trakt=$traktOk)"
+                    "completion leg failed (simkl=$ok mdblist=$mdbListOk trakt=$traktOk " +
+                        "bingecat=$bingecatOk)"
                 )
                 simklScrobbleSent = false
                 com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                     "tracker completion incomplete (simkl=$ok mdblist=$mdbListOk " +
-                        "trakt=$traktOk); latch reset for an in-session retry"
+                        "trakt=$traktOk bingecat=$bingecatOk); latch reset for an " +
+                        "in-session retry"
                 )
                 Log.e(
                     TAG,
-                    "completion legs simkl=$ok mdblist=$mdbListOk trakt=$traktOk; retrying"
+                    "completion legs simkl=$ok mdblist=$mdbListOk trakt=$traktOk " +
+                        "bingecat=$bingecatOk; retrying"
                 )
             }
             // The completion is now on the tracker, so the Continue Watching

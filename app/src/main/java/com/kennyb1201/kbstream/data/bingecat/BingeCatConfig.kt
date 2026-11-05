@@ -41,14 +41,23 @@ object BingeCatConfig {
     const val ACTIVATE_URL = "https://bingecat.com/activate"
 
     /**
-     * v1's scopes: read the profile list (to file the mapping), read lists
-     * (watchlist, saved list, user lists), and read history.
+     * Step 2's scopes: read the profile list (to file the mapping), read lists
+     * (watchlist, saved list, user lists), read history - and now WRITE history.
      *
-     * Read-only by construction: `history:write`, `lists:write`,
-     * `settings:read` and `search:read` are deliberately absent. BingeCat
-     * scrobbling is a later decision, not this integration.
+     * `history:write` is what turns the connection into a tracker: completion
+     * scrobbles and the mark-as-watched/unwatched mirror write to the mapped
+     * profile. `lists:write`, `settings:read` and `search:read` stay out, at
+     * every scope of the roadmap.
+     *
+     * Widening this string does NOT widen an existing grant: OAuth never adds a
+     * scope silently, so a viewer who connected under step 1 keeps a read-only
+     * token until they reconnect (see [BingeCatWriteRules.hasWriteScope] and the
+     * connect screen's re-connect prompt).
      */
-    const val SCOPES = "profiles:read lists:read history:read"
+    const val SCOPES = "profiles:read lists:read history:read history:write"
+
+    /** The write scope the tracker's gates check for on the stored grant. */
+    const val WRITE_SCOPE = "history:write"
 
     /**
      * The scope whose absence from the developer app breaks the most of v1,

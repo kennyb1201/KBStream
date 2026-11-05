@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.reporting.PlaybackDeathMarker
@@ -6091,6 +6092,47 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             val traktOk = runCatchingCancellable { syncCompletionToTrakt() }
                 .onFailure { Log.w(TAG, "Trakt completion sync failed", it) }
                 .getOrDefault(false)
+            // BingeCat, the fourth leg (step 2): the same identity the legs
+            // above were given, written once as a completed play. "Nothing
+            // attempted" answers true, so a grant without history:write never
+            // resets the latch over a state a retry cannot change.
+            val bingecatOk = runCatchingCancellable {
+                if (!PlaybackHistoryWriter.sessionStillActive(
+                        this@MpvPlayerActivity, sessionProfileId
+                    )
+                ) {
+                    true
+                } else {
+                    val bingecat = BingeCatRepository.getInstance(this@MpvPlayerActivity)
+                    val tmdb = tmdbId()
+                    when (parentType.lowercase()) {
+                        "movie" -> bingecat.pushWatchedMovie(
+                            imdbId = parentId,
+                            title = itemName,
+                            tmdbId = tmdb
+                        )
+
+                        "series", "show", "tv" -> {
+                            val showSeason = season
+                            val showEpisode = episode
+                            if (showSeason != null && showEpisode != null) {
+                                bingecat.pushWatchedEpisodes(
+                                    showImdbId = parentId,
+                                    season = showSeason,
+                                    episodes = coveredTmdbEpisodes(showEpisode),
+                                    title = itemName,
+                                    tmdbId = tmdb
+                                )
+                            } else {
+                                true
+                            }
+                        }
+
+                        else -> true
+                    }
+                }
+            }.onFailure { Log.w(TAG, "BingeCat completion sync failed", it) }
+                .getOrDefault(false)
             // Each leg's outcome, for COPY DIAGNOSTICS (spec C11).
             com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
                 "completion", "simkl", simklOk
@@ -6101,7 +6143,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
                 "completion", "trakt", traktOk
             )
-            if (!simklOk || !mdbListOk || !traktOk) {
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "bingecat", bingecatOk
+            )
+            if (!simklOk || !mdbListOk || !traktOk || !bingecatOk) {
                 // A failed tracker WRITE is a reportable event, not just a log
                 // line: `recentErrors()` is the only channel the report shares,
                 // and before this only sync/startup/addon/player-aspect problems
@@ -6109,18 +6154,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
                     "tracker",
                     "completion leg failed (simkl=$simklOk mdblist=$mdbListOk " +
-                        "trakt=$traktOk)"
+                        "trakt=$traktOk bingecat=$bingecatOk)"
                 )
                 // Retry in-session: the next completion tick re-posts every
                 // leg. No cross-launch queue (spec C13 scope).
                 trackersMarkedWatched = false
                 com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                     "tracker completion incomplete (simkl=$simklOk mdblist=$mdbListOk " +
-                        "trakt=$traktOk); latch reset for an in-session retry"
+                        "trakt=$traktOk bingecat=$bingecatOk); latch reset for an " +
+                        "in-session retry"
                 )
                 Log.w(
                     TAG,
-                    "completion legs simkl=$simklOk mdblist=$mdbListOk trakt=$traktOk; retrying"
+                    "completion legs simkl=$simklOk mdblist=$mdbListOk trakt=$traktOk " +
+                        "bingecat=$bingecatOk; retrying"
                 )
             }
             // The completion is on the tracker now, so the Continue Watching

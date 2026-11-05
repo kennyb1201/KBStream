@@ -17,6 +17,7 @@ import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
@@ -2015,6 +2016,47 @@ class ExternalPlayerActivity : ComponentActivity() {
             val traktOk = runCatchingCancellable { syncCompletionToTrakt() }
                 .onFailure { Log.w(TAG, "Trakt completion sync failed", it) }
                 .getOrDefault(false)
+            // BingeCat, the fourth leg (step 2): the same identity the legs
+            // above were given, written once as a completed play. "Nothing
+            // attempted" answers true, so a grant without history:write never
+            // resets the latch over a state a retry cannot change.
+            val bingecatOk = runCatchingCancellable {
+                if (!PlaybackHistoryWriter.sessionStillActive(
+                        this@ExternalPlayerActivity, sessionProfileId
+                    )
+                ) {
+                    true
+                } else {
+                    val bingecat = BingeCatRepository.getInstance(this@ExternalPlayerActivity)
+                    val tmdb = tmdbId()
+                    when (parentType.lowercase()) {
+                        "movie" -> bingecat.pushWatchedMovie(
+                            imdbId = parentId,
+                            title = itemName,
+                            tmdbId = tmdb
+                        )
+
+                        "series", "show", "tv" -> {
+                            val showSeason = season
+                            val showEpisode = episode
+                            if (showSeason != null && showEpisode != null) {
+                                bingecat.pushWatchedEpisodes(
+                                    showImdbId = parentId,
+                                    season = showSeason,
+                                    episodes = coveredTmdbEpisodes(showEpisode),
+                                    title = itemName,
+                                    tmdbId = tmdb
+                                )
+                            } else {
+                                true
+                            }
+                        }
+
+                        else -> true
+                    }
+                }
+            }.onFailure { Log.w(TAG, "BingeCat completion sync failed", it) }
+                .getOrDefault(false)
             // Each leg's outcome, for COPY DIAGNOSTICS (spec C11).
             com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
                 "completion", "simkl", simklOk
@@ -2025,20 +2067,25 @@ class ExternalPlayerActivity : ComponentActivity() {
             com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
                 "completion", "trakt", traktOk
             )
-            if (!simklOk || !mdbListOk || !traktOk) {
+            com.kennyb1201.kbstream.data.reporting.TrackerHealth.note(
+                "completion", "bingecat", bingecatOk
+            )
+            if (!simklOk || !mdbListOk || !traktOk || !bingecatOk) {
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
                     "tracker",
                     "completion leg failed (simkl=$simklOk mdblist=$mdbListOk " +
-                        "trakt=$traktOk)"
+                        "trakt=$traktOk bingecat=$bingecatOk)"
                 )
                 trackersMarkedWatched = false
                 com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                     "tracker completion incomplete (simkl=$simklOk mdblist=$mdbListOk " +
-                        "trakt=$traktOk); latch reset for an in-session retry"
+                        "trakt=$traktOk bingecat=$bingecatOk); latch reset for an " +
+                        "in-session retry"
                 )
                 Log.w(
                     TAG,
-                    "completion legs simkl=$simklOk mdblist=$mdbListOk trakt=$traktOk; retrying"
+                    "completion legs simkl=$simklOk mdblist=$mdbListOk trakt=$traktOk " +
+                        "bingecat=$bingecatOk; retrying"
                 )
             }
         }

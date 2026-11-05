@@ -178,7 +178,8 @@ internal object SettingsSearchIndex {
             "integrations.bingecat",
             SettingsPane.INTEGRATIONS,
             "BingeCat",
-            "bingecat read-only watchlist saved list lists watched history devices link"
+            "bingecat tracker watchlist saved list lists watched history tracking scrobble " +
+                "record plays devices link"
         ),
         // Moved to the Subtitles pane (settings reorg §7.1, §14.1). The key stays
         // `integrations.*` because it is the row's identity, not its address; the

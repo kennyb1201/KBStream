@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.trakt.TraktIdKeys
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -1977,6 +1978,35 @@ class WatchedStatusRepository(
             }
         }
 
+        // BingeCat, the fourth leg and the one this mark taught to write: the
+        // same whole-title mark in the mapped BingeCat profile. Its own gate
+        // (ready + history:write) decides whether a request is even attempted,
+        // and its failures are swallowed the same way the legs above handle
+        // theirs - a tracker must never undo a local mark.
+        runCatchingCancellable {
+            val bingecat = bingecatRepository()
+            val bingecatImdbId = normalizedId.takeIf { it.startsWith("tt") }
+            val bingecatTmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                ?.takeIf { normalizedId.startsWith("tmdb:") }
+            when (normalizedType) {
+                "movie" -> bingecat.pushWatchedMovie(
+                    imdbId = bingecatImdbId ?: normalizedId,
+                    tmdbId = bingecatTmdbId
+                )
+
+                "series" -> bingecat.pushWatchedShow(
+                    showImdbId = bingecatImdbId ?: normalizedId,
+                    tmdbId = bingecatTmdbId
+                )
+            }
+        }.onFailure { e ->
+            Log.e(
+                "WATCHED_REPO",
+                "BingeCat mark-watched push failed for $key",
+                e
+            )
+        }
+
         // The cached Simkl marker sets still describe the state BEFORE this
         // mark. Without dropping them a preload in the next 15 minutes keeps
         // resolving the title from that snapshot, and the tracker push above
@@ -2010,6 +2040,9 @@ class WatchedStatusRepository(
     /** The Trakt repository for this repository's context, resolved per use. */
     private fun traktMarkRepository(): TraktRepository =
         TraktRepository.getInstance(context)
+
+    private fun bingecatRepository(): BingeCatRepository =
+        BingeCatRepository.getInstance(context)
 
     private suspend fun publishLauncherWatchNext() {
         runCatchingCancellable {
@@ -2242,6 +2275,25 @@ class WatchedStatusRepository(
                     e
                 )
             }
+        }
+
+        // BingeCat's episode leg, beside the three above and one batch for this
+        // mark. The mark's own id forms are what it is told about, so a
+        // TMDB-keyed mark still resolves when the session carried no IMDb id.
+        runCatchingCancellable {
+            bingecatRepository().pushWatchedEpisode(
+                showImdbId = imdbForm ?: normalizedId,
+                season = season,
+                episode = episode,
+                title = showName.takeIf { it.isNotBlank() },
+                tmdbId = resolvedTmdbId
+            )
+        }.onFailure { e ->
+            Log.e(
+                "WATCHED_REPO",
+                "mark episode watched BingeCat push failed s=$season e=$episode",
+                e
+            )
         }
 
         _watchedStateVersion.value = now
@@ -2685,6 +2737,32 @@ class WatchedStatusRepository(
                     e
                 )
             }
+        }
+
+        // BingeCat, the same removal: the id this unmark was made from, in both
+        // spellings when both are known. Silent for the reason above.
+        runCatchingCancellable {
+            val bingecat = bingecatRepository()
+            val bingecatImdbId = normalizedId.takeIf { it.startsWith("tt") }
+            val bingecatTmdbId = normalizedId.removePrefix("tmdb:").toIntOrNull()
+                ?.takeIf { normalizedId.startsWith("tmdb:") }
+            when (normalizedType) {
+                "movie" -> bingecat.removeWatchedMovie(
+                    imdbId = bingecatImdbId ?: normalizedId,
+                    tmdbId = bingecatTmdbId
+                )
+
+                "series" -> bingecat.removeWatchedShow(
+                    showImdbId = bingecatImdbId ?: normalizedId,
+                    tmdbId = bingecatTmdbId
+                )
+            }
+        }.onFailure { e ->
+            Log.e(
+                "WATCHED_REPO",
+                "BingeCat remove-watched push failed for $key",
+                e
+            )
         }
 
         // Mirror the removal to MDBList when a key is set (movies and

@@ -14,6 +14,14 @@ data class BingeCatUiState(
     val isConfigured: Boolean = false,
     val isConnected: Boolean = false,
     val isMapped: Boolean = false,
+
+    /**
+     * Connected and mapped, but the grant was issued before `history:write`:
+     * the tracker is OFF until the viewer reconnects (spec F4). Never true for
+     * an unmapped or disconnected profile - both need a different answer, not a
+     * prompt.
+     */
+    val needsReapproval: Boolean = false,
     val mappedProfileId: Long? = null,
     val mappedProfileName: String? = null,
 
