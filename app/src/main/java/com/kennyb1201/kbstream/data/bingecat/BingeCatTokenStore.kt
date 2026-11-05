@@ -15,12 +15,23 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
  * ciphertext, and disconnect removes this store's keys and nothing else - the
  * local watch history, resume rows and My List are the viewer's.
  *
- * Deliberately absent: any sync of this session. v1 keeps BingeCat
- * device-local, exactly as the spec asks, so there is no sign-out tombstone
- * either - nothing else can overwrite it.
+ * And one rule the earlier v1 spec drew the other way: the session now SYNCs
+ * (see [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]). It was
+ * device-local because the spec said so, and the price was signing in again on
+ * every TV and on every profile - while every other integration the viewer
+ * connects once follows the account. The session travels encrypted on both
+ * sides (the account copy is the same trust level the Simkl and Trakt sessions
+ * already have), and a deliberate disconnect leaves a tombstone, because a
+ * blank store also means "this profile never connected BingeCat" and must not
+ * sign a sibling out.
  */
 internal class BingeCatTokenStore(
     private val context: Context?,
+    /**
+     * A SPECIFIC profile's session, for the cloud applier. Null reads the
+     * active profile, which is what every in-app caller wants.
+     */
+    private val profileId: String? = null,
     private val openPrefs: (Context, String) -> SharedPreferences = { appContext, name ->
         SecureTokenStore.prefs(appContext, name, legacyPlaintext = false)
     }
@@ -33,10 +44,18 @@ internal class BingeCatTokenStore(
         const val KEY_REFRESH_TOKEN = "refresh_token"
         const val KEY_EXPIRES_AT = "expires_at_ms"
         const val KEY_SCOPE = "scope"
+
+        /**
+         * Tombstone for a DELIBERATE disconnect. Only this marker may end a
+         * live session on another device; a merely empty store (a profile that
+         * never connected) must never do it.
+         */
+        const val KEY_SIGNED_OUT = "signed_out"
     }
 
     private fun storeName(appContext: Context): String =
-        ProfileStorage.prefsName(appContext, PREFS_NAME)
+        profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
+            ?: ProfileStorage.prefsName(appContext, PREFS_NAME)
 
     /**
      * This store, with ONE rebuild allowed when it will not open.
@@ -60,14 +79,47 @@ internal class BingeCatTokenStore(
     private val prefs: SharedPreferences?
         get() = open()
 
-    /** Throws when the store cannot be written even after [open]'s rebuild. */
+    /**
+     * Throws when the store cannot be written even after [open]'s rebuild.
+     *
+     * A saved session retires a lingering disconnect marker: a token that is
+     * present must never be published alongside a tombstone (see
+     * [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]).
+     */
     fun save(token: BingeCatToken) {
         val editor = prefs?.edit() ?: throw IllegalStateException("bingecat store unavailable")
         editor.putString(KEY_ACCESS_TOKEN, token.accessToken)
             .putString(KEY_REFRESH_TOKEN, token.refreshToken)
             .putLong(KEY_EXPIRES_AT, token.expiresAtEpochMillis)
             .putString(KEY_SCOPE, token.scope)
+            .putBoolean(KEY_SIGNED_OUT, false)
             .apply()
+    }
+
+    fun isSignedOut(): Boolean = prefs?.getBoolean(KEY_SIGNED_OUT, false) == true
+
+    /**
+     * Drops the session and leaves the sign-out tombstone for the sync blob.
+     *
+     * Returns whether the tombstone was actually written, and THROWS when the
+     * store cannot be opened at all: a disconnect that published anyway would
+     * sign the account out on every OTHER device while this one kept its
+     * session. Local library and watch state are not ours to touch.
+     */
+    fun markSignedOut(): Boolean {
+        val editor = prefs?.edit() ?: return false
+        editor.remove(KEY_ACCESS_TOKEN)
+            .remove(KEY_REFRESH_TOKEN)
+            .remove(KEY_EXPIRES_AT)
+            .remove(KEY_SCOPE)
+            .putBoolean(KEY_SIGNED_OUT, true)
+            .apply()
+        return true
+    }
+
+    /** Retires a tombstone once a live session is present again. */
+    fun clearSignedOutMarker() {
+        if (isSignedOut()) prefs?.edit()?.putBoolean(KEY_SIGNED_OUT, false)?.apply()
     }
 
     fun read(): BingeCatToken? {

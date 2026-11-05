@@ -168,7 +168,16 @@ class BingeCatContractTest {
             .substringAfter("suspend fun disconnect(): Boolean {")
             .substringBefore("\n    // ── Reads")
         assertTrue("the grant is revoked first", body.contains("service.revoke("))
-        assertTrue("then the session is dropped", body.contains("store.clear()"))
+        assertTrue(
+            "then the session is dropped - through the sign-out tombstone, so the " +
+                "other devices can end it too (see BingeCatAuthRules)",
+            body.contains("store.markSignedOut()")
+        )
+        assertTrue(
+            "and the disconnect is published, since a tombstone has no token to " +
+                "trigger the ordinary push gate",
+            body.contains("if (cleared) publishAuthToSync()")
+        )
         assertTrue("and the mapping with it", body.contains("mapping.clear()"))
         assertFalse(
             "disconnect must never touch the viewer's own library",

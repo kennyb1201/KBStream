@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.bingecat.BingeCatToken
+import com.kennyb1201.kbstream.data.bingecat.BingeCatTokenStore
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.trakt.TraktToken
@@ -120,6 +122,13 @@ private fun legacyStoreName(tail: String) = "kbstream_" + "nu" + "vio" + "_$tail
  */
 private fun traktAuthStore(context: Context, profileId: String? = null) =
     TraktTokenStore(context, profileId)
+
+/**
+ * The BingeCat session store, addressed the same way: the ACTIVE profile by
+ * default, or [profileId] when the applier is writing a sibling's copy.
+ */
+private fun bingecatAuthStore(context: Context, profileId: String? = null) =
+    BingeCatTokenStore(context, profileId)
 
 // Prefs store + key holding the profile's Simkl session (owned by
 // SimklRepository; spelled out here so the blob and the repository agree).
@@ -411,6 +420,14 @@ object PrefsPayloadBuilder {
      * token and expiry as well, because Trakt's access tokens expire.
      */
     const val KEY_TRAKT_AUTH = "trakt_auth"
+
+    /**
+     * The BingeCat session, on exactly the Trakt rule (see
+     * [BingeCatAuthRules]): a profile that never connected publishes nothing,
+     * only a deliberate disconnect publishes a tombstone, and the whole pair
+     * travels because the refresh token can rotate.
+     */
+    const val KEY_BINGECAT_AUTH = "bingecat_auth"
     const val KEY_IPTV = "iptv_config"
 
     /**
@@ -464,6 +481,9 @@ object PrefsPayloadBuilder {
         // connected Trakt publishes nothing, and only a deliberate disconnect
         // publishes a tombstone (see [TraktAuthRules]).
         KEY_TRAKT_AUTH to buildTraktAuth(context),
+        // And the BingeCat session, which used to be device-local by spec: the
+        // same never-publish-a-blank rule applies (see [BingeCatAuthRules]).
+        KEY_BINGECAT_AUTH to buildBingeCatAuth(context),
         // Same rule as the Simkl blob: a device with no key of its own must not
         // publish its blanks (see SupabaseSync.pushPrefsBlobs).
         KEY_API_KEYS to buildApiKeys(context),
@@ -509,6 +529,40 @@ object PrefsPayloadBuilder {
     fun hasTraktAuthToPublish(context: Context): Boolean {
         val store = traktAuthStore(context)
         return TraktAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
+    }
+
+    /**
+     * The profile's BingeCat session, as one blob.
+     *
+     * All of it travels - access token, refresh token, expiry, scope - because
+     * a refresh can rotate the pair and an access token alone would be a
+     * session that works until it expires and then strands the sibling.
+     */
+    fun buildBingeCatAuth(context: Context): JsonObject {
+        val store = bingecatAuthStore(context)
+        val session = store.read()
+        // Tombstone only for a DELIBERATE disconnect: an empty store with no
+        // marker is "this profile never connected BingeCat", which must not
+        // erase a live session anywhere (see [BingeCatAuthRules]).
+        val signedOut = session == null && store.isSignedOut()
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put(BingeCatTokenStore.KEY_ACCESS_TOKEN, session?.accessToken.orEmpty())
+            put(BingeCatTokenStore.KEY_REFRESH_TOKEN, session?.refreshToken.orEmpty())
+            put(BingeCatTokenStore.KEY_EXPIRES_AT, session?.expiresAtEpochMillis ?: 0L)
+            put(BingeCatTokenStore.KEY_SCOPE, session?.scope.orEmpty())
+            put(BingeCatAuthRules.SIGNED_OUT_FIELD, signedOut)
+        }
+    }
+
+    /**
+     * True when this profile has something to say about its BingeCat session: a
+     * token to share, or a deliberate disconnect to propagate. A profile that
+     * never connected publishes nothing - see [BingeCatAuthRules].
+     */
+    fun hasBingeCatAuthToPublish(context: Context): Boolean {
+        val store = bingecatAuthStore(context)
+        return BingeCatAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
     }
 
     fun buildBadgePack(context: Context): JsonObject {
@@ -1272,6 +1326,8 @@ object PrefsPayloadApplier {
                 applySimklAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_TRAKT_AUTH ->
                 applyTraktAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_BINGECAT_AUTH ->
+                applyBingeCatAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_API_KEYS ->
                 applyApiKeys(context, payload, profileId)
             PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload, profileId, live)
@@ -1873,6 +1929,101 @@ object PrefsPayloadApplier {
         )
         store.setAccountSlug(slug)
         if (live) resetTraktStateAfterSessionChange(context)
+    }
+
+    /**
+     * One pulled BingeCat session.
+     *
+     * Three shapes, the same three Trakt has: a tombstoned blank signs this
+     * device out, a live session is adopted when it may replace the local one
+     * ([BingeCatAuthRules.shouldAdopt]), and an unchanged session only retires
+     * a stale marker. What runs after an adoption is smaller than Trakt's
+     * reset, because BingeCat keeps no derived watch state of its own: only the
+     * repository's cached snapshot and the mapping (which is device-local and
+     * deliberately not synced).
+     */
+    private fun applyBingeCatAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val access = text(BingeCatTokenStore.KEY_ACCESS_TOKEN)
+        val refresh = text(BingeCatTokenStore.KEY_REFRESH_TOKEN)
+        val expiresAt = text(BingeCatTokenStore.KEY_EXPIRES_AT).toLongOrNull() ?: 0L
+        val scope = text(BingeCatTokenStore.KEY_SCOPE)
+        val signedOut = text(BingeCatAuthRules.SIGNED_OUT_FIELD) == "true"
+
+        val store = bingecatAuthStore(context, profileId)
+        val local = store.read()
+
+        if (access.isBlank()) {
+            if (!BingeCatAuthRules.clearsSession(access, signedOut)) return
+            // Nothing to sign out of: a profile that never connected must not
+            // record a tombstone it would then republish forever.
+            if (local == null) return
+            runCatching { store.markSignedOut() }
+            if (live) resetBingeCatStateAfterSessionChange(context)
+            return
+        }
+
+        val adopt = BingeCatAuthRules.shouldAdopt(
+            incomingAccess = access,
+            incomingExpiresAt = expiresAt,
+            localAccess = local?.accessToken,
+            localExpiresAt = local?.expiresAtEpochMillis ?: 0L,
+            nowMs = System.currentTimeMillis()
+        )
+        if (!adopt) return
+
+        val nextRefresh = refresh.takeIf { it.isNotBlank() } ?: local?.refreshToken
+        val nextScope = scope.takeIf { it.isNotBlank() } ?: local?.scope
+        val unchanged = local?.accessToken == access &&
+            local.refreshToken == nextRefresh &&
+            local.expiresAtEpochMillis == expiresAt &&
+            local.scope == nextScope
+        if (unchanged) {
+            // Same session: just retire a lingering disconnect marker so it
+            // cannot be republished over the live token on the next push.
+            store.clearSignedOutMarker()
+            return
+        }
+
+        runCatching {
+            store.save(
+                BingeCatToken(
+                    accessToken = access,
+                    refreshToken = nextRefresh,
+                    expiresAtEpochMillis = expiresAt,
+                    scope = nextScope
+                )
+            )
+        }
+        if (live) resetBingeCatStateAfterSessionChange(context)
+    }
+
+    /**
+     * The BingeCat session just changed on the on-screen profile.
+     *
+     * The cached snapshot goes, because it was read with the previous session's
+     * token; the mapping stays, because it is this profile's choice about which
+     * BingeCat profile to read and the account behind it is the same one the
+     * viewer just connected on the other device. Nothing in the local library,
+     * watch history or resume rows is touched - the same line
+     * [com.kennyb1201.kbstream.data.bingecat.BingeCatRepository.disconnect]
+     * draws.
+     */
+    private fun resetBingeCatStateAfterSessionChange(context: Context) {
+        runCatching {
+            com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                .getInstance(context)
+                .onSyncedSessionChanged()
+        }.onFailure {
+            android.util.Log.w(TAG, "bingecat reset after synced session change failed: ${it.message}")
+        }
     }
 
     /**

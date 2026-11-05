@@ -2302,6 +2302,16 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the BingeCat session on the same rule, for the same reason:
+            // every profile that has not connected BingeCat would otherwise
+            // publish its blank over the account's session. A deliberate
+            // disconnect publishes through BingeCatRepository.disconnect (see
+            // [BingeCatAuthRules]).
+            if (key == PrefsPayloadBuilder.KEY_BINGECAT_AUTH &&
+                !PrefsPayloadBuilder.hasBingeCatAuthToPublish(context)
+            ) {
+                return@forEach
+            }
             // And the taste signals, on the same rule for the same reason: a
             // profile that has never thumbed anything would publish an empty
             // set, and an empty set is what the applier refuses anyway - so

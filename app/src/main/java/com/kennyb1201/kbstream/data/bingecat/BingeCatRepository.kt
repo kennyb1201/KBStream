@@ -3,7 +3,9 @@ package com.kennyb1201.kbstream.data.bingecat
 import android.content.Context
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.sync.Mutex
@@ -149,6 +151,19 @@ class BingeCatRepository private constructor(private val context: Context?) {
     }
 
     fun accountScope(): String? = store.scope()
+
+    /**
+     * The session changed underneath this repository - it arrived from the
+     * account (see [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]).
+     *
+     * Only the cached snapshot goes: it was read with the previous token. The
+     * mapping is this profile's own choice and stays, and the viewer's library,
+     * history and resume rows are not BingeCat's to touch.
+     */
+    fun onSyncedSessionChanged() {
+        cached = null
+        BingeCatTrace.recordSession(store.read() != null)
+    }
 
     fun mappedProfileId(): Long? = mapping.mappedProfileId()?.also { id ->
         BingeCatTrace.recordMapping(id, mapping.mappedProfileName())
@@ -303,6 +318,11 @@ class BingeCatRepository private constructor(private val context: Context?) {
         return try {
             store.save(token)
             BingeCatTrace.recordSession(true)
+            // Cross-device sync: share the new session so a sibling comes up
+            // already connected (see [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]).
+            // Only a session that actually reached this device is worth
+            // publishing.
+            publishAuthToSync()
             BingeCatPollResult(BingeCatDeviceFlowRules.Poll.APPROVED)
         } catch (error: Exception) {
             BingeCatPollResult(
@@ -331,6 +351,13 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * Local data is not touched: the viewer's My List, watch history and resume
      * rows are theirs, and BingeCat's rows leave the Library only because they
      * are remote data with nothing left to read them from.
+     *
+     * A deliberate disconnect is the ONLY thing that may end the session on
+     * another device, so this leaves the sync tombstone rather than a bare
+     * clear - and publishes it immediately, because a tombstone has no token to
+     * trigger the ordinary push gate. Nothing is published when the tombstone
+     * does not take: signing the account out everywhere while this device kept
+     * its session would be worse than not syncing the disconnect.
      */
     suspend fun disconnect(): Boolean {
         val token = store.read()?.accessToken
@@ -343,12 +370,32 @@ class BingeCatRepository private constructor(private val context: Context?) {
             }.getOrNull()
             revoked = response?.isSuccessful == true
         }
-        store.clear()
+        val cleared = runCatching { store.markSignedOut() }.getOrDefault(false)
         mapping.clear()
         cached = null
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordMapping(null, null)
+        if (cleared) publishAuthToSync()
         return revoked
+    }
+
+    /**
+     * Publishes this profile's BingeCat session immediately, bypassing the bulk
+     * push's "nothing to publish" skip.
+     *
+     * Connect and refresh need it so a sibling adopts the new (rotated) pair
+     * without waiting for a full sync, and disconnect needs it because the
+     * tombstone has no token to trigger the ordinary gate.
+     */
+    private fun publishAuthToSync() {
+        val appContext = context ?: return
+        runCatching {
+            SupabaseSync.enqueuePrefs(
+                appContext,
+                PrefsPayloadBuilder.KEY_BINGECAT_AUTH,
+                PrefsPayloadBuilder.buildBingeCatAuth(appContext)
+            )
+        }
     }
 
     // ── Reads ────────────────────────────────────────────────────────────
@@ -606,6 +653,10 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 scope = granted.scope ?: latest.scope
             )
             runCatching { store.save(token) }.getOrNull() ?: return@withLock null
+            // A refresh ROTATES the pair (and may invalidate the old refresh
+            // token), so the account copy is now stale: push the new one or a
+            // sibling is signed out as soon as its own copy expires.
+            publishAuthToSync()
             token.accessToken
         }
     }

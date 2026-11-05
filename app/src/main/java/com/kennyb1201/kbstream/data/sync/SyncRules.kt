@@ -235,6 +235,61 @@ internal object TraktAuthRules {
 }
 
 /**
+ * Publish/apply rules for the BingeCat session blob.
+ *
+ * The shape is Trakt's ([TraktAuthRules]) because BingeCat's grant has the same
+ * two hazards. Its access tokens expire and its refresh tokens can rotate, so
+ * only part of the session would leave a sibling working for a while and then
+ * stranded; and the blob is account-wide FULL REPLACE, so a device that has
+ * simply never connected BingeCat must publish nothing rather than blank out
+ * the account's session. The two rules are therefore the same - publish only
+ * with a token or a deliberate disconnect, and only a tombstoned blank may
+ * clear a live session.
+ *
+ * One rule is deliberately NOT Trakt's: there is no account identity to
+ * compare. BingeCat's `scope` describes what the grant was allowed, not which
+ * account it belongs to, so a "different account must always win" test cannot
+ * be written - an expired remote session is refused when the local one is still
+ * live (`TraktAuthRules.shouldAdopt`'s third rule), and a reconnect to another
+ * account is adopted on its first pull because it is live.
+ */
+internal object BingeCatAuthRules {
+
+    /** Payload field marking a blank session as a deliberate sign-out. */
+    const val SIGNED_OUT_FIELD = "signed_out"
+
+    fun shouldPublish(accessToken: String?, signedOut: Boolean): Boolean =
+        !accessToken.isNullOrBlank() || signedOut
+
+    fun clearsSession(accessToken: String?, signedOut: Boolean): Boolean =
+        accessToken.isNullOrBlank() && signedOut
+
+    /**
+     * Whether a pulled session may replace the local one.
+     *
+     * Same access token: yes - a refresh on the other device rotated the pair
+     * and pushed the new expiry, and this device needs it.
+     * Otherwise adopt unless the incoming session has already expired and the
+     * local one has not: that is the stale-overwrite race, and an expired
+     * remote carries nothing this device can use.
+     */
+    fun shouldAdopt(
+        incomingAccess: String?,
+        incomingExpiresAt: Long,
+        localAccess: String?,
+        localExpiresAt: Long,
+        nowMs: Long
+    ): Boolean {
+        if (incomingAccess.isNullOrBlank()) return false
+        if (localAccess == null) return true
+        if (localAccess == incomingAccess) return true
+        val incomingLive = incomingExpiresAt > nowMs
+        val localLive = localExpiresAt > nowMs
+        return incomingLive || !localLive
+    }
+}
+
+/**
  * Merge rules for the display-prefs blob.
  *
  * That blob used to be WHOLE-BLOB last-write-wins with a timestamp stamped at
