@@ -42,7 +42,10 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
  *
  * The QR replaces typing the URL, never the code: neither Trakt's nor Simkl's
  * activation page pre-fills a code from a query parameter, so the code stays
- * large and separate beside this panel.
+ * large and separate beside this panel. BingeCat is the exception - its page
+ * takes `user_code` in the query, so that caller passes a complete URL already
+ * carrying the code (see `bingecatActivationUrlForQr`), and this composable
+ * still just encodes whatever [url] it is given.
  */
 @Composable
 fun KBQrCode(

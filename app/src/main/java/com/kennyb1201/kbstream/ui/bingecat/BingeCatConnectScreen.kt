@@ -31,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.bingecat.BingeCatConfig
+import com.kennyb1201.kbstream.data.bingecat.bingecatActivationUrlForQr
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBQrCode
@@ -236,15 +237,24 @@ private fun BingeCatLinkingPanel(uiState: BingeCatUiState) {
         return
     }
     val url = uiState.verificationUrl ?: BingeCatConfig.ACTIVATE_URL
+    // The QR opens the approval page WITH this code in it: BingeCat's activation
+    // page takes `user_code` as a query parameter (see
+    // bingecatActivationUrlForQr), unlike Trakt's and Simkl's, which are a page
+    // plus a code the viewer types. A scan that lands on the bare page would
+    // still make the viewer type the code - the path that failed twice on the
+    // TV with invalid_user_code - so the code travels in the URL. It is keyed on
+    // the code as well as the URL, so a fresh code can never reuse the old QR.
+    val qrUrl = remember(url, code) { bingecatActivationUrlForQr(url, code) }
     BingeCatPanel(
-        title = "Enter this code on BingeCat",
-        message = url
+        title = "Scan to connect BingeCat",
+        message = "Point your phone's camera at the code and approve it there. " +
+            "No camera handy? Enter the code below at $url."
     )
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
-        KBQrCode(url = url, size = 140.dp)
+        KBQrCode(url = qrUrl, size = 140.dp)
         Spacer(modifier = Modifier.width(18.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

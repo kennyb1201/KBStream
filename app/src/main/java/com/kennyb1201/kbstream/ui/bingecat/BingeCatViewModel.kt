@@ -97,6 +97,21 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
             next.isMapped == _uiState.value.isMapped &&
             next.userCode == null
         ) {
+            // The early return exists to keep a GENUINELY in-flight request or
+            // poll across re-entry, and those have a live job behind them. A
+            // flag with no live job is not an attempt: it is the state a
+            // cancelled one can leave behind, and it reads as "still asking"
+            // with nothing asking - the linking branch has no GENERATE in it, so
+            // re-entering could not get out either. Clear only that half.
+            val current = _uiState.value
+            val stalePoll = current.isPolling && pollJob?.isActive != true
+            val staleRequest = current.isRequestingCode && codeJob?.isActive != true
+            if (stalePoll || staleRequest) {
+                _uiState.value = current.copy(
+                    isPolling = current.isPolling && !stalePoll,
+                    isRequestingCode = current.isRequestingCode && !staleRequest
+                )
+            }
             return
         }
         stopPolling()
@@ -113,23 +128,38 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
             statusMessage = null
         )
         codeJob = viewModelScope.launch {
-            when (val result = repository.requestDeviceCode()) {
-                is BingeCatCodeResult.Issued -> {
-                    val code = result.code
-                    _uiState.value = _uiState.value.copy(
-                        isRequestingCode = false,
-                        userCode = code.userCode,
-                        verificationUrl = code.verificationUrl,
-                        secondsLeft = code.expiresInSeconds
-                    )
-                    startPolling(code)
-                }
+            try {
+                when (val result = repository.requestDeviceCode()) {
+                    is BingeCatCodeResult.Issued -> {
+                        val code = result.code
+                        _uiState.value = _uiState.value.copy(
+                            isRequestingCode = false,
+                            userCode = code.userCode,
+                            verificationUrl = code.verificationUrl,
+                            secondsLeft = code.expiresInSeconds
+                        )
+                        startPolling(code)
+                    }
 
-                is BingeCatCodeResult.Failed -> {
-                    _uiState.value = _uiState.value.copy(
-                        isRequestingCode = false,
-                        errorMessage = result.failure.message
-                    )
+                    is BingeCatCodeResult.Failed -> {
+                        _uiState.value = _uiState.value.copy(
+                            isRequestingCode = false,
+                            errorMessage = result.failure.message
+                        )
+                    }
+                }
+            } finally {
+                // Cancellation is an exit path too (CANCEL while the request is
+                // in flight, a profile switch, a superseding request), and it
+                // used to leave the flag set with no job behind it: the screen
+                // then read "Asking BingeCat for a device code…" forever, with
+                // no code to cancel and no GENERATE to press. Only the CURRENT
+                // request may clear it - a superseded one has already handed the
+                // flag to its replacement.
+                if (coroutineContext[Job] === codeJob &&
+                    _uiState.value.isRequestingCode
+                ) {
+                    _uiState.value = _uiState.value.copy(isRequestingCode = false)
                 }
             }
         }
@@ -220,9 +250,21 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Stops the loop AND clears the flag that says one is running.
+     *
+     * The flag is half of what `isLinking` reads, so cancelling the job without
+     * it left the screen in the linking branch after a mid-poll CANCEL: "Asking
+     * BingeCat for a device code…" with no code, and that branch offers only
+     * CANCEL and BACK - nothing that asks for a new code. This is the single
+     * owner of `isPolling`; no other exit path clears it on its own.
+     */
     private fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+        if (_uiState.value.isPolling) {
+            _uiState.value = _uiState.value.copy(isPolling = false)
+        }
     }
 
     /** The account's BingeCat profiles, for the picker. */
