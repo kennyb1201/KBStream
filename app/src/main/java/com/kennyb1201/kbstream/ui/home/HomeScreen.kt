@@ -254,19 +254,11 @@ private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
  */
 private const val HOME_TOP_BAR_DRIVE_MAX_FRAMES = 180
 
-/**
- * The key families Home's own rail cards report their focus under (see
- * [HomeViewModel.lastFocusedRailItemKey] and this screen's
- * `railFocusRequesters`).
- *
- * A catalog card keys itself by content ("movie:123"). A built-in row's cards
- * are not catalog content, so each names its own family rather than borrowing
- * that shape: the same title can be a Continue Watching card, an Upcoming card
- * and a catalog card at once, and one key must never mean two places to put
- * the D-pad back.
- */
-private const val CONTINUE_WATCHING_CARD_KEY_PREFIX = "upnext:"
-private const val UPCOMING_CARD_KEY_PREFIX = "upcoming:"
+// The key families Home's own rail cards report their focus under (see
+// [HomeViewModel.lastFocusedRailItemKey] and this screen's
+// `railFocusRequesters`) are declared in HomeReturnFocus.kt, beside the row
+// lookup the return restore uses: one spelling, so a card's key and the row it
+// is found back on can never disagree.
 
 /**
  * How long a Continue Watching resume waits for its stored stream id's root to
@@ -3168,9 +3160,6 @@ private fun HomeHeroHost(
     }
 }
 
-/** Card key prefix for the Top Picks row (see [HomeViewModel.lastFocusedRailItemKey]). */
-private const val TOP_PICKS_CARD_KEY_PREFIX = "top-picks|"
-
 /**
  * One blended pick as the card model the rest of Home navigates with.
  *
@@ -5143,18 +5132,56 @@ fun HomeScreen(
     // hand-back reads the boolean (see
     // [com.kennyb1201.kbstream.ui.browse.landFocusOn]); a false here means "not
     // composed yet", which is a retry, not a landing.
-    LaunchedEffect(Unit) {
+    //
+    // Ended for good once it lands, so a later rebuild of the rows cannot drag
+    // the viewer back to a card they have already left.
+    var homeReturnLanded by remember {
+        mutableStateOf(false)
+    }
+
+    // Keyed on the ROWS, not on Unit. A return from Detail rebuilds them (the
+    // rails reload, Top Picks republishes), and the remembered card was often
+    // composed after the first window had given up - focus then fell to the
+    // framework's default placement, the head of the first rail (field
+    // 2026-11-05: "I opened a Top Picks title, backed out, and I was on
+    // Continue Watching"). Each rebuild re-arms the bounded wait; the viewer's
+    // own first press ends it (viewerMovedFocusSinceEntry), and a landing ends
+    // it for good.
+    LaunchedEffect(mergedEntries) {
         // A fresh entry has nothing to come back to: whatever key an earlier
         // visit left in the ViewModel is not a place this viewer was, and the
         // Continue Watching landing owns focus on an arrival.
-        if (isFreshEntry) return@LaunchedEffect
+        if (isFreshEntry || homeReturnLanded) return@LaunchedEffect
         val wanted = viewModel.lastFocusedRailItemKey ?: return@LaunchedEffect
+        // A card that was never composed cannot be asked for focus. The seeded
+        // scroll puts the remembered ROW back, but the seed is an index into a
+        // list whose contents arrive late - so when the card is not registered
+        // (its row is not on screen), bring its row into view here. The index is
+        // converted from the entry list into the COLUMN's own numbering, which
+        // this effect must not guess at (see [homeColumnIndexForEntry]); skipped
+        // once the card is composed, so a landing never jumps the column.
+        if (railFocusRequesters[wanted] == null) {
+            homeEntryIndexForCardKey(mergedEntries, wanted)?.let { entryIndex ->
+                val visible = railListState.layoutInfo.visibleItemsInfo
+                    .map { item -> item.index to item.key }
+                val columnIndex = homeColumnIndexForEntry(
+                    visibleItems = visible,
+                    mergedEntries = mergedEntries,
+                    entryIndex = entryIndex
+                )
+                runCatching { railListState.scrollToItem(columnIndex) }
+            }
+        }
         repeat(HOME_RETURN_FOCUS_STEPS) {
+            if (viewerMovedFocusSinceEntry) return@LaunchedEffect
             val requester = railFocusRequesters[wanted]
             if (requester != null) {
                 val landed = runCatching { requester.requestFocus() }
                     .getOrDefault(false)
-                if (landed) return@LaunchedEffect
+                if (landed) {
+                    homeReturnLanded = true
+                    return@LaunchedEffect
+                }
             }
             delay(BROWSE_RETURN_FOCUS_DELAY_MS)
         }
@@ -6294,29 +6321,12 @@ fun HomeScreen(
                             // unarranged collections sit after the addon rails).
                             itemsIndexed(
                                 items = mergedEntries,
-                                key = { _, entry ->
-                                    when (entry) {
-                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail ->
-                                            "rail|" + entry.sourceIndex + "|" +
-                                                entry.rail.addonName + ":" +
-                                                entry.rail.catalogName + ":" + entry.rail.type
-                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
-                                            "kb|" + (entry.collection.id ?: entry.collection.title)
-                                        // One key per rail: the chips inside a
-                                        // rail are reordered in place rather
-                                        // than re-keying the LazyColumn item,
-                                        // and a rail is its own arrangement
-                                        // key, so it can move on its own.
-                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
-                                            "browse|" + entry.key
-                                        // One key per built-in rail, matching the
-                                        // "<family>|<id>" shape the rest use.
-                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
-                                            "builtin|" + entry.key.removePrefix(
-                                                "builtin:"
-                                            )
-                                    }
-                                },
+                                // One key per rail, matching the
+                                // "<family>|<id>" shape they all use. The
+                                // spelling lives beside the return restore,
+                                // which reaches an uncomposed row BY THIS KEY
+                                // (see [homeEntryItemKey]).
+                                key = { _, entry -> homeEntryItemKey(entry) },
                                 // One content type per rail KIND: the column
                                 // mixes these with spacers and status cards, and
                                 // Compose can only reuse a composition slot
@@ -6420,8 +6430,7 @@ fun HomeScreen(
                                         // remembered key and the restore lookup
                                         // move together.
                                         val catalogCardKeyPrefix =
-                                            "catalog|" + rail.addonName + "::" +
-                                                rail.catalogId + "::" + rail.type + "|"
+                                            railCardKeyPrefix(rail)
 
                                         Column(
                                             modifier = Modifier.padding(

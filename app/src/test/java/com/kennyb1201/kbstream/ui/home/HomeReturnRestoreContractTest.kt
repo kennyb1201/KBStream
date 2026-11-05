@@ -92,7 +92,7 @@ class HomeReturnRestoreContractTest {
             "a fresh entry skips the restore: whatever key an earlier visit " +
                 "left behind is not a place this viewer was, and the landing on " +
                 "Continue Watching owns focus on an arrival",
-            screen.contains("if (isFreshEntry) return@LaunchedEffect")
+            screen.contains("if (isFreshEntry || homeReturnLanded) return@LaunchedEffect")
         )
     }
 }
