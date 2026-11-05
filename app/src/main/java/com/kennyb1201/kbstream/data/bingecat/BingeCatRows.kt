@@ -27,6 +27,25 @@ data class BingeCatRow(
     }
 }
 
+/**
+ * Whether this row IS the title the caller is holding, for the watchlist and
+ * list membership checks (step 3's suffix and picker ticks).
+ *
+ * The same rule the MDBList and Trakt membership tests already use: the type
+ * must agree (a movie and a show can share an id in some id spaces), and one id
+ * must match on both sides. An id pair the row does not carry is not a match,
+ * never a guess - a permanently saved-looking button is worse than an unsaved
+ * one, because nothing on screen would ever correct it.
+ */
+fun BingeCatRow.matches(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
+    val wantedMovie = mediaType.lowercase() !in setOf("tv", "series")
+    if (isMovie != wantedMovie) return false
+    val queryImdb = imdbId?.takeIf { it.isNotBlank() }
+    val queryTmdb = tmdbId?.takeIf { it > 0 }
+    return (queryImdb != null && this.imdbId == queryImdb) ||
+        (queryTmdb != null && this.tmdbId == queryTmdb)
+}
+
 /** One BingeCat user list, as Library needs it. */
 data class BingeCatList(
     val ref: String,

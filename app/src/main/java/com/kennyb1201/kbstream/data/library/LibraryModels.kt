@@ -41,12 +41,17 @@ enum class LibrarySource(val label: String) {
     TRAKT_LIST("Trakt list"),
 
     /**
-     * BingeCat's own rows, read-only.
+     * BingeCat's own rows.
      *
      * Three sources rather than one because the section shows three things -
      * the watchlist, the saved list (BingeCat's "favorites") and each user list
      * by its own name - and a row has to be able to say which it came from.
-     * Nothing writes back to any of them: v1 has no `lists:write` scope.
+     *
+     * Writes reach two of them since step 3 (`lists:write`): a save adds to the
+     * watchlist, and the picker's rows add to and remove from a user list
+     * by its own `ref`. The saved list (favorites) stays read-only - step 3's
+     * scope is the watchlist and the lists, not BingeCat's own favorites - so a
+     * `BINGECAT_SAVED` row is still a row nothing writes back to.
      */
     BINGECAT_WATCHLIST("BingeCat"),
     BINGECAT_SAVED("BingeCat saved"),

@@ -695,7 +695,10 @@ private fun LibraryItemMenu(
             when (item.source) {
                 LibrarySource.LOCAL,
                 LibrarySource.MDBLIST_WATCHLIST,
-                LibrarySource.TRAKT_WATCHLIST -> add(
+                LibrarySource.TRAKT_WATCHLIST,
+                // Step 3: a BingeCat watchlist row is a watchlist row, so the
+                // same action drops it there too (see removeItem).
+                LibrarySource.BINGECAT_WATCHLIST -> add(
                     PosterContextAction(
                         label = "Remove from Library",
                         description = "Remove it here and on every connected tracker",
@@ -707,7 +710,9 @@ private fun LibraryItemMenu(
 
                 LibrarySource.LOCAL_LIST,
                 LibrarySource.MDBLIST_LIST,
-                LibrarySource.TRAKT_LIST -> add(
+                LibrarySource.TRAKT_LIST,
+                // And a BingeCat user-list row leaves that list by its own ref.
+                LibrarySource.BINGECAT_LIST -> add(
                     PosterContextAction(
                         label = "Remove from this list",
                         description = item.listName?.let { "Take it out of \"$it\"" },
@@ -717,12 +722,10 @@ private fun LibraryItemMenu(
                     }
                 )
 
-                // BingeCat is read-only: its rows have no remove and no
-                // web-link action, so the long press offers only the two
-                // actions every row has (details, and the picker's own).
-                LibrarySource.BINGECAT_WATCHLIST,
-                LibrarySource.BINGECAT_SAVED,
-                LibrarySource.BINGECAT_LIST -> Unit
+                // BingeCat's saved list (favorites) stays read-only, and no
+                // BingeCat row has a web-link action: the long press offers
+                // only the actions every row has (details, and the picker's).
+                LibrarySource.BINGECAT_SAVED -> Unit
 
                 LibrarySource.SIMKL_WATCHLIST,
                 LibrarySource.SIMKL_LIST -> {

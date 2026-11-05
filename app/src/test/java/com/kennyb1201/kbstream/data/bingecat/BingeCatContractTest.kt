@@ -82,22 +82,23 @@ class BingeCatContractTest {
     }
 
     @Test
-    fun `step 2 asks for the three reads and exactly one write`() {
-        assertTrue(
-            "the scope line is what the server checks the app against, and step 2's " +
-                "tracker needs history:write in it",
-            config.contains(
-                "const val SCOPES = \"profiles:read lists:read history:read history:write\""
-            )
-        )
+    fun `the scopes are the three reads and the two writes`() {
         val declared = config
-            .substringAfter("const val SCOPES = \"")
+            .substringAfter("const val SCOPES =")
+            .substringAfter("\"")
             .substringBefore("\"")
             .split(" ")
+            .filter { it.isNotBlank() }
         assertEquals(
-            "the three reads plus the one write: lists:write, settings:read and " +
-                "search:read stay out at every step of the roadmap",
-            listOf("profiles:read", "lists:read", "history:read", "history:write"),
+            "the three reads plus the two writes - step 2's history and step 3's " +
+                "lists; settings:read and search:read stay out at every step of the roadmap",
+            listOf(
+                "profiles:read",
+                "lists:read",
+                "history:read",
+                "history:write",
+                "lists:write"
+            ),
             declared
         )
     }

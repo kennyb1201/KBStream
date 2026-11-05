@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
@@ -83,15 +84,23 @@ internal object LibraryAdds {
         )
 
     /**
-     * The ", Simkl, MDBList and Trakt" tail of the add row's description, from
-     * what is actually connected — so the row promises exactly the mirrors it
-     * has.
+     * The ", Simkl, MDBList, Trakt and BingeCat" tail of the add row's
+     * description, from what is actually connected — so the row promises exactly
+     * the mirrors it has.
+     *
+     * BingeCat is listed only when a save can go out (see
+     * [LibraryMirror.bingeCatConnected]): a connected-but-unmapped profile or a
+     * grant without `lists:write` is not a mirror this row can promise.
      */
     fun mirrorSuffix(context: Context): String {
         val connected = buildList {
             if (LibraryMirror.simklConnected(context)) add("Simkl")
             if (LibraryMirror.mdbListConnected(context)) add("MDBList")
             if (LibraryMirror.traktConnected(context)) add("Trakt")
+            // Only when a BingeCat save can actually go out: connected, mapped,
+            // and granted lists:write. The tail is a promise about the mirrors
+            // behind the row, so it must match the legs that will fire.
+            if (LibraryMirror.bingeCatConnected(context)) add("BingeCat")
         }
         return when (connected.size) {
             0 -> ""
@@ -213,6 +222,10 @@ internal object LibraryAdds {
 
         is LibraryAddRoute.TraktList -> addToTraktList(context, route.remoteId, target)
 
+        LibraryAddRoute.BingeCatWatchlist -> addToBingeCatWatchlist(context, target)
+
+        is LibraryAddRoute.BingeCatList -> addToBingeCatList(context, route.ref, target)
+
         is LibraryAddRoute.MdbListList -> LibraryMirror.addToList(
             context = context,
             listId = route.id,
@@ -302,6 +315,51 @@ internal object LibraryAdds {
     }
 
     /**
+     * The BingeCat watchlist row: remote-only, and it reports the watchlist
+     * write's own answer (not "BingeCat is connected").
+     *
+     * `canSave()` is re-checked here rather than trusted from the row that
+     * built the picker: a disconnect, an unmapped profile or a grant that lost
+     * the scope can all happen while the dialog is open, and the row must then
+     * fail visibly instead of silently writing nowhere.
+     */
+    private suspend fun addToBingeCatWatchlist(
+        context: Context,
+        target: LibraryAddTarget
+    ): Boolean {
+        if (!LibraryMirror.bingeCatConnected(context)) return false
+        return runCatchingCancellable {
+            BingeCatRepository.getInstance(context).addToWatchlist(
+                isMovie = LocalLibraryStore.normalizedType(target.mediaType) == "movie",
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title
+            )
+        }.getOrDefault(false)
+    }
+
+    /**
+     * One BingeCat user list: addressed by the typed `ref` its own read
+     * returned, never by a name, and answered by the list write's boolean.
+     */
+    private suspend fun addToBingeCatList(
+        context: Context,
+        ref: String,
+        target: LibraryAddTarget
+    ): Boolean {
+        if (!LibraryMirror.bingeCatConnected(context)) return false
+        return runCatchingCancellable {
+            BingeCatRepository.getInstance(context).addToList(
+                ref = ref,
+                isMovie = LocalLibraryStore.normalizedType(target.mediaType) == "movie",
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                title = target.title
+            )
+        }.getOrDefault(false)
+    }
+
+    /**
      * [target] with the two facts an add needs that the screen may not have
      * had: the IMDB id when it only knew the TMDB one, and the release year
      * when the catalog sent none.
@@ -375,6 +433,12 @@ internal sealed interface LibraryAddRoute {
     /** One Trakt personal list, addressed by its slug/id. */
     data class TraktList(val remoteId: String) : LibraryAddRoute
 
+    /** The mapped BingeCat profile's watchlist (remote only). */
+    data object BingeCatWatchlist : LibraryAddRoute
+
+    /** One BingeCat user list, addressed by its typed `ref`. */
+    data class BingeCatList(val ref: String) : LibraryAddRoute
+
     /** One local personal list. */
     data class LocalList(val id: Int) : LibraryAddRoute
 
@@ -396,13 +460,20 @@ internal fun libraryAddRoute(row: LibraryPickerRow): LibraryAddRoute {
         row.isMyList -> LibraryAddRoute.MyList
         row.isMdbListWatchlist -> LibraryAddRoute.MdbListWatchlist
         row.isTraktWatchlist -> LibraryAddRoute.TraktWatchlist
+        row.isBingeCatWatchlist -> LibraryAddRoute.BingeCatWatchlist
         list == null || list.id == 0 -> LibraryAddRoute.Unroutable
         // A list's SOURCE decides where it lives, not its shelf id's sign:
-        // Trakt's shelf ids are negative like a local list's, and MDBList's
-        // are positive. The id only has to exist.
+        // Trakt's and BingeCat's shelf ids are negative like a local list's,
+        // and MDBList's are positive. The id only has to exist.
         list.source == LibrarySource.TRAKT_LIST -> list.remoteId
             ?.takeIf { it.isNotBlank() }
             ?.let { LibraryAddRoute.TraktList(it) }
+            ?: LibraryAddRoute.Unroutable
+        // BingeCat lists are addressed by the typed ref their read returned
+        // (`internal:12`), which is also what `/lists/{ref}/items` wants.
+        list.source == LibrarySource.BINGECAT_LIST -> list.remoteId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { LibraryAddRoute.BingeCatList(it) }
             ?: LibraryAddRoute.Unroutable
         list.source == LibrarySource.LOCAL_LIST -> LibraryAddRoute.LocalList(list.id)
         list.id > 0 -> LibraryAddRoute.MdbListList(list.id)

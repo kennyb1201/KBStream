@@ -39,6 +39,10 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatSnapshot
+import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
+import com.kennyb1201.kbstream.data.bingecat.matches
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
@@ -94,7 +98,9 @@ data class LibraryPickerRow(
     val isMdbListWatchlist: Boolean = false,
     /** Trakt watchlist row (remote-only). */
     val isTraktWatchlist: Boolean = false,
-    /** Any other list: local, MDBList or Trakt. */
+    /** BingeCat watchlist row (remote-only, step 3). */
+    val isBingeCatWatchlist: Boolean = false,
+    /** Any other list: local, MDBList, Trakt or BingeCat. */
     val list: LibraryList? = null
 ) {
     val label: String
@@ -102,6 +108,7 @@ data class LibraryPickerRow(
             isMyList -> "MY LIST"
             isMdbListWatchlist -> "Watchlist · MDBList"
             isTraktWatchlist -> "Watchlist · Trakt"
+            isBingeCatWatchlist -> "Watchlist · BingeCat"
             else -> list?.name ?: ""
         }
 
@@ -110,6 +117,7 @@ data class LibraryPickerRow(
             isMyList -> "This profile · mirrors to connected trackers"
             isMdbListWatchlist -> "${list?.itemCount ?: 0} titles · remote"
             isTraktWatchlist -> "${list?.itemCount ?: 0} titles · remote"
+            isBingeCatWatchlist -> "${list?.itemCount ?: 0} titles · remote"
             else -> "${list?.itemCount ?: 0} titles · ${list?.locationLabel ?: "MDBList"}"
         }
 }
@@ -285,6 +293,49 @@ fun LibraryAddToListDialog(
             remoteRows = remoteRows + traktRows
         }
 
+        // BingeCat, beside Trakt: the mapped profile's watchlist and its user
+        // lists, offered only when a save can actually go out - connected,
+        // mapped, and granted lists:write are all one answer (canSave()), so the
+        // dialog can never offer a row whose write the server would refuse.
+        var bingeCatSnapshot: BingeCatSnapshot? = null
+        if (LibraryMirror.bingeCatConnected(context)) {
+            val bingeCat = BingeCatRepository.getInstance(context)
+            bingeCatSnapshot = withContext(Dispatchers.IO) {
+                runCatchingCancellable { bingeCat.snapshot() }.getOrNull()
+            }
+            val snapshot = bingeCatSnapshot
+            if (snapshot != null) {
+                val bingeCatRows = mutableListOf<LibraryPickerRow>()
+                // Offered while connected even at zero titles, the same rule the
+                // MDBList and Trakt rows follow: an empty watchlist is exactly
+                // the state where a viewer needs the row.
+                bingeCatRows += LibraryPickerRow(
+                    isBingeCatWatchlist = true,
+                    list = LibraryList(
+                        id = -3,
+                        name = "Watchlist",
+                        itemCount = snapshot.watchlist.size,
+                        source = LibrarySource.BINGECAT_WATCHLIST
+                    )
+                )
+                bingeCatRows += snapshot.lists.mapIndexed { index, user ->
+                    LibraryPickerRow(
+                        list = LibraryList(
+                            id = bingecatShelfId(index),
+                            name = user.name,
+                            itemCount = user.itemCount,
+                            source = LibrarySource.BINGECAT_LIST,
+                            // The typed ref the lists read returned - what
+                            // `/lists/{ref}/items` is addressed by, and never a
+                            // name the app made up.
+                            remoteId = user.ref
+                        )
+                    )
+                }
+                remoteRows = remoteRows + bingeCatRows
+            }
+        }
+
         rows = initial + remoteRows
         loadingLists = false
 
@@ -345,6 +396,26 @@ fun LibraryAddToListDialog(
                     }
             }
         }
+        // BingeCat ticks: the watchlist from the snapshot's own rows (no extra
+        // call), and each user list from its items read - the same shape the
+        // Trakt block above uses, because a row that claims a membership it has
+        // not checked is a row the viewer cannot trust.
+        val bingeCat = bingeCatSnapshot
+        if (bingeCat != null) {
+            withContext(Dispatchers.IO) {
+                if (bingeCat.watchlist.any { it.matches(normalizedType, imdb, tmdb) }) {
+                    member += "BINGECAT_WATCHLIST"
+                }
+                bingeCat.lists.forEach { list ->
+                    val has = runCatchingCancellable {
+                        BingeCatRepository.getInstance(context).listRows(list.ref)
+                    }.getOrNull().orEmpty()
+                        .any { it.matches(normalizedType, imdb, tmdb) }
+                    if (has) member += "bingecat:${list.ref}"
+                }
+            }
+        }
+
         memberships = member
     }
 
@@ -375,8 +446,10 @@ fun LibraryAddToListDialog(
         row.isMyList -> "MY_LIST"
         row.isMdbListWatchlist -> "MDB_WATCHLIST"
         row.isTraktWatchlist -> "TRAKT_WATCHLIST"
+        row.isBingeCatWatchlist -> "BINGECAT_WATCHLIST"
         row.list?.source == LibrarySource.LOCAL_LIST -> "local:${row.list.id}"
         row.list?.source == LibrarySource.TRAKT_LIST -> "trakt:${row.list.remoteId}"
+        row.list?.source == LibrarySource.BINGECAT_LIST -> "bingecat:${row.list.remoteId}"
         row.list != null -> "mdb:${row.list.id}"
         else -> ""
     }

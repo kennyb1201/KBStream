@@ -65,10 +65,11 @@ data class BingeCatSnapshot(
  * BingeCat, read-only, as this app speaks to it.
  *
  * The connect grant, the proactive refresh, the disconnect, the per-profile
- * mapping, and the three reads v1 ships (watchlist + saved list + lists, and
- * history for the section's own watched marker). Nothing writes: there is no
- * scrobble, no list mutation and no settings call, and the scope string does
- * not even ask for them (see [BingeCatConfig.SCOPES]).
+ * mapping, the three reads v1 ships (watchlist + saved list + lists, and history
+ * for the section's own watched marker), and the two write legs: watched
+ * history (step 2, `history:write`) and the watchlist/user-list saves (step 3,
+ * `lists:write`). Nothing else writes: no list creation, no settings call, no
+ * imports (see [BingeCatConfig.SCOPES] for exactly what is asked).
  *
  * Three structural rules, each answering a specific failure:
  *
@@ -174,6 +175,21 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     fun mappedProfileName(): String? = mapping.mappedProfileName()
 
+    /**
+     * True when [mediaType]/[imdbId]/[tmdbId] is on the mapped profile's
+     * watchlist according to the LAST READ (spec F2's membership rule).
+     *
+     * False while nothing is cached, and false for a different mapping: a stale
+     * account's rows must never answer for this one, the same rule the snapshot
+     * itself enforces.
+     */
+    fun watchlistContains(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
+        val snapshot = cached ?: return false
+        val mapped = mappedProfileId() ?: return false
+        if (snapshot.mappedId != mapped) return false
+        return snapshot.watchlist.any { row -> row.matches(mediaType, imdbId, tmdbId) }
+    }
+
     /** True when this profile may make a data request at all. */
     fun isReady(): Boolean = isConfigured() && hasToken() && mappedProfileId() != null
 
@@ -188,12 +204,31 @@ class BingeCatRepository private constructor(private val context: Context?) {
     fun hasWriteScope(): Boolean = BingeCatWriteRules.hasWriteScope(store.scope())
 
     /**
+     * Whether the stored grant carries `lists:write` (step 3's gate).
+     *
+     * Its own gate, not a second reading of [hasWriteScope]: a step-2 grant has
+     * `history:write` and not this one, and asking the wrong question would turn
+     * a working tracker into a 403 (or hide a fixable state).
+     */
+    fun hasListsWriteScope(): Boolean =
+        BingeCatWriteRules.hasListsWriteScope(store.scope())
+
+    /** True when saving can go out: connected, mapped, and granted `lists:write`. */
+    fun canSave(): Boolean = isReady() && hasListsWriteScope()
+
+    /**
      * True while this profile is connected and mapped but the grant cannot
-     * write: the one state that needs a re-approval, and the only one the
-     * connect screen prompts for (never for unmapped or disconnected).
+     * write one of the two legs: the one state that needs a re-approval, and the
+     * only one the connect screen prompts for (never for unmapped or
+     * disconnected).
+     *
+     * Either missing scope counts, because the reconnect fixes both at once: a
+     * step-1 grant cannot record plays OR save, a step-2 grant cannot save, and
+     * the screen must not claim the connection is fully working in either case.
      */
     fun needsReapproval(): Boolean =
-        isConfigured() && hasToken() && mappedProfileId() != null && !hasWriteScope()
+        isConfigured() && hasToken() && mappedProfileId() != null &&
+            (!hasWriteScope() || !hasListsWriteScope())
 
     // ── Device flow ──────────────────────────────────────────────────────
 
@@ -622,6 +657,273 @@ class BingeCatRepository private constructor(private val context: Context?) {
             service.removeHistory("Bearer $token", profileId, batch)
         }
     }.getOrNull()
+
+    // ── List writes (step 3) ──────────────────────────────────────────────
+    //
+    // The saving legs behind the Detail Library button, the Library tab's
+    // remove and the picker's rows: the profile's watchlist (`sync/watchlist`
+    // add + remove) and one user list's items (`/lists/{ref}/items` POST and
+    // DELETE). The verbs live in BingeCatListWrites.kt; the gate, the failure
+    // contract and the cache rule live here, because they need this class's
+    // token, service and snapshot.
+
+    /**
+     * The Detail Library button's save leg: adds the title to the mapped
+     * profile's watchlist. False only when a write was attempted and failed.
+     */
+    suspend fun addToWatchlist(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = addToWatchlistImpl(isMovie, imdbId, tmdbId, title)
+
+    /** The button's (and the Library tab's) unsave leg on the watchlist. */
+    suspend fun removeFromWatchlist(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = removeFromWatchlistImpl(isMovie, imdbId, tmdbId, title)
+
+    /** The picker's add: one user list, addressed by its own typed `ref`. */
+    suspend fun addToList(
+        ref: String,
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = addToListImpl(ref, isMovie, imdbId, tmdbId, title)
+
+    /** The picker's remove, on the same list `ref` (never a name). */
+    suspend fun removeFromList(
+        ref: String,
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = removeFromListImpl(ref, isMovie, imdbId, tmdbId, title)
+
+    /** What one list write came back as, before its body is read. */
+    private sealed interface ListWriteResult {
+        /** A gate answered: nothing was sent, so nothing failed. */
+        data object Skipped : ListWriteResult
+
+        /** A request was accepted; [body] is the server's own report. */
+        data class Accepted(val body: Any?) : ListWriteResult
+
+        /** A request was attempted and did not land. */
+        data object Failed : ListWriteResult
+    }
+
+    /**
+     * The watchlist add/remove, with the tracker's whole failure contract.
+     *
+     * Same gates and same rules as [submitHistory] - unmapped is silent, a grant
+     * without `lists:write` is the needs-reapproval STATE (answering true, since
+     * nothing was attempted), 401 refreshes once, 429 parks, 403 converges, and
+     * success drops only this profile's BingeCat snapshot so the next Library
+     * open re-reads. The one difference is the question a success answers: an
+     * add is true when the title is on the watchlist afterwards (`added` OR
+     * `existing`), because a title that was already saved is not a failure - and
+     * the `not_found` case is, so the toggle reports it instead of painting a
+     * state the account does not have.
+     */
+    internal suspend fun submitSavedWrite(
+        add: Boolean,
+        kind: String,
+        batch: BingeCatSavedBatch,
+        label: String
+    ): Boolean {
+        if (batch.isEmpty) return false
+        return when (
+            val result = submitListWrite(label) { token, profileId ->
+                if (add) {
+                    service.addSavedItems("Bearer $token", profileId, kind, batch)
+                } else {
+                    service.removeSavedItems("Bearer $token", profileId, kind, batch)
+                }
+            }
+        ) {
+            ListWriteResult.Skipped -> true
+            ListWriteResult.Failed -> false
+            is ListWriteResult.Accepted ->
+                if (add) savedAddLanded(result.body) else true
+        }
+    }
+
+    /**
+     * One user list's add/remove, on the same contract as [submitSavedWrite].
+     *
+     * An add answers true when the list holds the title afterwards; the
+     * contract's `not_found` and `type_mismatch` arrays are the two ways a
+     * perfectly valid request still changes nothing, and both must read as a
+     * failed row rather than a silent one.
+     */
+    internal suspend fun submitListItemsWrite(
+        add: Boolean,
+        ref: String,
+        items: List<String>,
+        label: String
+    ): Boolean {
+        if (ref.isBlank() || items.isEmpty()) return false
+        return when (
+            val result = submitListWrite(label) { token, _ ->
+                val body = BingeCatListItemsWrite(items)
+                if (add) {
+                    service.addListItems("Bearer $token", ref, body)
+                } else {
+                    service.removeListItems("Bearer $token", ref, body)
+                }
+            }
+        ) {
+            ListWriteResult.Skipped -> true
+            ListWriteResult.Failed -> false
+            is ListWriteResult.Accepted ->
+                if (add) listItemsAddLanded(result.body) else true
+        }
+    }
+
+    /**
+     * One list-write request: the gates, the park, the refresh-once rule and the
+     * cache drop, shared by both routes.
+     *
+     * [request] performs the call on the mapped profile's own token, so no
+     * caller can address a list without pinning the profile it belongs to.
+     */
+    private suspend fun submitListWrite(
+        label: String,
+        request: suspend (token: String, profileId: Long) -> Response<*>?
+    ): ListWriteResult {
+        val mapped = if (isReady()) mappedProfileId() else null
+        if (mapped == null) return ListWriteResult.Skipped
+        if (!hasListsWriteScope()) {
+            // A step-1 or step-2 grant: saving is off until the viewer reconnects.
+            BingeCatTrace.recordNeedsReapproval(true)
+            Log.i(TAG, "list write skipped: grant has no ${BingeCatConfig.LISTS_WRITE_SCOPE} ($label)")
+            return ListWriteResult.Skipped
+        }
+        BingeCatTrace.recordNeedsReapproval(false)
+        val parkedMs = bingeCatWriteParkMs()
+        if (parkedMs > 0L) {
+            BingeCatTrace.recordListWriteFailure("429")
+            Log.i(TAG, "list write skipped: parked for ${parkedMs}ms after a 429 ($label)")
+            return ListWriteResult.Failed
+        }
+        BingeCatTrace.recordListWriteAttempt()
+        return try {
+            val token = ensureFreshToken()
+            if (token == null) {
+                BingeCatTrace.recordListWriteFailure("no-token")
+                Log.e(TAG, "list write skipped: no token ($label)")
+                return ListWriteResult.Failed
+            }
+            var response = request(token, mapped)
+            if (response == null) {
+                BingeCatTrace.recordListWriteFailure("network")
+                Log.e(TAG, "list write failed: network ($label)")
+                return ListWriteResult.Failed
+            }
+            if (response.code() == 401) {
+                val refreshed = ensureFreshToken(force = true)
+                if (refreshed != null) response = request(refreshed, mapped)
+                if (response == null) {
+                    BingeCatTrace.recordListWriteFailure("network")
+                    return ListWriteResult.Failed
+                }
+                if (response.code() == 401) {
+                    store.clear()
+                    cached = null
+                    BingeCatTrace.recordSession(false)
+                    BingeCatTrace.recordListWriteFailure("401")
+                    Log.e(TAG, "list write failed: 401 after refresh, session dropped ($label)")
+                    return ListWriteResult.Failed
+                }
+            }
+            when {
+                response.isSuccessful -> {
+                    // ONLY BingeCat's own snapshot: the next Library open re-reads
+                    // the watchlist and lists, which is what makes the toggle,
+                    // the suffix and the picker ticks reflect this write.
+                    cached = null
+                    BingeCatTrace.recordListWriteSuccess(listWriteResultLabel(response.body()))
+                    Log.i(TAG, "list write ok: $label ${listWriteResultLabel(response.body())}")
+                    ListWriteResult.Accepted(response.body())
+                }
+
+                noteBingeCatWriteRateLimit(
+                    response.code(),
+                    response.headers()["Retry-After"]
+                ) -> {
+                    BingeCatTrace.recordListWriteFailure("429")
+                    Log.w(TAG, "list write rate-limited: 429, leg parked ($label)")
+                    ListWriteResult.Failed
+                }
+
+                response.code() == 403 -> {
+                    BingeCatTrace.recordNeedsReapproval(true)
+                    BingeCatTrace.recordListWriteFailure("403-scope")
+                    Log.w(TAG, "list write refused: 403 scope, needs re-approval ($label)")
+                    ListWriteResult.Skipped
+                }
+
+                else -> {
+                    val body = runCatching { response.errorBody()?.string() }.getOrNull()
+                    BingeCatTrace.recordListWriteFailure("http:${response.code()}")
+                    Log.e(TAG, "list write failed: code=${response.code()} body=$body ($label)")
+                    ListWriteResult.Failed
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            BingeCatTrace.recordListWriteFailure(error.javaClass.simpleName)
+            Log.e(TAG, "list write error ($label): ${error.message}", error)
+            ListWriteResult.Failed
+        }
+    }
+
+    /** True when the watchlist add left the title saved (added OR already there). */
+    private fun savedAddLanded(body: Any?): Boolean = when (body) {
+        is BingeCatSavedAddResponse -> {
+            val added = body.added ?: BingeCatSavedCounts()
+            val existing = body.existing ?: BingeCatSavedCounts()
+            added.movies + added.shows + existing.movies + existing.shows > 0
+        }
+        // A 201 with no body still means the server accepted the batch.
+        else -> true
+    }
+
+    /** True when the list holds the title afterwards (added OR already listed). */
+    private fun listItemsAddLanded(body: Any?): Boolean = when (body) {
+        is BingeCatListItemsAdded -> !body.unchangedAndAbsent
+        else -> true
+    }
+
+    /** What a list write says it changed, for the log line and diagnostics. */
+    private fun listWriteResultLabel(body: Any?): String = when (body) {
+        is BingeCatSavedAddResponse -> {
+            val added = body.added ?: BingeCatSavedCounts()
+            val existing = body.existing ?: BingeCatSavedCounts()
+            "saved=${added.movies}m/${added.shows}s existing=${existing.movies}m/${existing.shows}s" +
+                " unresolved=${body.notFound?.total ?: 0}"
+        }
+
+        is BingeCatSavedRemoveResponse -> {
+            val deleted = body.deleted ?: BingeCatSavedCounts()
+            "unsaved=${deleted.movies}m/${deleted.shows}s" +
+                " unresolved=${body.notFound?.total ?: 0}"
+        }
+
+        is BingeCatListItemsAdded ->
+            "items added=${body.added.size} existing=${body.existing.size}" +
+                " not_found=${body.notFound.size} type_mismatch=${body.typeMismatch.size}"
+
+        is BingeCatListItemsRemoved ->
+            "items removed=${body.removed.size} not_found=${body.notFound.size}"
+
+        else -> ""
+    }
 
     /** What a committed batch says it wrote, for the log line and diagnostics. */
     private fun writeResultLabel(body: Any?): String = when (body) {

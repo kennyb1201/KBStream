@@ -87,10 +87,12 @@ class BingeCatTrackerContractTest {
             submit.substring(gate2, request).contains("return true")
         )
         assertTrue(
-            "only a connected, mapped profile needs re-approval",
+            "only a connected, mapped profile needs re-approval - and EITHER missing " +
+                "write scope counts, because one reconnect fixes both (a step-2 grant has " +
+                "history:write and not lists:write)",
             squash(repository).contains(
                 "fun needsReapproval(): Boolean = isConfigured() && hasToken() && " +
-                    "mappedProfileId() != null && !hasWriteScope()"
+                    "mappedProfileId() != null && (!hasWriteScope() || !hasListsWriteScope())"
             )
         )
     }

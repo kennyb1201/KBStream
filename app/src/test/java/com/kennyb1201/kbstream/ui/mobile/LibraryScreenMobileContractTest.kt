@@ -242,9 +242,10 @@ class LibraryScreenMobileContractTest {
             "LibrarySource.TRAKT_LIST",
             "LibrarySource.SIMKL_WATCHLIST",
             "LibrarySource.SIMKL_LIST",
-            // BingeCat is read-only, so its branch deliberately adds no
-            // action - the menu still has to NAME the sources rather than fall
-            // through an omitted case.
+            // Step 3 gives BingeCat a watchlist and a list remove; its saved
+            // list stays read-only and deliberately adds no action - the menu
+            // still has to NAME every source rather than fall through an
+            // omitted case.
             "LibrarySource.BINGECAT_WATCHLIST",
             "LibrarySource.BINGECAT_SAVED",
             "LibrarySource.BINGECAT_LIST"

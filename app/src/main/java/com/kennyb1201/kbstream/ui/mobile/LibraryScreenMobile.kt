@@ -593,7 +593,10 @@ fun LibraryScreenMobile(
                         when (item.source) {
                             LibrarySource.LOCAL,
                             LibrarySource.MDBLIST_WATCHLIST,
-                            LibrarySource.TRAKT_WATCHLIST -> add(
+                            LibrarySource.TRAKT_WATCHLIST,
+                            // Step 3 gives BingeCat a watchlist remove, so the
+                            // phone's menu offers it like the TV's.
+                            LibrarySource.BINGECAT_WATCHLIST -> add(
                                 PosterContextAction(
                                     label = "Remove from Library",
                                     description =
@@ -608,7 +611,8 @@ fun LibraryScreenMobile(
 
                             LibrarySource.LOCAL_LIST,
                             LibrarySource.MDBLIST_LIST,
-                            LibrarySource.TRAKT_LIST -> add(
+                            LibrarySource.TRAKT_LIST,
+                            LibrarySource.BINGECAT_LIST -> add(
                                 PosterContextAction(
                                     label = "Remove from this list",
                                     description = item.listName?.let {
@@ -622,10 +626,9 @@ fun LibraryScreenMobile(
                                 }
                             )
 
-                            // BingeCat is read-only: no remove, no link out.
-                            LibrarySource.BINGECAT_WATCHLIST,
-                            LibrarySource.BINGECAT_SAVED,
-                            LibrarySource.BINGECAT_LIST -> Unit
+                            // BingeCat's saved list (favorites) stays read-only,
+                            // and no BingeCat row has a link out.
+                            LibrarySource.BINGECAT_SAVED -> Unit
 
                             LibrarySource.SIMKL_WATCHLIST,
                             LibrarySource.SIMKL_LIST -> {

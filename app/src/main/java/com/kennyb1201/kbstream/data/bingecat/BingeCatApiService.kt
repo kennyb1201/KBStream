@@ -6,6 +6,7 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -108,6 +109,56 @@ interface BingeCatApiService {
         @Path("profileId") profileId: Long,
         @Body body: BingeCatHistoryBatch
     ): Response<BingeCatHistoryRemoveResponse>
+
+    /**
+     * The watchlist add (`lists:write`): "Add or restore profile Favorites or
+     * Watchlist items" (step 3's Q2b answer - the per-title add is a batch, the
+     * single-item PUT only updates rank/notes). Profile-pinned like every other
+     * call in this interface.
+     */
+    @POST("api/v1/profiles/{profileId}/sync/{kind}")
+    suspend fun addSavedItems(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        /** `watchlist` or `favorites`. */
+        @Path("kind") kind: String,
+        @Body body: BingeCatSavedBatch
+    ): Response<BingeCatSavedAddResponse>
+
+    /** The watchlist removal (`lists:write`), the add's mirror and also pinned. */
+    @POST("api/v1/profiles/{profileId}/sync/{kind}/remove")
+    suspend fun removeSavedItems(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        @Path("kind") kind: String,
+        @Body body: BingeCatSavedBatch
+    ): Response<BingeCatSavedRemoveResponse>
+
+    /**
+     * One user list's add (`lists:write`): the list is addressed by the typed
+     * `ref` its own read returned (`internal:12`, ...), never by a name, and the
+     * body is a list of media-reference strings (step 3's Q2a answer).
+     */
+    @POST("api/v1/lists/{ref}/items")
+    suspend fun addListItems(
+        @Header("Authorization") authorization: String,
+        @Path("ref") ref: String,
+        @Body body: BingeCatListItemsWrite
+    ): Response<BingeCatListItemsAdded>
+
+    /**
+     * One user list's removal (`lists:write`).
+     *
+     * Declared with `@HTTP` rather than `@DELETE` because the request carries a
+     * body: the contract's DELETE takes the same `ListItemsWriteRequest`, and
+     * Retrofit's `@DELETE` has no body parameter at all.
+     */
+    @HTTP(method = "DELETE", path = "api/v1/lists/{ref}/items", hasBody = true)
+    suspend fun removeListItems(
+        @Header("Authorization") authorization: String,
+        @Path("ref") ref: String,
+        @Body body: BingeCatListItemsWrite
+    ): Response<BingeCatListItemsRemoved>
 
     /** The watched timeline, cursor-paged (`next_cursor`). */
     @GET("api/v1/profiles/{profileId}/history")

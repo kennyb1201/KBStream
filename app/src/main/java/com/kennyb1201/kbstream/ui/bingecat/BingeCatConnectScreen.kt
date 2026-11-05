@@ -113,10 +113,17 @@ fun BingeCatConnectScreen(
             ) {
                 KBPageTitle(text = "BINGECAT", color = KBAccent)
 
+                // Both write directions are disclosed, because the grant now
+                // carries both: what KBStream sends is what the viewer is
+                // approving, and "records what you watch" alone would leave the
+                // saving half of the connection unmentioned.
                 Text(
                     text = "Reads your BingeCat watchlist, saved list, lists, and watched " +
                         "history for the profile you pick, and records what you watch there - " +
-                        "finished plays and the titles you mark watched or unwatched.",
+                        "finished plays and the titles you mark watched or unwatched. It " +
+                        "can also save and unsave titles: the Library button adds a title " +
+                        "to that profile's watchlist, and the add-to-list dialog adds to " +
+                        "and removes from its lists.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -145,16 +152,19 @@ fun BingeCatConnectScreen(
 
                     uiState.isConnected && uiState.isMapped -> {
                         if (uiState.needsReapproval) {
-                            // A grant issued under step 1's three read scopes.
-                            // Tracking cannot write with it, and no retry can
-                            // change that: the fix is a fresh approval (the
-                            // mapping and cached rows survive it).
+                            // A grant issued under fewer scopes than KBStream
+                            // now asks for (step 1's reads, or step 2's
+                            // reads + history:write). Writing cannot work with
+                            // it, and no retry can change that: the fix is a
+                            // fresh approval (the mapping and cached rows
+                            // survive it).
                             BingeCatPanel(
-                                title = "Tracking needs a reconnect",
-                                message = "BingeCat tracking is off - this connection was " +
-                                    "approved before KBStream asked to record plays. " +
-                                    "Reconnect to let KBStream record what you watch; your " +
-                                    "profile choice and cached rows are kept."
+                                title = "Writing needs a reconnect",
+                                message = "Part of BingeCat is off - this connection was " +
+                                    "approved before KBStream asked to record plays and to " +
+                                    "save titles to your watchlist and lists. Reconnect to " +
+                                    "let KBStream record what you watch and save what you " +
+                                    "add; your profile choice and cached rows are kept."
                             )
                         } else {
                             BingeCatPanel(

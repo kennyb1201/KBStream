@@ -41,23 +41,37 @@ object BingeCatConfig {
     const val ACTIVATE_URL = "https://bingecat.com/activate"
 
     /**
-     * Step 2's scopes: read the profile list (to file the mapping), read lists
-     * (watchlist, saved list, user lists), read history - and now WRITE history.
+     * Every scope the roadmap asks for: read the profile list (to file the
+     * mapping), read lists (watchlist, saved list, user lists), read history,
+     * write history, and now write lists.
      *
-     * `history:write` is what turns the connection into a tracker: completion
-     * scrobbles and the mark-as-watched/unwatched mirror write to the mapped
-     * profile. `lists:write`, `settings:read` and `search:read` stay out, at
-     * every scope of the roadmap.
+     * `history:write` is what turns the connection into a tracker (completion
+     * scrobbles and the mark-as-watched/unwatched mirror); `lists:write` is what
+     * lets the Library button save and unsave a title on the profile's watchlist
+     * and user lists. `settings:read` and `search:read` stay out at every scope
+     * of the roadmap.
      *
      * Widening this string does NOT widen an existing grant: OAuth never adds a
      * scope silently, so a viewer who connected under step 1 keeps a read-only
-     * token until they reconnect (see [BingeCatWriteRules.hasWriteScope] and the
-     * connect screen's re-connect prompt).
+     * token, and one who connected under step 2 keeps a token that cannot save -
+     * until they reconnect (see [BingeCatWriteRules.hasWriteScope] and
+     * [BingeCatWriteRules.hasListsWriteScope], and the connect screen's
+     * re-connect prompt).
      */
-    const val SCOPES = "profiles:read lists:read history:read history:write"
+    const val SCOPES =
+        "profiles:read lists:read history:read history:write lists:write"
 
     /** The write scope the tracker's gates check for on the stored grant. */
     const val WRITE_SCOPE = "history:write"
+
+    /**
+     * The scope saving needs: the watchlist and user-list writes (step 3).
+     *
+     * A separate name from [WRITE_SCOPE] because the two legs fail
+     * independently: a step-2 grant can scrobble and cannot save, and a gate
+     * that asked for "the write scope" would be wrong for one of them.
+     */
+    const val LISTS_WRITE_SCOPE = "lists:write"
 
     /**
      * The scope whose absence from the developer app breaks the most of v1,

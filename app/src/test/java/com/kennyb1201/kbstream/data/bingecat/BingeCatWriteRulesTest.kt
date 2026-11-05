@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.bingecat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -153,5 +155,68 @@ class BingeCatWriteRulesTest {
         assertFalse(noteBingeCatWriteRateLimit(401, "60"))
         assertFalse(noteBingeCatWriteRateLimit(403, "60"))
         assertFalse(noteBingeCatWriteRateLimit(500, null))
+    }
+
+    @Test
+    fun `saving has its own scope gate, and a step-2 grant fails it`() {
+        assertTrue(
+            "the scope line asks for it, so a fresh grant can save",
+            BingeCatWriteRules.hasListsWriteScope(BingeCatConfig.SCOPES)
+        )
+        assertTrue(BingeCatWriteRules.hasListsWriteScope("lists:read lists:write"))
+        assertTrue(
+            "a comma-separated echo is parsed the same way",
+            BingeCatWriteRules.hasListsWriteScope("lists:read,lists:write")
+        )
+        assertFalse(
+            "the step-2 grant has history:write and not lists:write: saving is off " +
+                "until the viewer reconnects",
+            BingeCatWriteRules.hasListsWriteScope("lists:read history:read history:write")
+        )
+        assertFalse("a prefix is not the scope", BingeCatWriteRules.hasListsWriteScope("lists:writes"))
+        assertFalse(BingeCatWriteRules.hasListsWriteScope(null))
+        assertTrue(
+            "and the two gates do not borrow each other: the same step-2 grant still " +
+                "scrobbles",
+            BingeCatWriteRules.hasWriteScope("lists:read history:read history:write")
+        )
+    }
+
+    @Test
+    fun `a list write names the title by ONE media reference`() {
+        // The contract's own grammar for /lists/{ref}/items items: `imdb:tt…`,
+        // `tmdb:movie:N`, `tmdb:show:N` (or a BingeCat id/slug, which this app
+        // never sends). A bare number would be read as a BingeCat id.
+        assertEquals(
+            "IMDb is preferred: unique without carrying a type",
+            "imdb:tt0113277",
+            BingeCatWriteRules.mediaRef("tt0113277", null, isMovie = true)
+        )
+        assertEquals(
+            "and still preferred when a TMDB id is known too",
+            "imdb:tt0113277",
+            BingeCatWriteRules.mediaRef("tt0113277", 603, isMovie = false)
+        )
+        assertEquals(
+            "the typed TMDB form is the fallback - and the type is in the string",
+            "tmdb:movie:603",
+            BingeCatWriteRules.mediaRef("tmdb:603", 603, isMovie = true)
+        )
+        assertEquals(
+            "series get the show form, not the movie one",
+            "tmdb:show:1399",
+            BingeCatWriteRules.mediaRef("tmdb:1399", 1399, isMovie = false)
+        )
+        assertEquals(
+            "a bare TMDB id from the session is enough to build one",
+            "tmdb:movie:603",
+            BingeCatWriteRules.mediaRef("", 603, isMovie = true)
+        )
+        assertNull(
+            "a bare number is a BingeCat id, so it is not sent as a reference",
+            BingeCatWriteRules.mediaRef("603", null, isMovie = true)
+        )
+        assertNull("a slug is not something this app sends", BingeCatWriteRules.mediaRef("some-slug", null, isMovie = true))
+        assertNull(BingeCatWriteRules.mediaRef("", null, isMovie = true))
     }
 }

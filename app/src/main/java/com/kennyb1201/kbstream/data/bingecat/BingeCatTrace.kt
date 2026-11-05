@@ -54,6 +54,25 @@ object BingeCatTrace {
     @Volatile
     private var needsReapproval: Boolean = false
 
+    // ── List writes (step 3) ──────────────────────────────────────────
+    //
+    // Counted apart from the history writes for the same reason those are
+    // counted apart from the reads: the two legs hold different scopes, so
+    // "saving is broken" and "scrobbling is broken" are different reports and a
+    // shared counter would merge them into one number that explains neither.
+
+    @Volatile
+    private var listWritesAttempted: Int = 0
+
+    @Volatile
+    private var listWritesSucceeded: Int = 0
+
+    @Volatile
+    private var lastListWriteError: String = NONE
+
+    @Volatile
+    private var lastListWriteDetail: String = NONE
+
     fun recordSession(connected: Boolean) {
         this.connected = connected
     }
@@ -103,6 +122,29 @@ object BingeCatTrace {
         lastWriteError = kind
     }
 
+    /** A list write that reached the network (or should have). */
+    fun recordListWriteAttempt() {
+        listWritesAttempted += 1
+    }
+
+    /** A committed list write, with the server's own counts and refusals. */
+    fun recordListWriteSuccess(detail: String) {
+        listWritesSucceeded += 1
+        lastListWriteError = NONE
+        lastListWriteDetail = detail.ifBlank { NONE }
+    }
+
+    /**
+     * A list write that did not commit.
+     *
+     * @param kind one of `401`, `429`, `403-scope`, `network`, `no-token`,
+     * `http:<code>`, or a failure class name - the same vocabulary the history
+     * writes use, so a report can be read the same way for either leg
+     */
+    fun recordListWriteFailure(kind: String) {
+        lastListWriteError = kind
+    }
+
     /** The needs-reapproval state a step-1 grant (or a 403) puts the tracker in. */
     fun recordNeedsReapproval(needed: Boolean) {
         needsReapproval = needed
@@ -121,6 +163,9 @@ object BingeCatTrace {
                 " writes=$writesAttempted/$writesSucceeded " +
                 "last_write_error=$lastWriteError " +
                 "last_write=$lastWriteDetail " +
+                "list_writes=$listWritesAttempted/$listWritesSucceeded " +
+                "last_list_write_error=$lastListWriteError " +
+                "last_list_write=$lastListWriteDetail " +
                 "needs_reapproval=${if (needsReapproval) "yes" else "no"}"
         )
     }
@@ -136,6 +181,10 @@ object BingeCatTrace {
         writesSucceeded = 0
         lastWriteError = NONE
         lastWriteDetail = NONE
+        listWritesAttempted = 0
+        listWritesSucceeded = 0
+        lastListWriteError = NONE
+        lastListWriteDetail = NONE
         needsReapproval = false
     }
 }

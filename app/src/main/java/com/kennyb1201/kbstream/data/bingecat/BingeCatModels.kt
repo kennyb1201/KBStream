@@ -281,6 +281,107 @@ data class BingeCatUnresolvedRef(
     @Json(name = "id") val id: Long? = null
 )
 
+// ── List writes (step 3) ───────────────────────────────────
+//
+// Resolved against the live contract (2026-11-05), which answers the spec's
+// two open questions:
+//
+//  - **Q2b: the watchlist IS writable per-item.** `POST
+//    /api/v1/profiles/{profile_id}/sync/{kind}` ("Add or restore profile
+//    Favorites or Watchlist items") and its `.../remove` sibling take the same
+//    [BingeCatSavedBatch] shape the history writes do. The spec's candidate (a)
+//    - the single-item PUT, whose body is rank/notes only - is the update of an
+//    existing entry, and the spec's worry about it was right; the add is this
+//    batch.
+//  - **Q2a: a list item is a MEDIA REFERENCE STRING**, not a TMDB integer:
+//    `/lists/{ref}/items` takes `items: string[]`, and the contract defines its
+//    ref grammar (`imdb:tt…`, `tmdb:movie:N`, `tmdb:show:N`, `tvdb:N`). See
+//    [BingeCatWriteRules.mediaRef] for which form this app sends.
+//
+// Both routes are guarded by `lists:write` (the same scope as the list-item
+// writes), so one gate covers the whole step.
+
+/**
+ * The watchlist add body: titles to add or restore.
+ *
+ * A null list is absent on the wire, so an empty batch cannot be sent as two
+ * empty arrays (see [isEmpty]).
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedBatch(
+    val movies: List<BingeCatSavedMovie>? = null,
+    val shows: List<BingeCatSavedShow>? = null
+) {
+    val isEmpty: Boolean get() = movies.isNullOrEmpty() && shows.isNullOrEmpty()
+}
+
+/** One movie for the watchlist, identified the same way a history write is. */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedMovie(val ids: BingeCatIds)
+
+/** One show for the watchlist. */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedShow(val ids: BingeCatIds)
+
+/** `SavedListAddResponse`: committed, already there, and unresolved counts. */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedAddResponse(
+    val added: BingeCatSavedCounts? = null,
+    val existing: BingeCatSavedCounts? = null,
+    @Json(name = "not_found") val notFound: BingeCatNotFoundSelection? = null
+)
+
+/** `SavedListRemoveResponse`: what the removal deleted, and what it missed. */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedRemoveResponse(
+    val deleted: BingeCatSavedCounts? = null,
+    @Json(name = "not_found") val notFound: BingeCatNotFoundSelection? = null
+)
+
+/** The watchlist counts. A watchlist holds titles, so movies and shows only. */
+@JsonClass(generateAdapter = true)
+data class BingeCatSavedCounts(
+    val movies: Int = 0,
+    val shows: Int = 0
+)
+
+/** `ListItemsWriteRequest`: the media references to add or remove. */
+@JsonClass(generateAdapter = true)
+data class BingeCatListItemsWrite(val items: List<String>)
+
+/**
+ * `ListItemsAdded`: what the list took, already had, could not resolve, and
+ * what it refused because the type disagreed (a show sent to a movie list).
+ *
+ * The three arrays are the write's own verdict - the picker's row reports the
+ * boolean, and these are what the log and diagnostics name.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatListItemsAdded(
+    val added: List<String> = emptyList(),
+    val existing: List<String> = emptyList(),
+    @Json(name = "not_found") val notFound: List<String> = emptyList(),
+    @Json(name = "type_mismatch") val typeMismatch: List<String> = emptyList(),
+    @Json(name = "item_count") val itemCount: Int = 0
+) {
+    /**
+     * True when the title is NOT on the list after this call: every ref was
+     * either unresolvable or refused for its type. An `existing` ref counts as
+     * success - asking for a title the list already holds leaves the viewer's
+     * intent satisfied, and a row that said "failed" there would be wrong.
+     */
+    val unchangedAndAbsent: Boolean
+        get() = added.isEmpty() && existing.isEmpty()
+}
+
+/** `ListItemsRemoved`: what left the list, and what was not in it. */
+@JsonClass(generateAdapter = true)
+data class BingeCatListItemsRemoved(
+    val removed: List<String> = emptyList(),
+    @Json(name = "not_found") val notFound: List<String> = emptyList(),
+    @Json(name = "item_count") val itemCount: Int = 0
+)
+
 /** A device-code request's body. Public client: no `client_secret`. */
 @JsonClass(generateAdapter = true)
 data class BingeCatDeviceCodeRequest(

@@ -480,13 +480,53 @@ class LibraryViewModel(
                 // Simkl: add-only; no remove path exists on the API.
                 LibrarySource.SIMKL_WATCHLIST, LibrarySource.SIMKL_LIST -> Unit
 
-                // BingeCat: read-only by scope (v1 has no lists:write and no
-                // history:write), so its rows deliberately offer no remove.
-                // The Library draws no action for them either; this branch is
-                // what keeps that absence a decision rather than a missing case.
-                LibrarySource.BINGECAT_WATCHLIST,
-                LibrarySource.BINGECAT_SAVED,
-                LibrarySource.BINGECAT_LIST -> Unit
+                LibrarySource.BINGECAT_WATCHLIST -> {
+                    // Step 3 gives BingeCat a watchlist remove, so the Library's
+                    // own remove drops the BingeCat copy like every other
+                    // tracker's. A local-only delete would be re-merged from
+                    // BingeCat's rows on the next refresh.
+                    runCatchingCancellable {
+                        bingecatRepository.removeFromWatchlist(
+                            isMovie = LocalLibraryStore.normalizedType(item.mediaType) == "movie",
+                            imdbId = item.imdbId,
+                            tmdbId = item.tmdbId
+                        )
+                    }.onFailure {
+                        Log.w(TAG, "BingeCat watchlist removal failed: ${it.message}")
+                    }
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalWatchlist = canonicalWatchlist.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    recomputeAll()
+                }
+
+                LibrarySource.BINGECAT_LIST -> {
+                    // Addressed by the list's typed ref, which the item carries
+                    // from the read that produced it (`BingecatShelfId` only
+                    // names the shelf).
+                    val listRef = item.listRemoteId ?: return@launch
+                    runCatchingCancellable {
+                        bingecatRepository.removeFromList(
+                            ref = listRef,
+                            isMovie = LocalLibraryStore.normalizedType(item.mediaType) == "movie",
+                            imdbId = item.imdbId,
+                            tmdbId = item.tmdbId
+                        )
+                    }.onFailure {
+                        Log.w(TAG, "BingeCat list removal failed: ${it.message}")
+                    }
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalListItems = canonicalListItems.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    pushDisplay()
+                }
+
+                // BingeCat's saved list (favorites) stays read-only: step 3
+                // adds the watchlist and the user lists, not BingeCat's own
+                // favorites, so there is no remove to offer there.
+                LibrarySource.BINGECAT_SAVED -> Unit
             }
         }
     }

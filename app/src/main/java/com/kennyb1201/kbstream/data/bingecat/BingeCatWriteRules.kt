@@ -13,7 +13,15 @@ import java.time.temporal.ChronoUnit
  *  - **The stored grant must carry `history:write`.** A step-1 token carries
  *    only the three read scopes, and a write attempted on it would earn a 403
  *    that reads like a failure; the absence is a state ("reconnect"), not an
- *    error (spec F3's gate 2).
+ *    error (spec F3's gate 2). Saving has the same gate for `lists:write`, and
+ *    each leg asks for its own scope because a step-2 grant has one and not
+ *    the other.
+ *  - **A list write names the title by ONE media reference**, because
+ *    `/lists/{ref}/items` takes strings rather than an `ids` object: the
+ *    contract's own `MediaRef` grammar (`imdb:tt…`, `tmdb:movie:N`,
+ *    `tmdb:show:N`, `tvdb:N`). IMDb wins when this app knows it - it is
+ *    unique without a type - and the typed TMDB form is the fallback, never a
+ *    bare TMDB id, which the grammar does not accept.
  *  - **At least one locally resolvable identifier**, and both when both are
  *    known: BingeCat's `MediaIds` refuses a body with neither, and an app id
  *    that is neither `tt…` nor `tmdb:…` cannot be translated into one.
@@ -39,11 +47,24 @@ object BingeCatWriteRules {
      * server that echoes commas must not read as a missing scope) and strictly
      * on the value: only an exact `history:write` counts, never a substring.
      */
-    fun hasWriteScope(scope: String?): Boolean =
+    fun hasWriteScope(scope: String?): Boolean = grants(scope, WRITE_SCOPE)
+
+    /**
+     * Whether [scope] allows the list/watchlist writes (step 3).
+     *
+     * Its own gate for the reason its own constant exists: the saving leg and
+     * the history leg are approved separately, so a grant can hold one and not
+     * the other and neither gate may borrow the other's answer.
+     */
+    fun hasListsWriteScope(scope: String?): Boolean =
+        grants(scope, BingeCatConfig.LISTS_WRITE_SCOPE)
+
+    /** [scope] as a set, parsed leniently on separators but exactly on values. */
+    private fun grants(scope: String?, wanted: String): Boolean =
         scope.orEmpty()
             .split(' ', ',', '\t', '\n')
             .map { it.trim() }
-            .any { it == WRITE_SCOPE }
+            .any { it == wanted }
 
     /**
      * The ids to send for one title, or null when this app cannot name it.
@@ -69,6 +90,35 @@ object BingeCatWriteRules {
     /** The completion instant, as the contract's `date-time`. */
     fun watchedAt(nowMs: Long = System.currentTimeMillis()): String =
         Instant.ofEpochMilli(nowMs).truncatedTo(ChronoUnit.SECONDS).toString()
+
+    private val TMDB_ID_ONLY = Regex("^tmdb:([0-9]+)$")
+
+    /**
+     * The one media reference a list write names this title by, or null when it
+     * cannot be named.
+     *
+     * `/lists/{ref}/items` takes `items: string[]`, and the contract defines a
+     * local media reference as "A BingeCat ID, slug, `imdb:tt…`, `tmdb:movie:N`,
+     * `tmdb:show:N` or `tvdb:N`" - so a bare TMDB id is NOT one, and would be
+     * read as a BingeCat id. IMDb is sent first when known: it is unique without
+     * carrying a type, while the TMDB form is only as right as [isMovie].
+     *
+     * [parentId] is the app's own spelling (`tt1234567` or `tmdb:12345`), and
+     * [tmdbId] the session's resolved TMDB id when it has one.
+     */
+    fun mediaRef(parentId: String, tmdbId: Int? = null, isMovie: Boolean): String? {
+        val trimmed = parentId.trim()
+        val imdb = trimmed.takeIf { IMDB.matches(it) }
+        if (imdb != null) return "imdb:$imdb"
+        val tmdb = tmdbId?.takeIf { it > 0 } ?: tmdbOf(trimmed) ?: return null
+        return "tmdb:${if (isMovie) "movie" else "show"}:$tmdb"
+    }
+
+    private fun tmdbOf(parentId: String): Int? = when {
+        TMDB_ID_ONLY.matches(parentId) -> TMDB_ID_ONLY.find(parentId)?.groupValues?.get(1)
+        parentId.startsWith(TMDB_PREFIX) -> parentId.removePrefix(TMDB_PREFIX)
+        else -> null
+    }?.toIntOrNull()?.takeIf { it > 0 }
 }
 
 /**

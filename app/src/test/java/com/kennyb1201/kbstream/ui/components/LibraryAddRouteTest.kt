@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.components
 
+import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.traktListShelfId
@@ -118,6 +119,55 @@ class LibraryAddRouteTest {
         assertEquals(
             LibraryAddRoute.Unroutable,
             libraryAddRoute(row(list = traktList(remoteId = "")))
+        )
+    }
+
+    @Test
+    fun `the BingeCat watchlist row goes to the BingeCat watchlist`() {
+        assertEquals(
+            "a BingeCat save is wired to the row's flag, not to its placeholder list",
+            LibraryAddRoute.BingeCatWatchlist,
+            libraryAddRoute(
+                LibraryPickerRow(isBingeCatWatchlist = true, list = list(-3))
+            )
+        )
+    }
+
+    @Test
+    fun `a BingeCat list routes by its typed ref, not its negative shelf id`() {
+        // `/lists/{ref}/items` is addressed by the ref the lists read returned
+        // (`internal:12`), which is the only name the server accepts.
+        assertEquals(
+            LibraryAddRoute.BingeCatList("internal:12"),
+            libraryAddRoute(
+                LibraryPickerRow(
+                    list = LibraryList(
+                        id = bingecatShelfId(0),
+                        name = "Watch later",
+                        itemCount = 0,
+                        source = LibrarySource.BINGECAT_LIST,
+                        remoteId = "internal:12"
+                    )
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `a BingeCat list with no ref is unroutable`() {
+        assertEquals(
+            LibraryAddRoute.Unroutable,
+            libraryAddRoute(
+                LibraryPickerRow(
+                    list = LibraryList(
+                        id = bingecatShelfId(1),
+                        name = "No ref",
+                        itemCount = 0,
+                        source = LibrarySource.BINGECAT_LIST,
+                        remoteId = ""
+                    )
+                )
+            )
         )
     }
 

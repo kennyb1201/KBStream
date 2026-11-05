@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.library
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -64,6 +65,18 @@ object LibraryMirror {
         val trakt = TraktRepository.getInstance(context)
         return trakt.isConfigured() && trakt.hasToken()
     }
+
+    /**
+     * BingeCat can save: connected, mapped to a profile, and granted
+     * `lists:write` (step 3).
+     *
+     * Deliberately [BingeCatRepository.canSave] and not "has a token": a
+     * connected-but-unmapped BingeCat has nowhere to put the title, and a
+     * step-1/2 grant would earn a 403. Neither is a mirror this app should
+     * promise in the add row or fire after a save.
+     */
+    fun bingeCatConnected(context: Context): Boolean =
+        BingeCatRepository.getInstance(context).canSave()
 
     /** The id triple shared by every entry point. */
     data class TitleRef(
@@ -300,6 +313,33 @@ object LibraryMirror {
             }
         }
 
+        // BingeCat's watchlist copy, on the same load-bearing rule: a copy left
+        // behind is a title the Library merge would bring back a moment later
+        // (see this function's doc). Skipped entirely when this device cannot
+        // save - an unmapped profile or a grant without `lists:write` must not
+        // turn a local remove into a 403.
+        if (bingeCatConnected(context)) {
+            val isMovie = type == "movie"
+            if (imdbId != null || tmdbId != null) {
+                mirrorScope.launch {
+                    runCatchingCancellable {
+                        BingeCatRepository.getInstance(context).removeFromWatchlist(
+                            isMovie = isMovie,
+                            imdbId = imdbId,
+                            tmdbId = tmdbId,
+                            title = label
+                        )
+                    }.onFailure { e ->
+                        Log.e(
+                            TAG,
+                            "bingecat removeFromWatchlist failed for $label: ${e.message}",
+                            e
+                        )
+                    }
+                }
+            }
+        }
+
         // Simkl has no remove-from-watchlist endpoint (only add-to-list
         // moves between statuses), so Simkl rows are add-only.
     }
@@ -395,6 +435,22 @@ object LibraryMirror {
                     )
                 }.onFailure { e ->
                     Log.e(TAG, "trakt mirror failed: ${e.message}", e)
+                }
+            }
+
+            // BingeCat's watchlist, on the same fire-and-forget rule: it is a
+            // mirror, so a rejected or parked write must not undo or block the
+            // local save that already happened above.
+            if (bingeCatConnected(context)) {
+                runCatchingCancellable {
+                    BingeCatRepository.getInstance(context).addToWatchlist(
+                        isMovie = r.normalizedType == "movie",
+                        imdbId = r.imdbId,
+                        tmdbId = r.tmdbId,
+                        title = r.title
+                    )
+                }.onFailure { e ->
+                    Log.e(TAG, "bingecat mirror failed: ${e.message}", e)
                 }
             }
         }

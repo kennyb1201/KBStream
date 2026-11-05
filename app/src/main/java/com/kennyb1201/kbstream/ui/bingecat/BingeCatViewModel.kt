@@ -59,14 +59,18 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
             isConnected = connected,
             isMapped = mappedId != null,
             // Only a connected AND mapped profile can be "needs re-approval";
-            // the repository's own rule, so the screen and the write gate can
-            // never disagree about when tracking is off.
+            // the repository's own rule, so the screen and the write gates can
+            // never disagree about when writing is off.
             needsReapproval = connected && mappedId != null && repository.needsReapproval(),
             mappedProfileId = mappedId,
             mappedProfileName = if (mappedId != null) repository.mappedProfileName() else null,
             statusMessage = when {
                 connected && mappedId != null && repository.needsReapproval() ->
-                    "BingeCat tracking is off: this grant predates the write scope."
+                    // Not "tracking is off": a step-2 grant records plays and
+                    // cannot save (and a step-1 grant can do neither), so the
+                    // line names the thing both gates share.
+                    "BingeCat writing is off: this grant was approved before a " +
+                        "write scope KBStream needs now."
                 connected -> "Connected to BingeCat."
                 else -> null
             }
