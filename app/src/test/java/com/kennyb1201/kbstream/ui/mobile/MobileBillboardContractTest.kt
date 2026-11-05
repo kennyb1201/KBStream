@@ -141,6 +141,38 @@ class MobileBillboardContractTest {
         assertTrue(home.contains("viewModel.clearBillboard()"))
     }
 
+    @Test
+    fun `a picked app-built rail can actually reach the hero`() {
+        val home = mobileHome()
+        val feedKey = home.substring(
+            home.indexOf("private fun Rail.billboardFeedKey()"),
+            home.indexOf("private fun UpNextItem.billboardPreview()")
+        )
+
+        // Field 2026-11-05: picking "Top Kids Movies" (or either Top Today row)
+        // changed nothing. The picker offers those rows - they are the app's own
+        // built-ins - and this lookup named none of them: an app-built rail has
+        // no manifest, so every other branch fell through to null and the slot
+        // fell back to trending.
+        assertTrue(
+            "the built-in key is the arrangement key, so it has to be consulted " +
+                "FIRST - an app-built rail has neither a custom id nor a base URL",
+            feedKey.contains(
+                "KBHomeOrderPrefs.builtinKeyForCatalogId(catalogId)?.let { return it }"
+            )
+        )
+        assertTrue(
+            "and before the custom-catalog and add-on spellings, so a rail that " +
+                "has both keys by the built-in one the picker chips",
+            feedKey.indexOf("builtinKeyForCatalogId(catalogId)") in 0 until
+                feedKey.indexOf("customCatalogKey(customId)")
+        )
+        assertTrue(
+            "an add-on catalog keeps its manifest key",
+            feedKey.contains("KBHomeOrderPrefs.addonKey(base, type, catalogId)")
+        )
+    }
+
     // ── motion ──────────────────────────────────────────────────────────
 
     @Test

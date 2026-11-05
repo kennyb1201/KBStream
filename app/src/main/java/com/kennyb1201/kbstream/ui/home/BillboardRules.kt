@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import kotlin.random.Random
 
 /*
  * The phone Home billboard's rules, as pure functions.
@@ -135,6 +136,46 @@ internal fun TmdbDiscoverItem.toBillboardPreview(railType: String): MetaPreview 
     )
 
 /**
+ * The billboard's pages drawn at RANDOM from every selected source's full pool.
+ *
+ * The pools are far larger than the pager: a kids profile's six rails hold up to
+ * the pinned target each, and taking the first ten in rail order meant the SAME
+ * ten on every visit - the rest of every selected row never reached the hero
+ * (field 2026-11-05: "it should cycle through all the titles from the rails
+ * selected, randomly"). The draw is a partial Fisher-Yates shuffle, so one visit
+ * cannot repeat a title and the next visit is a different set.
+ *
+ * A pool no larger than [cap] is returned as it stands: there is nothing to
+ * cycle through, and the order is a fact the sources gave (the day feed's
+ * interleave is a RANK - see [billboardInterleaveFeeds]).
+ *
+ * De-duplicated across sources by [billboardPageKey], so the same title in two
+ * selected rails is one page and cannot eat a slot in the draw.
+ */
+internal fun billboardRandomPages(
+    sources: List<List<MetaPreview>>,
+    cap: Int = BILLBOARD_MAX_PAGES,
+    random: Random = Random.Default
+): List<MetaPreview> {
+    val seen = HashSet<String>()
+    val pool = ArrayList<MetaPreview>()
+    for (source in sources) {
+        for (item in source) {
+            if (item.id.isBlank()) continue
+            if (seen.add(billboardPageKey(item))) pool.add(item)
+        }
+    }
+    if (pool.size <= cap) return pool
+    for (index in 0 until cap) {
+        val pick = index + random.nextInt(pool.size - index)
+        val swap = pool[index]
+        pool[index] = pool[pick]
+        pool[pick] = swap
+    }
+    return pool.subList(0, cap).toList()
+}
+
+/**
  * The billboard's items for the viewer's feed selection, or null when the
  * selection produced nothing at all.
  *
@@ -152,14 +193,20 @@ internal fun billboardChosenFeed(
     keys: List<String>,
     sources: Map<String, List<MetaPreview>>,
     defaultFeed: List<MetaPreview>,
-    cap: Int = BILLBOARD_MAX_PAGES
+    cap: Int = BILLBOARD_MAX_PAGES,
+    /** The draw's randomness; a seeded one is what makes this testable. */
+    random: Random = Random.Default
 ): List<MetaPreview>? {
     val order = keys.ifEmpty { AppPreferences.DEFAULT_BILLBOARD_FEEDS }
-    val merged = billboardMergeFeeds(
+    // Drawn, not sliced: an arranged Home reads as a curated wall, but a rail
+    // selection is a POOL that is many times the pager's ten, and taking its
+    // head meant the same ten forever (see [billboardRandomPages]).
+    val merged = billboardRandomPages(
         sources = order.map { key ->
             if (isBillboardDefaultFeed(key)) defaultFeed else sources[key].orEmpty()
         },
-        cap = cap
+        cap = cap,
+        random = random
     )
     return merged.ifEmpty { null }
 }

@@ -2639,6 +2639,14 @@ private fun BillboardAction(
  * arrangeable.
  */
 private fun Rail.billboardFeedKey(): String? {
+    // The APP-BUILT rails first (the Top Today pair, the six kids rows, the
+    // guest rows): they have no manifest to key against, so their arrangement -
+    // and therefore the picker's chip - key is the built-in key for the catalog
+    // id they are built with. Without this branch the picker offered those rows
+    // and this lookup named none of them, so picking "Top Kids Movies" put
+    // NOTHING in the hero and the slot fell back to trending (field 2026-11-05:
+    // "one title, then four").
+    KBHomeOrderPrefs.builtinKeyForCatalogId(catalogId)?.let { return it }
     val customId = customCatalogId?.takeIf { it.isNotBlank() }
     if (customId != null) return KBHomeOrderPrefs.customCatalogKey(customId)
     val base = baseUrl?.takeIf { it.isNotBlank() } ?: return null

@@ -3,8 +3,10 @@ package com.kennyb1201.kbstream.ui.home
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
+import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -225,6 +227,81 @@ class BillboardFeedRulesTest {
         )
 
         assertEquals(day, chosen)
+    }
+
+    // ── the draw: what "cycle through all of them" means ─────────────────
+
+    @Test
+    fun `a pool bigger than the pager is drawn at random, not sliced`() {
+        val pool = (1..25).map { item("p$it") }
+        val sources = mapOf("addon:x" to pool)
+
+        val first = billboardChosenFeed(
+            keys = listOf("addon:x"),
+            sources = sources,
+            defaultFeed = emptyList(),
+            random = Random(1)
+        )
+        val second = billboardChosenFeed(
+            keys = listOf("addon:x"),
+            sources = sources,
+            defaultFeed = emptyList(),
+            random = Random(2)
+        )
+
+        assertEquals("the cap still bounds the pager", BILLBOARD_MAX_PAGES, first?.size)
+        assertEquals(
+            "one visit cannot repeat a page",
+            first?.map { it.id }?.distinct()?.size,
+            first?.size
+        )
+        assertTrue("every page came from the pool", first?.all { it in pool } == true)
+        assertNotEquals(
+            "two visits draw different titles - the rest of a selected rail is " +
+                "reachable, which is what cycling through all of them means",
+            first?.map { it.id },
+            second?.map { it.id }
+        )
+    }
+
+    @Test
+    fun `a pool no bigger than the pager keeps the order its sources gave`() {
+        val pool = listOf(item("a"), item("b"), item("c"))
+
+        val chosen = billboardChosenFeed(
+            keys = listOf("addon:x"),
+            sources = mapOf("addon:x" to pool),
+            defaultFeed = emptyList(),
+            random = Random(7)
+        )
+
+        assertEquals(
+            "nothing to cycle through: the day feed's interleave is a RANK, and a " +
+                "small rail is shown as it came",
+            pool,
+            chosen
+        )
+    }
+
+    @Test
+    fun `the same title in two chosen rails is one page and does not eat a slot`() {
+        val shared = item("shared")
+        val first = listOf(shared) + (1..15).map { item("a$it") }
+        val second = listOf(shared) + (1..15).map { item("b$it") }
+
+        val chosen = billboardChosenFeed(
+            keys = listOf("addon:a", "addon:b"),
+            sources = mapOf("addon:a" to first, "addon:b" to second),
+            defaultFeed = emptyList(),
+            random = Random(3)
+        )
+
+        assertEquals("a merged duplicate must not leave the pager one page short", BILLBOARD_MAX_PAGES, chosen?.size)
+        assertEquals(
+            "and no page appears twice",
+            chosen?.map { it.id }?.distinct()?.size,
+            chosen?.size
+        )
     }
 
     @Test
