@@ -1710,14 +1710,24 @@ class TmdbRepository private constructor(context: Context) :
      * The phone Home billboard's default feed (see HomeViewModel's billboard
      * default): a hero that opens on "what is hot today" should not read the
      * weekly list, which is a different ranking and can be days old.
+     *
+     * Kids Mode note: this row is drawn as the full-screen hero at the TOP of a
+     * kids profile's Home, so it takes the same ceiling every catalog rail does.
+     * It was the last list in this class that shipped raw - every rail under the
+     * billboard was filtered while the hero above them cycled whatever was
+     * trending for adults, at full width with a wordmark. Same known-unknown rule
+     * as [getKBListItems]: keep a title whose certification the ceiling allows,
+     * and keep an unresolvable one only on the loosest (PG-13) ceiling.
      */
     suspend fun trendingDay(mediaType: String, page: Int = 1): List<TmdbDiscoverItem>? {
         if (apiKey.isBlank()) return null
         val isTv = mediaType.lowercase() == "tv"
-        return runCatchingCancellable {
+        val rows = runCatchingCancellable {
             if (isTv) api.getTrendingTvDayDiscover(apiKey, page).results
             else api.getTrendingMoviesDayDiscover(apiKey, page).results
-        }.getOrNull()
+        }.getOrNull() ?: return null
+        if (kidsMaxAge() == null) return rows
+        return kidsFilter(rows) { row -> row.id to if (isTv) "tv" else "movie" }
     }
 
     /**

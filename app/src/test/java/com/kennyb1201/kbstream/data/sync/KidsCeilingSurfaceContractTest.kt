@@ -59,6 +59,12 @@ class KidsCeilingSurfaceContractTest {
             Surface("TMDB discover / tag rails", TMDB, "kidsFilterPage(", 2),
             Surface("studio and tag items", TMDB, "kidsFilterItems(", 2),
             Surface("collections and title parts", TMDB, "kidsFilter(", 2),
+            // The last TMDB list that shipped raw, and the one at the TOP of
+            // the screen: the billboard's default feed is trending-today, so a
+            // kids profile's hero cycled adult titles above rails that were
+            // all clean. The marker is the row-level call, not the family
+            // above it, because that is the one this surface owns.
+            Surface("phone Home billboard default feed", TMDB, "kidsFilter(rows)", 1),
             Surface("person credits", TMDB, "kidsFilterPersonCredits(", 2),
             Surface("library rows", LIBRARY, "kidsFiltered(", 2),
             Surface("Continue Watching / Upcoming", HOME, "kidsFilterUpNext(", 2),

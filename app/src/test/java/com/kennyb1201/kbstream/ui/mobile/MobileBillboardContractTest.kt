@@ -435,8 +435,42 @@ class MobileBillboardContractTest {
         assertTrue(vm.contains("billboardInterleaveFeeds("))
         // A recomposition carrying the same feed resolves nothing new.
         assertTrue(vm.contains("if (currentKeys == wantedKeys) {"))
-        // A failed reload never blanks a published feed.
-        assertTrue(vm.contains("if (pages.isNotEmpty()) _billboardTrendingDay.value = pages"))
+        // A failed reload never blanks a published feed - but an answer for a
+        // DIFFERENT profile does, because the old one is another profile's
+        // content (see the kids-ceiling test below).
+        assertTrue(
+            vm.contains(
+                "if (pages.isNotEmpty() || cachedFor != forProfile) { " +
+                    "_billboardTrendingDay.value = pages }"
+            )
+        )
+    }
+
+    @Test
+    fun `a kids profile never inherits the previous profile's default feed`() {
+        // The default feed is TMDB's trending pair, cached for the ViewModel's
+        // life and ceiling-filtered for whichever profile loaded it. Reported:
+        // the kids profile's billboard showed adult titles. Two halves have to
+        // hold: the switch throws the cached copy away, and the screen asks
+        // again for the profile it is now showing (its effect used to key on the
+        // billboard toggle alone, so nothing re-asked after a switch).
+        assertTrue(
+            "the switch drops the cached default feed",
+            homeViewModel().contains("_billboardTrendingDay.value = emptyList()")
+        )
+        assertTrue(
+            "and the screen re-asks per profile, not per launch",
+            mobileHome().contains("LaunchedEffect(billboardEnabled, activeProfileId)")
+        )
+        assertTrue(
+            "a copy loaded for another profile or ceiling is not reused",
+            homeViewModel().contains("billboardTrendingFor == forProfile")
+        )
+        assertTrue(
+            "the feed itself takes the ceiling (see KidsCeilingSurfaceContractTest)",
+            source("com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt")
+                .contains("kidsFilter(rows)")
+        )
     }
 
     @Test

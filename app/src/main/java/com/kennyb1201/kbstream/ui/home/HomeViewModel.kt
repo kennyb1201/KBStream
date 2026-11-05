@@ -1800,11 +1800,33 @@ Log.d(
     }
 
     /**
+     * The profile whose ceiling the cached default feed was filtered for.
+     *
+     * The feed is a TMDB row put through the ACTIVE profile's ceiling (see
+     * TmdbRepository.trendingDay), so a cached copy is only ever an answer for
+     * one profile at one ceiling. Without this, a switch - or an edit to a
+     * profile's kids ceiling, which re-emits the same id - was answered with the
+     * copy loaded for the previous one, which is how a kids profile's hero came
+     * to cycle adult trending titles.
+     */
+    private var billboardTrendingFor: String? = null
+
+    /**
      * Loads the default feed (TMDB trending of the day) unless one is already
-     * published, and never blanks a published feed on a failed reload.
+     * published FOR THIS PROFILE, and never blanks a published feed on a failed
+     * reload.
      */
     fun loadBillboardTrendingDay(force: Boolean = false) {
-        if (!force && _billboardTrendingDay.value.isNotEmpty()) return
+        val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value
+        val forProfile = "${profile?.id}:${profile?.kidsMaxAge}"
+        if (!force &&
+            _billboardTrendingDay.value.isNotEmpty() &&
+            billboardTrendingFor == forProfile
+        ) {
+            return
+        }
+        val cachedFor = billboardTrendingFor
+        billboardTrendingFor = forProfile
         billboardTrendingJob?.cancel()
         billboardTrendingJob = viewModelScope.launch {
             val movies = safeSuspend { tmdbRepository.trendingDay("movie") }.orEmpty()
@@ -1813,7 +1835,14 @@ Log.d(
                 movies.map { it.toBillboardPreview("movie") },
                 shows.map { it.toBillboardPreview("series") }
             )
-            if (pages.isNotEmpty()) _billboardTrendingDay.value = pages
+            // Same profile: a failed reload never blanks a published feed. A
+            // DIFFERENT profile (or a changed ceiling): an empty answer has to
+            // clear it, because leaving the old list published is exactly adult
+            // trending titles on a kids profile's hero - the reason the ceiling
+            // was still not enough on its own.
+            if (pages.isNotEmpty() || cachedFor != forProfile) {
+                _billboardTrendingDay.value = pages
+            }
         }
     }
 
@@ -2228,6 +2257,15 @@ Log.d(
                     billboardResolveJob?.cancel()
                     billboardResolveJob = null
                     _billboardPages.value = emptyList()
+                    // And its DEFAULT feed, which is TMDB's trending pair: it is
+                    // loaded once and cached for the ViewModel's life, and it is
+                    // ceiling-filtered for whichever profile loaded it. Left in
+                    // place, a kids profile inherits the previous profile's
+                    // adult trending titles as the hero above its own clean
+                    // rails. The phone reloads it for the profile it is showing
+                    // (its LaunchedEffect keys on the active profile), so
+                    // emptying it here is what makes that reload happen.
+                    _billboardTrendingDay.value = emptyList()
 
                     // Same for the caught-up Upcoming cards: they come from
                     // the account-wide Simkl feed and are only kids-filtered

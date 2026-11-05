@@ -515,7 +515,12 @@ fun HomeScreenMobile(
 
         val billboardTrendingDay by
             viewModel.billboardTrendingDay.collectAsStateWithLifecycle()
-        LaunchedEffect(billboardEnabled) {
+        // Keyed on the profile as well as the switch: the default feed is
+        // ceiling-filtered for the profile that loads it, and a profile switch
+        // empties it (see HomeViewModel's switch block) - so the profile that is
+        // now on screen has to ask again, or a kids profile inherits the
+        // previous profile's adult trending titles as its hero.
+        LaunchedEffect(billboardEnabled, activeProfileId) {
             // Only when the slot is armed: a viewer who turned the billboard
             // off should not pay two TMDB calls for it on every launch.
             if (billboardEnabled) viewModel.loadBillboardTrendingDay()
