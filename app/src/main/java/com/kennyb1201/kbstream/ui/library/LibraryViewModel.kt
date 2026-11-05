@@ -19,6 +19,8 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.bingecat.BingeCatRow
+import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.trakt.TraktListEntry
 import com.kennyb1201.kbstream.data.trakt.TraktListRef
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -66,7 +68,8 @@ enum class LibraryFilter(val label: String) {
 enum class LibraryRemote(val label: String) {
     SIMKL("Simkl"),
     MDBLIST("MDBList"),
-    TRAKT("Trakt")
+    TRAKT("Trakt"),
+    BINGECAT("BingeCat")
 }
 
 /**
@@ -183,7 +186,10 @@ data class LibraryUiState(
 
     val simklConnected: Boolean = false,
     val mdbListConfigured: Boolean = false,
-    val traktConnected: Boolean = false
+    val traktConnected: Boolean = false,
+
+    /** True when this profile is connected AND mapped to a BingeCat profile. */
+    val bingecatConnected: Boolean = false
 )
 
 /**
@@ -206,6 +212,8 @@ class LibraryViewModel(
         TmdbRepository.getInstance(application)
     private val traktRepository =
         TraktRepository.getInstance(application)
+    private val bingecatRepository =
+        com.kennyb1201.kbstream.data.bingecat.BingeCatRepository.getInstance(application)
 
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()
@@ -471,6 +479,14 @@ class LibraryViewModel(
 
                 // Simkl: add-only; no remove path exists on the API.
                 LibrarySource.SIMKL_WATCHLIST, LibrarySource.SIMKL_LIST -> Unit
+
+                // BingeCat: read-only by scope (v1 has no lists:write and no
+                // history:write), so its rows deliberately offer no remove.
+                // The Library draws no action for them either; this branch is
+                // what keeps that absence a decision rather than a missing case.
+                LibrarySource.BINGECAT_WATCHLIST,
+                LibrarySource.BINGECAT_SAVED,
+                LibrarySource.BINGECAT_LIST -> Unit
             }
         }
     }
@@ -629,10 +645,58 @@ class LibraryViewModel(
                 emptyList()
             }
 
-            val lists = localLists + mdbLists + traktLists
+            // BingeCat, read-only: its rows join the same watchlist merge the
+            // trackers feed, and its lists become shelves beside theirs. The
+            // repository answers null rather than an empty list when nothing
+            // could be read (and keeps its own stale snapshot), so a 429 leaves
+            // the section exactly as it was instead of blanking it.
+            //
+            // Every read behind this is profile-scoped by construction: no
+            // mapping means no request at all (see BingeCatRepository.isReady),
+            // which is what keeps a kids profile from inheriting another
+            // profile's BingeCat rows.
+            val bingecatReady = bingecatRepository.isReady()
+            val bingecatSnapshot = if (bingecatReady) {
+                runCatchingCancellable { bingecatRepository.snapshot() }
+                    .onFailure {
+                        Log.w(TAG, "BingeCat snapshot failed: ${it.message}")
+                        failedRemotes += LibraryRemote.BINGECAT
+                    }
+                    .getOrNull()
+            } else {
+                null
+            }
+            if (bingecatReady && bingecatSnapshot == null) {
+                failedRemotes += LibraryRemote.BINGECAT
+            }
+            val bingecatWatchlist = bingecatSnapshot?.watchlist.orEmpty().mapNotNull { row ->
+                bingecatLibraryItem(row, LibrarySource.BINGECAT_WATCHLIST)
+            }
+            val bingecatSaved = bingecatSnapshot?.saved.orEmpty().mapNotNull { row ->
+                bingecatLibraryItem(row, LibrarySource.BINGECAT_SAVED)
+            }
+            val bingecatLists = bingecatSnapshot?.lists.orEmpty()
+                .mapIndexedNotNull { index, list ->
+                    list.name.takeIf { it.isNotBlank() }?.let { name ->
+                        LibraryList(
+                            id = bingecatShelfId(index),
+                            name = name,
+                            itemCount = list.itemCount,
+                            source = LibrarySource.BINGECAT_LIST,
+                            remoteId = list.ref
+                        )
+                    }
+                }
+
+            val lists = localLists + mdbLists + traktLists + bingecatLists
 
             if (version != requestVersion) return@launch
 
+            // BingeCat's rows are folded into the same merge, around the
+            // tracker expression this branch has always had (see the comment
+            // below): nested mergeById is idempotent, so they dedupe exactly as
+            // they would in one pass, and the tombstone filter still covers
+            // them.
             val watchlistMerged = kidsFiltered(
                 // What My List was told to forget stays forgotten HERE too.
                 //
@@ -651,7 +715,10 @@ class LibraryViewModel(
                 // local-list state and every other profile's view are
                 // untouched (their own records govern them).
                 LibraryTombstones.removedFrom(
-                    mergeById(simklItems + mdbListWatchlist + traktWatchlist),
+                    mergeById(
+                        mergeById(simklItems + mdbListWatchlist + traktWatchlist) +
+                            bingecatWatchlist + bingecatSaved
+                    ),
                     LocalLibraryStore.tombstones(appContext)
                 )
             )
@@ -681,7 +748,8 @@ class LibraryViewModel(
                 lists = lists,
                 simklConnected = simklConnected,
                 mdbListConfigured = mdbListConfigured,
-                traktConnected = traktConnected
+                traktConnected = traktConnected,
+                bingecatConnected = bingecatReady
             )
             pushDisplay()
 
@@ -732,7 +800,26 @@ class LibraryViewModel(
             } else {
                 emptyList()
             }
-            _uiState.value = _uiState.value.copy(lists = localLists + mdbLists + traktLists)
+            // BingeCat shelves survive a local-list mutation too: this path
+            // replaces the rail wholesale, so leaving them out would make every
+            // rename/delete on this device drop the BingeCat lists until the
+            // next full refresh. They come from the snapshot's cache, so this
+            // costs no request.
+            val bingecatLists = bingecatRepository.cachedSnapshot()?.lists.orEmpty()
+                .mapIndexedNotNull { index, list ->
+                    list.name.takeIf { it.isNotBlank() }?.let { name ->
+                        LibraryList(
+                            id = bingecatShelfId(index),
+                            name = name,
+                            itemCount = list.itemCount,
+                            source = LibrarySource.BINGECAT_LIST,
+                            remoteId = list.ref
+                        )
+                    }
+                }
+            _uiState.value = _uiState.value.copy(
+                lists = localLists + mdbLists + traktLists + bingecatLists
+            )
         }
     }
 
@@ -758,6 +845,24 @@ class LibraryViewModel(
     private suspend fun fetchListItems(list: LibraryList): List<LibraryItem> {
         val appContext = getApplication<Application>()
         if (list.source.isLocalList) return LocalLibraryStore.listItems(appContext, list.id)
+
+        if (list.source == LibrarySource.BINGECAT_LIST) {
+            val remoteId = list.remoteId ?: return emptyList()
+            val rows = runCatchingCancellable {
+                bingecatRepository.listRows(remoteId)
+            }.onFailure {
+                Log.w(TAG, "BingeCat list items fetch failed: ${it.message}")
+            }.getOrNull().orEmpty()
+            return rows.mapNotNull { row ->
+                bingecatLibraryItem(
+                    row = row,
+                    source = LibrarySource.BINGECAT_LIST,
+                    listId = list.id,
+                    listName = list.name,
+                    listRemoteId = remoteId
+                )
+            }
+        }
 
         if (list.source == LibrarySource.TRAKT_LIST) {
             val remoteId = list.remoteId ?: return emptyList()
@@ -808,6 +913,33 @@ class LibraryViewModel(
      * A row with no title or no id Trakt can address is dropped: it could not
      * be opened, badged, or removed, so drawing it would only look broken.
      */
+    /**
+     * One BingeCat row as a Library row.
+     *
+     * BingeCat delivers `title`/`year` and the ids inline (the contract's
+     * `PublicMedia`), but no artwork: the poster is resolved by the Library's
+     * ordinary enrichment pass from the TMDB id, exactly as an artwork-less
+     * MDBList row is. A row with no id was already dropped by
+     * `bingecatRow`, so there is nothing to guard here.
+     */
+    private fun bingecatLibraryItem(
+        row: BingeCatRow,
+        source: LibrarySource,
+        listId: Int? = null,
+        listName: String? = null,
+        listRemoteId: String? = null
+    ): LibraryItem = LibraryItem(
+        source = source,
+        mediaType = row.mediaType,
+        title = row.title,
+        year = row.year,
+        imdbId = row.imdbId,
+        tmdbId = row.tmdbId,
+        listId = listId,
+        listName = listName,
+        listRemoteId = listRemoteId
+    )
+
     private fun traktLibraryItem(
         entry: TraktListEntry,
         source: LibrarySource,

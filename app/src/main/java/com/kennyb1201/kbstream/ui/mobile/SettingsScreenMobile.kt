@@ -195,6 +195,7 @@ fun SettingsScreenMobile(
     onOpenAddons: () -> Unit = {},
     onOpenSimkl: () -> Unit = {},
     onOpenTrakt: () -> Unit = {},
+    onOpenBingeCat: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
@@ -298,6 +299,7 @@ fun SettingsScreenMobile(
                             onOpenAddons = onOpenAddons,
                             onOpenSimkl = onOpenSimkl,
                             onOpenTrakt = onOpenTrakt,
+                            onOpenBingeCat = onOpenBingeCat,
                             onOpenProfiles = onOpenProfiles
                         )
 
@@ -794,6 +796,7 @@ private fun IntegrationsPaneMobile(
     onOpenAddons: () -> Unit,
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
+    onOpenBingeCat: () -> Unit,
     onOpenProfiles: () -> Unit
 ) {
     val context = LocalContext.current
@@ -877,6 +880,15 @@ private fun IntegrationsPaneMobile(
                 resumeAuthority = authority
                 AppPreferences.setResumeAuthority(context, authority)
             }
+        )
+        // Read-only, like the TV row: reads BingeCat's lists for its own
+        // section and writes nothing back (v1 has no history:write). Last in the
+        // section, after the tie-break, matching the TV pane.
+        SettingsNavRowMobile(
+            label = "BingeCat",
+            description = "Read your BingeCat watchlist, saved list and lists in the " +
+                "Library tab - read-only, per BingeCat profile",
+            onClick = onOpenBingeCat
         )
 
         // ── API Keys ─────────────────────────────────────────────

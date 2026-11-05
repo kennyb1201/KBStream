@@ -174,6 +174,14 @@ internal fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        // BingeCat's connect page carries its own return destination for the
+        // same reason: it is opened from a settings row whose Back must land
+        // back on that row.
+        is Screen.BingeCat -> {
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
@@ -317,6 +325,9 @@ internal fun decodeScreen(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "trakt" -> Screen.Trakt(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "bingecat" -> Screen.BingeCat(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "guide" -> Screen.Guide
@@ -500,6 +511,7 @@ internal val Screen.navDepth: Int
         is Screen.Settings,
         is Screen.Simkl,
         is Screen.Trakt,
+        is Screen.BingeCat,
         is Screen.ProfilePicker,
         is Screen.Detail,
         is Screen.CatalogGrid,
@@ -533,6 +545,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
     is Screen.Trakt -> "trakt"
+    is Screen.BingeCat -> "bingecat"
     is Screen.Guide -> "guide"
     is Screen.Sports -> "sports"
     is Screen.Library -> "library"

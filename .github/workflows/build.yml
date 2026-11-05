@@ -41,6 +41,10 @@ jobs:
       # no client secret may be compiled into the APK (SimklClientConfigTest
       # fails the build on any *SECRET* BuildConfig field).
       TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+      # BingeCat's public API app. The id only, for the same reason: the
+      # contract defines bingecat-api-key as the application client_id, and the
+      # device flow is a public-client flow (see app/build.gradle.kts).
+      BINGECAT_CLIENT_ID: ${{ secrets.BINGECAT_CLIENT_ID }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       # Authenticates the Sentry Gradle plugin's R8-mapping upload so release
       # crash traces arrive deobfuscated (real class/method names).
@@ -130,6 +134,15 @@ jobs:
             echo "TRAKT_CLIENT_ID is present; Trakt connect, scrobble and history are enabled."
           else
             echo "::warning title=Trakt disabled::TRAKT_CLIENT_ID is empty; this build's Trakt row will say it is not configured."
+          fi
+
+      - name: Check BingeCat client id
+        run: |
+          set -euo pipefail
+          if [[ -n "${BINGECAT_CLIENT_ID:-}" ]]; then
+            echo "BINGECAT_CLIENT_ID is present; the BingeCat connect and Library reads are enabled."
+          else
+            echo "::warning title=BingeCat disabled::BINGECAT_CLIENT_ID is empty; this build's BingeCat row will say it is not configured."
           fi
 
       - name: Set up JDK 17

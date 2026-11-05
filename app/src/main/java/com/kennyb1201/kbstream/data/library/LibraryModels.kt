@@ -39,6 +39,18 @@ enum class LibrarySource(val label: String) {
     MDBLIST_LIST("MDBList list"),
     TRAKT_WATCHLIST("Trakt"),
     TRAKT_LIST("Trakt list"),
+
+    /**
+     * BingeCat's own rows, read-only.
+     *
+     * Three sources rather than one because the section shows three things -
+     * the watchlist, the saved list (BingeCat's "favorites") and each user list
+     * by its own name - and a row has to be able to say which it came from.
+     * Nothing writes back to any of them: v1 has no `lists:write` scope.
+     */
+    BINGECAT_WATCHLIST("BingeCat"),
+    BINGECAT_SAVED("BingeCat saved"),
+    BINGECAT_LIST("BingeCat list"),
     LOCAL_LIST("This device · list");
 
     /** True for a list this device owns and can rename/delete. */
@@ -151,6 +163,7 @@ data class LibraryList(
             LibrarySource.LOCAL_LIST -> "This device"
             LibrarySource.MDBLIST_LIST -> "MDBList"
             LibrarySource.TRAKT_LIST -> "Trakt"
+            LibrarySource.BINGECAT_LIST -> "BingeCat"
             else -> source.label
         }
 }

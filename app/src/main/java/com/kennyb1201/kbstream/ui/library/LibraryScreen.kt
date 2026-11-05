@@ -708,6 +708,13 @@ private fun LibraryItemMenu(
                     }
                 )
 
+                // BingeCat is read-only: its rows have no remove and no
+                // web-link action, so the long press offers only the two
+                // actions every row has (details, and the picker's own).
+                LibrarySource.BINGECAT_WATCHLIST,
+                LibrarySource.BINGECAT_SAVED,
+                LibrarySource.BINGECAT_LIST -> Unit
+
                 LibrarySource.SIMKL_WATCHLIST,
                 LibrarySource.SIMKL_LIST -> {
                     // Simkl's API rules: wherever Simkl data appears, name Simkl

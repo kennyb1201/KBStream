@@ -613,6 +613,11 @@ fun LibraryScreenMobile(
                                 }
                             )
 
+                            // BingeCat is read-only: no remove, no link out.
+                            LibrarySource.BINGECAT_WATCHLIST,
+                            LibrarySource.BINGECAT_SAVED,
+                            LibrarySource.BINGECAT_LIST -> Unit
+
                             LibrarySource.SIMKL_WATCHLIST,
                             LibrarySource.SIMKL_LIST -> {
                                 // Simkl's attribution rule: name Simkl and link

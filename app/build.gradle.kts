@@ -85,6 +85,19 @@ val traktClientId = localProps.getProperty("TRAKT_CLIENT_ID")
     ?: System.getenv("TRAKT_CLIENT_ID")
     ?: ""
 
+// BingeCat, by client id only - the same rule as Trakt and Simkl above, and for
+// the same reason. The BingeCat contract defines the `bingecat-api-key` header
+// as the application's `client_id` ("must match the JSON client_id where a body
+// contains one"), and its OAuth discovery advertises
+// `token_endpoint_auth_methods_supported: [client_secret_post, none]`: the device
+// flow is a PUBLIC-client flow, and a real poll with no secret answers
+// `authorization_pending` rather than `invalid_client`. So no `*SECRET*` field
+// belongs here (pinned by SimklClientConfigTest), and the id itself is public
+// by construction - it travels in every device-code request.
+val bingecatClientId = localProps.getProperty("BINGECAT_CLIENT_ID")
+    ?: System.getenv("BINGECAT_CLIENT_ID")
+    ?: ""
+
 val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
     ?: ""
@@ -237,6 +250,7 @@ android {
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientId\"")
+        buildConfigField("String", "BINGECAT_CLIENT_ID", "\"$bingecatClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
         buildConfigField("String", "INNERTUBE_API_KEY", "\"$innertubeApiKey\"")

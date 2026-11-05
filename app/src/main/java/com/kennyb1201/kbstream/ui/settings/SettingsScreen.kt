@@ -313,6 +313,7 @@ fun SettingsScreen(
     onOpenAddons: () -> Unit = {},
     onOpenSimkl: () -> Unit = {},
     onOpenTrakt: () -> Unit = {},
+    onOpenBingeCat: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     /**
      * Opens the Home rail manager. The manager is the Add-ons screen's dialog
@@ -334,6 +335,7 @@ fun SettingsScreen(
             onOpenAddons = onOpenAddons,
             onOpenSimkl = onOpenSimkl,
             onOpenTrakt = onOpenTrakt,
+            onOpenBingeCat = onOpenBingeCat,
             onOpenProfiles = onOpenProfiles,
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
@@ -1043,6 +1045,7 @@ fun SettingsScreen(
                         onClick = onOpenTrakt
                     )
 
+
                     // Resume Source closes the trackers' section (settings reorg
                     // §3.2, M2 fallout): it is the tie-break the two trackers
                     // above feed, so it belongs with them - it used to sit
@@ -1060,6 +1063,19 @@ fun SettingsScreen(
                             resumeAuthority = authority
                             AppPreferences.setResumeAuthority(context, authority)
                         }
+                    )
+
+                    // Read-only, and deliberately NOT in that tie-break's family:
+                    // BingeCat is read for its own lists, and nothing is written
+                    // back (v1 ships no history:write), so it is not a tracker
+                    // and not a resume source. It sits at the end of the section
+                    // so the Resume Source row stays the last thing the trackers
+                    // above it end on.
+                    NavigationRow(
+                        label = "BingeCat",
+                        description = "Read your BingeCat watchlist, saved list and lists in the " +
+                            "Library tab - read-only, per BingeCat profile",
+                        onClick = onOpenBingeCat
                     )
 
                 // ── API KEYS ─────────────────────────────────────────────

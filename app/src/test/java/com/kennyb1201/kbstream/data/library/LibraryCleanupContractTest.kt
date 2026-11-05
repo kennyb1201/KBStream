@@ -65,15 +65,24 @@ class LibraryCleanupContractTest {
             "the filter names the watchlist merge and the profile's own record",
             viewModel.contains(
                 "LibraryTombstones.removedFrom( " +
-                    "mergeById(simklItems + mdbListWatchlist + traktWatchlist), " +
+                    "mergeById( " +
+                    "mergeById(simklItems + mdbListWatchlist + traktWatchlist) + " +
+                    "bingecatWatchlist + bingecatSaved ), " +
                     "LocalLibraryStore.tombstones(appContext) )"
             )
         )
         assertTrue(
-            "the de-duped watchlist is what gets filtered, so one pass covers all " +
-                "three tracker sources",
+            "the de-duped watchlist is what gets filtered, so one pass covers every " +
+                "source - the three trackers and BingeCat, whose rows are folded " +
+                "into the same call rather than merged after the filter",
             viewModel.indexOf("LibraryTombstones.removedFrom(") <
                 viewModel.indexOf("mergeById(simklItems + mdbListWatchlist + traktWatchlist)")
+        )
+        assertTrue(
+            "and BingeCat's rows are inside that filtered merge, not beside it",
+            viewModel.indexOf("bingecatWatchlist + bingecatSaved") in
+                viewModel.indexOf("LibraryTombstones.removedFrom(") until
+                viewModel.indexOf("LocalLibraryStore.tombstones(appContext)")
         )
         assertTrue(
             "and before the merged view is built from it",

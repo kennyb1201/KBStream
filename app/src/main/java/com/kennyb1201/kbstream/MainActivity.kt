@@ -263,6 +263,14 @@ sealed class Screen {
      */
     data class Trakt(val returnTo: Screen = Home) : Screen()
 
+    /**
+     * The BingeCat connect page: a read-only integration beside the trackers,
+     * reached from its own Settings row. It carries its own return destination
+     * for the same reason [Simkl] and [Trakt] do - the page has more than one
+     * way in, and each one's Back must land where the viewer came from.
+     */
+    data class BingeCat(val returnTo: Screen = Home) : Screen()
+
     object Guide : Screen()
 
     /**
@@ -2579,6 +2587,7 @@ fun AppRoot(
                 },
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Settings) },
                 onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Settings) },
+                onOpenBingeCat = { screen = Screen.BingeCat(returnTo = Screen.Settings) },
                 onOpenProfiles = {
                     // Real picker so the profile can be SWITCHED here — the
                     // old wiring jumped straight into the editor, which can
@@ -2772,6 +2781,12 @@ fun AppRoot(
 
         is Screen.Trakt -> {
             TraktConnectScreen(
+                onBack = { screen = stableBackDestination(current.returnTo) }
+            )
+        }
+
+        is Screen.BingeCat -> {
+            com.kennyb1201.kbstream.ui.bingecat.BingeCatConnectScreen(
                 onBack = { screen = stableBackDestination(current.returnTo) }
             )
         }

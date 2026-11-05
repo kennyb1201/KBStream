@@ -10,6 +10,7 @@ import android.os.Debug
 import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
+import com.kennyb1201.kbstream.data.bingecat.BingeCatTrace
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
@@ -111,6 +112,12 @@ object Diagnostics {
         // this line is the only place a capture can tell "no source had a
         // hash" from "the key was rejected" (see TorBoxTrace).
         TorBoxTrace.lines().forEach { report.appendLine("torbox: $it") }
+        // What the BingeCat connection last did: connected, the mapped BingeCat
+        // profile, when it last revalidated, the last error class and the cached
+        // counts. Both halves fail soft (a 429 leaves Library alone, an unmapped
+        // profile makes no request), so this line is the only place a capture can
+        // tell "never connected" from "connected, unmapped" from "mapped, 429".
+        BingeCatTrace.lines().forEach { report.appendLine("bingecat: $it") }
         // The launch breakdown, printed explicitly: it is the one set of samples
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }

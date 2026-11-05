@@ -171,6 +171,15 @@ internal object SettingsSearchIndex {
             "Trakt",
             "scrobble tracker account connect watched history sync"
         ),
+        // Beside Trakt in composition order (it is drawn right after it), and
+        // registered for the same reason: the row has no key of its own, so it
+        // is searched by its label.
+        SettingSearchEntry(
+            "integrations.bingecat",
+            SettingsPane.INTEGRATIONS,
+            "BingeCat",
+            "bingecat read-only watchlist saved list lists watched history devices link"
+        ),
         // Moved to the Subtitles pane (settings reorg §7.1, §14.1). The key stays
         // `integrations.*` because it is the row's identity, not its address; the
         // pane field is what a result groups under and jumps to.
