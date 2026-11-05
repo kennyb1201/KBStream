@@ -187,8 +187,9 @@ class TokenlessResolveWallTest {
 
     @Test
     fun `a resolve is not flagged cold-mint tokenless unless the adaptive pick says so`() {
-        // The default is what the HLS and progressive returns keep: their
-        // tokenless shape is unverified, so F1 leaves them exactly as they were.
+        // The default stays false: every resolve return passes the flag
+        // explicitly (see TokenlessResolveWiringContractTest), so a caller that
+        // builds a ResolvedSource by hand still gets "mountable".
         val source = PlayableSource.Muxed(url = "https://googlevideo.example/hls")
         assertFalse(InnerTubeExtractor.ResolvedSource(source, "android").potlessByColdMint)
         assertTrue(

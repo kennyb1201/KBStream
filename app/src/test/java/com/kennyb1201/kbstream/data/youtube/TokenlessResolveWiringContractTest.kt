@@ -18,7 +18,10 @@ import org.junit.Test
  * just died.
  *
  * The settler is the 2026-11-03 phone capture: a GVS timeout must no longer
- * produce a MOUNTED tokenless adaptive source on any surface.
+ * produce a MOUNTED tokenless source on any surface. The 2026-11-05 TV capture
+ * then showed the adaptive-only spelling was too narrow - a tokenless
+ * PROGRESSIVE winner sailed through the same gate - so the flag is now carried
+ * by every InnerTube winner and the gate covers both kinds.
  */
 class TokenlessResolveWiringContractTest {
 
@@ -48,25 +51,30 @@ class TokenlessResolveWiringContractTest {
     }
 
     @Test
-    fun `only the adaptive winner is judged by the cold-mint flag`() {
+    fun `every InnerTube winner is judged by the cold-mint flag, whatever its kind`() {
         val hls = between(extractor, "Using HLS trailer manifest", "Prefer adaptive video + audio")
+        val adaptive = between(extractor, "Using adaptive video+audio", "fall through to")
         val progressive = between(
             extractor,
             "Falling back to muxed progressive",
             "return null"
         )
 
-        assertFalse(
-            "HLS keeps current behavior: its tokenless wall shape is unverified",
-            flat(hls).contains("potlessByColdMint")
-        )
-        assertFalse(
-            "progressive keeps current behavior too",
-            flat(progressive).contains("potlessByColdMint")
-        )
+        // The wall is a property of the URL the missing token would have signed,
+        // not of the shape the winner took. The 2026-11-05 capture is the proof:
+        // `pot.resolve ... pot=false kind=progressive` mounted and died at 41.9 s
+        // of a 138.5 s trailer, because only the adaptive return carried the
+        // flag and its gate was the only one the launcher had.
+        listOf("hls" to hls, "adaptive" to adaptive, "progressive" to progressive)
+            .forEach { (kind, block) ->
+                assertTrue(
+                    "a tokenless $kind winner must reach the gate, not the wall",
+                    flat(block).contains("potlessByColdMint = tokenlessByColdMint")
+                )
+            }
         assertEquals(
-            "exactly one return carries the flag - the adaptive one",
-            1,
+            "and every return that can mount carries it - no shape keeps the old default",
+            3,
             Regex("potlessByColdMint = tokenlessByColdMint").findAll(extractor).count()
         )
     }
@@ -74,7 +82,7 @@ class TokenlessResolveWiringContractTest {
     // ── F1b/F1c: never mount it; fall back, and hold without poisoning ──────
 
     @Test
-    fun `a tokenless adaptive winner is neither mounted nor cached`() {
+    fun `a tokenless winner is neither mounted nor cached`() {
         val mountAt = launcher.indexOf("if (resolved != null && !resolved.potlessByColdMint) {")
         val cacheAt = launcher.indexOf("sourceCache[videoId] = CachedSource(resolved.source")
         val tokenlessAt = launcher.indexOf("not mounting it into the wall")

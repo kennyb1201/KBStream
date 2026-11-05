@@ -231,11 +231,14 @@ object InnerTubeExtractor {
          * resolve could have carried one - minting enabled, a visitor to bind it
          * to, and a mint that produced nothing (a cold WebView).
          *
-         * Only ever set on an ADAPTIVE winner, the one shape whose tokenless
-         * death is established (the 2026-11-03 capture): its chunks hit the
-         * mid-play wall at the same spot on every surface. HLS and progressive
-         * winners are left at false, so their behavior is unchanged until a
-         * capture says their tokenless shape dies the same way.
+         * Set on EVERY winner the resolve can produce - HLS, adaptive and
+         * progressive - because the wall is a property of the URL the token
+         * would have signed, not of the shape the winner happened to take. The
+         * adaptive case was established first (2026-11-03), and the progressive
+         * case is the one that then shipped unmounted-guarded and died at
+         * 41.9 s of a 138.5 s trailer (2026-11-05, `kind=progressive`,
+         * `pot=false`, TCL Android 12). HLS is the same URL family; leaving any
+         * of them unguarded is the same first-mount death on a different line.
          *
          * Read by [TrailerPlayerLauncher.resolvePlayableUrl], which refuses to
          * mount such a source and walks the NewPipe chain instead. A tokenless
@@ -353,10 +356,13 @@ object InnerTubeExtractor {
         // discard every token; presenting the effective visitor is the only
         // place the visitor enters the player request.
         val visitor = presentedVisitor(config.visitorData, tokens.visitor)
-        // What the winner will be judged by (see ResolvedSource.potlessByColdMint):
-        // a token still missing after the re-mint, with minting on and a visitor
-        // to bind it to, is a COLD MINT - not a tokenless-by-configuration
-        // resolve, which must behave exactly as it did before this spec.
+        // What EVERY winner will be judged by (see
+        // ResolvedSource.potlessByColdMint): a token still missing after the
+        // re-mint, with minting on and a visitor to bind it to, is a COLD MINT -
+        // not a tokenless-by-configuration resolve, which must behave exactly as
+        // it did before this spec. All three returns below carry it: the wall is
+        // a property of the URL the missing token would have signed, so the
+        // shape a winner took cannot decide whether it may mount.
         val tokenlessByColdMint = isColdMintTokenless(
             gvsToken = tokens.gvs,
             visitorData = configVisitor,            mintingEnabled = runCatching { PoTokens.provider().isEnabled() }.getOrDefault(false)
@@ -435,7 +441,8 @@ object InnerTubeExtractor {
                     bestHls.third,
                     userAgent = userAgentFor(bestHls.first)
                 ).withResolveTokens(videoId, tokens, bestHls.first, KIND_HLS),
-                bestHls.first
+                bestHls.first,
+                potlessByColdMint = tokenlessByColdMint
             )
         }
 
@@ -530,7 +537,13 @@ object InnerTubeExtractor {
                     bestProgressive.client,
                     KIND_PROGRESSIVE
                 ),
-                bestProgressive.client
+                bestProgressive.client,
+                // The same flag the adaptive return carries: a tokenless
+                // progressive is the exact shape that mounted and died at the
+                // wall on 2026-11-05 (see ResolvedSource.potlessByColdMint).
+                // Without it the launcher's gate lets it through and the death
+                // plan becomes the normal path for a cold mint.
+                potlessByColdMint = tokenlessByColdMint
             )
         }
 

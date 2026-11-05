@@ -340,16 +340,17 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             return@withLock Result.success(resolved.source)
         }
         if (resolved != null) {
-            // A tokenless adaptive winner is not a success: its URLs carry no
-            // `pot`, so its first chunk boundary is the wall every surface dies
-            // at (see `ResolvedSource.potlessByColdMint`). Never mount it - walk
-            // the same NewPipe/Piped chain the extraction-null path walks, which signs
-            // nothing through that wall and is already cached behind this
-            // resolver. Nothing is stored for it either: a cached tokenless
-            // source would be served back as a cache hit by the next resolve.
+            // A tokenless winner is not a success, whatever its kind: its URLs
+            // carry no `pot`, so its first chunk boundary is the wall every
+            // surface dies at (see `ResolvedSource.potlessByColdMint`). Never
+            // mount it - walk the same NewPipe/Piped chain the extraction-null
+            // path walks, which signs nothing through that wall and is already
+            // cached behind this resolver. Nothing is stored for it either: a
+            // cached tokenless source would be served back as a cache hit by the
+            // next resolve.
             Log.w(
                 TAG,
-                "InnerTube resolved a tokenless adaptive source for $videoId; " +
+                "InnerTube resolved a tokenless source for $videoId; " +
                     "not mounting it into the wall, falling back to NewPipe"
             )
         } else {
@@ -381,9 +382,9 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             // ladder failed must not poison one that only ran out of mint.
             Log.w(
                 TAG,
-                "Holding trailer $videoId: no tokenless adaptive source was " +
-                    "mounted and NewPipe/Piped found nothing; the next resolve is " +
-                    "free to re-mint"
+                "Holding trailer $videoId: no tokenless source was mounted and " +
+                    "NewPipe/Piped found nothing; the next resolve is free to " +
+                    "re-mint"
             )
             return@withLock Result.failure(TokenlessHoldException(videoId, error))
         }
@@ -513,7 +514,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
 
 /**
  * The resolve found nothing it was willing to MOUNT: either it had no source at
- * all, or its only InnerTube winner was a tokenless adaptive source (see
+ * all, or its only InnerTube winner was a tokenless source of ANY kind (see
  * `ResolvedSource.potlessByColdMint`) and the NewPipe/Piped fallback found
  * nothing either.
  *
@@ -526,8 +527,8 @@ internal class TokenlessHoldException(
     val videoId: String,
     cause: Throwable? = null
 ) : Exception(
-    "Trailer $videoId held: a tokenless adaptive source was not mounted and " +
-        "the fallback found nothing",
+    "Trailer $videoId held: a tokenless source was not mounted and the " +
+        "fallback found nothing",
     cause
 )
 
