@@ -31,6 +31,7 @@ import org.junit.Test
 class HomeFocusedCardContractTest {
 
     private val home = normalized(stripComments(source(HOME)))
+    private val focus = normalized(stripComments(source(FOCUS)))
     private val slots = normalized(stripComments(source(SLOTS)))
 
     @Test
@@ -158,19 +159,22 @@ class HomeFocusedCardContractTest {
 
     @Test
     fun `every rail kind registers its cards under its own key as they compose`() {
+        // The key families' spelling lives in HomeReturnFocus.kt beside the row
+        // lookup the return restore uses - one declaration, so a card's key and
+        // the row it is found back on cannot disagree.
         assertTrue(
             "the Continue Watching cards, in the built-in row's own key family - " +
                 "one title can be a catalog card and a Continue Watching card at " +
                 "once, and one key must not mean two places to put the D-pad back",
             home.contains("val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id") &&
-                home.contains(
-                    "private const val CONTINUE_WATCHING_CARD_KEY_PREFIX = \"upnext:\""
+                focus.contains(
+                    "internal const val CONTINUE_WATCHING_CARD_KEY_PREFIX = \"upnext:\""
                 )
         )
         assertTrue(
             "and the Upcoming cards, likewise",
             home.contains("val cardKey = UPCOMING_CARD_KEY_PREFIX + upcoming.id") &&
-                home.contains("private const val UPCOMING_CARD_KEY_PREFIX = \"upcoming:\"")
+                focus.contains("internal const val UPCOMING_CARD_KEY_PREFIX = \"upcoming:\"")
         )
         assertTrue(
             "and the KB tiles put themselves in Home's map rather than only " +
@@ -242,6 +246,7 @@ class HomeFocusedCardContractTest {
 
     private companion object {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val FOCUS = "com/kennyb1201/kbstream/ui/home/HomeReturnFocus.kt"
         const val SLOTS = "com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt"
     }
 }

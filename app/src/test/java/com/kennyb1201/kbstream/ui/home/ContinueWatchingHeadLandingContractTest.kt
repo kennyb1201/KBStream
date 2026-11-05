@@ -150,10 +150,13 @@ class ContinueWatchingHeadLandingContractTest {
             scroll < ask
         )
         assertEquals(
-            "the two landings' scrolls are the only scrollToItems in Home - " +
-                "one per rail (see the Upcoming rail's own landing)",
+            "the two landings' scrolls are the only RAIL scrolls in Home - " +
+                "one per rail (see the Upcoming rail's own landing). Home also " +
+                "scrolls its rails COLUMN when a return from Detail has to " +
+                "reach a row that is not composed yet, which moves the column " +
+                "and not a rail's head.",
             2,
-            home.split("scrollToItem(").size - 1
+            home.split("railState.scrollToItem(").size - 1
         )
     }
 

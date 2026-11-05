@@ -19,15 +19,20 @@ import org.junit.Test
 class HomeRailCardKeyContractTest {
 
     private val home = normalized(stripComments(source(HOME)))
+    private val focus = normalized(stripComments(source(FOCUS)))
 
     @Test
     fun `a catalog card's registry key names its rail`() {
         assertTrue(
-            "the catalog rail must build a per-rail prefix",
-            home.contains(
-                "val catalogCardKeyPrefix = \"catalog|\" + rail.addonName + " +
-                    "\"::\" + rail.catalogId + \"::\" + rail.type + \"|\""
-            )
+            "the catalog rail must build its per-rail prefix with the ONE helper " +
+                "the row lookup reads too (HomeReturnFocus.kt), not by hand: two " +
+                "spellings would let a card's key and its row disagree",
+            focus.contains(
+                "internal fun railCardKeyPrefix(rail: Rail): String = " +
+                    "CATALOG_CARD_KEY_PREFIX + rail.addonName + \"::\" + " +
+                    "rail.catalogId + \"::\" + rail.type + \"|\""
+            ) &&
+                home.contains("val catalogCardKeyPrefix = railCardKeyPrefix(rail)")
         )
 
         val registration = home.substringAfter("DisposableEffect(requester) {")
@@ -106,5 +111,6 @@ class HomeRailCardKeyContractTest {
 
     private companion object {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val FOCUS = "com/kennyb1201/kbstream/ui/home/HomeReturnFocus.kt"
     }
 }
