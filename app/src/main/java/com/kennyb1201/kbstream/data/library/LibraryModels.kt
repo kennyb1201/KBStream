@@ -60,6 +60,36 @@ enum class LibrarySource(val label: String) {
 
     /** True for a list this device owns and can rename/delete. */
     val isLocalList: Boolean get() = this == LOCAL_LIST
+
+    /**
+     * True for a list the Library rail can rename and delete.
+     *
+     * A local list is both, entirely on this device. A Trakt, MDBList or
+     * BingeCat list is the same pair on the service that holds it, through the
+     * API each of them documents for its own manageable lists (owned static
+     * lists for MDBList, manual lists for BingeCat, the account's own for
+     * Trakt). A Simkl row can be neither - Simkl exposes no custom lists at all
+     * - so the rail offers no action for one rather than an action that fails.
+     */
+    val canManageList: Boolean
+        get() = this == LOCAL_LIST || this == TRAKT_LIST ||
+            this == MDBLIST_LIST || this == BINGECAT_LIST
+
+    /**
+     * Where a delete of a list in this source goes, for the confirm dialog.
+     *
+     * The wording is the point: deleting a local list and deleting a Trakt list
+     * are different promises, and a dialog that says only "Delete list?" is how
+     * one gets taken for the other.
+     */
+    val deleteDestinationLabel: String
+        get() = when (this) {
+            LOCAL_LIST -> "this device"
+            TRAKT_LIST -> "Trakt"
+            MDBLIST_LIST -> "MDBList"
+            BINGECAT_LIST -> "BingeCat"
+            else -> label
+        }
 }
 
 /**

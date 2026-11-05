@@ -5,6 +5,7 @@ import okhttp3.Response as OkHttpResponse
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
+import retrofit2.http.PUT
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
@@ -211,6 +212,40 @@ interface TraktApiService {
         @Query("limit") limit: Int = 100,
         @Query("page") page: Int = 1
     ): Response<List<TraktListItem>>
+
+    /**
+     * `POST /users/me/lists` - a new personal list on the authenticated account.
+     *
+     * Trakt answers 201 with the created list, which is the only place its id
+     * and slug come from: the rail is re-read after the write rather than
+     * guessing the row, so a create that landed still shows up even if this
+     * response was unreadable.
+     */
+    @POST("users/me/lists")
+    suspend fun createList(
+        @Header("Authorization") authorization: String,
+        @Body body: TraktListWriteRequest
+    ): Response<TraktUserList>
+
+    /**
+     * `PUT /users/me/lists/{listId}` - a list's metadata.
+     *
+     * Fields left out of the body keep their saved value (see
+     * [TraktListWriteRequest]), which is what makes a rename a rename.
+     */
+    @PUT("users/me/lists/{listId}")
+    suspend fun updateList(
+        @Header("Authorization") authorization: String,
+        @Path("listId") listId: String,
+        @Body body: TraktListWriteRequest
+    ): Response<TraktUserList>
+
+    /** `DELETE /users/me/lists/{listId}` - a hard delete on Trakt's side. */
+    @DELETE("users/me/lists/{listId}")
+    suspend fun deleteList(
+        @Header("Authorization") authorization: String,
+        @Path("listId") listId: String
+    ): Response<Unit>
 
     /** `POST /users/me/lists/{listId}/items` - an item add. */
     @POST("users/me/lists/{listId}/items")

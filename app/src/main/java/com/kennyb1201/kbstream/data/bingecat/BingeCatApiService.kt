@@ -4,9 +4,11 @@ import okhttp3.Interceptor
 import okhttp3.Response as OkHttpResponse
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.Header
 import retrofit2.http.GET
 import retrofit2.http.HTTP
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -80,6 +82,46 @@ interface BingeCatApiService {
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 100
     ): Response<BingeCatListsResponse>
+
+    /**
+     * `POST /api/v1/profiles/{profileId}/lists` - a new MANUAL list on the
+     * mapped profile (`lists:write`).
+     *
+     * Profile-pinned like every other write: a root-form create would land the
+     * list on whatever profile BingeCat last had open in a browser. 201 returns
+     * the list; 202 (the job form the AI/filter kinds use) carries it too, so
+     * one response type reads both.
+     */
+    @POST("api/v1/profiles/{profileId}/lists")
+    suspend fun createList(
+        @Header("Authorization") authorization: String,
+        @Path("profileId") profileId: Long,
+        @Body body: BingeCatListCreateRequest
+    ): Response<BingeCatListResponse>
+
+    /**
+     * `PATCH /api/v1/lists/{ref}` - a list's metadata (`lists:write`).
+     *
+     * The body carries the name alone (`enabled` is untouched by a rename; it
+     * belongs to BingeCat's publishing switch, which this app does not offer).
+     */
+    @PATCH("api/v1/lists/{ref}")
+    suspend fun patchList(
+        @Header("Authorization") authorization: String,
+        @Path("ref") ref: String,
+        @Body body: BingeCatListPatchRequest
+    ): Response<BingeCatListResponse>
+
+    /**
+     * `DELETE /api/v1/lists/{ref}` - a SOFT delete on BingeCat's side
+     * (`lists:write`). `restore` can bring it back, but this app offers no
+     * undelete, so the confirm dialog says the list leaves BingeCat.
+     */
+    @DELETE("api/v1/lists/{ref}")
+    suspend fun deleteList(
+        @Header("Authorization") authorization: String,
+        @Path("ref") ref: String
+    ): Response<BingeCatListResponse>
 
     /** A list's entries, addressed by the list's own `ref`. */
     @GET("api/v1/lists/{ref}/items")

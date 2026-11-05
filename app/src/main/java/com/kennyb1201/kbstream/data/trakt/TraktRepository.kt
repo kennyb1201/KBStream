@@ -1214,6 +1214,78 @@ class TraktRepository private constructor(private val context: Context?) {
     }
 
     /**
+     * Creates a personal list on the account, private unless the viewer changes
+     * it on Trakt afterwards.
+     *
+     * The name is the only thing the Library's create field collects, and it is
+     * the only thing sent: Trakt's body requires nothing else, and a default
+     * description would be a sentence the viewer never wrote. A blank name is
+     * refused before a request is made - Trakt would answer it with a 422 the
+     * row could only render as "failed" anyway.
+     *
+     * The rail is re-read by the caller after a true; the created list's id is
+     * deliberately not returned, because Trakt's list ids are not what the
+     * rail is keyed by (see [traktListShelfId]).
+     */
+    suspend fun createList(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        if (!TraktConfig.isConfigured) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.createList(
+                "Bearer $token",
+                TraktListWriteRequest(name = trimmed, privacy = "private")
+            )
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /**
+     * Renames one personal list the account owns.
+     *
+     * Name only: privacy, description and comment settings are absent from the
+     * body, and Trakt keeps their saved values (see [TraktListWriteRequest]). A
+     * list that is not the viewer's own - a public list someone else made, or a
+     * list this account only follows - is refused by the server and comes back
+     * here as false, which is the honest answer: nothing was renamed.
+     */
+    suspend fun renameList(listId: String, name: String): Boolean {
+        val trimmed = name.trim()
+        if (listId.isBlank() || trimmed.isEmpty()) return false
+        if (!TraktConfig.isConfigured) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.updateList("Bearer $token", listId, TraktListWriteRequest(name = trimmed))
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /**
+     * Deletes one personal list the account owns - a HARD delete on Trakt.
+     *
+     * This is the remote verb the Library's "Delete from Trakt" names, and it
+     * is why that action is spelled differently from the device-local removal:
+     * there is no undo here, and the titles Trakt held are not touched (they
+     * stay in this profile's Library if they were also saved locally).
+     */
+    suspend fun deleteList(listId: String): Boolean {
+        if (listId.isBlank()) return false
+        if (!TraktConfig.isConfigured) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.deleteList("Bearer $token", listId)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        return response.isSuccessful
+    }
+
+    /**
      * The removal body both watchlist/list writes share.
      *
      * Null when neither id can address the title: an empty ids object is a

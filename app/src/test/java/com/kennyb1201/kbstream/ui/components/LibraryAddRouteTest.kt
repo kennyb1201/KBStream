@@ -123,6 +123,19 @@ class LibraryAddRouteTest {
     }
 
     @Test
+    fun `the Simkl watchlist row goes to the Simkl watchlist`() {
+        // Simkl's only writable list is its watchlist, saved as plantowatch; it
+        // has no custom-list endpoints at all, so there is no Simkl list row to
+        // route and this is the whole destination.
+        assertEquals(
+            LibraryAddRoute.SimklWatchlist,
+            libraryAddRoute(
+                LibraryPickerRow(isSimklWatchlist = true, list = list(-4))
+            )
+        )
+    }
+
+    @Test
     fun `the BingeCat watchlist row goes to the BingeCat watchlist`() {
         assertEquals(
             "a BingeCat save is wired to the row's flag, not to its placeholder list",

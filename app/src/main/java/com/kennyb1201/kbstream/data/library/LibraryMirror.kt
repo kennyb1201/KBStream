@@ -249,11 +249,10 @@ object LibraryMirror {
      *
      * Split out for the review queue: its confirmation already tombstoned the
      * local rows in one write, and a tracker copy left behind would resurface
-     * the title in the Library merge. MDBList and Trakt are asked to drop it,
-     * best-effort and independent of each other; [title] only names the row in
-     * the log, so a surviving remote copy is visible in diagnostics instead of
-     * silent. Simkl has no remove-from-watchlist endpoint, so a Simkl copy is
-     * left to the tombstone-aware merge and to a removal on simkl.com.
+     * the title in the Library merge. MDBList, Trakt, BingeCat and Simkl are
+     * asked to drop it, best-effort and independent of each other; [title] only
+     * names the row in the log, so a surviving remote copy is visible in
+     * diagnostics instead of silent.
      */
     fun removeFromTrackers(
         context: Context,
@@ -340,8 +339,32 @@ object LibraryMirror {
             }
         }
 
-        // Simkl has no remove-from-watchlist endpoint (only add-to-list
-        // moves between statuses), so Simkl rows are add-only.
+        // Simkl's own copy, on the same load-bearing rule: the merge reads
+        // Simkl's list back, so a copy left behind puts the title on the rail
+        // again a moment after the viewer removed it. Simkl has no dedicated
+        // remove route - its documented path is a history delete, which would
+        // also wipe watched history and the rating - so the list-only inverse
+        // is used (see SimklRepository.removeFromWatchlist).
+        if (simklConnected(context)) {
+            if (imdbId != null || tmdbId != null) {
+                mirrorScope.launch {
+                    runCatchingCancellable {
+                        SimklRepository.getInstance(context).removeFromWatchlist(
+                            mediaType = type,
+                            imdbId = imdbId,
+                            tmdbId = tmdbId,
+                            simklId = null
+                        )
+                    }.onFailure { e ->
+                        Log.e(
+                            TAG,
+                            "simkl removeFromWatchlist failed for $label: ${e.message}",
+                            e
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /** Removes from one MDBList personal list (ids only; best-effort). */

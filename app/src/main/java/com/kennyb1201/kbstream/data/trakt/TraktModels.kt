@@ -318,6 +318,26 @@ data class TraktListIds(
     @Json(name = "slug") val slug: String? = null
 )
 
+/**
+ * The body of a list create (`POST /users/me/lists`) and of a list update
+ * (`PUT /users/me/lists/{id}`).
+ *
+ * Trakt takes the list's metadata as one object on both verbs. This app only
+ * ever sets the name: a rename from Library must not quietly flip a list's
+ * privacy or drop its description, so every other field is left off the wire
+ * on an update (absent means "keep"). A create sends the app's one default -
+ * private - because a list the viewer makes on a TV is not something to
+ * publish to their followers by accident.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktListWriteRequest(
+    @Json(name = "name") val name: String,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "privacy") val privacy: String? = null,
+    @Json(name = "display_numbers") val displayNumbers: Boolean? = null,
+    @Json(name = "allow_comments") val allowComments: Boolean? = null
+)
+
 /** One row of `GET /users/{user}/lists/{list}/items/{type}`. */
 @JsonClass(generateAdapter = true)
 data class TraktListItem(

@@ -27,8 +27,10 @@ import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -156,6 +158,18 @@ data class LibraryUiState(
     val lists: List<LibraryList> = emptyList(),
     val selectedList: LibraryList? = null,
     val selectedListItems: List<LibraryItem> = emptyList(),
+
+    /**
+     * The last list create/rename/delete that FAILED, worded for the viewer
+     * ("Couldn't delete \"Road trip\" from Trakt.").
+     *
+     * A list action is a remote write as well as a screen event, so its
+     * outcome cannot be assumed from the press: the dialog closes, the sheet
+     * goes, and a refusal would otherwise look exactly like a success whose
+     * row simply stayed put. Drawn once and cleared (see
+     * [LibraryViewModel.clearListActionMessage]).
+     */
+    val listActionMessage: String? = null,
 
     // TMDB rating per (type::imdb-or-tmdb key) for the sort + captions.
     val ratings: Map<String, Double> = emptyMap(),
@@ -337,15 +351,213 @@ class LibraryViewModel(
 
     /** Creates a local personal list and selects it. */
     fun createLocalList(name: String) {
+        createList(LibrarySource.LOCAL_LIST, name)
+    }
+
+    /**
+     * Creates a personal list on [source] - the local store, or one of the
+     * accounts that accept a create - and refreshes the rail from the source's
+     * own answer.
+     *
+     * The create is async everywhere: the rail's field closes on the press, so
+     * the new row cannot be painted from the field's own text. A local list is
+     * appended straight away (it is a synchronous disk write and the rail is
+     * keyed by its id), while a remote list is only painted once the source's
+     * lists read returns it - a row that exists on the TV but not on Trakt
+     * would be a claim the account never made.
+     *
+     * Simkl is absent by nature: its API has no custom-list endpoints at all,
+     * so there is no create to offer and no failed write to report.
+     */
+    fun createList(source: LibrarySource, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
         viewModelScope.launch {
-            val created = LocalLibraryStore.createList(getApplication(), name)
-            if (created != null) {
-                _uiState.value = _uiState.value.copy(
-                    lists = _uiState.value.lists + created
-                )
-                selectList(created)
+            val appContext = getApplication<Application>()
+            val created = when (source) {
+                LibrarySource.LOCAL_LIST -> {
+                    val local = LocalLibraryStore.createList(appContext, trimmed)
+                    if (local != null) {
+                        _uiState.value = _uiState.value.copy(
+                            lists = _uiState.value.lists + local
+                        )
+                        selectList(local)
+                    }
+                    local != null
+                }
+
+                LibrarySource.TRAKT_LIST -> withContext(Dispatchers.IO) {
+                    runCatchingCancellable { traktRepository.createList(trimmed) }
+                        .getOrDefault(false)
+                }
+
+                LibrarySource.MDBLIST_LIST -> withContext(Dispatchers.IO) {
+                    runCatchingCancellable {
+                        MdbListClient.createList(appContext, trimmed) != null
+                    }.getOrDefault(false)
+                }
+
+                LibrarySource.BINGECAT_LIST -> withContext(Dispatchers.IO) {
+                    runCatchingCancellable { bingecatRepository.createList(trimmed) }
+                        .getOrDefault(false)
+                }
+
+                else -> false
+            }
+            if (source == LibrarySource.LOCAL_LIST) return@launch
+            if (created) {
+                refreshListsOnly()
+            } else {
+                noteListAction("Couldn't create \"$trimmed\" on ${listSourceName(source)}.")
             }
         }
+    }
+
+    /**
+     * Renames one list where the source allows it: the local store for a list
+     * this device owns, or the source's own rename for Trakt's, MDBList's and
+     * BingeCat's manageable lists.
+     *
+     * The row is repainted ONLY after a success, and the rail is re-read after
+     * that: a rename the account refused (a list that is not the viewer's) must
+     * not leave a name on the TV that the service does not have.
+     */
+    fun renameList(list: LibraryList, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || trimmed == list.name) return
+        viewModelScope.launch {
+            val appContext = getApplication<Application>()
+            val renamed = when (list.source) {
+                LibrarySource.LOCAL_LIST -> LocalLibraryStore.renameList(
+                    appContext,
+                    list.id,
+                    trimmed
+                )
+
+                LibrarySource.TRAKT_LIST -> list.remoteId?.let { id ->
+                    withContext(Dispatchers.IO) {
+                        runCatchingCancellable {
+                            traktRepository.renameList(id, trimmed)
+                        }.getOrDefault(false)
+                    }
+                } ?: false
+
+                LibrarySource.MDBLIST_LIST -> withContext(Dispatchers.IO) {
+                    runCatchingCancellable {
+                        MdbListClient.renameList(appContext, list.id, trimmed)
+                    }.getOrDefault(false)
+                }
+
+                LibrarySource.BINGECAT_LIST -> list.remoteId?.let { ref ->
+                    withContext(Dispatchers.IO) {
+                        runCatchingCancellable {
+                            bingecatRepository.renameList(ref, trimmed)
+                        }.getOrDefault(false)
+                    }
+                } ?: false
+
+                else -> false
+            }
+            if (!renamed) {
+                noteListAction(
+                    "Couldn't rename \"${list.name}\" on ${list.locationLabel}."
+                )
+                return@launch
+            }
+            val state = _uiState.value
+            val sameList = { candidate: LibraryList ->
+                candidate.id == list.id && candidate.source == list.source
+            }
+            val openList = state.selectedList
+            _uiState.value = state.copy(
+                lists = state.lists.map { if (sameList(it)) it.copy(name = trimmed) else it },
+                selectedList = openList?.let { if (sameList(it)) it.copy(name = trimmed) else it }
+            )
+            if (openList != null && sameList(openList)) {
+                canonicalListItems = canonicalListItems.map { it.copy(listName = trimmed) }
+                pushDisplay()
+            }
+            if (list.source == LibrarySource.LOCAL_LIST) return@launch
+            refreshListsOnly()
+        }
+    }
+
+    /**
+     * Deletes one list FROM ITS SOURCE - Trakt's hard delete, MDBList's static
+     * list delete, BingeCat's soft delete.
+     *
+     * Deliberately separate from [deleteLocalList]: the device-local removal of
+     * a local list and the removal of a list from a service are different
+     * promises, and the confirm dialog names which one is being made. A source
+     * that refused keeps its row on the rail (and says so), because a remote
+     * list still exists whether or not this screen drew it.
+     */
+    fun deleteRemoteList(list: LibraryList) {
+        if (list.source.isLocalList) return
+        viewModelScope.launch {
+            val appContext = getApplication<Application>()
+            val deleted = when (list.source) {
+                LibrarySource.TRAKT_LIST -> list.remoteId?.let { id ->
+                    withContext(Dispatchers.IO) {
+                        runCatchingCancellable { traktRepository.deleteList(id) }
+                            .getOrDefault(false)
+                    }
+                } ?: false
+
+                LibrarySource.MDBLIST_LIST -> withContext(Dispatchers.IO) {
+                    runCatchingCancellable {
+                        MdbListClient.deleteList(appContext, list.id)
+                    }.getOrDefault(false)
+                }
+
+                LibrarySource.BINGECAT_LIST -> list.remoteId?.let { ref ->
+                    withContext(Dispatchers.IO) {
+                        runCatchingCancellable { bingecatRepository.deleteList(ref) }
+                            .getOrDefault(false)
+                    }
+                } ?: false
+
+                else -> false
+            }
+            if (!deleted) {
+                noteListAction(
+                    "Couldn't delete \"${list.name}\" from ${list.locationLabel}."
+                )
+                return@launch
+            }
+            val state = _uiState.value
+            val sameList = { candidate: LibraryList ->
+                candidate.id == list.id && candidate.source == list.source
+            }
+            val openList = state.selectedList
+            _uiState.value = state.copy(
+                lists = state.lists.filterNot { sameList(it) },
+                selectedList = openList?.takeIf { !sameList(it) }
+            )
+            if (openList != null && sameList(openList)) {
+                canonicalListItems = emptyList()
+            }
+            recomputeAll()
+            refreshListsOnly()
+        }
+    }
+
+    /** Dismisses the list-action message after the screen has shown it. */
+    fun clearListActionMessage() {
+        _uiState.value = _uiState.value.copy(listActionMessage = null)
+    }
+
+    private fun noteListAction(message: String) {
+        _uiState.value = _uiState.value.copy(listActionMessage = message)
+    }
+
+    /** The rail's name for a list source, for a failure the viewer has to read. */
+    private fun listSourceName(source: LibrarySource): String = when (source) {
+        LibrarySource.LOCAL_LIST -> "this device"
+        LibrarySource.TRAKT_LIST -> "Trakt"
+        LibrarySource.MDBLIST_LIST -> "MDBList"
+        LibrarySource.BINGECAT_LIST -> "BingeCat"
+        else -> source.label
     }
 
     /** Deletes a local personal list (MDBList lists are remote-managed). */
@@ -365,10 +577,11 @@ class LibraryViewModel(
     }
 
     /**
-     * Long-press remove on any Library row: local rows drop locally,
-     * MDBList rows mirror the removal remotely (best-effort). Simkl rows
-     * are add-only (Simkl exposes no remove-from-watchlist endpoint), so
-     * they offer no remove.
+     * Long-press remove on any Library row: local rows drop locally, and every
+     * tracker's watchlist copy is asked to drop too (best-effort) so the merged
+     * rail does not bring the title back on the next refresh. Simkl's copy goes
+     * through its list-only un-save; nothing here ever touches watched history
+     * or a rating.
      */
     fun removeItem(item: LibraryItem) {
         viewModelScope.launch {
@@ -477,8 +690,30 @@ class LibraryViewModel(
                     pushDisplay()
                 }
 
-                // Simkl: add-only; no remove path exists on the API.
-                LibrarySource.SIMKL_WATCHLIST, LibrarySource.SIMKL_LIST -> Unit
+                LibrarySource.SIMKL_WATCHLIST -> {
+                    // Simkl's watchlist is writable in both directions now: the
+                    // removal is the list-only inverse of the add (never the
+                    // history delete, which would take watched history and the
+                    // rating with it - see SimklRepository).
+                    runCatchingCancellable {
+                        simklRepository.removeFromWatchlist(
+                            mediaType = item.mediaType,
+                            imdbId = item.imdbId,
+                            tmdbId = item.tmdbId,
+                            simklId = item.simklId
+                        )
+                    }.onFailure {
+                        Log.w(TAG, "Simkl watchlist removal failed: ${it.message}")
+                    }
+                    val key = LocalLibraryStore.dedupeKey(item)
+                    canonicalWatchlist = canonicalWatchlist.filter {
+                        LocalLibraryStore.dedupeKey(it) != key
+                    }
+                    recomputeAll()
+                }
+
+                // The Simkl list bucket has no write path on the API.
+                LibrarySource.SIMKL_LIST -> Unit
 
                 LibrarySource.BINGECAT_WATCHLIST -> {
                     // Step 3 gives BingeCat a watchlist remove, so the Library's
@@ -843,9 +1078,13 @@ class LibraryViewModel(
             // BingeCat shelves survive a local-list mutation too: this path
             // replaces the rail wholesale, so leaving them out would make every
             // rename/delete on this device drop the BingeCat lists until the
-            // next full refresh. They come from the snapshot's cache, so this
-            // costs no request.
-            val bingecatLists = bingecatRepository.cachedSnapshot()?.lists.orEmpty()
+            // next full refresh. `snapshot()` is TTL-cached, so an ordinary
+            // local-list mutation costs no request - and a BingeCat create or
+            // delete (which drops that cache) re-reads here, which is the only
+            // way the new/removed list reaches the rail in the same breath.
+            val bingecatLists = runCatchingCancellable {
+                bingecatRepository.snapshot()
+            }.getOrNull()?.lists.orEmpty()
                 .mapIndexedNotNull { index, list ->
                     list.name.takeIf { it.isNotBlank() }?.let { name ->
                         LibraryList(

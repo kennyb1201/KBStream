@@ -121,6 +121,32 @@ data class BingeCatListSummary(
     @Json(name = "is_recommendation") val isRecommendation: Boolean = false
 )
 
+/**
+ * `ListCreateRequest` - `POST /api/v1/profiles/{id}/lists`.
+ *
+ * `content_type` is required by the contract and `kind` decides which of the
+ * create fields are meaningful. Library's create field collects a NAME, so the
+ * only kind it sends is `manual` (the one the viewer curates by hand), and its
+ * content type is `all`: a list made from a mixed Library must be able to hold
+ * both movies and shows. An AI / filter / smart list is BingeCat's engine's to
+ * make, never this dialog's.
+ */
+@JsonClass(generateAdapter = true)
+data class BingeCatListCreateRequest(
+    @Json(name = "kind") val kind: String = "manual",
+    @Json(name = "name") val name: String,
+    @Json(name = "content_type") val contentType: String = "all",
+    @Json(name = "enabled") val enabled: Boolean = true
+)
+
+/** `ListPatchRequest` - `PATCH /api/v1/lists/{ref}`; a rename sends the name alone. */
+@JsonClass(generateAdapter = true)
+data class BingeCatListPatchRequest(val name: String)
+
+/** `ListResponse` - the list a create/patch/delete answered with. */
+@JsonClass(generateAdapter = true)
+data class BingeCatListResponse(val list: BingeCatListSummary? = null)
+
 /** `GET /api/v1/lists/{ref}/items`. */
 @JsonClass(generateAdapter = true)
 data class BingeCatListItemsResponse(

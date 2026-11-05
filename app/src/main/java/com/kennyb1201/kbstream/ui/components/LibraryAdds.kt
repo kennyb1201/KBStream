@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -220,6 +221,8 @@ internal object LibraryAdds {
 
         LibraryAddRoute.TraktWatchlist -> addToTraktWatchlist(context, target)
 
+        LibraryAddRoute.SimklWatchlist -> addToSimklWatchlist(context, target)
+
         is LibraryAddRoute.TraktList -> addToTraktList(context, route.remoteId, target)
 
         LibraryAddRoute.BingeCatWatchlist -> addToBingeCatWatchlist(context, target)
@@ -285,6 +288,31 @@ internal object LibraryAdds {
                 isMovie = LocalLibraryStore.normalizedType(target.mediaType) == "movie",
                 imdbId = target.imdbId,
                 tmdbId = target.tmdbId,
+                title = target.title,
+                year = target.year
+            )
+        }.getOrDefault(false)
+    }
+
+    /**
+     * The Simkl watchlist row: remote-only, and it reports the watchlist
+     * write's own answer.
+     *
+     * `plantowatch` is the only status this row sends. It is a save, not a
+     * status editor: a movie Simkl will not accept as `watching` or `hold` is
+     * exactly the title someone is saving to watch later.
+     */
+    private suspend fun addToSimklWatchlist(
+        context: Context,
+        target: LibraryAddTarget
+    ): Boolean {
+        if (!LibraryMirror.simklConnected(context)) return false
+        return runCatchingCancellable {
+            SimklRepository.getInstance(context).addToWatchlist(
+                mediaType = LocalLibraryStore.normalizedType(target.mediaType),
+                imdbId = target.imdbId,
+                tmdbId = target.tmdbId,
+                simklId = null,
                 title = target.title,
                 year = target.year
             )
@@ -427,6 +455,9 @@ internal sealed interface LibraryAddRoute {
     /** The account's Trakt watchlist (remote only). */
     data object TraktWatchlist : LibraryAddRoute
 
+    /** The account's Simkl watchlist: saved as `plantowatch` (remote only). */
+    data object SimklWatchlist : LibraryAddRoute
+
     /** One MDBList personal list. */
     data class MdbListList(val id: Int) : LibraryAddRoute
 
@@ -460,6 +491,7 @@ internal fun libraryAddRoute(row: LibraryPickerRow): LibraryAddRoute {
         row.isMyList -> LibraryAddRoute.MyList
         row.isMdbListWatchlist -> LibraryAddRoute.MdbListWatchlist
         row.isTraktWatchlist -> LibraryAddRoute.TraktWatchlist
+        row.isSimklWatchlist -> LibraryAddRoute.SimklWatchlist
         row.isBingeCatWatchlist -> LibraryAddRoute.BingeCatWatchlist
         list == null || list.id == 0 -> LibraryAddRoute.Unroutable
         // A list's SOURCE decides where it lives, not its shelf id's sign:

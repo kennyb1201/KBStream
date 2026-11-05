@@ -375,6 +375,54 @@ class SimklRepository(
         }.getOrDefault(false)
     }
 
+    /**
+     * Removes one title from the viewer's Simkl list, without recording a watch
+     * event and without touching watched history.
+     *
+     * Simkl has no dedicated remove route. The documented path -
+     * `POST /sync/history/remove` with the item alone - deletes the title from
+     * the user's LIBRARY *and* their watch history, and clears its rating with
+     * it; using it to un-save a plan-to-watch title would destroy data the
+     * viewer never asked to lose, so it is not used here.
+     *
+     * `POST /sync/add-to-list` with `to: "remove"` is the list-only inverse
+     * (the endpoint operates on the five watchlist statuses, and this value
+     * takes the item out of them). Simkl documents it as a legacy value not to
+     * be used in new integrations, which is exactly why this is spelled
+     * carefully: it is sent only from an explicit un-save, its answer is read
+     * (`landed`), and a refusal is this function's false - nothing is lost if
+     * the value ever stops being accepted, because a rejected request leaves
+     * the account unchanged and the row reports the failure.
+     */
+    suspend fun removeFromWatchlist(
+        mediaType: String,
+        imdbId: String?,
+        tmdbId: Int?,
+        simklId: Int?
+    ): Boolean {
+        if (!isConfigured() || !hasToken()) return false
+        val ids = SimklAddToListIds(
+            imdb = imdbId?.takeIf { it.isNotBlank() && it.startsWith("tt") },
+            tmdb = tmdbId?.takeIf { it > 0 },
+            simkl = simklId
+        )
+        if (ids.imdb == null && ids.tmdb == null && ids.simkl == null) {
+            return false
+        }
+
+        val isMovie = mediaType.lowercase() == "movie"
+        val entry = SimklAddToListEntry(to = "remove", ids = ids)
+        val body = SimklAddToListRequest(
+            movies = if (isMovie) listOf(entry) else emptyList(),
+            shows = if (!isMovie) listOf(entry) else emptyList()
+        )
+
+        return runCatchingCancellable {
+            val response = api.addToWatchlist(bearer(requireAccessToken()), body)
+            response.isSuccessful && response.body()?.landed != false
+        }.getOrDefault(false)
+    }
+
     private val allShowsJsonAdapter:
         JsonAdapter<SimklAllShowsResponse> =
         moshi.adapter(

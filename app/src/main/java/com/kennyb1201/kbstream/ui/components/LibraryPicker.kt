@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.trakt.TraktListEntry
 import com.kennyb1201.kbstream.data.trakt.TraktListRef
+import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.FormFactor
 import com.kennyb1201.kbstream.ui.components.touch.KBButton as TouchKBButton
@@ -98,6 +99,8 @@ data class LibraryPickerRow(
     val isMdbListWatchlist: Boolean = false,
     /** Trakt watchlist row (remote-only). */
     val isTraktWatchlist: Boolean = false,
+    /** Simkl watchlist row (remote-only, saved as `plantowatch`). */
+    val isSimklWatchlist: Boolean = false,
     /** BingeCat watchlist row (remote-only, step 3). */
     val isBingeCatWatchlist: Boolean = false,
     /** Any other list: local, MDBList, Trakt or BingeCat. */
@@ -108,6 +111,7 @@ data class LibraryPickerRow(
             isMyList -> "MY LIST"
             isMdbListWatchlist -> "Watchlist · MDBList"
             isTraktWatchlist -> "Watchlist · Trakt"
+            isSimklWatchlist -> "Watchlist · Simkl"
             isBingeCatWatchlist -> "Watchlist · BingeCat"
             else -> list?.name ?: ""
         }
@@ -117,6 +121,7 @@ data class LibraryPickerRow(
             isMyList -> "This profile · mirrors to connected trackers"
             isMdbListWatchlist -> "${list?.itemCount ?: 0} titles · remote"
             isTraktWatchlist -> "${list?.itemCount ?: 0} titles · remote"
+            isSimklWatchlist -> "${list?.itemCount ?: 0} titles · remote"
             isBingeCatWatchlist -> "${list?.itemCount ?: 0} titles · remote"
             else -> "${list?.itemCount ?: 0} titles · ${list?.locationLabel ?: "MDBList"}"
         }
@@ -155,6 +160,21 @@ fun LibraryAddToListDialog(
     var showCreateField by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
     var loadingLists by remember { mutableStateOf(true) }
+
+    /**
+     * Where the create row's CREATE goes, and which sources it offers.
+     *
+     * The default is the behaviour this row has always had: an MDBList list
+     * when a key is set (reusing an identically-named one so the add mirrors to
+     * the account), a local list otherwise. Trakt and BingeCat join it when
+     * they are connected, because both now accept a create from the app; Simkl
+     * never does, because its API has no custom lists at all.
+     */
+    var createSources by remember {
+        mutableStateOf(listOf(LibrarySource.LOCAL_LIST))
+    }
+    var createSource by remember { mutableStateOf(LibrarySource.LOCAL_LIST) }
+    var createError by remember { mutableStateOf<String?>(null) }
 
     /**
      * The target every row of this dialog actually adds, with the IMDB id
@@ -293,6 +313,27 @@ fun LibraryAddToListDialog(
             remoteRows = remoteRows + traktRows
         }
 
+        // Simkl, beside Trakt and MDBList: its watchlist is the one list the
+        // API lets this app write (`sync/add-to-list`), so it is a destination
+        // row like the other watchlists - offered while connected even at zero
+        // titles. Simkl has no custom-list API, so there are no list rows
+        // beside it, and that is a gap in the API, not a missing row here.
+        if (LibraryMirror.simklConnected(context)) {
+            val simkl = SimklRepository.getInstance(context)
+            val watchlistCount = withContext(Dispatchers.IO) {
+                runCatchingCancellable { simkl.getWatchlistItems().size }.getOrDefault(0)
+            }
+            remoteRows = remoteRows + LibraryPickerRow(
+                isSimklWatchlist = true,
+                list = LibraryList(
+                    id = -4,
+                    name = "Watchlist",
+                    itemCount = watchlistCount,
+                    source = LibrarySource.SIMKL_WATCHLIST
+                )
+            )
+        }
+
         // BingeCat, beside Trakt: the mapped profile's watchlist and its user
         // lists, offered only when a save can actually go out - connected,
         // mapped, and granted lists:write are all one answer (canSave()), so the
@@ -338,6 +379,15 @@ fun LibraryAddToListDialog(
 
         rows = initial + remoteRows
         loadingLists = false
+        // The create row's destinations, from what is actually connected: the
+        // defaults are unchanged (MDBList when a key is set, local otherwise),
+        // and Trakt/BingeCat appear only when their create can land.
+        createSources = buildList {
+            add(if (mdbConnected) LibrarySource.MDBLIST_LIST else LibrarySource.LOCAL_LIST)
+            if (LibraryMirror.traktConnected(context)) add(LibrarySource.TRAKT_LIST)
+            if (LibraryMirror.bingeCatConnected(context)) add(LibrarySource.BINGECAT_LIST)
+        }
+        createSource = createSources.first()
 
         // Membership check: local My List synchronously; MDBList rows via
         // one items fetch per list (capped, fail-soft).
@@ -396,6 +446,25 @@ fun LibraryAddToListDialog(
                     }
             }
         }
+        // Simkl's tick: matched against its watchlist read, the same read the
+        // count above came from. A tick (or its absence) is a claim about the
+        // account, so it is taken from the account's own answer rather than
+        // from what this dialog just wrote.
+        if (LibraryMirror.simklConnected(context)) {
+            withContext(Dispatchers.IO) {
+                runCatchingCancellable {
+                    SimklRepository.getInstance(context).getWatchlistItems()
+                }.getOrDefault(emptyList()).any { row ->
+                    LocalLibraryStore.matches(
+                        row,
+                        normalizedType,
+                        imdb,
+                        tmdb
+                    )
+                }.let { if (it) member += "SIMKL_WATCHLIST" }
+            }
+        }
+
         // BingeCat ticks: the watchlist from the snapshot's own rows (no extra
         // call), and each user list from its items read - the same shape the
         // Trakt block above uses, because a row that claims a membership it has
@@ -446,6 +515,7 @@ fun LibraryAddToListDialog(
         row.isMyList -> "MY_LIST"
         row.isMdbListWatchlist -> "MDB_WATCHLIST"
         row.isTraktWatchlist -> "TRAKT_WATCHLIST"
+        row.isSimklWatchlist -> "SIMKL_WATCHLIST"
         row.isBingeCatWatchlist -> "BINGECAT_WATCHLIST"
         row.list?.source == LibrarySource.LOCAL_LIST -> "local:${row.list.id}"
         row.list?.source == LibrarySource.TRAKT_LIST -> "trakt:${row.list.remoteId}"
@@ -488,43 +558,30 @@ fun LibraryAddToListDialog(
     fun createList() {
         val name = newListName.trim()
         if (name.isEmpty()) return
+        val destination = createSource
+        createError = null
         scope.launch {
             val created = withContext(Dispatchers.IO) {
-                // With a key set, reuse an identically-named MDBList list so
-                // the add mirrors to the account list; otherwise local-only.
-                if (LibraryMirror.mdbListConnected(context)) {
-                    val existing = runCatchingCancellable {
-                        MdbListClient.getUserLists(context)
-                    }.getOrDefault(emptyList())
-                        .firstOrNull { it.name.equals(name, ignoreCase = true) }
-                    if (existing != null) {
-                        LibraryList(
-                            id = existing.id,
-                            name = existing.name,
-                            itemCount = existing.itemCount,
-                            source = com.kennyb1201.kbstream.data.library.LibrarySource.MDBLIST_LIST
-                        )
-                    } else {
-                        runCatchingCancellable {
-                            MdbListClient.createList(context, name)
-                        }.getOrNull()?.let {
-                            LibraryList(
-                                id = it.id,
-                                name = it.name,
-                                itemCount = 0,
-                                source = com.kennyb1201.kbstream.data.library.LibrarySource.MDBLIST_LIST
-                            )
-                        }
-                    } ?: LocalLibraryStore.createList(context, name)
-                } else {
-                    LocalLibraryStore.createList(context, name)
-                }
+                runCatchingCancellable {
+                    createDestination(context, destination, name)
+                }.getOrNull()
             }
             if (created != null) {
                 rows = rows + LibraryPickerRow(list = created)
                 newListName = ""
                 showCreateField = false
                 addRow(LibraryPickerRow(list = created))
+            } else {
+                // The field stays open with the name in it: the viewer asked
+                // for a list that did not get made, and a closed sheet would
+                // read as one that did.
+                createError = "Couldn't create \"$name\" on " +
+                    when (destination) {
+                        LibrarySource.TRAKT_LIST -> "Trakt"
+                        LibrarySource.BINGECAT_LIST -> "BingeCat"
+                        LibrarySource.MDBLIST_LIST -> "MDBList"
+                        else -> "this device"
+                    } + "."
             }
         }
     }
@@ -639,6 +696,21 @@ fun LibraryAddToListDialog(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (showCreateField) {
+                // Which account the new list goes on. Only drawn when there is a
+                // choice: a viewer with no Trakt/BingeCat connected sees the
+                // same field as before, and the MDBList/default behaviour is
+                // unchanged.
+                if (createSources.size > 1) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        createSources.forEach { source ->
+                            PickerAction(
+                                label = pickerSourceLabel(source),
+                                enabled = true
+                            ) { createSource = source }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 KBTextField(
                     value = newListName,
                     onValueChange = { newListName = it },
@@ -647,6 +719,14 @@ fun LibraryAddToListDialog(
                     onDone = { createList() },
                     keepFocusOnDone = true
                 )
+                createError?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KBAccent,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     PickerAction(label = "CREATE", enabled = newListName.isNotBlank()) { createList() }
@@ -835,6 +915,113 @@ private fun matchesTraktEntry(
     val ids = entry.media.ids
     return (imdbId != null && ids?.imdb == imdbId) ||
         (tmdbId != null && ids?.tmdb == tmdbId)
+}
+
+/** The picker's chip name for one create destination. */
+private fun pickerSourceLabel(source: LibrarySource): String = when (source) {
+    LibrarySource.LOCAL_LIST -> "THIS DEVICE"
+    LibrarySource.MDBLIST_LIST -> "MDBLIST"
+    LibrarySource.TRAKT_LIST -> "TRAKT"
+    LibrarySource.BINGECAT_LIST -> "BINGECAT"
+    else -> source.label.uppercase()
+}
+
+/**
+ * Creates one list on [source] for the picker's create row, and answers the
+ * rail-shaped list the row then adds the title to.
+ *
+ * Null is a failed create, and the caller says so instead of closing the field:
+ * a remote create is a request, and the sheet already closes on the press, so
+ * a silent null is the one outcome this row cannot report any other way.
+ *
+ * MDBList keeps the row's long-standing behaviour - reuse an identically-named
+ * list when the account already has one, so the add mirrors to it - and no
+ * longer falls back to a local list when the account refuses: the picker now
+ * names MDBList as the destination, so a local list would be a different list
+ * than the one the viewer asked for.
+ */
+private suspend fun createDestination(
+    context: android.content.Context,
+    source: LibrarySource,
+    name: String
+): LibraryList? = when (source) {
+    LibrarySource.LOCAL_LIST -> LocalLibraryStore.createList(context, name)
+
+    LibrarySource.MDBLIST_LIST -> {
+        val existing = runCatchingCancellable {
+            MdbListClient.getUserLists(context)
+        }.getOrDefault(emptyList())
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        existing?.let {
+            LibraryList(
+                id = it.id,
+                name = it.name,
+                itemCount = it.itemCount,
+                source = LibrarySource.MDBLIST_LIST
+            )
+        } ?: runCatchingCancellable {
+            MdbListClient.createList(context, name)
+        }.getOrNull()?.let {
+            LibraryList(
+                id = it.id,
+                name = it.name,
+                itemCount = 0,
+                source = LibrarySource.MDBLIST_LIST
+            )
+        }
+    }
+
+    LibrarySource.TRAKT_LIST -> {
+        val trakt = TraktRepository.getInstance(context)
+        if (!runCatchingCancellable { trakt.createList(name) }.getOrDefault(false)) {
+            null
+        } else {
+            runCatchingCancellable {
+                trakt.userLists()
+            }.getOrDefault(emptyList())
+                .firstOrNull { it.name.equals(name, ignoreCase = true) }
+                ?.let { list ->
+                    val traktId = list.ids?.trakt ?: 0
+                    val remoteId = list.ids?.slug
+                        ?: traktId.takeIf { it > 0 }?.toString()
+                    remoteId?.takeIf { it.isNotBlank() }?.let { id ->
+                        LibraryList(
+                            id = traktListShelfId(traktId),
+                            name = list.name ?: name,
+                            itemCount = 0,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = id
+                        )
+                    }
+                }
+        }
+    }
+
+    LibrarySource.BINGECAT_LIST -> {
+        val repository = BingeCatRepository.getInstance(context)
+        if (!runCatchingCancellable { repository.createList(name) }.getOrDefault(false)) {
+            null
+        } else {
+            // The created list's own ref is read back from the profile's lists
+            // rather than assumed: /lists/{ref}/items is addressed by it. The
+            // write dropped the cache, so this is a fresh read.
+            runCatchingCancellable { repository.snapshot() }.getOrNull()?.lists.orEmpty()
+                .mapIndexedNotNull { index, list ->
+                    list.ref?.takeIf { it.isNotBlank() }?.let { ref ->
+                        LibraryList(
+                            id = bingecatShelfId(index),
+                            name = list.name ?: name,
+                            itemCount = list.itemCount ?: 0,
+                            source = LibrarySource.BINGECAT_LIST,
+                            remoteId = ref
+                        )
+                    }
+                }
+                .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        }
+    }
+
+    else -> null
 }
 
 /** MDBList membership test shared by the dialog's row badges. */

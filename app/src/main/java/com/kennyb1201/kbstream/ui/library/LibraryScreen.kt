@@ -253,11 +253,26 @@ fun LibraryScreen(
         landFocusOn(key?.let { cardFocusRequesters[it] })
     }
 
-    // A local list waiting to be deleted (null = no dialog). The list rail's
-    // long press opened straight onto a delete that nothing asked about; the
-    // app's own rule for a long press is that it opens a menu and leaves the
-    // destructive choice to the viewer.
+    // The list whose long-press menu is open (null = no menu). The rail's long
+    // press used to open straight onto a delete for a local list and do nothing
+    // at all for the others; both are wrong now that a list can be renamed here
+    // and deleted from the service that holds it, so the press opens a choice.
+    var listMenu by remember { mutableStateOf<LibraryList?>(null) }
+
+    // A list waiting for its new name, and one waiting to be deleted from its
+    // own source (or from this device, for a local list).
+    var listPendingRename by remember { mutableStateOf<LibraryList?>(null) }
     var listPendingDelete by remember { mutableStateOf<LibraryList?>(null) }
+
+    // A list write that failed, said out loud. A rename/delete is a remote
+    // request behind a dialog that has already closed, so without this the
+    // refusal is indistinguishable from success.
+    val listFeedback = rememberKBFeedback()
+    LaunchedEffect(state.listActionMessage) {
+        val message = state.listActionMessage ?: return@LaunchedEffect
+        listFeedback.show(message)
+        viewModel.clearListActionMessage()
+    }
 
     LaunchedEffect(Unit) {
         // The Home Upcoming header's shortcut: arrive on the Calendar pane with
@@ -526,16 +541,22 @@ fun LibraryScreen(
                     loading = state.loading,
                     onListSelect = { viewModel.selectList(it) },
                     onListLongPress = { list ->
-                        // Local lists can be deleted; MDBList lists are
-                        // managed on MDBList. Asked about first: a long press
-                        // opens a menu everywhere else in the app, and a whole
-                        // list leaving on one is not a choice a stray press
-                        // should be able to make.
-                        if (list.source.isLocalList) {
-                            listPendingDelete = list
+                        // Every manage-list source gets the menu now: rename
+                        // where the API allows it, and a delete that names the
+                        // service when the list lives there. Asked about first
+                        // - a whole list leaving on one stray press is not a
+                        // choice a long press should be able to make.
+                        if (list.source.canManageList) {
+                            listMenu = list
                         }
                     },
-                    onCreateList = { viewModel.createLocalList(it) },
+                    onCreateList = { source, name -> viewModel.createList(source, name) },
+                    createSources = listOfNotNull(
+                        LibrarySource.LOCAL_LIST,
+                        LibrarySource.TRAKT_LIST.takeIf { state.traktConnected },
+                        LibrarySource.MDBLIST_LIST.takeIf { state.mdbListConfigured },
+                        LibrarySource.BINGECAT_LIST.takeIf { state.bingecatConnected }
+                    ),
                     onItemClick = onItemClick,
                     onItemLongClick = { item, successorKey ->
                         menuItem = item
@@ -606,13 +627,43 @@ fun LibraryScreen(
         )
     }
 
+    listMenu?.let { list ->
+        LibraryListActionsDialog(
+            list = list,
+            onDismiss = { listMenu = null },
+            onRename = {
+                listMenu = null
+                listPendingRename = list
+            },
+            onDelete = {
+                listMenu = null
+                listPendingDelete = list
+            }
+        )
+    }
+
+    listPendingRename?.let { list ->
+        LibraryRenameListDialog(
+            list = list,
+            onDismiss = { listPendingRename = null },
+            onConfirm = { name ->
+                listPendingRename = null
+                viewModel.renameList(list, name)
+            }
+        )
+    }
+
     listPendingDelete?.let { list ->
         LibraryDeleteListDialog(
             list = list,
             onDismiss = { listPendingDelete = null },
             onConfirm = {
                 listPendingDelete = null
-                viewModel.deleteLocalList(list.id)
+                if (list.source.isLocalList) {
+                    viewModel.deleteLocalList(list.id)
+                } else {
+                    viewModel.deleteRemoteList(list)
+                }
             }
         )
     }
@@ -641,9 +692,10 @@ private fun libraryGridRows(state: LibraryUiState): List<LibraryItem> =
 /**
  * Long-press menu for one Library row, built on the app-wide
  * [PosterContextMenu] so a long press looks and behaves the same here as on
- * Home, Search and the detail rails. Simkl rows are add-only (the API has no
- * remove-from-watchlist endpoint), so they get an explanatory row instead of
- * a destructive one.
+ * Home, Search and the detail rails. Every source's watchlist copy can be
+ * dropped now: Simkl's un-save is its list-only inverse, not a history delete
+ * (see SimklRepository.removeFromWatchlist), so a Simkl row offers the same
+ * removal as the rest.
  */
 @Composable
 private fun LibraryItemMenu(
@@ -727,35 +779,46 @@ private fun LibraryItemMenu(
                 // only the actions every row has (details, and the picker's).
                 LibrarySource.BINGECAT_SAVED -> Unit
 
-                LibrarySource.SIMKL_WATCHLIST,
-                LibrarySource.SIMKL_LIST -> {
-                    // Simkl's API rules: wherever Simkl data appears, name Simkl
-                    // and link back to the page for THAT item - a bare link to
-                    // simkl.com is explicitly not attribution. The id came in
-                    // with the watchlist read itself, so this costs no request.
-                    simklItemUrl(item.mediaType, item.simklId, item.simklSlug)?.let { url ->
-                        add(
-                            PosterContextAction(
-                                label = "View on Simkl",
-                                description = "Open this title's page on simkl.com"
-                            ) {
-                                try {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    )
-                                } catch (_: ActivityNotFoundException) {
-                                    // No browser on this box: the row is a link
-                                    // out, so there is nothing else to do.
-                                }
-                                onDismiss()
-                            }
-                        )
+                // Simkl's watchlist is writable now (as `plantowatch`, and its
+                // list-only inverse on a removal), so it is a normal removal row
+                // rather than the old "Managed on Simkl" dead end. The Simkl
+                // list bucket itself has no API to write to, so a SIMKL_LIST row
+                // keeps the explanatory copy.
+                LibrarySource.SIMKL_WATCHLIST -> add(
+                    PosterContextAction(
+                        label = "Remove from Simkl",
+                        description = "Take it off your Simkl watchlist",
+                        isDestructive = true
+                    ) {
+                        onRemove()
                     }
+                )
+
+                LibrarySource.SIMKL_LIST -> Unit
+            }
+
+            // Simkl's API rules: wherever Simkl data appears, name Simkl and
+            // link back to the page for THAT item - a bare link to simkl.com is
+            // explicitly not attribution. The id came in with the read itself,
+            // so this costs no request.
+            if (
+                item.source == LibrarySource.SIMKL_WATCHLIST ||
+                item.source == LibrarySource.SIMKL_LIST
+            ) {
+                simklItemUrl(item.mediaType, item.simklId, item.simklSlug)?.let { url ->
                     add(
                         PosterContextAction(
-                            label = "Managed on Simkl",
-                            description = "Remove it from your watchlist on simkl.com"
+                            label = "View on Simkl",
+                            description = "Open this title's page on simkl.com"
                         ) {
+                            try {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                )
+                            } catch (_: ActivityNotFoundException) {
+                                // No browser on this box: the row is a link out,
+                                // so there is nothing else to do.
+                            }
                             onDismiss()
                         }
                     )
@@ -766,14 +829,158 @@ private fun LibraryItemMenu(
     )
 }
 
+/** The rail's chip name for one create destination. */
+private fun createSourceLabel(source: LibrarySource): String = when (source) {
+    LibrarySource.LOCAL_LIST -> "THIS DEVICE"
+    LibrarySource.TRAKT_LIST -> "TRAKT"
+    LibrarySource.MDBLIST_LIST -> "MDBLIST"
+    LibrarySource.BINGECAT_LIST -> "BINGECAT"
+    else -> source.label.uppercase()
+}
+
+/**
+ * What can be done to one list, asked before anything happens.
+ *
+ * Two rows, each naming its own effect: RENAME (the list keeps its titles) and
+ * the delete, whose wording names WHERE it happens - "REMOVE FROM THIS DEVICE"
+ * for a local list, "DELETE FROM TRAKT" and friends for a remote one. The
+ * second is the distinction this dialog exists for: the same press used to mean
+ * "hide it here" while a service copy survived, and a whole-list delete on a
+ * service has no undo.
+ *
+ * CANCEL is drawn first and takes the focus, the same rule the delete confirm
+ * follows, so the safe choice is the default stop.
+ */
+@Composable
+private fun LibraryListActionsDialog(
+    list: LibraryList,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { cancelFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = list.name, subtitle = list.locationLabel) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                KBCard(
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(cancelFocusRequester)
+                ) {
+                    Text(
+                        text = "CANCEL",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                KBCard(onClick = onRename) {
+                    Text(
+                        text = "RENAME",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                KBCard(onClick = onDelete) {
+                    Text(
+                        text = if (list.source.isLocalList) {
+                            "REMOVE FROM THIS DEVICE"
+                        } else {
+                            "DELETE FROM ${list.source.deleteDestinationLabel.uppercase()}"
+                        },
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The name-entry step of a rename, seeded with the list's current name.
+ *
+ * The field is not auto-focused: on a TV, focusing a text field pops the
+ * keyboard over the dialog before the viewer has said they want to type. DONE
+ * on the keyboard and SAVE both commit; a blank name (or the unchanged one) is
+ * refused here rather than sent to the source as a no-op write.
+ */
+@Composable
+private fun LibraryRenameListDialog(
+    list: LibraryList,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember(list.id) { mutableStateOf(list.name) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Rename list", subtitle = list.locationLabel) {
+            KBTextField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = "List name",
+                modifier = Modifier.fillMaxWidth(),
+                onDone = {
+                    if (name.isNotBlank() && name.trim() != list.name) {
+                        onConfirm(name)
+                    }
+                }
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBCard(onClick = onDismiss) {
+                    Text(
+                        text = "CANCEL",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                KBCard(
+                    onClick = {
+                        if (name.isNotBlank() && name.trim() != list.name) {
+                            onConfirm(name)
+                        }
+                    }
+                ) {
+                    Text(
+                        text = "SAVE",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * Confirms deleting one local list.
  *
- * The list rail's long press opens this instead of deleting on the spot: what
- * leaves is a list the viewer made, and the app's one rule for a long press is
- * that it opens a choice rather than acting (see [LibraryItemMenu]). MDBList
- * lists never get here - they are managed on MDBList, and the rail's own
- * callback refuses one.
+ * The list rail's long press opens this (through
+ * [LibraryListActionsDialog]) instead of deleting on the spot, and this dialog
+ * names where the delete happens: a local list leaves THIS DEVICE, while a
+ * Trakt/MDBList/BingeCat list leaves that account, where there is no undo. The
+ * wording is the whole point of the second sentence - "Delete list?" was true
+ * of both and described neither.
  *
  * CANCEL is drawn FIRST and takes the focus, so the safe action is the default
  * stop: this is the rule the Settings clear-history dialog needed, where
@@ -800,10 +1007,23 @@ private fun LibraryDeleteListDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        KBDialogPanel(title = "Delete list?", subtitle = list.name) {
+        KBDialogPanel(
+            title = if (list.source.isLocalList) {
+                "Delete list?"
+            } else {
+                "Delete from ${list.source.deleteDestinationLabel}?"
+            },
+            subtitle = list.name
+        ) {
             Text(
-                text = "The list is removed from this device. Its " +
-                    "${list.itemCount} titles stay in your Library.",
+                text = if (list.source.isLocalList) {
+                    "The list is removed from this device. Its " +
+                        "${list.itemCount} titles stay in your Library."
+                } else {
+                    "The list is deleted from " +
+                        "${list.source.deleteDestinationLabel}. Its " +
+                        "${list.itemCount} titles stay in your Library."
+                },
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
@@ -1138,7 +1358,14 @@ private fun ListsPane(
     loading: Boolean,
     onListSelect: (LibraryList) -> Unit,
     onListLongPress: (LibraryList) -> Unit,
-    onCreateList: (String) -> Unit,
+    onCreateList: (LibrarySource, String) -> Unit,
+    /**
+     * The sources a list can be created on, in the order the chips show them.
+     * Local always; Trakt/MDBList/BingeCat only while connected, because a
+     * chip that would create nothing is a promise the screen cannot keep.
+     * Simkl is never here - its API has no custom lists.
+     */
+    createSources: List<LibrarySource>,
     onItemClick: (String, String) -> Unit,
     onItemLongClick: (LibraryItem, String?) -> Unit,
     // The screen's per-card requesters, registered by the grids below and read
@@ -1154,6 +1381,10 @@ private fun ListsPane(
 ) {
     var showCreateField by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
+    // Where the field's CREATE goes. Local is the default because it is the one
+    // source that always exists, so a viewer with no account connected sees
+    // exactly the field they always had.
+    var createSource by remember { mutableStateOf(LibrarySource.LOCAL_LIST) }
 
     Row(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -1172,13 +1403,12 @@ private fun ListsPane(
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
                 val sourceLabel = list.locationLabel
-                // The delete gesture the local lists never had: the parameter
-                // and the ViewModel call existed, nothing ever invoked them.
-                // Only for a list this device owns - MDBList and Trakt lists
-                // are managed on their service, and the screen's callback
-                // refuses one anyway; not offering the press is what says so.
+                // The manage gesture: rename and delete for a list this app
+                // can actually change - a local list, or one of the accounts'
+                // own managed lists. A source with neither (Simkl) gets no
+                // press rather than a menu of refusals.
                 val onRowLongPress: (() -> Unit)? =
-                    if (list.source.isLocalList) {
+                    if (list.source.canManageList) {
                         { onListLongPress(list) }
                     } else {
                         null
@@ -1248,6 +1478,22 @@ private fun ListsPane(
             item(key = "create_list") {
                 if (showCreateField) {
                     Column {
+                        // Which account the new list goes on. Drawn above the
+                        // field so the destination is chosen before the name is
+                        // typed; a single-source rail (local only) draws nothing
+                        // extra and behaves exactly as it always did.
+                        if (createSources.size > 1) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                createSources.forEach { source ->
+                                    LibraryFilterChip(
+                                        label = createSourceLabel(source),
+                                        selected = createSource == source,
+                                        onClick = { createSource = source }
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
                         KBTextField(
                             value = newListName,
                             onValueChange = { newListName = it },
@@ -1255,7 +1501,7 @@ private fun ListsPane(
                             modifier = Modifier.fillMaxWidth(),
                             onDone = {
                                 if (newListName.isNotBlank()) {
-                                    onCreateList(newListName)
+                                    onCreateList(createSource, newListName)
                                 }
                                 newListName = ""
                                 showCreateField = false
@@ -1265,9 +1511,12 @@ private fun ListsPane(
                         LibraryFilterChip(
                             label = "CREATE",
                             selected = false,
+                            // A blank name is disabled rather than refused after
+                            // the press: the same rule the picker's create row
+                            // follows.
                             onClick = {
                                 if (newListName.isNotBlank()) {
-                                    onCreateList(newListName)
+                                    onCreateList(createSource, newListName)
                                 }
                                 newListName = ""
                                 showCreateField = false

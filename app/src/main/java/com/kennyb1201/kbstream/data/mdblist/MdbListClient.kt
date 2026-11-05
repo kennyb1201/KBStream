@@ -2176,6 +2176,87 @@ object MdbListClient {
     }
 
     /**
+     * PUT /lists/{id} — renames one of the account's own static lists.
+     *
+     * The body carries the name alone: the same endpoint also takes `private`,
+     * and a rename must not flip a list's visibility, so it is left out (absent
+     * means "keep"). MDBList only edits static, owned lists - a dynamic, feed,
+     * official or external list is refused by the server, and that refusal is
+     * this function's false, not a silent success.
+     *
+     * The response's own `success` flag is checked as well as the status code:
+     * a 200 whose body says the update did not apply would otherwise repaint
+     * the rail with a name the account does not have.
+     */
+    suspend fun renameList(
+        context: Context,
+        listId: Int,
+        name: String
+    ): Boolean {
+        val trimmed = name.trim()
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || listId <= 0 || trimmed.isEmpty()) return false
+        val payload = JSONObject().put("name", trimmed)
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$BASE/lists/$listId?apikey=$apiKey")
+                    .put(payload.toString().toRequestBody("application/json".toMediaType()))
+                    // A rename is a WRITE and draws on the write ceiling, the
+                    // same rule the create follows (see createList).
+                    .tag(WRITE_TAG)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "lists/$listId update failed code=${response.code}")
+                        return@use false
+                    }
+                    val root = runCatching {
+                        JSONObject(response.body?.string().orEmpty())
+                    }.getOrNull()
+                    // An unreadable body is taken at the status code's word.
+                    root?.optBoolean("success", true) ?: true
+                }
+            }.getOrDefault(false)
+        }
+    }
+
+    /**
+     * DELETE /lists/{id} — deletes one of the account's own static lists.
+     *
+     * This is the remote half of the Library rail's delete. MDBList has no undo
+     * endpoint in its contract, so a true here means the list is gone from the
+     * account; a refusal (a list that is not the viewer's, a dynamic or official
+     * list) is false and the rail keeps the row.
+     */
+    suspend fun deleteList(
+        context: Context,
+        listId: Int
+    ): Boolean {
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank() || listId <= 0) return false
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$BASE/lists/$listId?apikey=$apiKey")
+                    .delete()
+                    .tag(WRITE_TAG)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "lists/$listId delete failed code=${response.code}")
+                        return@use false
+                    }
+                    val root = runCatching {
+                        JSONObject(response.body?.string().orEmpty())
+                    }.getOrNull()
+                    root?.optBoolean("success", true) ?: true
+                }
+            }.getOrDefault(false)
+        }
+    }
+
+    /**
      * GET /watchlist/items — the account's MDBList watchlist, following the
      * pagination cursor exactly as [getListItems] does. The old single
      * `limit=1000` request silently truncated a watchlist longer than that

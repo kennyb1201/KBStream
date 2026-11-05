@@ -63,7 +63,7 @@ class BingeCatListWritesContractTest {
     private val picker = source("com/kennyb1201/kbstream/ui/components/LibraryPicker.kt")
 
     @Test
-    fun `the four writes are the contract routes, profile pinned and nothing more`() {
+    fun `the list writes are the contract routes, profile pinned and nothing more`() {
         listOf(
             "@POST(\"api/v1/profiles/{profileId}/sync/{kind}\")",
             "@POST(\"api/v1/profiles/{profileId}/sync/{kind}/remove\")",
@@ -77,9 +77,23 @@ class BingeCatListWritesContractTest {
                 "opened in a browser - a write there is worse than a failed read",
             api.contains("\"api/v1/sync/{kind}")
         )
+        // Step 3 deliberately stopped at item writes; the unified list control
+        // spec adds the three list verbs, on the same profile pinning - a root
+        // form would create the list on whichever profile a browser last used.
+        assertTrue(
+            "a list is created on the mapped profile",
+            api.contains("@POST(\"api/v1/profiles/{profileId}/lists\")")
+        )
+        assertTrue(
+            "and renamed/deleted by its own ref",
+            api.contains("@PATCH(\"api/v1/lists/{ref}\")") &&
+                api.contains("@DELETE(\"api/v1/lists/{ref}\")")
+        )
         assertFalse(
-            "step 3 does not create lists (the picker offers existing ones only)",
-            api.contains("@POST(\"api/v1/profiles/{profileId}/lists\"")
+            "neither of those is the root form either",
+            api.contains("@POST(\"api/v1/lists\"") ||
+                api.contains("@PATCH(\"api/v1/lists\"") ||
+                api.contains("@DELETE(\"api/v1/lists\"")
         )
         assertFalse(
             "nor does it edit rank/notes, which is the single-item PUT",

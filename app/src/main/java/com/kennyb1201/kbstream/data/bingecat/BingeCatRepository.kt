@@ -785,6 +785,79 @@ class BingeCatRepository private constructor(private val context: Context?) {
     }
 
     /**
+     * Creates one MANUAL list on the mapped profile (`lists:write`).
+     *
+     * Same contract as the item writes: the scope gate runs before a request is
+     * made, a 403 converges to needs-reapproval, a 429 parks the leg, and a
+     * success drops this repository's snapshot so the Library's next read sees
+     * the new list. The content type is `all` because the Library this list is
+     * made from holds both movies and shows; the create field collects a name
+     * and nothing else.
+     */
+    suspend fun createList(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        val body = BingeCatListCreateRequest(name = trimmed)
+        return when (
+            val result = submitListWrite("list create $trimmed") { token, profileId ->
+                service.createList("Bearer $token", profileId, body)
+            }
+        ) {
+            ListWriteResult.Skipped -> false
+            ListWriteResult.Failed -> false
+            // 201 and 202 both mean the list exists; a 202 also carries the job
+            // the AI/filter kinds would need, which a manual list never does.
+            is ListWriteResult.Accepted -> true
+        }
+    }
+
+    /** Renames one user list by its own `ref` (`lists:write`). */
+    suspend fun renameList(ref: String, name: String): Boolean {
+        val trimmed = name.trim()
+        if (ref.isBlank() || trimmed.isEmpty()) return false
+        val body = BingeCatListPatchRequest(name = trimmed)
+        return when (
+            val result = submitListWrite("list rename $ref") { token, _ ->
+                service.patchList("Bearer $token", ref, body)
+            }
+        ) {
+            ListWriteResult.Skipped -> false
+            ListWriteResult.Failed -> false
+            is ListWriteResult.Accepted -> listWriteLanded(result.body)
+        }
+    }
+
+    /**
+     * Deletes one user list by its `ref` - a soft delete on BingeCat's side.
+     *
+     * Soft means BingeCat keeps the list's rows for a restore; this app offers
+     * no undelete, so the rail's confirm names the destination and the row goes
+     * away on the next read.
+     */
+    suspend fun deleteList(ref: String): Boolean {
+        if (ref.isBlank()) return false
+        return when (
+            val result = submitListWrite("list delete $ref") { token, _ ->
+                service.deleteList("Bearer $token", ref)
+            }
+        ) {
+            ListWriteResult.Skipped -> false
+            ListWriteResult.Failed -> false
+            is ListWriteResult.Accepted -> listWriteLanded(result.body)
+        }
+    }
+
+    /**
+     * A create/patch/delete answered with the list it changed; a body that is
+     * not that answer is taken at the 2xx's word, the same rule the item
+     * writes' landed checks follow.
+     */
+    private fun listWriteLanded(body: Any?): Boolean = when (body) {
+        is BingeCatListResponse -> body.list != null
+        else -> true
+    }
+
+    /**
      * One list-write request: the gates, the park, the refresh-once rule and the
      * cache drop, shared by both routes.
      *
