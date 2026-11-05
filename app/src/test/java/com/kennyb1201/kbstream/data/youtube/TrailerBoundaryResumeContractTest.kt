@@ -96,15 +96,24 @@ class TrailerBoundaryResumeContractTest {
             extractor.contains("internal data class ResolvedSource(") &&
                 extractor.contains("val client: String?")
         )
+        // The helper now builds the whole answer - the source, its client, the
+        // gate's flag and the token pair it mounted with - so each shape names
+        // itself in the same call that records it.
         assertTrue(
             "each of the three shapes names itself as it is recorded",
-            extractor.contains(
-                ".withResolveTokens(videoId, tokens, bestHls.first, KIND_HLS)"
-            ) && extractor.contains(
-                ".withResolveTokens(videoId, tokens, bestVideo?.client, KIND_ADAPTIVE)"
+            flat(extractor).contains(
+                ".withResolveTokens( videoId, tokens, bestHls.first, KIND_HLS, " +
+                    "tokenlessByColdMint )"
             ) && flat(extractor).contains(
-                "bestProgressive.client, KIND_PROGRESSIVE"
+                ".withResolveTokens( videoId, tokens, bestVideo?.client, KIND_ADAPTIVE, " +
+                    "tokenlessByColdMint )"
+            ) && flat(extractor).contains(
+                "bestProgressive.client, KIND_PROGRESSIVE, tokenlessByColdMint"
             )
+        )
+        assertTrue(
+            "and the pair it mounted with rides back out, because it is only true now",
+            flat(extractor).contains("playerToken = playerToken, pot = pot")
         )
         assertTrue(
             "the trace's resolve line carries the shape, for the death line that follows",
@@ -133,7 +142,10 @@ class TrailerBoundaryResumeContractTest {
         )
         assertTrue(
             "the client is cached beside the source, so a death can name it",
-            flatLauncher.contains("CachedSource(resolved.source, resolved.client)")
+            flatLauncher.contains(
+                "CachedSource( resolved.source, resolved.client, " +
+                    "playerToken = resolved.playerToken, pot = resolved.pot )"
+            )
         )
         assertTrue(
             "with the trace's last resolve as the fallback for an evicted entry",

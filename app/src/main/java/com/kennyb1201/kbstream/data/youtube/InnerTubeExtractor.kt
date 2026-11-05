@@ -245,7 +245,20 @@ object InnerTubeExtractor {
          * resolve BY CONFIGURATION (minting off, no visitor) is NOT this flag:
          * that resolve is byte-identical to pre-spec behavior.
          */
-        val potlessByColdMint: Boolean = false
+        val potlessByColdMint: Boolean = false,
+        /**
+         * Whether the player request that produced this source presented a
+         * player-context token, and whether the returned URL(s) carry `pot`.
+         *
+         * Carried because the pair is only true NOW: the death line has to name
+         * the state this source MOUNTED with, and by the time a replacement
+         * resolve has run, the trace's last resolve belongs to that replacement
+         * (2026-11-05: an `android_vr` mount died while a `client android`
+         * replacement played, and the capture could not say which wall the dead
+         * one had hit). See `PoTokenTrace.recordMount`.
+         */
+        val playerToken: Boolean = false,
+        val pot: Boolean = false
     )
 
     /**
@@ -436,13 +449,15 @@ object InnerTubeExtractor {
         val bestHls = pickBestHls(allowedHls)
         if (bestHls != null) {
             Log.d(TAG, "Using HLS trailer manifest (client=${bestHls.first})")
-            return ResolvedSource(
-                PlayableSource.Muxed(
-                    bestHls.third,
-                    userAgent = userAgentFor(bestHls.first)
-                ).withResolveTokens(videoId, tokens, bestHls.first, KIND_HLS),
+            return PlayableSource.Muxed(
+                bestHls.third,
+                userAgent = userAgentFor(bestHls.first)
+            ).withResolveTokens(
+                videoId,
+                tokens,
                 bestHls.first,
-                potlessByColdMint = tokenlessByColdMint
+                KIND_HLS,
+                tokenlessByColdMint
             )
         }
 
@@ -494,12 +509,14 @@ object InnerTubeExtractor {
             // with android-signed still 403ing at ~36 s says the remaining wall
             // is attestation, not the client table.
             Log.d(TAG, "Using adaptive video+audio (client=${bestVideo?.client})")
-            return ResolvedSource(
-                PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
-                    .withResolveTokens(videoId, tokens, bestVideo?.client, KIND_ADAPTIVE),
-                bestVideo?.client,
-                potlessByColdMint = tokenlessByColdMint
-            )
+            return PlayableSource.Adaptive(resolvedVideo, resolvedAudio, userAgent = clientUa)
+                .withResolveTokens(
+                    videoId,
+                    tokens,
+                    bestVideo?.client,
+                    KIND_ADAPTIVE,
+                    tokenlessByColdMint
+                )
         }
 
         // No verified adaptive audio (or no video at all): fall through to
@@ -527,23 +544,20 @@ object InnerTubeExtractor {
                 "Falling back to muxed progressive stream " +
                     "(audio safety, client=${bestProgressive.client})"
             )
-            return ResolvedSource(
-                PlayableSource.Muxed(
-                    resolvedProgressive,
-                    userAgent = userAgentFor(bestProgressive.client)
-                ).withResolveTokens(
-                    videoId,
-                    tokens,
-                    bestProgressive.client,
-                    KIND_PROGRESSIVE
-                ),
+            // The same flag the adaptive return carries: a tokenless
+            // progressive is the exact shape that mounted and died at the wall
+            // on 2026-11-05 (see ResolvedSource.potlessByColdMint). Without it
+            // the launcher's gate lets it through and the death plan becomes
+            // the normal path for a cold mint.
+            return PlayableSource.Muxed(
+                resolvedProgressive,
+                userAgent = userAgentFor(bestProgressive.client)
+            ).withResolveTokens(
+                videoId,
+                tokens,
                 bestProgressive.client,
-                // The same flag the adaptive return carries: a tokenless
-                // progressive is the exact shape that mounted and died at the
-                // wall on 2026-11-05 (see ResolvedSource.potlessByColdMint).
-                // Without it the launcher's gate lets it through and the death
-                // plan becomes the normal path for a cold mint.
-                potlessByColdMint = tokenlessByColdMint
+                KIND_PROGRESSIVE,
+                tokenlessByColdMint
             )
         }
 
@@ -745,24 +759,38 @@ object InnerTubeExtractor {
         }
 
     /**
-     * Attaches the GVS token to the source being returned, and records what the
-     * resolve actually carried for the diagnostics report.
+     * Attaches the GVS token to the source being returned, records what the
+     * resolve actually carried for the diagnostics report, and hands back the
+     * whole answer.
+     *
+     * The token pair travels WITH the source because it is only true here: the
+     * death line has to name the state a source MOUNTED with, and the resolve
+     * line is overwritten by the next resolve (see `PoTokenTrace.recordMount`).
      */
     private fun PlayableSource.withResolveTokens(
         videoId: String,
         tokens: ResolveTokens,
         client: String?,
-        kind: String
-    ): PlayableSource {
+        kind: String,
+        potlessByColdMint: Boolean
+    ): ResolvedSource {
         val decorated = withPotToken(tokens.gvs)
+        val playerToken = !tokens.player.isNullOrBlank()
+        val pot = decorated.carriesPot()
         PoTokenTrace.recordResolve(
             videoId = videoId,
-            playerToken = !tokens.player.isNullOrBlank(),
-            pot = decorated.carriesPot(),
+            playerToken = playerToken,
+            pot = pot,
             client = client,
             kind = kind
         )
-        return decorated
+        return ResolvedSource(
+            source = decorated,
+            client = client,
+            potlessByColdMint = potlessByColdMint,
+            playerToken = playerToken,
+            pot = pot
+        )
     }
 
     /**

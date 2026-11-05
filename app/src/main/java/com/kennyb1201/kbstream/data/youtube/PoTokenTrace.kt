@@ -72,6 +72,51 @@ object PoTokenTrace {
     private var chunkDeath: ChunkDeath? = null
 
     /**
+     * What one MOUNTED trailer source carried, as it was when it mounted.
+     *
+     * [client] is the client that signed the mounted source, or null for the
+     * NewPipe/Piped fallback, which names no InnerTube client and carries no
+     * InnerTube tokens.
+     */
+    data class MountTokens(
+        val client: String?,
+        val playerToken: Boolean,
+        val pot: Boolean
+    ) {
+        /** True for the fallback: no InnerTube client signed this mount. */
+        val fallback: Boolean get() = client.isNullOrBlank()
+    }
+
+    /**
+     * The mount-time snapshots, by `videoId` and signing client.
+     *
+     * Keyed by BOTH, and populated when a source is handed over for playback
+     * rather than when the resolve line is written, because that is the only
+     * spelling that survives the case this exists for
+     * (2026-11-05, Onn): an `android_vr` progressive mount died at 15.2 s and a
+     * replacement `client android` played. The replacement's resolve overwrites
+     * [resolveLine] - by design, it is the latest resolve - so the death line
+     * had no token state at all, and the ONE fact that tells the pot wall from
+     * the player-token wall from a fallback death was gone by the time the
+     * capture was pasted. A per-client key means the replacement cannot
+     * overwrite the dead mount's pair; they are different entries.
+     *
+     * Bounded: a long session resolves a trailer per hero rotation, and this
+     * map outlives the launcher's bounded source cache. The eldest entry goes
+     * when the cap is reached; the cap is above that cache's, so an entry that
+     * can still be served back and die is still here.
+     */
+    private val mountTokens = LinkedHashMap<String, MountTokens>()
+
+    /**
+     * The source most recently mounted for a video, by video.
+     *
+     * Only one source is mounted per video at a time, and the fallback has no
+     * client to be keyed by - the first half of [mountTokensFor]'s answer.
+     */
+    private val lastMount = LinkedHashMap<String, MountTokens>()
+
+    /**
      * A failed chunk read, in the terms a capture needs to act on it.
      *
      * [videoId] is read from the signed URL's own `id` parameter, so a
@@ -218,6 +263,67 @@ object PoTokenTrace {
     }
 
     /**
+     * Records that a source is being handed to the player, with the token state
+     * it carries at this moment.
+     *
+     * Called from the launcher at each of the three places a source is handed
+     * over for playback - an InnerTube winner, a source served from the cache,
+     * and the NewPipe/Piped fallback - and NOT from the resolve itself: a resolve
+     * the gate refuses (a tokenless InnerTube winner) never reaches a player and
+     * must leave no snapshot, or a fallback death would read back that refused
+     * source's `pot=false` and be quoted as "a tokenless mount died", which is a
+     * different bug entirely.
+     *
+     * A cache hit re-records the pair the source was CACHED with, so a mount
+     * served from a URL signed ten minutes ago reports the tokens of that mint,
+     * never the latest one.
+     */
+    @Synchronized
+    fun recordMount(videoId: String, client: String?, playerToken: Boolean, pot: Boolean) {
+        val id = videoId.takeIf { it.isNotBlank() } ?: return
+        val mounted = MountTokens(
+            client = client?.takeIf { it.isNotBlank() },
+            playerToken = playerToken,
+            pot = pot
+        )
+        lastMount[id] = mounted
+        trimMounts(lastMount)
+        val key = mounted.client ?: return
+        mountTokens[mountKey(id, key)] = mounted
+        trimMounts(mountTokens)
+    }
+
+    /**
+     * The token state of the source that died, or null when none is recorded.
+     *
+     * The exact (video, [client]) snapshot is the answer whenever there is one:
+     * that is the mount that is dying, whatever the latest resolve says. When
+     * the caller's client never mounted this video - it is the latest resolve's
+     * client rather than the mount's (the fallback names none, so a fallback
+     * mount is reported under whatever resolved last) - the source most
+     * recently mounted for the video is, and it says `fallback=true` on the line.
+     *
+     * Null when neither is known: a death is never given another source's
+     * tokens, and an unknown is printed as an absence, not as `false`.
+     */
+    @Synchronized
+    fun mountTokensFor(videoId: String?, client: String?): MountTokens? {
+        val id = videoId?.takeIf { it.isNotBlank() } ?: return null
+        val key = client?.takeIf { it.isNotBlank() }
+        if (key != null) mountTokens[mountKey(id, key)]?.let { return it }
+        return lastMount[id]
+    }
+
+    private fun mountKey(videoId: String, client: String): String =
+        videoId + '\u0000' + client
+
+    private fun trimMounts(snapshots: LinkedHashMap<String, MountTokens>) {
+        while (snapshots.size > MAX_MOUNT_SNAPSHOTS) {
+            snapshots.remove(snapshots.keys.first())
+        }
+    }
+
+    /**
      * Records a trailer that died mid-play.
      *
      * The field case this exists for (2026-10-22: every trailer, every device,
@@ -265,6 +371,12 @@ object PoTokenTrace {
      *    what that retry changed - `first`, `same` for an identical re-sign, or
      *    `class:<key>` when it re-resolved excluding the class that died.
      *
+     * And it now carries the token state of the source that died (see
+     * [recordMount]): `playerToken=` / `pot=` with the resolve line's own
+     * spelling, plus `fallback=true` when the mount was the NewPipe/Piped
+     * fallback. Read from the mount, never from the latest resolve - the two are
+     * allowed to disagree, and on 2026-11-05 they did.
+     *
      * One more `resume` value joins the closed vocabulary above:
      * `none: retries spent` - the ladder had no untried class left and the one
      * identical replay was already spent, so no replacement was requested at
@@ -292,8 +404,16 @@ object PoTokenTrace {
         val who = client?.takeIf { it.isNotBlank() } ?: "unknown"
         val shape = kind?.takeIf { it.isNotBlank() } ?: "unknown"
         val length = if (durationMs > 0L) durationMs.toString() else "?"
+        val mounted = mountTokensFor(videoId, client)
         deathLine = buildString {
             append("trailer.death: video=$videoId client=$who kind=$shape")
+            // Only when a mount was recorded: a capture must not read an
+            // invented pair as a fact, and every surface that predates this
+            // still writes exactly the line it always wrote.
+            if (mounted != null) {
+                append(" playerToken=${mounted.playerToken} pot=${mounted.pot}")
+                if (mounted.fallback) append(" fallback=true")
+            }
             itag?.takeIf { it.isNotBlank() }?.let { append(" itag=$it") }
             append(" at=${positionMs.coerceAtLeast(0L)}/$length")
             if (chunkOffsetBytes != null) {
@@ -354,5 +474,14 @@ object PoTokenTrace {
         chunkDeath = null
         lastResolveClient = null
         lastResolveKind = null
+        mountTokens.clear()
+        lastMount.clear()
     }
+
+    /**
+     * How many mount-time snapshots are kept. Above the launcher's own source
+     * cache (100), so a source that can still be served back and die still has
+     * its snapshot here.
+     */
+    private const val MAX_MOUNT_SNAPSHOTS = 128
 }

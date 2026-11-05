@@ -137,6 +137,133 @@ class TrailerDeathRecordTest {
         )
     }
 
+    // ── the token state of the source that died ────────────────────────────
+
+    /**
+     * The 2026-11-05 capture this exists for: an `android_vr` progressive mount
+     * died at 15.2 s and a replacement `client android` played. The resolve line
+     * is the latest resolve BY DESIGN, so it showed the replacement's
+     * `playerToken=false pot=true` - and the dead mount's state, the one fact
+     * that tells the pot wall from the player-token wall, was gone.
+     */
+    @Test
+    fun `a replacement's mount cannot overwrite the dead mount's tokens`() {
+        PoTokenTrace.recordMount(VIDEO_ID, "android_vr", playerToken = false, pot = true)
+        PoTokenTrace.recordResolve(
+            VIDEO_ID,
+            playerToken = false,
+            pot = true,
+            client = "android_vr",
+            kind = "progressive"
+        )
+        PoTokenTrace.recordMount(VIDEO_ID, "android", playerToken = true, pot = true)
+        PoTokenTrace.recordResolve(
+            VIDEO_ID,
+            playerToken = true,
+            pot = true,
+            client = "android",
+            kind = "adaptive"
+        )
+
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "android_vr",
+            kind = "progressive",
+            positionMs = 15_240L,
+            durationMs = 138_458L,
+            resume = "client android ok"
+        )
+
+        assertEquals(
+            "the death line is the per-attempt record: the DEAD mount's pair, " +
+                "even though the resolve line has moved on",
+            "trailer.death: video=$VIDEO_ID client=android_vr kind=progressive " +
+                "playerToken=false pot=true at=15240/138458 resume=client android ok",
+            PoTokenTrace.lines().last()
+        )
+        assertEquals(
+            "and the resolve line stays the latest resolve - the disagreement is the point",
+            "pot.resolve: video=$VIDEO_ID playerToken=true pot=true client=android kind=adaptive",
+            PoTokenTrace.lines().single { it.startsWith("pot.resolve:") }
+        )
+    }
+
+    @Test
+    fun `a fallback death says it was the fallback, not a tokenless mount`() {
+        PoTokenTrace.recordMount(VIDEO_ID, client = null, playerToken = false, pot = false)
+
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = null,
+            kind = null,
+            positionMs = 4_100L,
+            durationMs = 138_458L,
+            resume = "none: no other client"
+        )
+
+        assertEquals(
+            "the fallback names no client and carries no InnerTube tokens; without " +
+                "the marker this reads exactly like a gate regression",
+            "trailer.death: video=$VIDEO_ID client=unknown kind=unknown " +
+                "playerToken=false pot=false fallback=true at=4100/138458 " +
+                "resume=none: no other client",
+            PoTokenTrace.lines().last()
+        )
+    }
+
+    @Test
+    fun `a death with no recorded mount invents no tokens`() {
+        PoTokenTrace.recordResolve(VIDEO_ID, playerToken = true, pot = true, client = "android")
+
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending"
+        )
+
+        assertEquals(
+            "a client that never mounted this video has no pair to quote, and the " +
+                "resolve line's is another source's - an absence, never a guess",
+            "trailer.death: video=$VIDEO_ID client=tv kind=adaptive " +
+                "at=20400/140849 resume=pending",
+            PoTokenTrace.lines().last()
+        )
+    }
+
+    @Test
+    fun `another video's mount is never quoted`() {
+        PoTokenTrace.recordMount(OTHER_ID, "android", playerToken = true, pot = true)
+
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "android",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending"
+        )
+
+        assertEquals(
+            "trailer.death: video=$VIDEO_ID client=android kind=adaptive " +
+                "at=20400/140849 resume=pending",
+            PoTokenTrace.lines().last()
+        )
+    }
+
+    @Test
+    fun `a clear drops the mount snapshots with everything else`() {
+        PoTokenTrace.recordMount(VIDEO_ID, "android", playerToken = true, pot = true)
+        PoTokenTrace.clear()
+
+        assertNull(
+            "a cleared trace must not hand the next report a stale pair",
+            PoTokenTrace.mountTokensFor(VIDEO_ID, "android")
+        )
+    }
+
     @Test
     fun `a chunk death is quoted only for its own video`() {
         PoTokenTrace.recordChunkDeath(

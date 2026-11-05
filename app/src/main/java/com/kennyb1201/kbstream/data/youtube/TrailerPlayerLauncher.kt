@@ -192,6 +192,13 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
          * another URL that dies at the same place.
          */
         val client: String? = null,
+        /**
+         * The token state the cached source was minted with, so a mount served
+         * from the cache reports ITS OWN pair when it dies - not the latest
+         * mint's (see [PoTokenTrace.recordMount]).
+         */
+        val playerToken: Boolean = false,
+        val pot: Boolean = false,
         val cachedAt: Long = System.currentTimeMillis()
     ) {
         /**
@@ -319,6 +326,15 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             sourceCache[videoId]?.let { cached ->
                 if (!cached.isStale) {
                     Log.w(TAG, "Trailer source cache hit for $videoId")
+                    // A cache hit replays the snapshot the source was cached
+                    // with - this URL was signed by that mint, whatever has
+                    // been minted since.
+                    PoTokenTrace.recordMount(
+                        videoId,
+                        cached.client,
+                        cached.playerToken,
+                        cached.pot
+                    )
                     return@withLock Result.success(cached.source)
                 }
                 sourceCache.remove(videoId)
@@ -334,7 +350,22 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             excludeClients = excludeClients
         )
         if (resolved != null && !resolved.potlessByColdMint) {
-            sourceCache[videoId] = CachedSource(resolved.source, resolved.client)
+            sourceCache[videoId] = CachedSource(
+                resolved.source,
+                resolved.client,
+                playerToken = resolved.playerToken,
+                pot = resolved.pot
+            )
+            // Recorded HERE, at the hand-over, and not at the resolve: a
+            // tokenless winner is never mounted (the branch above), and a
+            // snapshot it left behind would be quoted as the fallback's own
+            // death.
+            PoTokenTrace.recordMount(
+                videoId,
+                resolved.client,
+                resolved.playerToken,
+                resolved.pot
+            )
             resolutionFailures.remove(videoId)
             logResolved("InnerTube", resolved.source)
             return@withLock Result.success(resolved.source)
@@ -371,6 +402,15 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             // a later death starts its exclusion from the trace's fallback
             // rather than from a client that never signed anything.
             sourceCache[videoId] = CachedSource(source, client = null)
+            // The fallback names no client and carries no InnerTube tokens, and
+            // its death has to read as a fallback death rather than as a
+            // tokenless InnerTube mount (a gate regression).
+            PoTokenTrace.recordMount(
+                videoId,
+                client = null,
+                playerToken = false,
+                pot = false
+            )
             resolutionFailures.remove(videoId)
             logResolved("NewPipe/Piped", source)
         }

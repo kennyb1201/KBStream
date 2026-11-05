@@ -69,13 +69,20 @@ class TokenlessResolveWiringContractTest {
             .forEach { (kind, block) ->
                 assertTrue(
                     "a tokenless $kind winner must reach the gate, not the wall",
-                    flat(block).contains("potlessByColdMint = tokenlessByColdMint")
+                    flat(block).contains("tokenlessByColdMint")
                 )
             }
         assertEquals(
-            "and every return that can mount carries it - no shape keeps the old default",
-            3,
-            Regex("potlessByColdMint = tokenlessByColdMint").findAll(extractor).count()
+            "and the flag a winner passes reaches the field: one helper, so no " +
+                "shape can be judged differently from its siblings",
+            1,
+            Regex("potlessByColdMint = potlessByColdMint").findAll(flat(extractor)).count()
+        )
+        assertEquals(
+            "the declaration and the helper's one construction, so no winner " +
+                "is built around the flag",
+            2,
+            Regex("ResolvedSource\\(").findAll(extractor).count()
         )
     }
 
@@ -84,7 +91,7 @@ class TokenlessResolveWiringContractTest {
     @Test
     fun `a tokenless winner is neither mounted nor cached`() {
         val mountAt = launcher.indexOf("if (resolved != null && !resolved.potlessByColdMint) {")
-        val cacheAt = launcher.indexOf("sourceCache[videoId] = CachedSource(resolved.source")
+        val cacheAt = launcher.indexOf("sourceCache[videoId] = CachedSource(")
         val tokenlessAt = launcher.indexOf("not mounting it into the wall")
 
         assertTrue("the mount must be guarded by the flag", mountAt >= 0)
@@ -96,7 +103,7 @@ class TokenlessResolveWiringContractTest {
         assertEquals(
             "and nothing else stores an InnerTube source",
             1,
-            Regex("CachedSource\\(resolved.source").findAll(launcher).count()
+            Regex("CachedSource\\(\\s*resolved\\.source").findAll(launcher).count()
         )
         assertTrue(
             "the fallback chain is what answers it, exactly as the extraction-null " +
@@ -134,6 +141,47 @@ class TokenlessResolveWiringContractTest {
             ) &&
                 flat(home).contains("if (error is TokenlessHoldException) {") &&
                 flat(mobileHome).contains("if (it is TokenlessHoldException) {")
+        )
+    }
+
+    // ── the death line's token state comes from the mount ──────────────────
+
+    @Test
+    fun `every mount hands the trace its token state, and only a mount does`() {
+        assertEquals(
+            "three things can be mounted for one video - the InnerTube winner, a " +
+                "source served from the cache, and the NewPipe/Piped fallback - and a " +
+                "death line that names no token state is the evidence gap this closes",
+            3,
+            Regex("PoTokenTrace\\.recordMount\\(").findAll(launcher).count()
+        )
+        assertTrue(
+            "the fallback names no client and carries no InnerTube tokens, so its " +
+                "death reads as a fallback death",
+            flat(launcher).contains(
+                "PoTokenTrace.recordMount( videoId, client = null, " +
+                    "playerToken = false, pot = false )"
+            )
+        )
+        assertTrue(
+            "a cache hit replays the pair the source was CACHED with, not the " +
+                "latest mint's",
+            flat(launcher).contains(
+                "PoTokenTrace.recordMount( videoId, cached.client, " +
+                    "cached.playerToken, cached.pot )"
+            )
+        )
+        assertTrue(
+            "and the InnerTube winner hands over the pair it resolved with",
+            flat(launcher).contains(
+                "PoTokenTrace.recordMount( videoId, resolved.client, " +
+                    "resolved.playerToken, resolved.pot )"
+            )
+        )
+        assertTrue(
+            "and the resolve does not: a resolve the gate refuses never mounts, so " +
+                "a snapshot taken there would be quoted as the mount that replaced it",
+            Regex("recordMount\\(").findAll(extractor).count() == 0
         )
     }
 
