@@ -884,10 +884,27 @@ private fun IntegrationsPaneMobile(
         // Read-only, like the TV row: reads BingeCat's lists for its own
         // section and writes nothing back (v1 has no history:write). Last in the
         // section, after the tie-break, matching the TV pane.
+        // The row says WHICH half of the connection is missing: a session that
+        // arrived from the account with no mapping beside it is connected but
+        // serving nothing (spec F2), and the row must not read as finished.
+        val bingecatNeedsProfile = remember(profileRowKey, syncedRevision) {
+            val bingecat = com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                .getInstance(context)
+            bingecat.hasToken() && bingecat.mappedProfileId() == null
+        }
         SettingsNavRowMobile(
-            label = "BingeCat",
-            description = "Read your BingeCat watchlist, saved list and lists in the " +
-                "Library tab - read-only, per BingeCat profile",
+            label = if (bingecatNeedsProfile) {
+                "BingeCat — profile not selected"
+            } else {
+                "BingeCat"
+            },
+            description = if (bingecatNeedsProfile) {
+                "Connected to BingeCat, but this KBStream profile has no BingeCat " +
+                    "profile chosen yet, so no BingeCat rows are read. Open this to pick one."
+            } else {
+                "Read your BingeCat watchlist, saved list and lists in the " +
+                    "Library tab - read-only, per BingeCat profile"
+            },
             onClick = onOpenBingeCat
         )
 

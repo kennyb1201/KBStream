@@ -151,14 +151,25 @@ internal class BingeCatTokenStore(
 /**
  * Which BingeCat profile this KBStream profile reads.
  *
- * Stored per KBStream profile, on this device, and deliberately **not** in the
- * sync payload: the mapping is a choice about *this* profile's device, and a
- * mapping arriving from another device would point at a BingeCat id that may
- * not even exist for this account.
+ * Stored per KBStream profile, and this store stays the store of record on the
+ * device. It used to be deliberately **not** in the sync payload, on the
+ * argument that "a mapping arriving from another device would point at a
+ * BingeCat id that may not even exist for this account" - and that argument
+ * died with the session: the token follows the account now
+ * ([com.kennyb1201.kbstream.data.sync.BingeCatAuthRules]), so the sibling is
+ * signed into the same account and the id does exist there. The mapping travels
+ * as its own per-profile row, a transport on top of this store rather than a
+ * replacement for it, and the one case the old comment was right about - an id
+ * whose profile was deleted after the mapping was written - is answered by
+ * validating the id against the account's own profile list
+ * (`BingeCatRepository.profiles`).
+ *
+ * The row is per KBStream profile, which is what keeps the kids protection: a
+ * kids profile has no mapping and publishes none, so Profile 1's BingeCat
+ * profile can never become the kids profile's, whether or not sync is on.
  *
  * "Unmapped" is a real state, not an error: a connected profile with no
- * mapping makes no data request at all, which is what keeps a kids profile
- * from inheriting Profile 1's BingeCat rows (spec F2).
+ * mapping makes no data request at all (spec F2).
  */
 internal class BingeCatProfileMap(private val context: Context?) {
 

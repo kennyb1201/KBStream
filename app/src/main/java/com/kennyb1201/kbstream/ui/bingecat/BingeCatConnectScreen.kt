@@ -82,6 +82,16 @@ fun BingeCatConnectScreen(
         if (showPicker) vm.loadProfiles()
     }
 
+    // A session can arrive from the account with no mapping beside it: the first
+    // sync after the mapping row started travelling, or a mapped BingeCat profile
+    // that a profile fetch just found gone (spec F3). That state draws the
+    // picker, so the picker has to be FETCHED - drawn over loaded profiles it
+    // read "BingeCat has no profiles" and left the profile step looking like a
+    // dead end (spec F2).
+    LaunchedEffect(uiState.isConnected, uiState.isMapped) {
+        if (uiState.isConnected && !uiState.isMapped) vm.loadProfiles()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()

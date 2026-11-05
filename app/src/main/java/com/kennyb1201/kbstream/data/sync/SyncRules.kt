@@ -290,6 +290,92 @@ internal object BingeCatAuthRules {
 }
 
 /**
+ * Merge rules for the per-profile BingeCat mapping row.
+ *
+ * The mapping (which BingeCat profile a KBStream profile reads) used to be
+ * device-local on purpose: a mapping from another device would name a BingeCat
+ * id that "may not even exist for this account". That rationale died with
+ * [BingeCatAuthRules] - the session now follows the account, so a sibling is
+ * signed into the SAME account and the id exists there. What did not die is the
+ * rule that made the session safe: **never publish a blank**. A profile that
+ * was never mapped has no mapping to share, and if it published its empty row
+ * on every bulk push it would erase every sibling's mapping - the "Simkl
+ * sign-in didn't sync" regression, repeated for the mapping.
+ *
+ * So the two rules are the session's, plus one the session does not need:
+ *
+ *  - **Publish only a mapping or a deliberate clear.** A tombstone is a blank
+ *    with [CLEARED_FIELD]; only a deliberate unmap (the settings picker's
+ *    clear, or `BingeCatRepository.disconnect()`) may write one.
+ *  - **Only a tombstone clears a live local mapping.** A blank that is not
+ *    tombstoned is "this device never mapped", and it can never blank a
+ *    sibling.
+ *  - **A newer choice wins.** Unlike the session - where a
+ *    "different account must always win" test cannot be written - the mapping
+ *    is a CHOICE, so "change the mapped profile on the TV and the phone follows"
+ *    has to work while a stale in-flight row has to be refused. That is decided
+ *    by the payload's `updatedAt` (the moment the mapping last CHANGED on the
+ *    device that published it, not the moment it was pushed) against the local
+ *    write stamp, and the applier records the stamp it adopted so an echo back
+ *    to the sibling can never look newer than the choice it came from.
+ *
+ * A tombstone is adopted regardless of timestamps, exactly as
+ * [BingeCatAuthRules.clearsSession] is: a deliberate clear is a person's
+ * decision, clocks between two boxes are not comparable enough to let a
+ * skew refuse it, and a mapping that lost a race is one re-select away. The one
+ * thing a tombstone cannot do is clear a mapping that is not there - that would
+ * record a marker this device then republishes forever.
+ */
+internal object BingeCatProfileMapRules {
+
+    /** Payload field marking a blank mapping as a deliberate clear. */
+    const val CLEARED_FIELD = "cleared"
+
+    /** The mapped BingeCat profile id; 0 (or absent) when there is none. */
+    const val PROFILE_ID_FIELD = "profile_id"
+
+    /** Display-only name of the mapped profile. Never used to resolve anything. */
+    const val PROFILE_NAME_FIELD = "profile_name"
+
+    /** When the mapping last CHANGED on the publishing device. */
+    const val UPDATED_AT_FIELD = "updatedAt"
+
+    fun shouldPublish(mappedProfileId: Long?, cleared: Boolean): Boolean =
+        (mappedProfileId != null && mappedProfileId > 0L) || cleared
+
+    /** A blank row that means "unmapped on purpose", not "never mapped here". */
+    fun clearsMapping(mappedProfileId: Long?, cleared: Boolean): Boolean =
+        (mappedProfileId == null || mappedProfileId <= 0L) && cleared
+
+    /**
+     * Whether a pulled row may replace this device's mapping.
+     *
+     * [incomingUpdatedAt] is the pulled payload's `updatedAt` and
+     * [localWrittenAt] is when THIS device's mapping last changed (0 when this
+     * build has no record of a change - a mapping written by an older build,
+     * which any pulled choice may then replace).
+     */
+    fun shouldApply(
+        incomingProfileId: Long?,
+        incomingCleared: Boolean,
+        localProfileId: Long?,
+        incomingUpdatedAt: Long,
+        localWrittenAt: Long
+    ): Boolean {
+        // A tombstone clears a live local mapping and nothing else.
+        if (incomingProfileId == null) return incomingCleared && localProfileId != null
+        // Unmapped here: adopt the account's mapping.
+        if (localProfileId == null) return true
+        // Same choice: nothing to write (the name is display-only).
+        if (localProfileId == incomingProfileId) return false
+        // A different choice: only a NEWER one may replace a local mapping. A
+        // re-select on either device is the recovery for a true conflict, which
+        // is stated rather than silently resolved by whichever push landed last.
+        return incomingUpdatedAt > localWrittenAt
+    }
+}
+
+/**
  * Merge rules for the display-prefs blob.
  *
  * That blob used to be WHOLE-BLOB last-write-wins with a timestamp stamped at

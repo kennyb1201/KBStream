@@ -71,6 +71,13 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
                     // line names the thing both gates share.
                     "BingeCat writing is off: this grant was approved before a " +
                         "write scope KBStream needs now."
+                // A session can arrive from the account with no mapping beside
+                // it (the first sync after F1, or an id that a profile fetch
+                // just cleared), and that state serves nothing: it must not read
+                // as a finished connection (spec F2).
+                connected && mappedId == null ->
+                    "Connected to BingeCat, but no BingeCat profile is selected yet " +
+                        "- nothing is read until you pick one."
                 connected -> "Connected to BingeCat."
                 else -> null
             }
@@ -114,6 +121,14 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         if (next.isConnected) {
             viewModelScope.launch {
                 runCatching { repository.publishSessionIfConnected() }
+                // Spec F3: a MAPPED profile's id is validated against the
+                // account's own listing, so a BingeCat profile deleted on the
+                // web is noticed here (the mapping clears and F2's picker
+                // appears) instead of 404ing every read until the viewer happens
+                // to open the picker. An unmapped profile fetches on the same
+                // visit anyway - the screen's own effect asks for the picker - so
+                // this half is only the mapped case.
+                if (next.isMapped) loadProfiles()
             }
         }
         if (next.isConnected == _uiState.value.isConnected &&
@@ -317,8 +332,16 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(isLoadingProfiles = true, profilesError = null)
         viewModelScope.launch {
             val profiles = repository.profiles()
+            // The fetch is also the mapping's validation (spec F3): a successful
+            // listing that omits the mapped id has just unmapped this profile,
+            // and the screen has to say so (F2's prompt) instead of keeping a
+            // "mapped" state over a row that no longer exists.
+            val mappedNow = repository.mappedProfileId()
             _uiState.value = _uiState.value.copy(
                 isLoadingProfiles = false,
+                isMapped = mappedNow != null,
+                mappedProfileId = mappedNow,
+                mappedProfileName = if (mappedNow != null) repository.mappedProfileName() else null,
                 profiles = profiles.orEmpty(),
                 profilesError = if (profiles == null) {
                     "Could not read your BingeCat profiles. Check the connection and try again."

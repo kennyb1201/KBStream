@@ -1072,11 +1072,35 @@ fun SettingsScreen(
                     // family. It sits at the end of the section so the Resume
                     // Source row stays the last thing the trackers above it end
                     // on.
+                    // The row says WHICH half of the connection is missing. A
+                    // session that arrived from the account with no mapping
+                    // beside it is connected but serving nothing (spec F2), and
+                    // a bare "BingeCat" row read as finished while the Library
+                    // had no rows and nothing on screen owed the profile step.
+                    // Keyed on the profile and the sync revision because those
+                    // are the two things that change the answer: a switch
+                    // changes which mapping is asked about, and a pulled
+                    // mapping is what turns the qualifier off.
+                    val bingecatNeedsProfile = remember(profileRowKey, syncedRevision) {
+                        val bingecat = com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                            .getInstance(context)
+                        bingecat.hasToken() && bingecat.mappedProfileId() == null
+                    }
                     NavigationRow(
-                        label = "BingeCat",
-                        description = "Read your BingeCat watchlist, saved list and lists, and " +
-                            "record what you watch - per BingeCat profile. Browse BingeCat's " +
-                            "public lists and import one into your profile there.",
+                        label = if (bingecatNeedsProfile) {
+                            "BingeCat — profile not selected"
+                        } else {
+                            "BingeCat"
+                        },
+                        description = if (bingecatNeedsProfile) {
+                            "Connected to BingeCat, but this KBStream profile has no " +
+                                "BingeCat profile chosen yet, so no BingeCat rows are read. " +
+                                "Open this to pick one."
+                        } else {
+                            "Read your BingeCat watchlist, saved list and lists, and " +
+                                "record what you watch - per BingeCat profile. Browse " +
+                                "BingeCat's public lists and import one into your profile there."
+                        },
                         onClick = onOpenBingeCat
                     )
 

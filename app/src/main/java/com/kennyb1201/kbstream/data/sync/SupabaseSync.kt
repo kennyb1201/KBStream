@@ -2312,6 +2312,16 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the BingeCat MAPPING on the same rule, for the same reason: a
+            // profile that was never mapped must publish nothing, or its blank
+            // row erases the mapping every sibling reads from. A deliberate
+            // unmap publishes through BingeCatRepository.disconnect (see
+            // [BingeCatProfileMapRules]).
+            if (key == PrefsPayloadBuilder.KEY_BINGECAT_PROFILE_MAP &&
+                !PrefsPayloadBuilder.hasBingeCatProfileMapToPublish(context)
+            ) {
+                return@forEach
+            }
             // And the taste signals, on the same rule for the same reason: a
             // profile that has never thumbed anything would publish an empty
             // set, and an empty set is what the applier refuses anyway - so

@@ -130,6 +130,18 @@ private fun traktAuthStore(context: Context, profileId: String? = null) =
 private fun bingecatAuthStore(context: Context, profileId: String? = null) =
     BingeCatTokenStore(context, profileId)
 
+// The mapping row's LOCAL bookkeeping, next to the mapping itself but not inside
+// it: `BingeCatProfileMap`'s prefs name and keys are its own contract. These two
+// keys are never published - they are how the row is built (`written_at` is the
+// row's `updatedAt`) and how a blank is told from a deliberate clear.
+private const val BINGECAT_MAP_SYNC_STORE = "bingecat_map_sync"
+private const val BINGECAT_MAP_WRITTEN_AT = "written_at"
+private const val BINGECAT_MAP_CLEARED = "cleared"
+
+/** The mapping bookkeeping store for the active profile, or for one named row. */
+private fun bingecatMapSyncPrefs(context: Context, profileId: String? = null) =
+    profilePrefs(context, BINGECAT_MAP_SYNC_STORE, profileId)
+
 // Prefs store + key holding the profile's Simkl session (owned by
 // SimklRepository; spelled out here so the blob and the repository agree).
 private const val SIMKL_AUTH_STORE = "simkl_auth"
@@ -440,6 +452,21 @@ object PrefsPayloadBuilder {
      * travels because the refresh token can rotate.
      */
     const val KEY_BINGECAT_AUTH = "bingecat_auth"
+
+    /**
+     * WHICH BingeCat profile this KBStream profile reads, beside the session
+     * above (see [BingeCatProfileMapRules]).
+     *
+     * It was device-local on purpose until the session started travelling; a
+     * second device then came up connected but serving nothing, because
+     * `isReady()` needs a mapping and nothing said the profile step was still
+     * owed (the 2026-11-05 "have to re-select the profile on the second device"
+     * report). Per KBStream profile like every row here, which is what keeps the
+     * kids profile's (empty) mapping its own: a row keyed by ACCOUNT instead
+     * would hand Profile 1's BingeCat profile to the kids profile on every
+     * device, and that invariant is out.
+     */
+    const val KEY_BINGECAT_PROFILE_MAP = "bingecat_profile_map"
     const val KEY_IPTV = "iptv_config"
 
     /**
@@ -501,6 +528,11 @@ object PrefsPayloadBuilder {
         // And the BingeCat session, which used to be device-local by spec: the
         // same never-publish-a-blank rule applies (see [BingeCatAuthRules]).
         KEY_BINGECAT_AUTH to buildBingeCatAuth(context),
+        // And the profile that session reads. Skipped by the push when this
+        // profile never mapped anything and never deliberately unmapped (see
+        // hasBingeCatProfileMapToPublish): an unmapped device publishing its
+        // blank is exactly what would erase the account's mapping.
+        KEY_BINGECAT_PROFILE_MAP to buildBingeCatProfileMap(context),
         // Same rule as the Simkl blob: a device with no key of its own must not
         // publish its blanks (see SupabaseSync.pushPrefsBlobs).
         KEY_API_KEYS to buildApiKeys(context),
@@ -589,6 +621,70 @@ object PrefsPayloadBuilder {
     fun hasBingeCatAuthToPublish(context: Context): Boolean {
         val store = bingecatAuthStore(context)
         return BingeCatAuthRules.shouldPublish(store.accessToken(), store.isSignedOut())
+    }
+
+    /**
+     * The profile's BingeCat mapping, as one blob: the id, its display-only name,
+     * and the moment the mapping last CHANGED here.
+     *
+     * `updatedAt` is that change, not this build's clock (the collections bug: a
+     * device that had merely opened the app re-stamped its older copy and
+     * reverted a sibling's newer one). It is what decides a conflict against a
+     * different local mapping - see [BingeCatProfileMapRules.shouldApply].
+     * A profile that never mapped and never deliberately unmapped still builds a
+     * row; the push gate is what keeps it out of the cloud.
+     */
+    fun buildBingeCatProfileMap(context: Context): JsonObject {
+        val mapping = com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap(context)
+        val mappedId = mapping.mappedProfileId()
+        val sync = bingecatMapSyncPrefs(context)
+        // Tombstone only for a DELIBERATE clear: an empty store with no marker is
+        // "this profile never mapped", which must not erase a sibling's mapping.
+        val cleared = BingeCatProfileMapRules.clearsMapping(
+            mappedId,
+            sync.getBoolean(BINGECAT_MAP_CLEARED, false)
+        )
+        return buildJsonObject {
+            put(
+                BingeCatProfileMapRules.UPDATED_AT_FIELD,
+                sync.getLong(BINGECAT_MAP_WRITTEN_AT, 0L)
+            )
+            put(BingeCatProfileMapRules.PROFILE_ID_FIELD, mappedId ?: 0L)
+            put(BingeCatProfileMapRules.PROFILE_NAME_FIELD, mapping.mappedProfileName().orEmpty())
+            put(BingeCatProfileMapRules.CLEARED_FIELD, cleared)
+        }
+    }
+
+    /**
+     * True when this profile has something to say about the mapping: a profile it
+     * reads, or a deliberate unmap to propagate. A profile that was never mapped
+     * publishes nothing - see [BingeCatProfileMapRules].
+     */
+    fun hasBingeCatProfileMapToPublish(context: Context): Boolean {
+        val mapping = com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap(context)
+        val cleared = mapping.mappedProfileId() == null &&
+            bingecatMapSyncPrefs(context).getBoolean(BINGECAT_MAP_CLEARED, false)
+        return BingeCatProfileMapRules.shouldPublish(mapping.mappedProfileId(), cleared)
+    }
+
+    /**
+     * Notes that this profile's BingeCat mapping just CHANGED on this device -
+     * selected, cleared, or (with [cleared]) deliberately unmapped.
+     *
+     * Called by `BingeCatRepository` at the two places a mapping can change, so
+     * the row it publishes carries the moment of the change and the marker that
+     * makes a blank row a deliberate clear. Kept here rather than in
+     * `BingeCatProfileMap` because the local store's name and keys are its own
+     * contract and sync bookkeeping is not part of it.
+     */
+    fun recordBingeCatMappingChanged(context: Context?, cleared: Boolean) {
+        val appContext = context?.applicationContext ?: return
+        runCatching {
+            bingecatMapSyncPrefs(appContext).edit()
+                .putLong(BINGECAT_MAP_WRITTEN_AT, System.currentTimeMillis())
+                .putBoolean(BINGECAT_MAP_CLEARED, cleared)
+                .apply()
+        }
     }
 
     fun buildBadgePack(context: Context): JsonObject {
@@ -1356,6 +1452,8 @@ object PrefsPayloadApplier {
                 applyTraktAuth(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_BINGECAT_AUTH ->
                 applyBingeCatAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_BINGECAT_PROFILE_MAP ->
+                applyBingeCatProfileMap(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_API_KEYS ->
                 applyApiKeys(context, payload, profileId)
             PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload, profileId, live)
@@ -2016,8 +2114,9 @@ object PrefsPayloadApplier {
      * ([BingeCatAuthRules.shouldAdopt]), and an unchanged session only retires
      * a stale marker. What runs after an adoption is smaller than Trakt's
      * reset, because BingeCat keeps no derived watch state of its own: only the
-     * repository's cached snapshot and the mapping (which is device-local and
-     * deliberately not synced).
+     * repository's cached snapshot and the mapping - and the mapping's own row
+     * carries it now, so a session adopted here leaves this profile's choice of
+     * BingeCat profile exactly as it was (see [BingeCatProfileMapRules]).
      */
     private fun applyBingeCatAuth(
         context: Context,
@@ -2080,6 +2179,106 @@ object PrefsPayloadApplier {
             )
         }
         if (live) resetBingeCatStateAfterSessionChange(context)
+    }
+
+    /**
+     * One pulled BingeCat mapping: which BingeCat profile this KBStream profile
+     * reads, from the account (see [BingeCatProfileMapRules]).
+     *
+     * Three shapes, like the session's: a tombstoned blank unmaps this device, a
+     * live mapping is adopted when it may replace the local one, and an identical
+     * mapping is a no-op. The local store stays the store of record on the device
+     * - this writes the same id and name `BingeCatProfileMap.set` would - and the
+     * stamp it records is the pulled one, so the adopted choice is never
+     * re-published as newer than it is.
+     *
+     * We never publish a pulled id here: applying is a receive, and a device that
+     * merely received must not answer.
+     */
+    private fun applyBingeCatProfileMap(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+
+        val incomingId = text(BingeCatProfileMapRules.PROFILE_ID_FIELD)
+            .toLongOrNull()
+            ?.takeIf { it > 0L }
+        val incomingName = text(BingeCatProfileMapRules.PROFILE_NAME_FIELD)
+        val cleared = text(BingeCatProfileMapRules.CLEARED_FIELD) == "true"
+        val incomingUpdatedAt = payloadUpdatedAt(payload) ?: 0L
+
+        // The mapping's own store for THIS row's profile (a realtime row can name
+        // a sibling), addressed with the same name and keys the local class uses.
+        val mapPrefs = profilePrefs(
+            context,
+            com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.PREFS_NAME,
+            profileId
+        )
+        val localId = mapPrefs
+            .getLong(com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.KEY_PROFILE_ID, 0L)
+            .takeIf { it > 0L }
+        val syncPrefs = bingecatMapSyncPrefs(context, profileId)
+        val localWrittenAt = syncPrefs.getLong(BINGECAT_MAP_WRITTEN_AT, 0L)
+
+        if (!BingeCatProfileMapRules.shouldApply(
+                incomingProfileId = incomingId,
+                incomingCleared = cleared,
+                localProfileId = localId,
+                incomingUpdatedAt = incomingUpdatedAt,
+                localWrittenAt = localWrittenAt
+            )
+        ) {
+            return
+        }
+
+        if (incomingId == null) {
+            mapPrefs.edit()
+                .remove(com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.KEY_PROFILE_ID)
+                .remove(com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.KEY_PROFILE_NAME)
+                .apply()
+            syncPrefs.edit()
+                .putLong(BINGECAT_MAP_WRITTEN_AT, incomingUpdatedAt)
+                .putBoolean(BINGECAT_MAP_CLEARED, true)
+                .apply()
+        } else {
+            mapPrefs.edit()
+                .putLong(
+                    com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.KEY_PROFILE_ID,
+                    incomingId
+                )
+                .putString(
+                    com.kennyb1201.kbstream.data.bingecat.BingeCatProfileMap.KEY_PROFILE_NAME,
+                    incomingName.takeIf { it.isNotBlank() }
+                )
+                .apply()
+            syncPrefs.edit()
+                .putLong(BINGECAT_MAP_WRITTEN_AT, incomingUpdatedAt)
+                .putBoolean(BINGECAT_MAP_CLEARED, false)
+                .apply()
+        }
+        if (live) resetBingeCatStateAfterMappingChange(context)
+    }
+
+    /**
+     * The mapping just changed on the on-screen profile.
+     *
+     * Only the repository's cached snapshot goes: it was read for the PREVIOUS
+     * BingeCat profile, and serving it after a mapping change would show another
+     * profile's lists until the next read (the same trap the cache's own
+     * `mappedId` guard closes).
+     */
+    private fun resetBingeCatStateAfterMappingChange(context: Context) {
+        runCatching {
+            com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
+                .getInstance(context)
+                .onSyncedMappingChanged()
+        }.onFailure {
+            android.util.Log.w(TAG, "bingecat reset after synced mapping change failed: ${it.message}")
+        }
     }
 
     /**
