@@ -488,6 +488,19 @@ object PrefsPayloadBuilder {
     const val KEY_COLLECTIONS = "kb_collections"
     const val KEY_BADGE_PACK = "badge_pack"
     const val KEY_LIBRARY = "library"
+
+    /**
+     * The profile's OWN personal lists (create, rename, add, remove, delete).
+     *
+     * Its own row rather than a field of [KEY_LIBRARY]: the library blob is
+     * whole-blob last-write-wins against a stamp every My List write also moves,
+     * so a list made on one device was dropped by a sibling whose My List edit
+     * was newer - and that sibling's next push republished its older copy over
+     * the account's. A list is its own unit of edit, so the row carries the
+     * lists and their removal record and merges per list (see
+     * [com.kennyb1201.kbstream.data.sync.LocalListSyncRules]).
+     */
+    const val KEY_LIBRARY_LISTS = "library_lists"
     const val KEY_DISMISSALS = "dismissals"
     /**
      * The profile's own thumbs and 1-10 ratings (see [TasteSignals]). Its own
@@ -544,6 +557,10 @@ object PrefsPayloadBuilder {
         KEY_COLLECTIONS to buildCollections(context),
         KEY_BADGE_PACK to buildBadgePack(context),
         KEY_LIBRARY to buildLibrary(context),
+        // Skipped when this profile has neither a list nor a delete to publish
+        // (see hasLibraryListsToPublish): an untouched device's empty row would
+        // erase the account's lists for every sibling.
+        KEY_LIBRARY_LISTS to buildLibraryLists(context),
         KEY_DISMISSALS to buildDismissals(context),
         // Skipped when this profile has no signals at all (see
         // SupabaseSync.pushPrefsBlobs): a device that never thumbed anything
@@ -1236,12 +1253,40 @@ object PrefsPayloadBuilder {
             put("updatedAt", System.currentTimeMillis())
             val prefs = scopedPrefs(context, "kbstream_library")
             put("my_list", prefs.getString("my_list", null) ?: "")
-            put("personal_lists", prefs.getString("personal_lists", null) ?: "")
+            // The personal lists are NOT here any more: they travel on their
+            // own per-list row (see [KEY_LIBRARY_LISTS]), because a whole-blob
+            // write gated on this stamp lost them whenever the other device had
+            // also touched My List.
             put(
                 LibraryTombstones.PAYLOAD_KEY,
                 prefs.getString(LibraryTombstones.PREFS_KEY, null) ?: ""
             )
         }
+
+    /**
+     * The profile's personal lists and their removal record, as the store's own
+     * encoded text.
+     *
+     * Both halves are carried because neither answers alone: the lists say what
+     * this device HAS, and the record says what it deliberately removed - a list
+     * that is merely absent is "never here", which must not delete a sibling's
+     * copy (see [com.kennyb1201.kbstream.data.sync.LocalListSyncRules]).
+     */
+    fun buildLibraryLists(context: Context): JsonObject {
+        val prefs = scopedPrefs(context, "kbstream_library")
+        return buildJsonObject {
+            put("updatedAt", System.currentTimeMillis())
+            put("lists", prefs.getString("personal_lists", null) ?: "")
+            put("deleted", prefs.getString("personal_lists_deleted", null) ?: "")
+        }
+    }
+
+    /**
+     * True when this profile has a list or a delete to say: the gate the bulk
+     * push uses so a device that never made a list cannot erase the account's.
+     */
+    fun hasLibraryListsToPublish(context: Context): Boolean =
+        com.kennyb1201.kbstream.data.library.LocalLibraryStore.hasListsToPublish(context)
 
     /**
      * Continue-watching/upcoming dismissals as one raw JSON object string
@@ -1468,6 +1513,8 @@ object PrefsPayloadApplier {
                 applyCollections(context, payload, profileId)
             PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload, profileId)
             PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_LIBRARY_LISTS ->
+                applyLibraryLists(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload, profileId)
             PrefsPayloadBuilder.KEY_TASTE_SIGNALS ->
                 applyTasteSignals(context, payload, profileId)
@@ -1520,10 +1567,18 @@ object PrefsPayloadApplier {
         ) {
             return
         }
+        // A pin whose local list this device already deleted is not adopted: the
+        // sibling may not have seen the tombstone yet, and taking its copy would
+        // put a rail back for a list that does not exist here.
+        val adopted = com.kennyb1201.kbstream.data.library.withoutDeletedLocalPins(
+            rails,
+            com.kennyb1201.kbstream.data.library.LocalLibraryStore
+                .deletedListIds(context, profileId)
+        )
         prefs.edit()
             .putString(
                 com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNC_BLOB_KEY,
-                com.kennyb1201.kbstream.data.library.LibraryHomeRails.encode(rails)
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails.encode(adopted)
             )
             .putLong(
                 com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
@@ -1586,7 +1641,10 @@ object PrefsPayloadApplier {
 
         val editor = prefs.edit()
         if (!remoteIsStale) {
-            raw("personal_lists")?.let { editor.putString("personal_lists", it) }
+            // The personal lists used to be adopted here too, whole-blob. They
+            // have their own per-list row now ([KEY_LIBRARY_LISTS]) - leaving
+            // the field here would let an older sibling's push replace the
+            // merged lists with its copy.
             editor.putLong("library_synced_at", remoteUpdated ?: System.currentTimeMillis())
         }
 
@@ -1604,6 +1662,54 @@ object PrefsPayloadApplier {
         }
 
         editor.apply()
+    }
+
+    /**
+     * The pulled personal lists: merged per list, never adopted whole.
+     *
+     * The store does the merge (it owns the encoding), and this is where the
+     * screen is told: a list that arrived from the account repaints the Library
+     * rail and Home's pinned rails through the shared revision, because both
+     * read the store while they compose.
+     */
+    private fun applyLibraryLists(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        fun text(key: String): String? =
+            (payload[key] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content
+                ?.takeIf { it.isNotBlank() }
+        val listsRaw = text("lists")
+        val deletedRaw = text("deleted")
+        val changed = runCatching {
+            com.kennyb1201.kbstream.data.library.LocalLibraryStore.mergePulledLists(
+                context = context,
+                profileId = profileId,
+                incomingListsRaw = listsRaw,
+                incomingDeletedRaw = deletedRaw
+            )
+        }.onFailure {
+            android.util.Log.w(TAG, "personal lists merge failed: ${it.message}")
+        }.getOrDefault(false)
+        // A list deleted on the other device takes its Home pin with it, even
+        // though the sibling's pin row still names it (see
+        // withoutDeletedLocalPins): the tombstone is the newer statement, and a
+        // rail pointing at a list that no longer exists is a heading that
+        // cannot fill.
+        val pinsChanged = runCatching {
+            com.kennyb1201.kbstream.data.library.LibraryHomeRails.dropLocalPinsAdopted(
+                context = context,
+                profileId = profileId,
+                deletedListIds = com.kennyb1201.kbstream.data.library.LocalLibraryStore
+                    .deletedListIdsFromRaw(deletedRaw)
+            )
+        }.onFailure {
+            android.util.Log.w(TAG, "personal list pin drop failed: ${it.message}")
+        }.getOrDefault(false)
+        if ((changed || pinsChanged) && live) _revision.value += 1
     }
 
     /**

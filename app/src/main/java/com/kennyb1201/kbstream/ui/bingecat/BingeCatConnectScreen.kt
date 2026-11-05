@@ -52,9 +52,13 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * WHICH BingeCat profile this KBStream profile reads, and an unanswered
  * question means no data at all (spec F2).
  *
- * One screen for both form factors, laid out as a single scrolling column: the
- * content is three lines and a code, and a separate touch layout would be the
- * same content with different padding.
+ * A separate touch twin exists after all
+ * ([com.kennyb1201.kbstream.ui.mobile.BingeCatConnectScreenMobile]): the
+ * page was written as one scrolling column "the same content with different
+ * padding", which was wrong about the widgets - every control here is a
+ * D-pad card, so on a phone the page took no press and the connection could
+ * not be made from it at all. The twin keeps this description, the states and
+ * the ViewModel, and swaps the widgets for the touch ones.
  */
 @Composable
 fun BingeCatConnectScreen(
@@ -68,6 +72,18 @@ fun BingeCatConnectScreen(
     onBrowsePublicLists: () -> Unit = {},
     vm: BingeCatViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel, mapping step and disconnect, laid out
+    // for touch. One branch; the TV page below is unchanged.
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.BingeCatConnectScreenMobile(
+            modifier = modifier,
+            onBack = onBack,
+            onBrowsePublicLists = onBrowsePublicLists,
+            vm = vm
+        )
+        return
+    }
+
     val uiState by vm.uiState.collectAsStateWithLifecycle()
     // Whether the mapped screen is showing the picker again. Re-mapping is a
     // deliberate action, so it never replaces a working mapping silently: the

@@ -1644,6 +1644,19 @@ object SupabaseSync {
     }
 
     /**
+     * Awaits one pull of the account's prefs rows for the profile on screen.
+     *
+     * The four-table pull runs at sign-in, at app start and on a profile switch,
+     * and realtime carries a row made elsewhere - but neither helps a screen
+     * that has to decide NOW whether the account holds something it does not
+     * (the BingeCat page's "is a profile mapped?", after a mapping was made on a
+     * sibling device following this device's last pull). Callers get the SAME
+     * merge the ordinary pull uses: this is a trigger for it, not a second
+     * applier. Returns whether the read ran.
+     */
+    suspend fun pullPrefsNow(context: Context): Boolean = pullPrefs(context)
+
+    /**
      * Awaited variants — callers that must sequence push-after-pull.
      * Prefs pull FIRST: the profiles blob inside it creates/activates the
      * account's profile on a fresh device, and the history/watched pulls
@@ -2330,6 +2343,15 @@ object SupabaseSync {
             // does not have to win on a sibling (see TasteSignals.clearAll).
             if (key == PrefsPayloadBuilder.KEY_TASTE_SIGNALS &&
                 !PrefsPayloadBuilder.hasTasteSignalsToPublish(context)
+            ) {
+                return@forEach
+            }
+            // And the profile's personal lists, on the same rule for the same
+            // reason: every profile that never made a list would otherwise
+            // publish its empty row over the account's, and the sibling's lists
+            // would vanish on its next pull (see [LocalListSyncRules]).
+            if (key == PrefsPayloadBuilder.KEY_LIBRARY_LISTS &&
+                !PrefsPayloadBuilder.hasLibraryListsToPublish(context)
             ) {
                 return@forEach
             }

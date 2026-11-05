@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
+import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
@@ -14,6 +15,8 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.TastePlacement
 import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
+import com.kennyb1201.kbstream.data.library.libraryHomeRailId
+import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.library.watchlistShelfId
@@ -255,6 +258,31 @@ class LibraryViewModel(
         // activity-scoped, so an init-only snapshot went stale the moment
         // the user added a title from another screen and came back.
         observeProfileSwitches()
+        observeSyncedLists()
+    }
+
+    /**
+     * A personal list that arrived from the account repaints the rail.
+     *
+     * The lists travel on their own row and are merged per list (see
+     * [com.kennyb1201.kbstream.data.sync.LocalListSyncRules]), so a list made,
+     * renamed or deleted on the other device lands in this profile's store
+     * while the Library may already be open. Only the LOCAL rows are re-read
+     * here - the account lists are fetched from their services by the full
+     * refresh, and reading them on every synced pref would be a network call
+     * per unrelated pull. A disk read of one small blob is the whole cost.
+     */
+    private fun observeSyncedLists() {
+        viewModelScope.launch {
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.revision.collect {
+                val localLists = LocalLibraryStore.userLists(getApplication())
+                val state = _uiState.value
+                val merged = localLists + state.lists.filterNot { it.source.isLocalList }
+                if (merged != state.lists) {
+                    _uiState.value = state.copy(lists = merged)
+                }
+            }
+        }
     }
 
     /**
@@ -526,6 +554,13 @@ class LibraryViewModel(
                     "Couldn't delete \"${list.name}\" from ${list.locationLabel}."
                 )
                 return@launch
+            }
+            // The pin goes with the list it named. A remote list has no
+            // tombstone to carry this - the service is the source of truth -
+            // so the drop is published as a pin edit, which is how the sibling
+            // that never deleted anything loses the rail too.
+            libraryHomeRailPinFor(list)?.let { pin ->
+                LibraryHomeRails.setPinned(appContext, pin, false)
             }
             val state = _uiState.value
             val sameList = { candidate: LibraryList ->
@@ -883,23 +918,34 @@ class LibraryViewModel(
                 emptyList()
             }
 
+            // Whether the read ANSWERED, as opposed to answered with no lists.
+            // A failed or unconfigured source knows nothing about which lists
+            // still exist, so it is not allowed to prune a Home rail or close
+            // the open list (see liveListIds below).
+            var mdbListsAnswered = false
             val mdbLists = if (mdbListConfigured) {
+                // OrNull, not the flattening read: an unreachable MDBList must
+                // not look like "this account has no lists", or the reconcile
+                // below would drop every MDBList pin on an offline start.
                 runCatchingCancellable {
-                    MdbListClient.getUserLists(appContext).map { list ->
-                        LibraryList(
-                            id = list.id,
-                            name = list.name,
-                            itemCount = list.itemCount,
-                            source = LibrarySource.MDBLIST_LIST
-                        )
-                    }
+                    MdbListClient.getUserListsOrNull(appContext)
                 }.onFailure {
                     Log.w(TAG, "MDBList lists fetch failed: ${it.message}")
-                }.getOrDefault(emptyList())
+                }.getOrNull()?.also {
+                    mdbListsAnswered = true
+                }?.map { list ->
+                    LibraryList(
+                        id = list.id,
+                        name = list.name,
+                        itemCount = list.itemCount,
+                        source = LibrarySource.MDBLIST_LIST
+                    )
+                }.orEmpty()
             } else {
                 emptyList()
             }
 
+            var traktListsAnswered = false
             val traktLists = if (traktConnected) {
                 runCatchingCancellable {
                     traktRepository.userLists().mapNotNull { list ->
@@ -915,6 +961,8 @@ class LibraryViewModel(
                             remoteId = remoteId
                         )
                     }
+                }.onSuccess {
+                    traktListsAnswered = true
                 }.onFailure {
                     Log.w(TAG, "Trakt lists fetch failed: ${it.message}")
                 }.getOrDefault(emptyList())
@@ -933,6 +981,9 @@ class LibraryViewModel(
             // which is what keeps a kids profile from inheriting another
             // profile's BingeCat rows.
             val bingecatReady = bingecatRepository.isReady()
+            // Before the call, so the answer's stamp can say whether this read
+            // actually reached BingeCat (see liveListIds).
+            val bingecatReadAt = System.currentTimeMillis()
             val bingecatSnapshot = if (bingecatReady) {
                 runCatchingCancellable { bingecatRepository.snapshot() }
                     .onFailure {
@@ -1000,7 +1051,62 @@ class LibraryViewModel(
             // the rail in the order they always had.
             val lists = localLists + mdbLists + traktLists + bingecatLists + watchlistLists
 
+            // The list sources that ANSWERED this refresh, and the ids each of
+            // them still has. A source that failed, is not configured or is not
+            // connected is simply absent - see withoutVanishedPins: an
+            // unanswered read must never read as "the list is gone".
+            val liveListIds = buildMap {
+                if (mdbListsAnswered) {
+                    put(
+                        LibrarySource.MDBLIST_LIST.name,
+                        mdbLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                    )
+                }
+                if (traktListsAnswered) {
+                    put(
+                        LibrarySource.TRAKT_LIST.name,
+                        traktLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                    )
+                }
+                // BingeCat is stale-while-revalidate: snapshot() answers with
+                // cached rows - and keeps them after a FAILED revalidation - so
+                // "non-null" does not mean "the site was asked". Only a
+                // snapshot this refresh actually fetched may prune a pin, or a
+                // 30-minute-old cache missing a list created elsewhere would
+                // delete a live rail.
+                if (bingecatReady && bingecatSnapshot != null &&
+                    bingecatSnapshot.refreshedAtMs >= bingecatReadAt
+                ) {
+                    put(
+                        LibrarySource.BINGECAT_LIST.name,
+                        bingecatLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                    )
+                }
+            }
+
             if (version != requestVersion) return@launch
+
+            // A list deleted on a website takes its Home rail with it: the
+            // absence from this read is the only signal the app gets, and the
+            // pinned row would otherwise be a promise about a list that no
+            // longer exists anywhere. Best-effort - a prefs failure must not
+            // cost the Library its rows.
+            runCatching { LibraryHomeRails.reconcilePins(appContext, liveListIds) }
+                .onFailure { Log.w(TAG, "Home rail reconcile failed: ${it.message}") }
+
+            // And it must not stay OPEN: its pane would keep a title naming a
+            // list that is gone, and every read of it would answer with
+            // nothing. Closed back to the merged view - where pressing back
+            // after deleting a list here leaves the viewer. Only a source that
+            // answered can close it, so a dead Trakt cannot throw the viewer
+            // out of the list they were reading.
+            val openList = _uiState.value.selectedList
+            if (openList != null &&
+                liveListIds[openList.source.name]
+                    ?.contains(libraryHomeRailId(openList)) == false
+            ) {
+                _uiState.value = _uiState.value.copy(selectedList = null)
+            }
 
             // BingeCat's rows are folded into the same merge, around the
             // tracker expression this branch has always had (see the comment

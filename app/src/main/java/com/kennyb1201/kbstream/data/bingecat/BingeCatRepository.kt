@@ -646,6 +646,28 @@ class BingeCatRepository private constructor(private val context: Context?) {
     }
 
     /**
+     * Re-asserts this device's MAPPING to the account, when it has one.
+     *
+     * The mapping's sibling of [publishSessionIfConnected], and it exists for
+     * the same report one layer down: a profile mapped by a build that predates
+     * the mapping row has no publish of its own, and the bulk push only runs on
+     * sign-in / "Sync now" - so every sibling kept asking for a BingeCat
+     * profile that had already been chosen, once per KBStream profile. Opening
+     * the BingeCat page is proof the viewer is looking at THIS mapping, so it
+     * re-asserts it: the same one-row enqueue `setMappedProfile` uses, carrying
+     * the mapping's own change stamp, so it can never outrank a newer choice
+     * made on another device.
+     *
+     * Nothing is published for an unmapped profile: a blank that is not
+     * tombstoned is "never mapped here" and must never erase a sibling's mapping
+     * (see [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
+     */
+    fun publishMappingIfMapped() {
+        if (mapping.mappedProfileId() == null) return
+        publishMappingToSync()
+    }
+
+    /**
      * Publishes this profile's BingeCat session immediately, bypassing the bulk
      * push's "nothing to publish" skip.
      *

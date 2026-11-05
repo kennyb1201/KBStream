@@ -70,3 +70,56 @@ fun libraryHomeRailPinFor(list: LibraryList): LibraryHomeRailPin? {
         name = name
     )
 }
+
+/**
+ * [pins] minus the ones whose local list was deleted.
+ *
+ * A list deleted on one device reaches the other as a TOMBSTONE
+ * (`personal_lists_deleted`, see LocalLibraryStore) and not as a pin removal:
+ * the sibling never edited its pin row, so its copy still names a list that no
+ * longer exists anywhere. That pin is invisible only by accident - the rail
+ * draws nothing because the list has no items - and it stays in the blob, gets
+ * republished on the sibling's next pin edit, and comes back the moment the
+ * account's copy is adopted again. A pin is a promise about a list, so it goes
+ * when the list goes.
+ *
+ * Only LOCAL_LIST pins are touched. A Trakt, MDBList or BingeCat pin's id
+ * belongs to that service, and this device's tombstone says nothing about it -
+ * filtering those would let one device's local cleanup hide a list that still
+ * exists on the account.
+ */
+fun withoutDeletedLocalPins(
+    pins: List<LibraryHomeRailPin>,
+    deletedListIds: Set<Int>
+): List<LibraryHomeRailPin> {
+    if (deletedListIds.isEmpty()) return pins
+    return pins.filterNot { pin ->
+        pin.source == LibrarySource.LOCAL_LIST.name &&
+            pin.id.removePrefix("id:").toIntOrNull() in deletedListIds
+    }
+}
+
+/**
+ * [pins] minus the ones naming a list the service no longer has.
+ *
+ * A list deleted on Trakt's, MDBList's or BingeCat's own site leaves nothing on
+ * this device to say so - no tombstone, no event - so the only signal is the
+ * list's absence from the rail's next read. [liveIds] is that read: the ids each
+ * source still answered with, per [LibraryHomeRailPin.source] name.
+ *
+ * A source MISSING from [liveIds] is not a source with no lists: it is a source
+ * that did not answer (not configured, timed out, rate-limited), and it says
+ * nothing about which lists exist. Those pins are kept. Pruning on a failed read
+ * would delete a rail for a list that is still there, and publish that mistake
+ * to the account - the trap every last-write-wins row in this app has.
+ */
+fun withoutVanishedPins(
+    pins: List<LibraryHomeRailPin>,
+    liveIds: Map<String, Set<String>>
+): List<LibraryHomeRailPin> {
+    if (liveIds.isEmpty()) return pins
+    return pins.filter { pin ->
+        val live = liveIds[pin.source] ?: return@filter true
+        pin.id in live
+    }
+}

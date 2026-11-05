@@ -14,9 +14,14 @@ class LocalListIdCollisionContractTest {
     @Test
     fun `creating a list skips an id already in use`() {
         val body = functionBody("fun createList(")
+        // The collision set grew with the sync work: a re-used id would also
+        // collide with the removal record, and the new list would read as the
+        // one the viewer deleted, so the next merge would drop it.
         assertTrue(
             "the id must be bumped off any collision before it is stored",
-            body.contains("while (lists.any { it.id == idForList })")
+            body.contains(
+                "while (lists.any { it.id == idForList } || deleted.containsKey(idForList))"
+            )
         )
         assertTrue(
             "and the stored list must carry the resolved id",

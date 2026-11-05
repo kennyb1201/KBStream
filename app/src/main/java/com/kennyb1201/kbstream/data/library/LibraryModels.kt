@@ -263,6 +263,18 @@ object LocalLibraryStore {
     private const val KEY_LISTS = "personal_lists"
 
     /**
+     * The removal record for [KEY_LISTS]: id -> when it was deleted.
+     *
+     * A delete cannot be expressed by the lists blob alone - a list that is
+     * simply absent is also a list this device never had, and reading those as
+     * the same thing is how a sibling's next push put a deleted list back. The
+     * record is the only thing that removes a list, and it outranks any older
+     * copy that has not heard about the delete yet (see
+     * [com.kennyb1201.kbstream.data.sync.LocalListSyncRules]).
+     */
+    private const val KEY_LISTS_DELETED = "personal_lists_deleted"
+
+    /**
      * The last copy of each blob that PARSED, per profile store.
      *
      * A blob that will not parse (a schema drift from a sideloaded newer/older
@@ -760,7 +772,18 @@ object LocalLibraryStore {
         val id: Int,
         val name: String,
         val createdAt: Long,
-        val items: MutableList<LibraryItem>
+        val items: MutableList<LibraryItem>,
+        /**
+         * When this list last CHANGED here: its creation, a rename, or a row
+         * added or removed. The merge compares it across devices, so it is the
+         * list's own edit time - never the moment a push happened, which would
+         * let a device that merely opened the app overwrite a newer copy.
+         *
+         * Absent in blobs written before this existed, and read as
+         * [createdAt]: an older list is still older than a sibling's edit, and
+         * any pulled copy of it may then win.
+         */
+        val updatedAt: Long = createdAt
     )
 
     /** The personal lists for display: the parsed blob or the last good copy. */
@@ -799,7 +822,8 @@ object LocalLibraryStore {
                     id = id,
                     name = name,
                     createdAt = createdAt,
-                    items = items
+                    items = items,
+                    updatedAt = obj.optLong("updatedAt", createdAt)
                 )
             }
             out.sortBy { it.createdAt }
@@ -828,11 +852,190 @@ object LocalLibraryStore {
                     .put("id", list.id)
                     .put("name", list.name)
                     .put("createdAt", list.createdAt)
+                    .put("updatedAt", list.updatedAt)
                     .put("items", items)
             )
         }
         prefs(context).edit().putString(KEY_LISTS, root.toString()).apply()
-        pushLibrarySync(context)
+        pushListsSync(context)
+    }
+
+    /** The removal record of the ambient profile, as id -> deletedAt. */
+    private fun deletedLists(context: Context): Map<Int, Long> =
+        decodeDeletedLists(prefs(context).getString(KEY_LISTS_DELETED, null))
+
+    /**
+     * The ids this profile has a removal record for, whoever deleted them.
+     *
+     * Read by the pins store: a pin that names a deleted list must not survive
+     * an adopted copy from a sibling that has not deleted it yet (see
+     * [withoutDeletedLocalPins]).
+     */
+    internal fun deletedListIds(context: Context, profileId: String?): Set<Int> =
+        decodeDeletedLists(
+            libraryPrefs(context, profileId).getString(KEY_LISTS_DELETED, null)
+        ).keys
+
+    /** The ids a pushed removal record names, without touching any store. */
+    internal fun deletedListIdsFromRaw(raw: String?): Set<Int> =
+        decodeDeletedLists(raw).keys
+
+    private fun decodeDeletedLists(raw: String?): Map<Int, Long> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        val root = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+        val out = mutableMapOf<Int, Long>()
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val id = key.toIntOrNull() ?: continue
+            out[id] = root.optLong(key, 0L)
+        }
+        return out
+    }
+
+    private fun encodeDeletedLists(record: Map<Int, Long>): String {
+        val root = JSONObject()
+        record.forEach { (id, at) -> root.put(id.toString(), at) }
+        return root.toString()
+    }
+
+    /**
+     * Cross-device sync for the personal lists, on their own row.
+     *
+     * The library row is whole-blob last-write-wins against a stamp every My
+     * List write also moves, which is what made a list created on one device
+     * disappear on the next one: the other device's My List edit republished
+     * its older copy of the lists. This row carries the lists and their removal
+     * record and is merged per list (see
+     * [com.kennyb1201.kbstream.data.sync.LocalListSyncRules]).
+     */
+    private fun pushListsSync(context: Context) {
+        com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+            context,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_LIBRARY_LISTS,
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildLibraryLists(context)
+        )
+    }
+
+    /** True when this profile has lists or a delete to publish. */
+    fun hasListsToPublish(context: Context): Boolean =
+        com.kennyb1201.kbstream.data.sync.LocalListSyncRules.shouldPublish(
+            listCount = readLists(context).size,
+            tombstoneCount = deletedLists(context).size
+        )
+
+    /**
+     * Merges the account's lists into [profileId]'s store, one list at a time,
+     * and answers whether anything changed.
+     *
+     * Addressed by profile rather than by the ambient store: the applier may be
+     * writing a sibling profile's library. Nothing is pushed - a pull is not
+     * this device's edit, and the sibling that made it already published it.
+     * A local blob that will not parse refuses the merge rather than replacing
+     * the other lists with the incoming half (the same rule every read-modify-
+     * write here follows).
+     */
+    @Synchronized
+    fun mergePulledLists(
+        context: Context,
+        profileId: String?,
+        incomingListsRaw: String?,
+        incomingDeletedRaw: String?
+    ): Boolean {
+        val prefs = libraryPrefs(context, profileId)
+        val localRaw = prefs.getString(KEY_LISTS, null)
+        val local = listsFromRaw(localRaw) ?: return false
+        val incoming = listsFromRaw(incomingListsRaw) ?: return false
+        val localDeleted = decodeDeletedLists(prefs.getString(KEY_LISTS_DELETED, null))
+        val incomingDeleted = decodeDeletedLists(incomingDeletedRaw)
+        val deleted = com.kennyb1201.kbstream.data.sync.LocalListSyncRules.mergeTombstones(
+            local = localDeleted,
+            incoming = incomingDeleted
+        )
+
+        val byId = linkedMapOf<Int, StoredList>()
+        local.forEach { byId[it.id] = it }
+        incoming.forEach { list ->
+            val localCopy = byId[list.id]
+            val keeps = com.kennyb1201.kbstream.data.sync.LocalListSyncRules.takesIncoming(
+                incomingUpdatedAt = list.updatedAt,
+                localUpdatedAt = localCopy?.updatedAt,
+                tombstoned = deleted.containsKey(list.id)
+            )
+            if (keeps) byId[list.id] = list
+        }
+        // The removal record is applied last, so it also takes out a local copy
+        // the incoming half did not mention.
+        deleted.keys.forEach { byId.remove(it) }
+
+        val merged = byId.values.sortedBy { it.createdAt }
+        val listsChanged = merged != local
+        val deletedChanged = deleted != localDeleted
+        if (!listsChanged && !deletedChanged) return false
+
+        val root = JSONObject()
+        merged.forEach { list ->
+            val items = JSONArray()
+            list.items.forEach { items.put(entryJson(it)) }
+            root.put(
+                list.id.toString(),
+                JSONObject()
+                    .put("id", list.id)
+                    .put("name", list.name)
+                    .put("createdAt", list.createdAt)
+                    .put("updatedAt", list.updatedAt)
+                    .put("items", items)
+            )
+        }
+        prefs.edit()
+            .putString(KEY_LISTS, root.toString())
+            .putString(KEY_LISTS_DELETED, encodeDeletedLists(deleted))
+            .apply()
+        // The ambient store's last-good copy belongs to the ambient profile; a
+        // sibling's merge must not leave the parsed cache pointing at it.
+        if (profileId == null) {
+            lastGood[cacheKey(context, KEY_LISTS)] = merged
+        }
+        return true
+    }
+
+    /**
+     * Parses one personal-lists blob, or null when it is absent or unreadable.
+     *
+     * Absent is "no lists here" (an empty list); unreadable is a refusal, so
+     * the caller keeps what it has instead of replacing it with an empty
+     * library.
+     */
+    private fun listsFromRaw(raw: String?): List<StoredList>? {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val root = JSONObject(raw)
+            val out = mutableListOf<StoredList>()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val obj = root.optJSONObject(key) ?: continue
+                val name = obj.optString("name", "")
+                if (name.isBlank()) continue
+                val createdAt = obj.optLong("createdAt", 0L)
+                val items = mutableListOf<LibraryItem>()
+                obj.optJSONArray("items")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let(::entryFromJson)?.let(items::add)
+                    }
+                }
+                val id = obj.optInt("id", localListId(createdAt))
+                if (id == 0) continue
+                out += StoredList(
+                    id = id,
+                    name = name,
+                    createdAt = createdAt,
+                    items = items,
+                    updatedAt = obj.optLong("updatedAt", createdAt)
+                )
+            }
+            out.sortedBy { it.createdAt }
+        }.getOrNull()
     }
 
     /** All local personal lists, oldest first (stable rail order). */
@@ -860,10 +1063,13 @@ object LocalLibraryStore {
         // Two lists created in the same millisecond derive the SAME id, and the
         // store is keyed by it - the second silently replaced the first, a
         // double-tap on create losing a list (LS-P2-8). Bump the stamp until
-        // the id is free.
+        // the id is free - of the lists here AND of the removal record, because
+        // re-using a deleted id would make the new list read as the one the
+        // viewer deleted and the next merge would drop it.
+        val deleted = deletedLists(context)
         var stamp = createdAt
         var idForList = localListId(stamp)
-        while (lists.any { it.id == idForList }) {
+        while (lists.any { it.id == idForList } || deleted.containsKey(idForList)) {
             stamp += 1L
             idForList = localListId(stamp)
         }
@@ -871,7 +1077,8 @@ object LocalLibraryStore {
             id = idForList,
             name = trimmed,
             createdAt = stamp,
-            items = mutableListOf()
+            items = mutableListOf(),
+            updatedAt = stamp
         )
         lists += stored
         writeLists(context, lists)
@@ -884,18 +1091,36 @@ object LocalLibraryStore {
         if (trimmed.isBlank()) return false
         val lists = readListsForWrite(context) ?: return false
         val target = lists.firstOrNull { it.id == listId } ?: return false
-        val renamed = target.copy(name = trimmed)
+        val renamed = target.copy(name = trimmed, updatedAt = System.currentTimeMillis())
         val updated = lists.map { if (it.id == listId) renamed else it }
         writeLists(context, updated)
         return true
     }
 
+    /**
+     * Deletes one local list, and records the removal so it travels.
+     *
+     * The empty blob alone would not say whether the list was deleted here or
+     * never existed on the other device - and reading those the same way is how
+     * a sibling's next push put a deleted list back. The record outranks an
+     * older copy of the list, forever, because ids are never reused
+     * ([createList] steps over them).
+     */
     @Synchronized
     fun deleteList(context: Context, listId: Int): Boolean {
         val lists = readListsForWrite(context) ?: return false
         val filtered = lists.filter { it.id != listId }
         if (filtered.size == lists.size) return false
+        val record = deletedLists(context).toMutableMap()
+        record[listId] = System.currentTimeMillis()
+        prefs(context).edit()
+            .putString(KEY_LISTS_DELETED, encodeDeletedLists(record))
+            .apply()
         writeLists(context, filtered)
+        // The Home rail goes with the list, here at the store rather than in a
+        // screen: every surface that can delete a list comes through this call,
+        // and the drop publishes the pin row so the sibling loses it as well.
+        LibraryHomeRails.dropLocalPins(context, setOf(listId))
         return true
     }
 
@@ -933,8 +1158,14 @@ object LocalLibraryStore {
         val target = lists.firstOrNull { it.id == listId } ?: return
         // Match on either id: a removal passes whatever id the row it came
         // from knows, which is often only one side of the stored pair.
-        target.items.removeAll { matches(it, mediaType, imdbId, tmdbId) }
-        writeLists(context, lists)
+        val removed = target.items.removeAll { matches(it, mediaType, imdbId, tmdbId) }
+        if (!removed) return
+        // A row leaving a list is that list's edit: the stamp is what lets the
+        // sibling take this copy instead of keeping the row it still shows.
+        val stamped = lists.map {
+            if (it.id == listId) it.copy(updatedAt = System.currentTimeMillis()) else it
+        }
+        writeLists(context, stamped)
     }
 
     // Shared add used by My List and local lists: de-duped, newest first.
@@ -995,7 +1226,10 @@ object LocalLibraryStore {
         val target = lists.firstOrNull { it.id == id } ?: return false
         if (target.items.any { matches(it, mediaType, imdbId, tmdbId) }) return true
         target.items.add(0, entry)
-        writeLists(context, lists)
+        val stamped = lists.map {
+            if (it.id == id) it.copy(updatedAt = System.currentTimeMillis()) else it
+        }
+        writeLists(context, stamped)
         return true
     }
 

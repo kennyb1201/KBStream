@@ -57,9 +57,12 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * Home rail manager is touched, and a public list is never presented as
  * KBStream's own pick: every card and detail names its BingeCat owner.
  *
- * One composable for both form factors, like the connect page beside it: the
- * content is cards and one field, and a separate touch layout would be the same
- * content with different padding.
+ * A separate touch twin exists
+ * ([com.kennyb1201.kbstream.ui.mobile.BingeCatPublicListsScreenMobile]): the
+ * page was written as one layout "the same content with different padding",
+ * which was wrong about the widgets - the cards and buttons here answer the
+ * D-pad, so on a phone the browser took no press and the import could not be
+ * started from it. The twin keeps this level stack and the ViewModel.
  */
 @Composable
 fun BingeCatPublicListsScreen(
@@ -68,6 +71,17 @@ fun BingeCatPublicListsScreen(
     onOpenTitle: (mediaType: String, id: String) -> Unit,
     vm: BingeCatPublicListsViewModel = viewModel()
 ) {
+    // The phone entry: the same ViewModel and level stack, laid out for touch.
+    if (!com.kennyb1201.kbstream.FormFactor.isTv) {
+        com.kennyb1201.kbstream.ui.mobile.BingeCatPublicListsScreenMobile(
+            modifier = modifier,
+            onBack = onBack,
+            onOpenTitle = onOpenTitle,
+            vm = vm
+        )
+        return
+    }
+
     val uiState by vm.uiState.collectAsStateWithLifecycle()
 
     // Back walks the surface's own stack; at the root it leaves for the BingeCat

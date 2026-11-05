@@ -103,6 +103,76 @@ object LibraryHomeRails {
     }
 
     /**
+     * Drops the pins of the local lists in [deletedListIds], as a local edit.
+     *
+     * Called from [LocalLibraryStore.deleteList], so the pin goes in the same
+     * breath as the list on every surface that can delete one. Publishing is
+     * the point: the sibling that still holds the pin must lose it too, which
+     * is why this goes through [write] rather than filtering quietly. The
+     * removal of the LAST pin still publishes (see [shouldPublish]), so an
+     * empty blob here is a statement, not a silence.
+     */
+    fun dropLocalPins(context: Context, deletedListIds: Set<Int>): Boolean {
+        if (deletedListIds.isEmpty()) return false
+        val current = pins(context)
+        val kept = withoutDeletedLocalPins(current, deletedListIds)
+        if (kept.size == current.size) return false
+        write(context, kept)
+        return true
+    }
+
+    /**
+     * Drops the pins of lists that no longer exist at the service, and mirrors
+     * the result.
+     *
+     * Called by the Library's full refresh with the ids each list source just
+     * answered with (see [withoutVanishedPins]). A list deleted on a website is
+     * only visible as an absence, so this is the one place that absence is read
+     * as a statement - and only for a source that DID answer, which is why the
+     * map is built from successful reads alone.
+     *
+     * Publishing matters twice over: the sibling devices lose the rail, and the
+     * account's pin row stops naming a list that is gone, so no later adoption
+     * can bring it back.
+     */
+    fun reconcilePins(context: Context, liveIds: Map<String, Set<String>>): Boolean {
+        if (liveIds.isEmpty()) return false
+        val current = pins(context)
+        val kept = withoutVanishedPins(current, liveIds)
+        if (kept.size == current.size) return false
+        write(context, kept)
+        return true
+    }
+
+    /**
+     * The same drop, for a tombstone that arrived from another device.
+     *
+     * [profileId] rather than the active profile: the applier may be writing a
+     * sibling's pins. Nothing is published here - a pull is not this device's
+     * edit, and the device that deleted the list already published both the
+     * tombstone and its own pin row, so republishing would be this device
+     * claiming an edit it did not make. The stamp is still moved forward, so an
+     * older account copy adopted later cannot put the dead pin back.
+     */
+    internal fun dropLocalPinsAdopted(
+        context: Context,
+        profileId: String?,
+        deletedListIds: Set<Int>
+    ): Boolean {
+        if (deletedListIds.isEmpty()) return false
+        val prefs = prefsFor(context, profileId)
+        val raw = prefs.getString(KEY_BLOB, null) ?: return false
+        val current = runCatching { adapter.fromJson(raw) }.getOrNull()?.rails ?: return false
+        val kept = withoutDeletedLocalPins(current, deletedListIds)
+        if (kept.size == current.size) return false
+        prefs.edit()
+            .putString(KEY_BLOB, encode(kept))
+            .putLong(SYNCED_AT_KEY, System.currentTimeMillis())
+            .apply()
+        return true
+    }
+
+    /**
      * Writes [rails] and mirrors them.
      *
      * The stamp is written BEFORE the enqueue so the pull's staleness guard
@@ -180,8 +250,12 @@ object LibraryHomeRails {
         }
     }
 
-    private fun prefs(context: Context) = context.getSharedPreferences(
-        ProfileStorage.prefsName(context, PREFS),
+    private fun prefs(context: Context) = prefsFor(context, null)
+
+    /** The pins blob of one profile (null = the profile scoped to right now). */
+    private fun prefsFor(context: Context, profileId: String?) = context.getSharedPreferences(
+        if (profileId == null) ProfileStorage.prefsName(context, PREFS)
+        else ProfileStorage.prefsName(profileId, PREFS),
         Context.MODE_PRIVATE
     )
 }

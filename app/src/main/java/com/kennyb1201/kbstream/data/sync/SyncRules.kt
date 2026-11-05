@@ -376,6 +376,79 @@ internal object BingeCatProfileMapRules {
 }
 
 /**
+ * Merge rules for the profile's OWN personal lists (create, rename, add,
+ * remove, delete).
+ *
+ * These lists used to ride the library blob, which is whole-blob
+ * last-write-wins against a stamp every My List write also moves. Two
+ * consequences, both reported as "my lists don't sync": a list made on the TV
+ * was dropped by the phone whose My List write was newer, and the phone's next
+ * My List write republished its OLDER copy of the lists over the account's, so
+ * the list disappeared again. A list is its own unit of edit - its name, its
+ * rows, and its removal each touch one id - so the merge is per list, the way
+ * display prefs are per key.
+ *
+ * The rules are the ones the mapping and session rows already use:
+ *
+ *  - **Never publish a blank.** A device with no lists and no tombstones has
+ *    nothing to say, and publishing its empty row would erase the account's
+ *    lists for every sibling.
+ *  - **A newer edit of the SAME list wins.** `updatedAt` is when that list last
+ *    changed on the device that published it (a rename, a row added or
+ *    removed), never the moment of the push - a device that merely opened the
+ *    app must not re-stamp an older copy over a sibling's newer one.
+ *  - **A delete is a tombstone, and a tombstone wins.** Deleting a list is a
+ *    person's decision and cannot be undone by an older copy arriving late;
+ *    ids are never reused, so a tombstoned id can never be a list the viewer
+ *    wants back (see [takesIncoming]).
+ *  - **Absence is not a delete.** A list the payload does not mention is kept:
+ *    the only thing that removes a list is its tombstone.
+ */
+internal object LocalListSyncRules {
+
+    /** True when this profile has something to say about the account's lists. */
+    fun shouldPublish(listCount: Int, tombstoneCount: Int): Boolean =
+        listCount > 0 || tombstoneCount > 0
+
+    /**
+     * Whether a pulled copy of ONE list may replace the local one.
+     *
+     * [localUpdatedAt] is null when this device does not have the list at all,
+     * which is the fresh-sibling case: adopt it. A tombstoned id is refused
+     * outright - the deliberate delete outranks any copy that has not heard
+     * about it yet.
+     */
+    fun takesIncoming(
+        incomingUpdatedAt: Long,
+        localUpdatedAt: Long?,
+        tombstoned: Boolean
+    ): Boolean {
+        if (tombstoned) return false
+        if (localUpdatedAt == null) return true
+        return incomingUpdatedAt > localUpdatedAt
+    }
+
+    /**
+     * The merged removal record: the newest delete per id from both sides.
+     *
+     * Kept per id rather than as one blob stamp, because a device that deleted
+     * list 7 must not also be read as having said anything about list 9.
+     */
+    fun mergeTombstones(
+        local: Map<Int, Long>,
+        incoming: Map<Int, Long>
+    ): Map<Int, Long> {
+        if (incoming.isEmpty()) return local
+        val merged = local.toMutableMap()
+        incoming.forEach { (id, at) ->
+            val existing = merged[id]
+            if (existing == null || at > existing) merged[id] = at
+        }
+        return merged
+    }
+}
+
+/**
  * Merge rules for the display-prefs blob.
  *
  * That blob used to be WHOLE-BLOB last-write-wins with a timestamp stamped at

@@ -2007,10 +2007,24 @@ object MdbListClient {
     /**
      * GET /lists/user — the authenticated user's personal lists.
      */
-    suspend fun getUserLists(context: Context): List<MdbListUserList> {
+    suspend fun getUserLists(context: Context): List<MdbListUserList> =
+        getUserListsOrNull(context).orEmpty()
+
+    /**
+     * GET /lists/user, where a FAILED read is null and "no lists" is empty.
+     *
+     * [getUserLists] flattens the two together, which is right when the answer
+     * is only drawn. It is wrong for a caller that reads an EMPTY answer as
+     * "these lists are gone": MDBList's rail and Home pins are reconciled
+     * against what the service still has (see LibraryHomeRailReconcile), and an
+     * offline start or a 429 that came back as an empty list would delete a
+     * rail for a list that still exists. A blank key is still an empty list -
+     * that is a profile without MDBList, not a failure.
+     */
+    suspend fun getUserListsOrNull(context: Context): List<MdbListUserList>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
-        val body = getString("$BASE/lists/user?apikey=$apiKey") ?: return emptyList()
+        val body = getString("$BASE/lists/user?apikey=$apiKey") ?: return null
         return runCatching {
             val arr = JSONArray(body)
             (0 until arr.length()).mapNotNull { i ->
@@ -2023,7 +2037,8 @@ object MdbListClient {
                     itemCount = obj.optInt("items", 0)
                 )
             }
-        }.getOrDefault(emptyList())
+        // An unparseable body is not an answer about which lists exist.
+        }.getOrNull()
     }
 
     /**

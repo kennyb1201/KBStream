@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -67,6 +68,8 @@ import com.kennyb1201.kbstream.ui.components.touch.rememberTouchPosterSize
 import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.library.LIBRARY_BROWSE_SCREEN_KEY
+import com.kennyb1201.kbstream.data.library.LibraryHomeRails
+import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarEntry
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarPane
 import com.kennyb1201.kbstream.ui.library.LibraryFilter
@@ -103,9 +106,10 @@ import kotlinx.coroutines.delay
  *    grid records, so backing out of a Detail page reopens the library on the
  *    poster that was pressed (scrolled to it, without a D-pad to focus);
  *  - **personal lists**: the rail becomes a vertical list of lists with their
- *    counts and source, a selected row highlights, local rows carry the
- *    long-press delete (confirmed by a dialog, never on the press itself), and
- *    "+ NEW LIST" opens an inline name field;
+ *    counts and source, and a selected row highlights. A long-press opens the
+ *    row's actions - rename where the source allows it, SHOW ON HOME / HIDE
+ *    FROM HOME for any list, and a confirmed delete for a list this device
+ *    owns - and "+ NEW LIST" opens an inline name field;
  *  - **the menu**: Go to Details, watched-independent hide, Add to list, and
  *    the per-source removal row - from this list, from the library, or the
  *    explanatory "Managed on Simkl" row with its attribution link;
@@ -161,7 +165,14 @@ fun LibraryScreenMobile(
         var returnTarget by remember { mutableStateOf<BrowseReturnTarget?>(null) }
 
         var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
+        var listMenu by remember { mutableStateOf<LibraryList?>(null) }
         var listPendingDelete by remember { mutableStateOf<LibraryList?>(null) }
+        var listPendingRename by remember { mutableStateOf<LibraryList?>(null) }
+        var renameListDraft by remember { mutableStateOf("") }
+        // Bumped when a pin changes, so the menu's SHOW ON HOME / REMOVE FROM
+        // HOME row re-reads the store instead of drawing the state it had when
+        // it opened.
+        var homeRailRevision by remember { mutableIntStateOf(0) }
         var showCreateField by remember { mutableStateOf(false) }
         var newListName by remember { mutableStateOf("") }
         var notice by remember { mutableStateOf<String?>(null) }
@@ -443,14 +454,12 @@ fun LibraryScreenMobile(
                                     list = list,
                                     selected = state.selectedList?.id == list.id,
                                     onClick = { viewModel.selectList(list) },
-                                    onLongClick = {
-                                        // Only a list this device owns can be
-                                        // deleted; an MDBList or Trakt list is
-                                        // managed on its service.
-                                        if (list.source.isLocalList) {
-                                            listPendingDelete = list
-                                        }
-                                    }
+                                    // Every row gets the menu, not only the ones
+                                    // this app can rename: "Show on Home" is an
+                                    // answer about this viewer's Home and needs
+                                    // no write to the service. Rename and delete
+                                    // stay gated inside the dialog.
+                                    onLongClick = { listMenu = list }
                                 )
                             }
 
@@ -675,6 +684,110 @@ fun LibraryScreenMobile(
                     },
                     onDismiss = { menuItem = null }
                 )
+            }
+
+            // One row's actions: rename where the source allows it, pin it to
+            // Home (any list can be a Home rail), delete where this device owns
+            // it. The TV reaches the same three through its long-press menu.
+            listMenu?.let { list ->
+                Dialog(onDismissRequest = { listMenu = null }) {
+                    KBDialogPanel(
+                        title = list.name,
+                        subtitle = "${list.itemCount} titles · ${list.locationLabel}"
+                    ) {
+                        val pin = libraryHomeRailPinFor(list)
+                        val onHome = remember(homeRailRevision, list.id, list.source) {
+                            pin != null && LibraryHomeRails.isPinned(context, pin)
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (list.source.canManageList) {
+                                KBButton(
+                                    label = "RENAME LIST",
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    renameListDraft = list.name
+                                    listPendingRename = list
+                                    listMenu = null
+                                }
+                            }
+                            if (pin != null) {
+                                KBButton(
+                                    // The TV's own wording: one pin, two states.
+                                    label = if (onHome) "HIDE FROM HOME" else "SHOW ON HOME",
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    LibraryHomeRails.setPinned(context, pin, !onHome)
+                                    homeRailRevision += 1
+                                    if (!onHome) {
+                                        notice = "\"${list.name}\" is now a row on Home."
+                                    }
+                                    listMenu = null
+                                }
+                            }
+                            // Only a list this device owns can be deleted here; a
+                            // Trakt, MDBList or BingeCat list is deleted on its
+                            // service, from the Library's own list actions there.
+                            if (list.source.isLocalList) {
+                                KBButton(
+                                    label = "DELETE LIST",
+                                    danger = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    listMenu = null
+                                    listPendingDelete = list
+                                }
+                            }
+                            KBButton(
+                                label = "CANCEL",
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                listMenu = null
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Rename is a name-entry dialog, seeded with the list's current
+            // name, and the row is repainted by the ViewModel only after the
+            // source accepted it.
+            listPendingRename?.let { list ->
+                Dialog(onDismissRequest = { listPendingRename = null }) {
+                    KBDialogPanel(
+                        title = "Rename list",
+                        subtitle = list.locationLabel
+                    ) {
+                        KBTextField(
+                            value = renameListDraft,
+                            onValueChange = { renameListDraft = it },
+                            placeholder = "List name",
+                            modifier = Modifier.fillMaxWidth(),
+                            onDone = {
+                                viewModel.renameList(list, renameListDraft)
+                                listPendingRename = null
+                            }
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            KBButton(
+                                label = "CANCEL",
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                listPendingRename = null
+                            }
+                            KBButton(
+                                label = "SAVE",
+                                enabled = renameListDraft.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                viewModel.renameList(list, renameListDraft)
+                                listPendingRename = null
+                            }
+                        }
+                    }
+                }
             }
 
             // Deleting a list is confirmed, never done by the press itself.

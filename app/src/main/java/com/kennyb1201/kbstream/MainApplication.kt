@@ -254,6 +254,26 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     )
                 }
             }
+            // Home rails pinned to a Library list: check that the list still
+            // exists at the service that holds it. A list deleted on a website
+            // has no event behind it - the absence from a read is the only
+            // signal - so without this a dead pin waited for the viewer to open
+            // the Library. Its own launch, and the launcher does nothing at all
+            // when no remote list is pinned (see LibraryHomeRailReconcile), so
+            // the launch path never pays for a network read it does not need.
+            startupScope.launch {
+                runCatchingCancellable {
+                    PerfTrace.timedSuspend("startup.homeRailReconcile") {
+                        com.kennyb1201.kbstream.data.library.LibraryHomeRailReconcile
+                            .runOnce(this@MainApplication)
+                    }
+                }.onFailure { error ->
+                    CrashReporter.recordNonFatal(
+                        error,
+                        mapOf("source" to "app_create_home_rail_reconcile")
+                    )
+                }
+            }
             // The stored continue-watching rows of older builds name their
             // shows by the id the CATALOG handed out rather than TMDB's (see
             // HistoryRootMigration). Every read re-roots them, so playback is

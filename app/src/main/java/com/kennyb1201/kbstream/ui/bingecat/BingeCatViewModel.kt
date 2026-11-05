@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.bingecat.BingeCatDeviceFlowRules
 import com.kennyb1201.kbstream.data.bingecat.BingeCatProfile
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -121,14 +122,19 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         if (next.isConnected) {
             viewModelScope.launch {
                 runCatching { repository.publishSessionIfConnected() }
+                // The mapping's own re-assert, for the same reason one layer
+                // down: a profile mapped by a build that predates the mapping
+                // row has nothing that would ever publish it, so every sibling
+                // kept its picker (see BingeCatRepository.publishMappingIfMapped).
+                runCatching { repository.publishMappingIfMapped() }
                 // Spec F3: a MAPPED profile's id is validated against the
                 // account's own listing, so a BingeCat profile deleted on the
                 // web is noticed here (the mapping clears and F2's picker
                 // appears) instead of 404ing every read until the viewer happens
-                // to open the picker. An unmapped profile fetches on the same
-                // visit anyway - the screen's own effect asks for the picker - so
-                // this half is only the mapped case.
-                if (next.isMapped) loadProfiles()
+                // to open the picker. An unmapped profile asks the ACCOUNT once
+                // before it asks the viewer - the picker is only honest when the
+                // account really has no mapping for this profile.
+                if (next.isMapped) loadProfiles() else pullAccountMapping()
             }
         }
         if (next.isConnected == _uiState.value.isConnected &&
@@ -155,6 +161,40 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         }
         stopPolling()
         _uiState.value = next
+    }
+
+    /**
+     * Asks the ACCOUNT for this profile's mapping before the page draws its
+     * picker.
+     *
+     * The ordinary pull runs at sign-in, at app start and on a profile switch,
+     * but a mapping made on a sibling AFTER the last one leaves this page with
+     * only an old local read to go on - and a picker over a mapping the account
+     * already holds is exactly the "I have to select it again on every device"
+     * report. One awaited prefs read per visit, and only while this profile has
+     * no mapping at all, so a viewer who picked "not now" is not asked again on
+     * every recomposition.
+     */
+    private fun pullAccountMapping() {
+        if (!SupabaseSync.isSignedIn()) return
+        viewModelScope.launch {
+            runCatching { SupabaseSync.pullPrefsNow(appContext) }
+            if (repository.mappedProfileId() == null) return@launch
+            // The row was applied to this profile's store; the page's own state
+            // is what draws the picker, so it re-derives from that store - the
+            // same fields loadProfiles() re-reads after a fetch, worded by the
+            // one place that words them (initialState). A request or poll in
+            // flight is not the mapping's to cancel.
+            val state = initialState()
+            _uiState.value = _uiState.value.copy(
+                isMapped = state.isMapped,
+                mappedProfileId = state.mappedProfileId,
+                mappedProfileName = state.mappedProfileName,
+                needsReapproval = state.needsReapproval,
+                statusMessage = state.statusMessage,
+                profilesError = null
+            )
+        }
     }
 
     /** Asks for a code and starts polling it. */
