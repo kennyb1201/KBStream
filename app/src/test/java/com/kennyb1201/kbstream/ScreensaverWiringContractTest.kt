@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -221,7 +222,36 @@ class ScreensaverWiringContractTest {
             "and what the overlay shows is built at arm time from the clean art",
             squash(home).contains("val arming = screensaverCleanSlides(latestScreensaverPool)") &&
                 squash(home).contains("if (arming.isEmpty()) return@LaunchedEffect") &&
-                squash(home).contains("screensaverSlidesShown = arming")
+                squash(home).contains("screensaverSlidesShown = arming.shuffled()")
+        )
+    }
+
+    @Test
+    fun `the show's order is shuffled once per show, and nothing else is`() {
+        assertTrue(
+            "the resolved slides are dealt a fresh order at the one place a show " +
+                "is armed, or every idle evening is the same tour in rail order",
+            squash(home).contains("screensaverSlidesShown = arming.shuffled()")
+        )
+        assertTrue(
+            "the shuffle is of the SHOWN snapshot, after the clean-art filter, so " +
+                "the resolve pass and its ordered prefix are untouched",
+            squash(home).contains(
+                "val arming = screensaverCleanSlides(latestScreensaverPool) { meta -> " +
+                    "viewModel.screensaverCleanBackdrop(meta.id, meta.type) }"
+            )
+        )
+        assertFalse(
+            "and the rules stay order-preserving: a shuffled clean-slide list or " +
+                "resolve prefix would make one show differ from itself between reads",
+            rules.contains("shuffled()")
+        )
+        assertTrue(
+            "the pool itself is still the ordered rail snapshot the pass walks",
+            squash(home).contains(
+                "val screensaverPool = remember(rails) { screensaverSlides(" +
+                    "rails.flatMap { rail -> rail.items }) }"
+            )
         )
     }
 
@@ -309,10 +339,22 @@ class ScreensaverWiringContractTest {
             )
         )
         assertTrue(
-            "the idle-wait pass writes each resolved title's first genre, by the " +
+            "the idle-wait pass writes each resolved title's genre line, by the " +
                 "overlay's own rule",
             squash(homeVm).contains("screensaverGenre(detail?.genres?.map { it.name })") &&
                 squash(homeVm).contains("resolvedHeroGenres[key] = genre")
+        )
+        assertTrue(
+            "which is the first two joined, so the label reads \"ACTION · DRAMA\"",
+            rules.contains("internal const val SCREENSAVER_GENRE_SEPARATOR = \" · \"") &&
+                squash(rules).contains("?.take(2)") &&
+                squash(rules).contains(".joinToString(SCREENSAVER_GENRE_SEPARATOR)")
+        )
+        assertEquals(
+            "the rule has exactly two callers, both of them screensaver memos - the " +
+                "hero draws its own genre from its detail state and keeps showing one",
+            2,
+            homeVm.split("screensaverGenre(").size - 1
         )
         assertTrue(
             "and the overlay still reads it without a fetch",
@@ -361,7 +403,7 @@ class ScreensaverWiringContractTest {
         )
         assertTrue(
             "what it shows is the snapshot it armed with, not the live rails",
-            squash(home).contains("screensaverSlidesShown = arming")
+            squash(home).contains("screensaverSlidesShown = arming.shuffled()")
         )
         assertTrue(
             "Back exits the overlay instead of leaving Home",

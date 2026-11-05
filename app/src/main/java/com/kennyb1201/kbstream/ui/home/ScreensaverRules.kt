@@ -110,16 +110,33 @@ internal fun screensaverCleanSlides(
     }
 
 /**
- * The genre the corner shows, or null to show the logo alone.
+ * Between the corner label's genres. A middle dot with a hair of space: the
+ * line is tracked capitals, so a plain hyphen would read as a dash between two
+ * words rather than as a separator.
+ */
+internal const val SCREENSAVER_GENRE_SEPARATOR = " · "
+
+/**
+ * The genre line the corner shows, or null to show the logo alone.
  *
- * Only the first genre, and only one that is already known: rail items carry no
- * genre of their own, so the label comes from a resolved title - either the hero
- * the focus pass resolved, or the idle wait's own pass over the pool. A slide
- * whose title has not resolved yet is drawn without a genre rather than waiting
- * for one - no slide delays the show for a label.
+ * The first TWO genres the title resolved, joined - "Action · Drama" - and only
+ * genres that are already known: rail items carry none of their own, so the
+ * label comes from a resolved title - either the hero the focus pass resolved,
+ * or the idle wait's own pass over the pool. A slide whose title has not
+ * resolved yet is drawn without a genre rather than waiting for one - no slide
+ * delays the show for a label.
+ *
+ * Two, not the whole list: the label sits under the wordmark at the wordmark's
+ * width, where a title's full genre set is a paragraph rather than a caption.
+ * A one-genre title still shows just that one, and a title with no genres still
+ * shows no line at all. This is the screensaver's line only - the hero draws
+ * its own genre from its detail state and keeps showing one.
  */
 internal fun screensaverGenre(genres: List<String>?): String? =
     genres
         ?.asSequence()
         ?.map { it.trim() }
-        ?.firstOrNull { it.isNotEmpty() }
+        ?.filter { it.isNotEmpty() }
+        ?.take(2)
+        ?.joinToString(SCREENSAVER_GENRE_SEPARATOR)
+        ?.takeIf { it.isNotEmpty() }

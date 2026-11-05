@@ -140,15 +140,24 @@ class ScreensaverRulesTest {
     }
 
     @Test
-    fun `the genre is the first one known, trimmed, and nothing when there is none`() {
-        assertEquals("Action", screensaverGenre(listOf("Action", "Drama")))
+    fun `the genre line is the first two known, joined, and nothing when there is none`() {
         assertEquals(
-            "a padded first entry is the genre, not a blank caption",
-            "Action",
-            screensaverGenre(listOf("  Action ", "Drama"))
+            "the corner reads as a genre tag, not as the title's full classification",
+            "Action · Drama",
+            screensaverGenre(listOf("Action", "Drama"))
         )
         assertEquals(
-            "a blank leading entry is skipped rather than drawn",
+            "two, not the whole list: a third genre is a paragraph under a wordmark",
+            "Action · Drama",
+            screensaverGenre(listOf("Action", "Drama", "Sci-Fi"))
+        )
+        assertEquals(
+            "a padded entry is the genre, not a blank half of the line",
+            "Action · Drama",
+            screensaverGenre(listOf("  Action ", "Drama "))
+        )
+        assertEquals(
+            "one genre still shows one, with no dangling separator",
             "Drama",
             screensaverGenre(listOf("", " ", "Drama"))
         )

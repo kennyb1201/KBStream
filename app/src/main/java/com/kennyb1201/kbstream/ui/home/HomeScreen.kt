@@ -5224,7 +5224,15 @@ fun HomeScreen(
         }
         if (arming.isEmpty()) return@LaunchedEffect
         screensaverRestoreTarget = focusedCardRequester ?: lastPosterFocusRequester
-        screensaverSlidesShown = arming
+        // Shuffled ONCE per show, and only here. The pool is in rail order, so
+        // an unshuffled show is the same titles in the same sequence every
+        // time it arms - the viewer who idles three times in an evening gets
+        // the same tour three times. The SHOWN snapshot is what shuffles, not
+        // the pool: the resolve pass keeps warming the same ordered prefix it
+        // always did (its order decides nothing but which titles finish first),
+        // and the next arming deals a fresh order from whatever resolved by
+        // then.
+        screensaverSlidesShown = arming.shuffled()
         screensaverVisible = true
     }
 

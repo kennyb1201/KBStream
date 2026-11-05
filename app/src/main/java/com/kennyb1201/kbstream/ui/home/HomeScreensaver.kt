@@ -57,8 +57,8 @@ import kotlinx.coroutines.delay
  * slide per [SCREENSAVER_DWELL_MS], each a fullscreen 16:9 backdrop sweeping
  * with the billboard's own Ken Burns move (`billboardSweep`, applied to the
  * IMAGE through a graphics layer, so the page never recomposes per frame) with
- * the title's clearlogo and, where the title has resolved one, the first genre
- * beneath it as a tracked-capitals label. The caller only hands titles whose
+ * the title's clearlogo and, where the title has resolved them, the first two
+ * genres beneath it as a tracked-capitals label ("ACTION · DRAMA"). The caller only hands titles whose
  * CLEAN backdrop has resolved (the hero's ranked, textless-first artwork), so
  * the picture here is never the promo image a rail ships. Nothing here is
  * clickable; the whole surface is one ambient picture.
@@ -238,9 +238,10 @@ internal fun HomeScreensaver(
                     // No genre until this title has resolved one: the label
                     // never delays a slide, and a placeholder would be text
                     // about nothing. An EYEBROW, not a second title line -
-                    // tracked capitals in the muted grey, one line, capped at
-                    // the wordmark's own width so a long genre ellipsizes
-                    // instead of running past the art it labels.
+                    // tracked capitals in the muted grey - two genres at most
+                    // - one line, capped at the wordmark's own width so a long
+                    // line ellipsizes instead of running past the art it
+                    // labels.
                     genreOf(slide)?.let { genre ->
                         Text(
                             text = genre.uppercase(),
