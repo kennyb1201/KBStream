@@ -109,6 +109,7 @@ import com.kennyb1201.kbstream.ui.components.mobileRatingSources
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.TouchTitleRatingDialog
 import com.kennyb1201.kbstream.ui.components.rememberTasteRating
+import com.kennyb1201.kbstream.ui.components.TasteAdds
 import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.touch.EpisodeRatingChip
@@ -418,36 +419,26 @@ fun DetailScreenMobile(
             ids = tasteIds
         )
         var ratingDialog by remember { mutableStateOf(false) }
-        // Same action as the TV row and the poster menus' rows, reported
-        // through this surface's channel: a toast, because the phone has no
-        // app-wide feedback banner.
+        // Same action as the TV row and the poster menus' rows, on the same one
+        // write path (TasteAdds: local signal first, BingeCat favorites leg
+        // beside it), reported through this surface's channel: a toast, because
+        // the phone has no app-wide feedback banner.
         fun pressTaste(signal: String) {
-            val next = TasteSignals.nextSignal(tasteSignal, signal)
-            val stored = if (next == null) {
-                TasteSignals.clearSignal(
-                    context = context,
-                    mediaType = normalizedType,
-                    title = libraryTarget.title,
-                    year = tasteYear,
-                    ids = tasteIds
-                )
-            } else {
-                TasteSignals.setSignal(
-                    context = context,
-                    mediaType = normalizedType,
-                    title = libraryTarget.title,
-                    posterUrl = posterUrl,
-                    year = tasteYear,
-                    ids = tasteIds,
-                    signal = next
-                )
-            }
+            val result = TasteAdds.press(
+                context = context,
+                mediaType = normalizedType,
+                title = libraryTarget.title,
+                posterUrl = posterUrl,
+                year = tasteYear,
+                ids = tasteIds,
+                signal = signal
+            )
             Toast.makeText(
                 context,
                 when {
-                    !stored -> "Couldn't save your rating"
-                    next == null -> "Rating removed"
-                    next == TasteSignals.LIKE -> "Liked"
+                    !result.stored -> "Couldn't save your rating"
+                    result.next == null -> "Rating removed"
+                    result.next == TasteSignals.LIKE -> "Liked"
                     else -> "Disliked"
                 },
                 Toast.LENGTH_SHORT

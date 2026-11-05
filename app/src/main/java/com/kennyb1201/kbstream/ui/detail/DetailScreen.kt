@@ -166,6 +166,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.TvTitleRatingDialog
 import com.kennyb1201.kbstream.ui.components.rememberTasteRating
+import com.kennyb1201.kbstream.ui.components.TasteAdds
 import com.kennyb1201.kbstream.ui.components.rememberTasteSignal
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
@@ -3247,37 +3248,27 @@ fun DetailScreen(
             // (the active one clears it, the other flips it), the store
             // answers, and the buttons repaint from its answer - the bookmark
             // toggle's own rule, so a press can never claim a signal that did
-            // not persist. Nothing here writes to a tracker: v1 is local (see
-            // TasteSignals).
+            // not persist. One write path for the whole app, so the BingeCat
+            // favorites leg (see TasteAdds) rides along here and on every other
+            // thumb without a second copy.
             fun pressTaste(signal: String) {
-                val next = TasteSignals.nextSignal(tasteSignal, signal)
-                val stored = if (next == null) {
-                    TasteSignals.clearSignal(
-                        context = context,
-                        mediaType = normalizedType,
-                        title = libraryButtonTarget.title,
-                        year = tasteYear,
-                        ids = tasteIds
-                    )
-                } else {
-                    TasteSignals.setSignal(
-                        context = context,
-                        mediaType = normalizedType,
-                        title = libraryButtonTarget.title,
-                        posterUrl = viewModel.currentPosterUrl(),
-                        year = tasteYear,
-                        ids = tasteIds,
-                        signal = next
-                    )
-                }
+                val result = TasteAdds.press(
+                    context = context,
+                    mediaType = normalizedType,
+                    title = libraryButtonTarget.title,
+                    posterUrl = viewModel.currentPosterUrl(),
+                    year = tasteYear,
+                    ids = tasteIds,
+                    signal = signal
+                )
                 feedback.show(
                     text = when {
-                        !stored -> "Couldn't save your rating"
-                        next == null -> "Rating removed: ${libraryButtonTarget.title}"
-                        next == TasteSignals.LIKE -> "Liked: ${libraryButtonTarget.title}"
+                        !result.stored -> "Couldn't save your rating"
+                        result.next == null -> "Rating removed: ${libraryButtonTarget.title}"
+                        result.next == TasteSignals.LIKE -> "Liked: ${libraryButtonTarget.title}"
                         else -> "Disliked: ${libraryButtonTarget.title}"
                     },
-                    isError = !stored
+                    isError = !result.stored
                 )
             }
 

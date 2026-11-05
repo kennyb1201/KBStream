@@ -4,7 +4,8 @@ import android.util.Log
 
 /*
  * Outbound list writes for [BingeCatRepository]: the watchlist add/remove behind
- * the Detail Library button and the Library tab's remove, and one user list's
+ * the Detail Library button and the Library tab's remove, the Favorites
+ * add/remove behind the thumbs (the favorites spec), and one user list's
  * add/remove behind the picker (step 3, `lists:write`).
  *
  * These live outside BingeCatRepository.kt only to keep that file readable -
@@ -25,13 +26,17 @@ import android.util.Log
 private const val TAG = "BINGECAT_REPO"
 
 /**
- * The kind the watchlist route is addressed by.
+ * The two kinds `sync/{kind}` is addressed by (the contract's own `Kind` enum,
+ * `favorites` | `watchlist`).
  *
- * `favorites` is the sibling the same route also accepts; the saved list is
- * step 1's read-only section and is deliberately not written here (step 3's
- * scope), so only this name is used.
+ * Both take the SAME `SavedSelectionBatch` body and both are gated on
+ * `lists:write` - the contract states the scope per operation
+ * (`x-required-scopes: [lists:write]` on both the add and the remove), so one
+ * leg's grant is the other's. They stay separate constants because the ROUTE
+ * and the account's own list are separate.
  */
 private const val WATCHLIST_KIND = "watchlist"
+private const val FAVORITES_KIND = "favorites"
 
 internal suspend fun BingeCatRepository.addToWatchlistImpl(
     isMovie: Boolean,
@@ -39,7 +44,7 @@ internal suspend fun BingeCatRepository.addToWatchlistImpl(
     tmdbId: Int?,
     title: String?
 ): Boolean {
-    val batch = watchlistBatch(isMovie, imdbId, tmdbId)
+    val batch = savedBatch(isMovie, imdbId, tmdbId)
         ?: return bail("watchlist add", imdbId, tmdbId)
     return submitSavedWrite(
         add = true,
@@ -58,13 +63,53 @@ internal suspend fun BingeCatRepository.removeFromWatchlistImpl(
     // The removal carries the same `ids` object the add does: a watchlist entry
     // is identified by its media, and the contract's remove batch is the same
     // `SavedSelectionBatch` (there is no timestamp to leave out).
-    val batch = watchlistBatch(isMovie, imdbId, tmdbId)
+    val batch = savedBatch(isMovie, imdbId, tmdbId)
         ?: return bail("watchlist remove", imdbId, tmdbId)
     return submitSavedWrite(
         add = false,
         kind = WATCHLIST_KIND,
         batch = batch,
         label = "watchlist ${title ?: imdbId ?: tmdbId}"
+    )
+}
+
+/**
+ * The thumbs' favorites leg: the mapped profile's Favorites gains this title.
+ *
+ * No history is recorded - `sync/favorites` and `sync/history` are different
+ * routes, and nothing here calls the history one, so a thumb tap can never add
+ * or remove a watch event.
+ */
+internal suspend fun BingeCatRepository.addToFavoritesImpl(
+    isMovie: Boolean,
+    imdbId: String?,
+    tmdbId: Int?,
+    title: String?
+): Boolean {
+    val batch = savedBatch(isMovie, imdbId, tmdbId)
+        ?: return bail("favorites add", imdbId, tmdbId)
+    return submitSavedWrite(
+        add = true,
+        kind = FAVORITES_KIND,
+        batch = batch,
+        label = "favorites ${title ?: imdbId ?: tmdbId}"
+    )
+}
+
+/** The thumbs' unsave leg, on the same batch and the same contract. */
+internal suspend fun BingeCatRepository.removeFromFavoritesImpl(
+    isMovie: Boolean,
+    imdbId: String?,
+    tmdbId: Int?,
+    title: String?
+): Boolean {
+    val batch = savedBatch(isMovie, imdbId, tmdbId)
+        ?: return bail("favorites remove", imdbId, tmdbId)
+    return submitSavedWrite(
+        add = false,
+        kind = FAVORITES_KIND,
+        batch = batch,
+        label = "favorites ${title ?: imdbId ?: tmdbId}"
     )
 }
 
@@ -103,13 +148,14 @@ internal suspend fun BingeCatRepository.removeFromListImpl(
 }
 
 /**
- * The watchlist body for one title.
+ * The `SavedSelectionBatch` body for one title - the watchlist's and the
+ * favorites' alike, because the contract gives both kinds the same body.
  *
  * A null batch means this app cannot name the title, and no request is made:
  * [BingeCatWriteRules.writeIds] refuses a selector with neither a usable IMDb
  * nor TMDB id, and the contract refuses the empty batch too.
  */
-private fun watchlistBatch(
+private fun savedBatch(
     isMovie: Boolean,
     imdbId: String?,
     tmdbId: Int?

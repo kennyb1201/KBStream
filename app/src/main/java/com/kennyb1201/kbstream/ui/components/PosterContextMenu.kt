@@ -244,6 +244,13 @@ fun rememberHiddenTitleKeys(): Set<String> {
  * library toggle's [LibraryAdds.revision]: state is painted from the store,
  * never from the last press.
  *
+ * The painted signal is the local one OR BingeCat Favorites membership (see
+ * [TasteAdds.favoriteSignal]): a title favorited on Bingecat's website, and
+ * never thumbed on this device, opens with its thumb already lit - the
+ * because-you-watched thumbs-lit precedent. A dislike paints only from the
+ * local store, because BingeCat has no dislike to read back. [TasteAdds.revision]
+ * is what re-reads the membership after a leg lands.
+ *
  * [ids] are the spellings this surface knows, in the watched-key order (the
  * resolved IMDB flavor first, the raw `tmdb:<n>` second); the name and year
  * bridge the two id namespaces when only one of them is known.
@@ -257,8 +264,11 @@ fun rememberTasteSignal(
 ): String? {
     val context = LocalContext.current
     val version by TasteSignals.version.collectAsStateWithLifecycle()
-    return remember(version, mediaType, title, year, ids) {
-        TasteSignals.signalFor(context, mediaType, title, year, ids)
+    // Read in composition on purpose: it is the signal that BingeCat's cached
+    // favorites have changed under this thumb.
+    val favoritesVersion = TasteAdds.revision
+    return remember(version, favoritesVersion, mediaType, title, year, ids) {
+        TasteAdds.paintedSignal(context, mediaType, title, year, ids)
     }
 }
 
@@ -305,7 +315,10 @@ internal fun tasteMenuActions(
     dismiss: () -> Unit,
     onRate: () -> Unit
 ): List<PosterContextAction> {
-    val current = TasteSignals.signalFor(
+    // The same painted signal Detail's row draws, favorites included: a menu
+    // that says "Like this title" over a thumb the title's own page shows lit
+    // makes one of the two wrong.
+    val current = TasteAdds.paintedSignal(
         context = context,
         mediaType = target.mediaType,
         title = target.title,
@@ -321,34 +334,25 @@ internal fun tasteMenuActions(
     )
 
     val press: (String) -> Unit = { signal ->
-        val next = TasteSignals.nextSignal(current, signal)
-        val stored = if (next == null) {
-            TasteSignals.clearSignal(
-                context = context,
-                mediaType = target.mediaType,
-                title = target.title,
-                year = target.year,
-                ids = target.ids
-            )
-        } else {
-            TasteSignals.setSignal(
-                context = context,
-                mediaType = target.mediaType,
-                title = target.title,
-                posterUrl = target.posterUrl,
-                year = target.year,
-                ids = target.ids,
-                signal = next
-            )
-        }
+        // The one write path every thumb in the app shares (see [TasteAdds]):
+        // the local signal, then the BingeCat favorites leg.
+        val result = TasteAdds.press(
+            context = context,
+            mediaType = target.mediaType,
+            title = target.title,
+            posterUrl = target.posterUrl,
+            year = target.year,
+            ids = target.ids,
+            signal = signal
+        )
         feedback.show(
             text = when {
-                !stored -> "Couldn't save your rating"
-                next == null -> "Rating removed: ${target.title}"
-                next == TasteSignals.LIKE -> "Liked: ${target.title}"
+                !result.stored -> "Couldn't save your rating"
+                result.next == null -> "Rating removed: ${target.title}"
+                result.next == TasteSignals.LIKE -> "Liked: ${target.title}"
                 else -> "Disliked: ${target.title}"
             },
-            isError = !stored
+            isError = !result.stored
         )
         dismiss()
     }

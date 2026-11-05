@@ -244,6 +244,20 @@ class BingeCatRepository private constructor(private val context: Context?) {
         BingeCatTrace.recordSession(store.read() != null)
     }
 
+    /**
+     * The MAPPING changed underneath this repository - it arrived from the
+     * account (see [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
+     *
+     * Only the cached snapshot goes: it was read for the PREVIOUS BingeCat
+     * profile, and its own `mappedId` guard would keep refusing to serve it
+     * anyway - clearing it just makes the next read the new profile's. The
+     * session, the local library and the watched markers are not touched.
+     */
+    fun onSyncedMappingChanged() {
+        cached = null
+        BingeCatTrace.recordMapping(mapping.mappedProfileId(), mapping.mappedProfileName())
+    }
+
     fun mappedProfileId(): Long? = mapping.mappedProfileId()?.also { id ->
         BingeCatTrace.recordMapping(id, mapping.mappedProfileName())
     }
@@ -263,6 +277,32 @@ class BingeCatRepository private constructor(private val context: Context?) {
         val mapped = mappedProfileId() ?: return false
         if (snapshot.mappedId != mapped) return false
         return snapshot.watchlist.any { row -> row.matches(mediaType, imdbId, tmdbId) }
+    }
+
+    /**
+     * True when [mediaType]/[imdbId]/[tmdbId] is on the mapped profile's
+     * BingeCat FAVORITES according to the LAST READ - the thumbs' membership
+     * rule (the favorites spec's F3, matched by TMDB or IMDb id).
+     *
+     * The sibling of [watchlistContains] over the snapshot's `saved` rows (the
+     * `sync/favorites` read), with the same two refusals: false while nothing is
+     * cached, and false for a different mapping, because a stale account's rows
+     * must never light a thumb on this one.
+     *
+     * One refusal more than its sibling, because this answer paints a page: the
+     * snapshot must also belong to the app profile on screen now. BingeCat's
+     * mapping is account-wide, so a snapshot read under another profile still
+     * carries that profile's Favorites - and a thumb lit from it would be another
+     * profile's saved title on this one's Detail page (the same rule
+     * [snapshot] already applies to its own cache).
+     */
+    fun favoritesContains(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
+        val snapshot = cached ?: return false
+        val mapped = mappedProfileId() ?: return false
+        if (snapshot.mappedId != mapped) return false
+        val active = context?.let { ProfileStorage.activeProfileId(it) }
+        if (snapshot.profileId != active) return false
+        return snapshot.saved.any { row -> row.matches(mediaType, imdbId, tmdbId) }
     }
 
     /** True when this profile may make a data request at all. */
@@ -290,6 +330,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     /** True when saving can go out: connected, mapped, and granted `lists:write`. */
     fun canSave(): Boolean = isReady() && hasListsWriteScope()
+
+    /**
+     * True when the thumbs' favorites leg can go out - the same gate as saving,
+     * deliberately read through the same function.
+     *
+     * Favorites is a saved-list kind on the same two routes and the contract
+     * asks `lists:write` for both, so a second scope question here would be a
+     * second answer to one fact. An unmapped profile, no token, or a step-1/2
+     * grant all answer false: the thumbs then stay local-only, silently, which
+     * is the spec's own outcome for each.
+     */
+    fun canFavorite(): Boolean = canSave()
 
     /**
      * True while this profile is connected and mapped but the grant cannot
@@ -464,16 +516,66 @@ class BingeCatRepository private constructor(private val context: Context?) {
         }
     }
 
-    /** The account's profiles, for the mapping step. Null when the read failed. */
+    /**
+     * The account's profiles, for the mapping step. Null when the read failed.
+     *
+     * A SUCCESSFUL fetch is also the mapping's only proof of life (spec F3): the
+     * mapping is a BingeCat id, and a profile deleted on the account leaves it
+     * pointing at nothing - `isReady()` true, every read a 404, and the picker's
+     * own list showing the truth. So the mapped id is checked here, after a
+     * listing that actually came back.
+     *
+     * One deliberate refusal: a fetch that returns NO profiles at all does not
+     * count as "omits the id". An account always has at least one profile, so an
+     * empty list is a server state rather than a fact about the mapping, and
+     * clearing (and publishing a tombstone) on it would unmap a healthy profile
+     * on a transient answer. A failed read (`null`) never reaches this check at
+     * all: a failure is not evidence the profile is gone.
+     */
     suspend fun profiles(): List<BingeCatProfile>? {
         val body = authorizedBody { auth -> service.profiles(auth) } ?: return null
-        return body.profiles.filter { (it.id ?: 0L) > 0L }
+        val profiles = body.profiles.filter { (it.id ?: 0L) > 0L }
+        val mapped = mappedProfileId()
+        if (profiles.isNotEmpty() && mapped != null && profiles.none { it.id == mapped }) {
+            clearStaleMapping()
+        }
+        return profiles
     }
 
+    /**
+     * The mapped BingeCat profile is gone from the account.
+     *
+     * The same clearing a deliberate unmap does, and it publishes the same
+     * tombstone: leaving the dead id in the account's row would hand it to every
+     * sibling that syncs before its own profile fetch, and each of them would
+     * re-adopt a profile the account no longer has. A blank that is not
+     * tombstoned is not an option ("never publish a blank"), and the row is
+     * per KBStream profile, so nothing but this profile's mapping moves.
+     */
+    private fun clearStaleMapping() {
+        mapping.clear()
+        cached = null
+        BingeCatTrace.recordMapping(null, null)
+        PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = true)
+        publishMappingToSync()
+    }
+
+    /**
+     * Files this KBStream profile's choice of BingeCat profile.
+     *
+     * The mapping is no longer device-local: it publishes as soon as it is made,
+     * because the bulk push only runs on sign-in / "Sync now" and a viewer who
+     * maps a profile on the TV expects the phone to read it without a re-select
+     * (and without waiting for a full sync). Re-mapping publishes too - the new
+     * choice is what carries the newer stamp, which is what lets a sibling tell
+     * it from a stale row.
+     */
     fun setMappedProfile(profile: BingeCatProfile) {
         mapping.set(profile)
         BingeCatTrace.recordMapping(profile.id, profile.name)
         cached = null
+        PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = false)
+        publishMappingToSync()
     }
 
     /**
@@ -489,6 +591,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * trigger the ordinary push gate. Nothing is published when the tombstone
      * does not take: signing the account out everywhere while this device kept
      * its session would be worse than not syncing the disconnect.
+     *
+     * The MAPPING is unmapped deliberately here too, so it publishes its own
+     * tombstone beside the session's: a sibling that kept the id would hold a
+     * mapping with no session behind it, which is neither "connected and
+     * unmapped" nor a tracker - an orphan the viewer never chose (see
+     * [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
      */
     suspend fun disconnect(): Boolean {
         val token = store.read()?.accessToken
@@ -506,7 +614,12 @@ class BingeCatRepository private constructor(private val context: Context?) {
         cached = null
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordMapping(null, null)
+        PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = true)
         if (cleared) publishAuthToSync()
+        // Its own row and its own marker: the mapping tombstone does not depend
+        // on whether the grant was revoked (a revoke can fail offline while the
+        // disconnect on this device still stands).
+        publishMappingToSync()
         return revoked
     }
 
@@ -547,6 +660,26 @@ class BingeCatRepository private constructor(private val context: Context?) {
                 appContext,
                 PrefsPayloadBuilder.KEY_BINGECAT_AUTH,
                 PrefsPayloadBuilder.buildBingeCatAuth(appContext)
+            )
+        }
+    }
+
+    /**
+     * Publishes this profile's BingeCat MAPPING immediately, bypassing the bulk
+     * push's "nothing to publish" skip.
+     *
+     * Mapping, re-mapping and disconnect need it for the same reason the session
+     * does: the bulk push waits for sign-in / "Sync now", and a mapping made on
+     * the TV is exactly what the phone is waiting for (see
+     * [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
+     */
+    private fun publishMappingToSync() {
+        val appContext = context ?: return
+        runCatching {
+            SupabaseSync.enqueuePrefs(
+                appContext,
+                PrefsPayloadBuilder.KEY_BINGECAT_PROFILE_MAP,
+                PrefsPayloadBuilder.buildBingeCatProfileMap(appContext)
             )
         }
     }
@@ -782,6 +915,31 @@ class BingeCatRepository private constructor(private val context: Context?) {
         tmdbId: Int?,
         title: String? = null
     ): Boolean = removeFromWatchlistImpl(isMovie, imdbId, tmdbId, title)
+
+    /**
+     * The thumbs' favorites leg: puts the title on the mapped profile's
+     * Favorites.
+     *
+     * Same gates and same failure contract as the watchlist ([submitSavedWrite]),
+     * and the same one-thing-on-success rule: only BingeCat's snapshot is
+     * dropped, so the next Library open - and the next thumb paint - re-reads.
+     * False only when a write was attempted and did not land; a gate answering
+     * "not now" is true, because nothing failed.
+     */
+    suspend fun addToFavorites(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = addToFavoritesImpl(isMovie, imdbId, tmdbId, title)
+
+    /** The thumbs' unsave leg, on the same contract. */
+    suspend fun removeFromFavorites(
+        isMovie: Boolean,
+        imdbId: String?,
+        tmdbId: Int?,
+        title: String? = null
+    ): Boolean = removeFromFavoritesImpl(isMovie, imdbId, tmdbId, title)
 
     /** The picker's add: one user list, addressed by its own typed `ref`. */
     suspend fun addToList(

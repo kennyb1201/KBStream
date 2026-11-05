@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.OneShotPreDrawListener
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.components.TasteAdds
 import com.kennyb1201.kbstream.ui.components.clipToPosterEdge
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.library.TasteProfileStore
@@ -1022,8 +1023,12 @@ internal class BecauseYouWatchedUi(
      *
      * No year: the identity is the id pair (both flavors), and the store's name
      * fallback exists for surfaces that have no id at all.
+     *
+     * The painted read goes through [TasteAdds.paintedSignal], the same one
+     * Detail's row uses: a title favorited on Bingecat's website opens the
+     * panel's thumbs lit, and a press on it is the clear the viewer sees.
      */
-    private fun readSignal(finished: FinishedTitle): String? = TasteSignals.signalFor(
+    private fun readSignal(finished: FinishedTitle): String? = TasteAdds.paintedSignal(
         context = host,
         mediaType = finished.mediaType,
         title = finished.title,
@@ -1052,44 +1057,35 @@ internal class BecauseYouWatchedUi(
         // would shadow it for everything below.
         val hostScope = scope() ?: return
         hostScope.launch {
-            val current = withContext(Dispatchers.IO) { readSignal(finished) }
-            val next = TasteSignals.nextSignal(current, pressed)
-            val stored = withContext(Dispatchers.IO) {
-                if (next == null) {
-                    TasteSignals.clearSignal(
-                        context = host,
-                        mediaType = finished.mediaType,
-                        title = finished.title,
-                        year = null,
-                        ids = finished.storeIds
-                    )
-                } else {
-                    TasteSignals.setSignal(
-                        context = host,
-                        mediaType = finished.mediaType,
-                        title = finished.title,
-                        posterUrl = finished.posterUrl,
-                        year = null,
-                        ids = finished.storeIds,
-                        signal = next
-                    )
-                }
+            // The same one write path as the poster menus' rows and Detail's own
+            // row (see TasteAdds), so a thumb here reaches BingeCat's favorites
+            // too. Off the main thread because the store write is disk work.
+            val result = withContext(Dispatchers.IO) {
+                TasteAdds.press(
+                    context = host,
+                    mediaType = finished.mediaType,
+                    title = finished.title,
+                    posterUrl = finished.posterUrl,
+                    year = null,
+                    ids = finished.storeIds,
+                    signal = pressed
+                )
             }
             withContext(Dispatchers.Main) {
                 // A failed write repaints what the store still holds and reports
                 // the failure; a stored one paints the new signal.
-                paintThumbs(if (stored) next else current)
+                paintThumbs(if (result.stored) result.next else result.current)
                 Toast.makeText(
                     host,
                     when {
-                        !stored -> "Couldn't save your rating"
-                        next == null -> "Rating removed: ${finished.title}"
-                        next == TasteSignals.LIKE -> "Liked: ${finished.title}"
+                        !result.stored -> "Couldn't save your rating"
+                        result.next == null -> "Rating removed: ${finished.title}"
+                        result.next == TasteSignals.LIKE -> "Liked: ${finished.title}"
                         else -> "Disliked: ${finished.title}"
                     },
                     // The players report real problems for longer, as they do
                     // for every other failure toast.
-                    if (stored) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                    if (result.stored) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                 ).show()
             }
         }

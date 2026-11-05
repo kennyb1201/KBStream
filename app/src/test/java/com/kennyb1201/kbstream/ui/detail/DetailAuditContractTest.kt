@@ -451,8 +451,9 @@ class DetailAuditContractTest {
                 )
                 assertTrue(
                     "$who has to turn the press into the next signal through the " +
-                        "shared rule (the active thumb clears, the other flips)",
-                    src.contains("TasteSignals.nextSignal(")
+                        "shared rule (the active thumb clears, the other flips), which " +
+                        "now lives in the one write path both rows share",
+                    src.contains("TasteAdds.press(")
                 )
                 assertTrue(
                     "and report the outcome",
