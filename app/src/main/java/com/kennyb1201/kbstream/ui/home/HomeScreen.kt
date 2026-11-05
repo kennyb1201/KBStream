@@ -152,6 +152,7 @@ import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.library.LibraryItem
+import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
@@ -3279,6 +3280,8 @@ private fun LibraryItem.homeRailMeta(): MetaPreview? {
  * shared poster menu's actions are keyed on a title's ids, not on the list it
  * was seen in, and a second menu here would be a copy that could drift from it.
  */
+// LocalBringIntoViewSpec is still experimental, the way every rail here is.
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryListHomeRail(
     rail: LibraryHomeRailUi,
