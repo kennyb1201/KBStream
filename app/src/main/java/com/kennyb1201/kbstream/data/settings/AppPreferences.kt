@@ -1706,8 +1706,12 @@ object AppPreferences {
     // about the account, and it applies to every profile on it. Neither key is
     // in SYNCED_PREF_KEYS, and neither writer publishes the display blob.
     //
-    // Off by default: a fullscreen takeover is opt-in. A viewer who never
-    // opens Settings must never have the picture replaced under them.
+    // ON by default: the overlay is the app's answer to a television left on a
+    // static Home (burn-in, and a screen that looks frozen), so an install that
+    // never opens Settings still gets it. The switch is the way out, and it is
+    // stored: a viewer who turns it OFF keeps that, because the key is then
+    // present and reads false - only a device that has never answered falls
+    // through to this default.
     private const val KEY_SCREENSAVER_ENABLED = "screensaver_enabled"
     private const val KEY_SCREENSAVER_TIMEOUT_MINUTES = "screensaver_timeout"
 
@@ -1718,7 +1722,7 @@ object AppPreferences {
     const val DEFAULT_SCREENSAVER_TIMEOUT_MINUTES = 5
 
     fun getScreensaverEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_SCREENSAVER_ENABLED, false)
+        prefs(context).getBoolean(KEY_SCREENSAVER_ENABLED, true)
 
     fun setScreensaverEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SCREENSAVER_ENABLED, enabled).apply()

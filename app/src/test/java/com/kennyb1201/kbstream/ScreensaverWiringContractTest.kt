@@ -54,11 +54,19 @@ class ScreensaverWiringContractTest {
     private val homeVm = source("com/kennyb1201/kbstream/ui/home/HomeViewModel.kt")
 
     @Test
-    fun `the switch is off by default and the wait is five minutes`() {
+    fun `the switch is on by default and the wait is five minutes`() {
         assertTrue(
-            "the toggle must default to off: a fullscreen takeover is opt-in",
+            "the overlay must default to ON: a television left on a static Home is " +
+                "the case it exists for, and a device that never opened Settings has " +
+                "no stored answer to fall back on",
             prefs.contains("KEY_SCREENSAVER_ENABLED = \"screensaver_enabled\"") &&
-                prefs.contains("getBoolean(KEY_SCREENSAVER_ENABLED, false)")
+                prefs.contains("getBoolean(KEY_SCREENSAVER_ENABLED, true)")
+        )
+        assertTrue(
+            "but an explicit OFF must survive, which means the switch writes the key " +
+                "rather than relying on the default",
+            prefs.contains("fun setScreensaverEnabled(context: Context, enabled: Boolean)") &&
+                prefs.contains("putBoolean(KEY_SCREENSAVER_ENABLED, enabled)")
         )
         assertTrue(
             "and the wait defaults to 5 minutes, out of the offered set",

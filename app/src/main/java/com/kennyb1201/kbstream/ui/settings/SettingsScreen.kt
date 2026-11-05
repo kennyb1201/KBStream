@@ -3086,8 +3086,9 @@ fun SettingsScreen(
                     label = "TV Screensaver",
                     description = "When Home is left idle, fill the screen with the artwork of " +
                         "the titles on it (backdrop, logo and genre), moving gently from one to " +
-                        "the next. Any button brings Home back exactly where it was. Off by " +
-                        "default; a title without both a backdrop and a logo is skipped.",
+                        "the next. Any button brings Home back exactly where it was. On by " +
+                        "default, and this switch turns it off; a title without both a " +
+                        "backdrop and a logo is skipped.",
                     checked = screensaverEnabled,
                     onToggle = { enabled ->
                         screensaverEnabled = enabled
