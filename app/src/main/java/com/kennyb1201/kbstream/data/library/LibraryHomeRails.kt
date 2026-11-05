@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.trakt.TraktListRef
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.serialization.json.JsonArray
@@ -26,7 +27,14 @@ import kotlinx.serialization.json.put
  * One field, and deliberately the same `rails` array the account row carries
  * (see [LibraryHomeRails.buildBlob]), so a blob written here and one adopted
  * from a sibling read back through one shape rather than two that can drift.
+ *
+ * Annotated like every other stored model in the app: without a generated
+ * adapter Moshi falls back to kotlin-reflect, which a release build answers
+ * with "No JsonAdapter for class java.util.ArrayList" while the object
+ * initialises - a crash on Home rather than a parse failure (Sentry ANDROID-16,
+ * 0.9.160).
  */
+@JsonClass(generateAdapter = true)
 internal data class LibraryHomeRailsBlob(
     val rails: List<LibraryHomeRailPin> = emptyList()
 )

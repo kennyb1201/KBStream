@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.library
 
+import com.squareup.moshi.JsonClass
+
 /**
  * One Library list the viewer put on Home.
  *
@@ -24,7 +26,12 @@ package com.kennyb1201.kbstream.data.library
  *
  * The JSON encoding lives with the store (LibraryHomeRails), and these rules
  * are plain Kotlin so they are pinned by a unit test rather than by two devices.
+ *
+ * Carries a generated Moshi adapter for the same reason as the blob that holds
+ * it (see [LibraryHomeRailsBlob]): the blob's adapter asks Moshi for this type
+ * by name at runtime, and reflection here is what fails in a release build.
  */
+@JsonClass(generateAdapter = true)
 data class LibraryHomeRailPin(
     val source: String,
     val id: String,

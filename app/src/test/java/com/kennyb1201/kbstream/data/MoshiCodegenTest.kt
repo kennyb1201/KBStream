@@ -11,6 +11,8 @@ import com.kennyb1201.kbstream.data.airdates.TvmazeShow
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.badges.StreamBadgeGroup
 import com.kennyb1201.kbstream.data.badges.StreamBadgePack
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailsBlob
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.mdblist.MdbListWatchedSnapshot
@@ -208,6 +210,32 @@ class MoshiCodegenTest {
      * reflective factory it was a reflective default-call, which is what R8's
      * release build rejects.
      */
+    /**
+     * ANDROID-16: the Home-rail store was the one pair of models still answered
+     * by kotlin-reflect, and its adapter is built in `LibraryHomeRails`'s object
+     * initialiser - which Home's composition touches. So the reflective failure
+     * was not a cache miss behind `runCatching` but an
+     * ExceptionInInitializerError on the first frame of the app, in the release
+     * build only (0.9.160). The blob is the default-argument shape the sweep-5
+     * cases above describe, and the pin is the type its generated adapter looks
+     * up by name.
+     */
+    @Test
+    fun `the library home rails models have generated adapters, not reflective ones`() {
+        val models = listOf(
+            LibraryHomeRailsBlob::class.java,
+            LibraryHomeRailPin::class.java
+        )
+        models.forEach { model ->
+            val adapterClass = Class.forName(Types.generatedJsonAdapterName(model))
+            assertTrue(
+                "${adapterClass.name} is not a JsonAdapter",
+                JsonAdapter::class.java.isAssignableFrom(adapterClass)
+            )
+            codegenOnly.adapter(model)
+        }
+    }
+
     @Test
     fun `an mdblist ratings cache round-trips through absent keys`() {
         val adapter = codegenOnly.adapter(MdbListRatings::class.java)
