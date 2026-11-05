@@ -311,11 +311,20 @@ fun LibraryScreen(
             KBPageTitle(text = "LIBRARY", color = KBAccent)
             Spacer(modifier = Modifier.weight(1f))
             Text(
+                // Reading order: what the shelf always holds first, then the
+                // trackers, then the read-only feeds. This names the sources;
+                // it does not order them - which one wins a duplicate is the
+                // ViewModel's merge, and it is untouched by this line.
                 text = buildList {
-                    if (state.simklConnected) add("SIMKL")
-                    if (state.mdbListConfigured) add("MDBLIST")
                     add("LOCAL")
                     if (state.traktConnected) add("TRAKT")
+                    if (state.simklConnected) add("SIMKL")
+                    if (state.mdbListConfigured) add("MDBLIST")
+                    // Connected AND mapped: BingeCat is read-only, and an
+                    // unmapped profile contributes no rows by design, so
+                    // naming it here would advertise a source with nothing
+                    // behind it.
+                    if (state.bingecatConnected) add("BINGECAT")
                 }.joinToString(" + "),
                 style = MaterialTheme.typography.labelMedium,
                 color = KBTextLo,

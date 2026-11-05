@@ -323,17 +323,26 @@ fun LibraryScreenMobile(
                                 fontWeight = FontWeight.SemiBold
                             )
                             // The source line is the widest thing in this
-                            // header (four connected services is a long
+                            // header (five connected services is a long
                             // string). It takes the leftover space and ends
                             // there, instead of being measured at its full
                             // intrinsic width and pushing the LIBRARY title
                             // off the left edge of a 360dp portrait screen.
+                            //
+                            // Reading order, the same as the TV: what the
+                            // shelf always holds first, then the trackers,
+                            // then the read-only feeds. Display only - the
+                            // merge order underneath is the ViewModel's.
                             Text(
                                 text = buildList {
-                                    if (state.simklConnected) add("SIMKL")
-                                    if (state.mdbListConfigured) add("MDBLIST")
                                     add("LOCAL")
                                     if (state.traktConnected) add("TRAKT")
+                                    if (state.simklConnected) add("SIMKL")
+                                    if (state.mdbListConfigured) add("MDBLIST")
+                                    // Connected AND mapped, matching the
+                                    // Library section's own rule: an unmapped
+                                    // BingeCat has no rows to offer.
+                                    if (state.bingecatConnected) add("BINGECAT")
                                 }.joinToString(" + "),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = KBTextLo,
