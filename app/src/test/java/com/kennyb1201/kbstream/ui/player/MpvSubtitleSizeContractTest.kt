@@ -15,13 +15,14 @@ import org.junit.Test
  * `SurfaceView` cannot be driven in a JVM test (the same reason this tree's
  * other player contracts read the source):
  *
- *  - **the first frame**: the size is computed against the video's height, which
- *    mpv reports as 0 until a frame decodes, so `video-params/h` has to be
- *    observed and the size re-applied when it arrives - otherwise the open-time
- *    fallback is what every cue keeps for the whole session;
- *  - **a size change mid-playback**: the height is remembered, so the setting
- *    computes against the picture already on screen rather than waiting for
- *    another frame or dropping to the fallback;
+ *  - **the measured surface**: the size is computed against the height of the
+ *    SURFACE mpv draws into, because that is what mpv scales cues with - so the
+ *    one writer of `android-surface-size` has to update it and re-apply the
+ *    size. Sizing against `video-params/h` was the bug (a 2160p title on a
+ *    1080-tall surface came out half size), and nothing may observe it;
+ *  - **a size change mid-playback**: the surface height is remembered, so the
+ *    setting computes against the window already in hand rather than waiting
+ *    for another measurement or dropping to the fallback;
  *  - **ASS stays untouched**: an appearance apply writes exactly `sub-font-size`,
  *    `sub-back-color`, `sub-border-size` and `sub-pos`. Nothing here may add a
  *    `sub-ass-*` / `sub-scale` option, which would restyle a fansub's own
@@ -54,9 +55,14 @@ class MpvSubtitleSizeContractTest {
         view.slice("fun applySubtitleAppearance(", "private fun setStreamOption(")
     }
 
-    /** The int64 property handler, where the height arrives. */
+    /** The int64 property handler. */
     private val intEvent: String by lazy {
         view.slice("override fun eventProperty(property: String, value: Long)", "override fun eventProperty(property: String, value: Double)")
+    }
+
+    /** The one writer of the surface size, where the window height arrives. */
+    private val surfaceSize: String by lazy {
+        view.slice("private fun publishAndroidSurfaceSize(", "override fun surfaceCreated(")
     }
 
     /** The observation block set up at init. */
@@ -94,37 +100,43 @@ class MpvSubtitleSizeContractTest {
     }
 
     @Test
-    fun `the first frame re-applies the size, through an observation of the video height`() {
-        assertTrue(
-            "video-params/h must be observed: it was not, and the open-time value is 0",
-            observations.contains(
-                "MpvBackend.observeProperty(\"video-params/h\", MpvFormat.MPV_FORMAT_INT64)"
-            )
+    fun `the measured surface re-applies the size, and the video's height never does`() {
+        assertFalse(
+            "video-params/h must NOT be observed: it is the FILE's height, and mpv scales cues " +
+                "with the WINDOW - observing it is what made a 2160p title's subtitles half size",
+            observations.contains("observeProperty(\"video-params/h\"")
+        )
+        assertFalse(
+            "and nothing may branch on it in the event handler either",
+            intEvent.contains("\"video-params/h\" ->")
         )
         assertTrue(
-            "and the handler must re-apply the size when it arrives (or changes on a " +
-                "resolution switch)",
-            intEvent.contains("\"video-params/h\" -> {") &&
-                intEvent.contains("applySubtitleFontSize()")
+            "the surface height the size is computed from is the one the surface-size writer " +
+                "publishes - one number, one writer",
+            surfaceSize.contains("windowHeightPx = h") &&
+                surfaceSize.contains("applySubtitleFontSize()")
         )
         assertTrue(
-            "remembering the height is what keeps the number honest once the frame is up",
-            intEvent.contains("videoHeightPx = height")
+            "and the writer is still the one that tells mpv the size it draws into",
+            surfaceSize.contains("setPropertyString(\"android-surface-size\"")
         )
         assertFalse(
             "a re-apply of the size must not rewrite the background or the position - they do " +
                 "not depend on the height, and a redundant write is a visible restyle",
-            intEvent.contains("sub-back-color") || intEvent.contains("sub-pos")
+            surfaceSize.contains("sub-back-color") || surfaceSize.contains("sub-pos")
         )
     }
 
     @Test
     fun `a size change mid-playback computes against the height already in hand`() {
         assertTrue(
-            "the writer must read the remembered height, not re-read mpv's property and not " +
-                "fall back to a guess",
-            sizeWriter.contains("videoHeightPx") &&
+            "the writer must read the remembered SURFACE height, not re-read mpv's property",
+            sizeWriter.contains("windowHeightPx") &&
                 !sizeWriter.contains("getPropertyIntOrNull")
+        )
+        assertFalse(
+            "and must not take the file's height, which is the resolution bug this removed",
+            sizeWriter.contains("video-params/h")
         )
         assertTrue(
             "choosing a size re-applies the appearance with all three values, which is the " +

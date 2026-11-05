@@ -389,15 +389,21 @@ class MpvPlayerView @JvmOverloads constructor(
     private var durationSec: Double? = null
 
     /**
-     * `video-params/h` for the file playing now, in pixels: 0 until the first
-     * frame decodes.
+     * The height of the SURFACE mpv draws into, in pixels: 0 until it has been
+     * measured.
      *
      * The subtitle size is computed against it (see
-     * [SubtitleOverlayStyle.mpvFontSize]), and it is remembered here so a size
-     * change mid-playback computes against the same height the picture has,
-     * instead of falling back or waiting for another frame.
+     * [SubtitleOverlayStyle.mpvFontSize]) because that is the height mpv scales
+     * its cues with - the window, not the file. Sizing against the video's
+     * height made a 2160p title's subtitles half size on a 1080-tall surface,
+     * which is the "tiny subtitles in mpv" report.
+     *
+     * Kept in step with the one writer of `android-surface-size`
+     * ([publishAndroidSurfaceSize]), so the number the size is computed from is
+     * always the surface mpv was told about, including PiP and a mid-session
+     * resize.
      */
-    private var videoHeightPx = 0
+    private var windowHeightPx = 0
 
     /**
      * The size index last applied, so a height arriving (or changing) can
@@ -1291,10 +1297,11 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun applySubtitleAppearance(size: Int, background: Int, position: Int) {
         // The size is COMPUTED, not a fixed table: mpv draws its own cues at a
-        // scale sized against the video's height, while the main player paints
-        // text cues at 11 / 14 / 18sp against the display's density, so the
-        // same setting came out far bigger here on the same title. Remembered
-        // so a height that arrives later can re-apply this index (see
+        // scale sized against the WINDOW it renders into (720-reference), while
+        // the main player paints text cues at 11 / 14 / 18sp against the
+        // display's density, so the same setting came out a different size here
+        // - and a different one again per video resolution. Remembered so a
+        // surface size that arrives later can re-apply this index (see
         // applySubtitleFontSize).
         subtitleSize = size
         applySubtitleFontSize()
@@ -1354,7 +1361,12 @@ class MpvPlayerView @JvmOverloads constructor(
             1f,
             resources.displayMetrics
         )
-        val font = SubtitleOverlayStyle.mpvFontSize(subtitleSize, pixelsPerSp, videoHeightPx)
+        // The measured surface when there is one; before layout the display's
+        // height is the closest honest stand-in for the window this will get -
+        // a fixed step table would be wrong by the panel's own ratio.
+        val windowHeight = windowHeightPx.takeIf { it > 0 }
+            ?: resources.displayMetrics.heightPixels
+        val font = SubtitleOverlayStyle.mpvFontSize(subtitleSize, pixelsPerSp, windowHeight)
         styleOption("sub-font-size", font.toString())
     }
 
@@ -1479,6 +1491,19 @@ class MpvPlayerView @JvmOverloads constructor(
         // neither applyOptions nor attachSurface sets gpu-api.
         vo.gpuApi?.let { MpvBackend.setOptionString("gpu-api", it) }
         if (vo.openglEs) MpvBackend.setOptionString("opengl-es", "yes")
+        // HDR pass-through on the GPU path, which is the whole difference between
+        // "the file's grade reaches the TV" and "mpv tone-mapped it to SDR":
+        // gpu-next's `target-colorspace-hint` hands the frame's colour space to
+        // the display instead of always converting to sRGB. It is the option
+        // that decides DV/HDR output, and it is a no-op wherever the backend
+        // cannot signal (libmpv's Android EGL context does not set a data space
+        // at all, so an EGL session stays tone-mapped SDR; the Vulkan output
+        // mode in Settings is the one this can take effect on). Set only for
+        // gpu-next - it is a gpu-next option, and the MediaCodec path has no GPU
+        // output to hint to.
+        if (vo.vo == AppPreferences.MPV_VO_GPU_NEXT) {
+            MpvBackend.setOptionString("target-colorspace-hint", "yes")
+        }
         // The field test's line: which mode was stored, which device it was
         // resolved on, and what that came out as.
         Log.i(
@@ -1776,11 +1801,11 @@ class MpvPlayerView @JvmOverloads constructor(
         // rebuilt whenever a new file (or another track) brings a different
         // one.
         MpvBackend.observeProperty("audio-params/channel-count", MpvFormat.MPV_FORMAT_INT64)
-        // The subtitle size is computed against the video's own height, so the
-        // first frame - and any resolution switch after it - has to re-apply
-        // it. Not observed until now, which left every cue at whatever size the
-        // open applied.
-        MpvBackend.observeProperty("video-params/h", MpvFormat.MPV_FORMAT_INT64)
+        // NOT `video-params/h`: the subtitle size is computed against the
+        // SURFACE height (mpv scales cues with the window, see
+        // [SubtitleOverlayStyle.mpvFontSize]), and that is driven by the one
+        // `android-surface-size` writer instead - so a 2160p title on a
+        // 1080-tall surface no longer halves the text.
     }
 
     // --- Surface lifecycle --------------------------------------------------
@@ -1904,6 +1929,15 @@ class MpvPlayerView @JvmOverloads constructor(
         runCatching { MpvBackend.setPropertyString("android-surface-size", "${w}x$h") }
             .onSuccess { Log.i(TAG, "android-surface-size=${w}x$h ($source)") }
             .onFailure { Log.w(TAG, "android-surface-size=${w}x$h rejected", it) }
+        // The same size is what mpv scales subtitles with, so the size has to
+        // be recomputed here: the first real measurement after open, a resize,
+        // and PiP all arrive as this call, and any of them changes the rendered
+        // height of a cue. Size only - background and position do not depend on
+        // the window (see [applySubtitleFontSize]).
+        if (h > 0 && h != windowHeightPx) {
+            windowHeightPx = h
+            applySubtitleFontSize()
+        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -2380,20 +2414,6 @@ class MpvPlayerView @JvmOverloads constructor(
             // the channel count; the boost's limiter rides the same chain).
             "audio-params/channel-count" ->
                 if (dialogueBoost > 0 || volumeBoostDb > 0) applyAudioFilters()
-
-            // The first frame, and any resolution switch: the subtitle size is
-            // computed against this, so it moves with it. Size only - the
-            // background and the position do not depend on the height. Posted
-            // to the view rather than applied here, like the other callbacks
-            // this event thread drives: the appearance was set up on the main
-            // thread, and the write that depends on it belongs there too.
-            "video-params/h" -> {
-                val height = value.toInt().coerceAtLeast(0)
-                if (height != videoHeightPx) {
-                    videoHeightPx = height
-                    post { applySubtitleFontSize() }
-                }
-            }
         }
     }
 

@@ -285,6 +285,28 @@ class MpvVideoOutputTest {
     }
 
     @Test
+    fun `the GPU path asks the display for the file's colour space, the MediaCodec path does not`() {
+        // "The DV/HDR file plays as SDR" has one option behind it on gpu-next:
+        // target-colorspace-hint hands the frame's colour space to the display
+        // instead of always converting to sRGB. It only takes effect on a
+        // backend that can signal (libmpv's Android EGL context cannot set a
+        // data space at all, so an EGL session stays tone-mapped SDR; the
+        // Vulkan output mode is the one it can act on), and it is meaningless on
+        // the MediaCodec path, which has no GPU output to hint to.
+        val applyOptions = view.substringAfter("private fun applyOptions()")
+        assertTrue(
+            "gpu-next must be told to pass the colour space through",
+            applyOptions.contains(
+                "MpvBackend.setOptionString(\"target-colorspace-hint\", \"yes\")"
+            )
+        )
+        assertTrue(
+            "and only for gpu-next: a vo that renders through the decoder has nothing to hint",
+            applyOptions.contains("if (vo.vo == AppPreferences.MPV_VO_GPU_NEXT)")
+        )
+    }
+
+    @Test
     fun `the resolved output is opened as the session option and re-opened from the same resolution`() {
         // This test has been through both answers. It first pinned that the VO
         // put back on a surface re-attach had to be the session's own rather

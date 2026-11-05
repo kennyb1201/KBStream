@@ -71,9 +71,11 @@ internal object SubtitleOverlayStyle {
         EXO_TEXT_SP.getOrElse(sizeIndex) { EXO_TEXT_SP[SIZE_NEUTRAL] }
 
     /**
-     * The height mpv's `sub-font-size` is read against: mpv sizes its own cues
-     * from the VIDEO's height, and that scale is 720p-based, so the same number
-     * on a 1080p title renders about 1.5x what it does on a 720p one.
+     * The height mpv's `sub-font-size` is read against: mpv's own reference is
+     * a WINDOW height of 720 (mpv's manual: the unit is "the size in scaled
+     * pixels at a window height of 720", and `--sub-scale-by-window` /
+     * `--sub-scale-with-window` both default to yes), so the same number on a
+     * 1080-tall window renders 1.5x what it does on a 720-tall one.
      *
      * A model constant, not a measurement: if a field check shows the two
      * engines differ by one factor at every height, this is the one number to
@@ -82,25 +84,31 @@ internal object SubtitleOverlayStyle {
     const val MPV_REFERENCE_HEIGHT_PX = 720f
 
     /**
-     * mpv's `sub-font-size` for a size index and the height of the video being
-     * played.
+     * mpv's `sub-font-size` for a size index and the height of the WINDOW mpv
+     * is drawing into - the surface, not the file.
      *
      * [scaledDensity] is the sp-to-pixel factor `COMPLEX_UNIT_SP` resolves
-     * through (user font scale included), which is what [exoTextSp] is in; the
-     * pixels are then re-expressed against the video's height, which is the
-     * scale mpv draws in. So the same setting is the same rendered height on
-     * both engines - Exo's 11 / 14 / 18sp, at whatever density the screen
-     * reports.
+     * through (user font scale included), which is what [exoTextSp] is in; those
+     * pixels are then re-expressed against mpv's 720-reference window, which is
+     * the scale mpv draws in. So the same setting is the same rendered height
+     * on both engines - Exo's 11 / 14 / 18sp, at whatever density the screen
+     * reports - on every title, whatever its resolution.
      *
-     * [videoHeightPx] is mpv's `video-params/h`: 0 until the first frame
-     * decodes, which is answered with [mpvFallbackFontSize] rather than a guess
-     * at the display's height - a 1080p title on a 4K panel would come out
-     * twice the size it should, which is the class of error this removes.
+     * [windowHeightPx] is the SURFACE height, and it is the one number this
+     * must use. Sizing against the VIDEO's height (`video-params/h`, which this
+     * did) is wrong by exactly the two heights' ratio, because mpv scales its
+     * cues with the window: a 2160p title on a 1080-tall surface came out HALF
+     * size, and a 720p one on the same surface half again too large. That is
+     * the "subtitles are tiny in mpv" report, and DV/HDR remuxes - usually
+     * 2160p - were the titles it showed on.
+     *
+     * 0 means the surface has not been measured yet (or there is none); that is
+     * answered with [mpvFallbackFontSize] rather than a guess.
      */
-    fun mpvFontSize(sizeIndex: Int, scaledDensity: Float, videoHeightPx: Int): Double {
-        if (videoHeightPx <= 0) return mpvFallbackFontSize(sizeIndex)
+    fun mpvFontSize(sizeIndex: Int, scaledDensity: Float, windowHeightPx: Int): Double {
+        if (windowHeightPx <= 0) return mpvFallbackFontSize(sizeIndex)
         val targetPx = exoTextSp(sizeIndex) * scaledDensity
-        return (targetPx * MPV_REFERENCE_HEIGHT_PX / videoHeightPx).toDouble()
+        return (targetPx * MPV_REFERENCE_HEIGHT_PX / windowHeightPx).toDouble()
     }
 
     /**
