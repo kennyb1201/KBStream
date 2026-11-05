@@ -69,10 +69,15 @@ class HiddenTitlesSyncWiringContractTest {
                 "cannot be one string with one stamp",
             payload.contains("const val KEY_HIDDEN_TITLES = \"hidden_titles\"")
         )
+        // The window covers the key list from its first row to this one. It grew
+        // from 3_000 when the personal lists' own row was added above the hidden
+        // titles' (with the comment that says why it is a row of its own); the
+        // assertion is that this key IS in buildAll, not how far down the list
+        // it sits, so the span follows the list.
         assertTrue(
             "buildAll is what the bulk push walks, so a key missing here is a " +
                 "blob that never leaves the device",
-            body(payload, "fun buildAll(", 3_000)
+            body(payload, "fun buildAll(", 4_000)
                 .contains("KEY_HIDDEN_TITLES to buildHiddenTitles(context)")
         )
     }
