@@ -34,8 +34,17 @@ private fun ManifestCatalog.typeKey(): String = type.lowercase()
  * Within a type, a predecessor with the same NAME wins over position, and only
  * the leftovers are paired positionally.
  *
- * Returns `(added, replaced)` pairs in the manifest's order; catalogs that line
- * up on one side with no counterpart of the same type are left unpaired.
+ * Newcomers are walked in a CANONICAL order (name, then media type, then id),
+ * not in the order the manifest happens to list them: a churning addon reorders
+ * its own rails freely, and pairing in manifest order meant a rail with no name
+ * match could inherit a DIFFERENT predecessor's slot on every refresh - rails
+ * that look identical to the viewer, a slot or three apart, and at different
+ * positions on a phone and a TV because each refreshes against its own copy.
+ * Pairing in a canonical order makes the answer depend only on the SET of rails
+ * involved, which is the part a refresh does not change.
+ *
+ * Catalogs that line up on one side with no counterpart of the same type are
+ * left unpaired.
  */
 internal fun pairReplacedCatalogs(
     existing: List<ManifestCatalog>,
@@ -45,7 +54,10 @@ internal fun pairReplacedCatalogs(
     val existingKeys = existing.mapTo(HashSet()) { it.replacementKey() }
     val removedByType =
         existing.filter { it.replacementKey() !in freshKeys }.groupBy { it.typeKey() }
-    val added = fresh.filter { it.replacementKey() !in existingKeys }
+    val added =
+        fresh
+            .filter { it.replacementKey() !in existingKeys }
+            .sortedWith(compareBy<ManifestCatalog>({ it.name }, { it.typeKey() }, { it.id }))
 
     val takenByType = HashMap<String, MutableSet<String>>()
     return added.mapNotNull { newcomer ->
@@ -103,7 +115,7 @@ internal data class ManifestMergePlan(
  * ```
  * order = globalOrder[key]                             // survivor: unchanged
  *     ?: globalOrder[keyOf(paired predecessor)]        // paired newcomer: inherits
- *     ?: next remaining freed slot, ascending          // unpaired newcomer
+ *     ?: next remaining freed slot, ascending          // no predecessor
  *     ?: (fallbackOrderStart + overflowOffset++)       // genuinely new: append
  * ```
  *
@@ -113,6 +125,12 @@ internal data class ManifestMergePlan(
  * not from manifest position) is what keeps the two stores from disagreeing:
  * consuming freed slots in manifest order gave a churned rail a DIFFERENT slot
  * than the arrangement remap gave it whenever the addon reordered its rails.
+ *
+ * Both pools — the newcomers being paired, and the ones that inherit nothing
+ * and draw from the freed slots — are walked in a canonical order, never in the
+ * manifest's (see [pairReplacedCatalogs]): a dynamic add-on reorders its rails
+ * as freely as it renames them, and that order is the one thing about it that
+ * two devices, and two refreshes of the same device, do NOT share.
  * A freed slot is never handed out twice either, because a slot inherited by a
  * pair is withdrawn from the pool below.
  *
@@ -143,25 +161,44 @@ internal fun planManifestMerge(
             .filter { slot -> slot !in inheritedSlots }
     val fallbackOrderStart = (globalOrder.values.maxOrNull() ?: -1) + 1
 
+    /** The slot [catalog] inherits from something this device already had. */
+    fun inheritedSlot(catalog: ManifestCatalog): Int? {
+        val key = keyOf(catalog)
+        return globalOrder[key]
+            ?: replacementByKey[key]?.let { predecessor -> globalOrder[keyOf(predecessor)] }
+    }
+
+    // Slots for the catalogs that inherit NOTHING are handed out in the same
+    // canonical order [pairReplacedCatalogs] pairs in, not in the manifest's:
+    // a manifest reorder must leave the viewer's Home alone, and two devices
+    // refreshing the same set have to reach the same answer. Walking them in
+    // manifest order made exactly those rails swap places with each other on
+    // every refresh - the "same rows, a slot or three apart" report.
     var freedSlotCursor = 0
     var overflowOffset = 0
+    val unpairedSlots = HashMap<Int, Int>()
+    manifestCatalogs.indices
+        .filter { index -> inheritedSlot(manifestCatalogs[index]) == null }
+        .sortedWith(
+            compareBy<Int>(
+                { index -> manifestCatalogs[index].name },
+                { index -> manifestCatalogs[index].typeKey() },
+                { index -> manifestCatalogs[index].id }
+            )
+        )
+        .forEach { index ->
+            unpairedSlots[index] = freedOrderSlots.getOrNull(freedSlotCursor++)
+                ?: (fallbackOrderStart + overflowOffset++)
+        }
 
     val catalogs =
-        manifestCatalogs.map { manifestCatalog ->
+        manifestCatalogs.mapIndexed { index, manifestCatalog ->
             val key = keyOf(manifestCatalog)
             val inherited = existingByKey[key] ?: replacementByKey[key]
             manifestCatalog.copy(
                 showOnHome = inherited?.showOnHome ?: manifestCatalog.defaultShowOnHome,
                 customName = inherited?.customName ?: manifestCatalog.customName,
-                order =
-                    globalOrder[key]
-                        ?: replacementByKey[key]?.let { predecessor ->
-                            globalOrder[keyOf(predecessor)]
-                        }
-                        ?: (
-                            freedOrderSlots.getOrNull(freedSlotCursor++)
-                                ?: (fallbackOrderStart + overflowOffset++)
-                            )
+                order = inheritedSlot(manifestCatalog) ?: unpairedSlots.getValue(index)
             )
         }
 
@@ -267,7 +304,21 @@ internal fun setAllCatalogsVisible(
  */
 internal fun mergeRefreshedCatalogs(
     oldCatalogs: List<ManifestCatalog>,
-    newCatalogs: List<ManifestCatalog>
+    newCatalogs: List<ManifestCatalog>,
+    /**
+     * The global slot the returned list starts at.
+     *
+     * An INSTALL passes the slot after the last catalog this profile already
+     * has, so a new add-on lands at the END of Home. Numbering a fresh
+     * install's catalogs from 0 put them in the same slots as the first
+     * add-on's, and the densifier then interleaved the two by whichever order
+     * the add-on list happened to be in - which is why a newly added add-on's
+     * rails appeared scattered through the top of Home instead of as a block.
+     * Refresh paths do not use this function ([planManifestMerge] owns those,
+     * with the replacement pairing); the default keeps them reading as a
+     * sequence from zero.
+     */
+    firstOrder: Int = 0
 ): List<ManifestCatalog> {
     fun key(type: String, id: String): String =
         "${type.trim().lowercase()}::${id.trim().lowercase()}"
@@ -305,7 +356,7 @@ internal fun mergeRefreshedCatalogs(
         }
     }
 
-    return result.mapIndexed { index, catalog -> catalog.copy(order = index) }
+    return result.mapIndexed { index, catalog -> catalog.copy(order = firstOrder + index) }
 }
 
 /**

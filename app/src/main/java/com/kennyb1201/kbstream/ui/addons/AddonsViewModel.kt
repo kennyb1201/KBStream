@@ -645,58 +645,113 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
 
-                // Compute the next list INSIDE the manager's state lock so a
-                // background manifest apply / cloud apply that lands while
-                // this manifest was downloading can't be clobbered here.
+                // Re-adding an add-on that is already installed is an UPDATE,
+                // and it takes the SAME path a refresh does: the manager's
+                // merge (see planManifestMerge) keeps every catalog's global
+                // slot, carries renames and visibility across, and remaps a
+                // swapped catalog id in the Home arrangement. It used to run a
+                // per-add-on merge that renumbered that add-on's catalogs from
+                // 0 - so re-adding a churning add-on (BingeCat) put its rails
+                // back at the top of Home and shuffled every rail under them,
+                // while the arrangement kept naming the old ids.
+                val installed =
+                    addonManager.getInstalledAddons()
+                        .firstOrNull { it.manifestUrl == cleanUrl }
+                        ?: addonManager.getInstalledAddons()
+                            .firstOrNull { it.id == manifest.id }
+
+                if (installed != null) {
+                    addonManager.updateAddonFromManifest(installed.manifestUrl, manifest)
+
+                    if (installed.manifestUrl != cleanUrl) {
+                        // The same add-on served from a NEW address (a rotated
+                        // token, a moved endpoint). Adopt the URL the viewer
+                        // pasted, and carry the Home arrangement across with it:
+                        // an arrangement key embeds the manifest's base URL (see
+                        // KBHomeOrderPrefs.addonKey), so without the remap every
+                        // rail of this add-on would fall back to its default
+                        // slot. The ids are read AFTER the merge, because that
+                        // is what the stored catalogs are keyed by now.
+                        val moved = addonManager.getInstalledAddons()
+                            .firstOrNull { it.manifestUrl == installed.manifestUrl }
+                        val remap = moved?.catalogs.orEmpty().associate { catalog ->
+                            KBHomeOrderPrefs.addonKeyFromManifest(
+                                installed.manifestUrl,
+                                catalog.type,
+                                catalog.id
+                            ) to KBHomeOrderPrefs.addonKeyFromManifest(
+                                cleanUrl,
+                                catalog.type,
+                                catalog.id
+                            )
+                        }
+                        addonManager.updateInstalled { current ->
+                            current.map { addon ->
+                                if (addon.manifestUrl == installed.manifestUrl) {
+                                    addon.copy(manifestUrl = cleanUrl)
+                                } else {
+                                    addon
+                                }
+                            }
+                        }
+                        KBHomeOrderPrefs.remapAddonKeys(getApplication(), remap)
+                    }
+
+                    refresh()
+                    _status.value = "Updated ${installed.displayName}"
+                    checkHealth()
+                    return@launch
+                }
+
+                // A genuinely new add-on: compute the next list INSIDE the
+                // manager's state lock so a background manifest apply / cloud
+                // apply that lands while this manifest was downloading can't be
+                // clobbered here.
                 var added = false
-                var updatedName = ""
                 addonManager.updateInstalled { current ->
-                    val existing = current.firstOrNull { it.id == manifest.id }
+                    // Lost a race to a sync pull that installed it meanwhile.
+                    if (current.any { it.manifestUrl == cleanUrl || it.id == manifest.id }) {
+                        return@updateInstalled null
+                    }
 
-                    val catalogs = mergeRefreshedCatalogs(
-                        oldCatalogs = existing?.catalogs.orEmpty(),
-                        newCatalogs = manifest.catalogs
-                    )
+                    // `order` is the global sequence every rail on Home is
+                    // drawn in, so a fresh install appends after the last
+                    // catalog this profile already has (see
+                    // [mergeRefreshedCatalogs]'s firstOrder).
+                    val firstOrder =
+                        (current.flatMap { addon -> addon.catalogs }
+                            .maxOfOrNull { catalog -> catalog.order } ?: -1) + 1
 
-                    val installed = InstalledAddon(
+                    val newAddon = InstalledAddon(
                         manifestUrl = cleanUrl,
                         id = manifest.id,
                         name = manifest.name,
                         resources = manifest.resources,
-                        catalogs = catalogs,
-                        customName = existing?.customName,
+                        catalogs = mergeRefreshedCatalogs(
+                            oldCatalogs = emptyList(),
+                            newCatalogs = manifest.catalogs,
+                            firstOrder = firstOrder
+                        ),
+                        customName = null,
                         version = manifest.version,
                         description = manifest.description,
                         types = manifest.types,
                         idPrefixes = manifest.idPrefixes,
                         logo = manifest.logo ?: manifest.icon,
-                        // Re-adding an addon the user had turned off must not
-                        // silently switch it back on; only its manifest data
-                        // is being refreshed here.
-                        enabled = existing?.enabled ?: true
+                        enabled = true
                     )
 
-                    added = existing == null
-                    updatedName = installed.displayName
-
-                    if (existing == null) {
-                        current + installed
-                    } else {
-                        current.map {
-                            if (it.id == manifest.id) {
-                                installed
-                            } else {
-                                it
-                            }
-                        }
-                    }
+                    added = true
+                    current + newAddon
                 }
                 refresh()
 
                 _status.value = if (added) {
-                    "Added $updatedName"
+                    "Added ${manifest.name}"
                 } else {
-                    "Updated $updatedName"
+                    // The race above: it is installed, so what the viewer
+                    // wanted has happened either way.
+                    "Already installed"
                 }
                 checkHealth()
             } catch (e: kotlinx.coroutines.CancellationException) {

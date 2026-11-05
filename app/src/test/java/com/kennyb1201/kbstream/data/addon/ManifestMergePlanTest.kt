@@ -209,7 +209,7 @@ class ManifestMergePlanTest {
 
         val plan = planManifestMerge(stored, reordered, globalOrder, ::keyOf)
         assertEquals(
-            "removed in saved order against newcomers in manifest order, one-for-one",
+            "removed in saved order against newcomers in canonical (name) order",
             setOf("bwc-d2" to "bwc-b", "bwc-b2" to "bwc-d"),
             plan.replaced.map { (added, removed) -> added.id to removed.id }.toSet()
         )
@@ -222,6 +222,55 @@ class ManifestMergePlanTest {
         assertEquals("the rename follows the same pairing", "B rail", byId.getValue("bwc-d2").customName)
         assertEquals("D rail", byId.getValue("bwc-b2").customName)
         assertFalse("and so does the pin", byId.getValue("bwc-b2").showOnHome)
+    }
+
+    @Test
+    fun `a churned add-on that reorders its manifest moves no rail`() {
+        // The report this pins: BingeCat's rails are the same rows on a phone
+        // and a TV, a slot or three apart. Its because-you-watched rails churn
+        // their ids as the content turns over and the manifest lists them in
+        // whatever order it likes, so BOTH halves of the merge - which newcomer
+        // inherits which predecessor's slot, and which unpaired newcomer takes
+        // which freed slot - used to be decided by that listing order. Walking
+        // them canonically makes a reorder on its own a no-op, which is also
+        // what lets two devices refreshing the same set reach one answer.
+        val stored = listOf(
+            catalog("series", "bwc-a", name = "Because you watched A", order = 10),
+            catalog("series", "bwc-b", name = "Because you watched B", order = 11),
+            catalog("movie", "bwc-c", name = "Because you watched C", order = 12)
+        )
+        val globalOrder = mapOf(
+            "series::bwc-a" to 10,
+            "series::bwc-b" to 11,
+            "movie::bwc-c" to 12
+        )
+
+        // Every id churned AND every name changed with it (the content is new).
+        val reshaped = listOf(
+            catalog("series", "bwc-x", name = "Because you watched X"),
+            catalog("series", "bwc-y", name = "Because you watched Y"),
+            catalog("movie", "bwc-z", name = "Because you watched Z")
+        )
+        val shuffled = listOf(reshaped[2], reshaped[0], reshaped[1])
+
+        val one = planManifestMerge(stored, reshaped, globalOrder, ::keyOf)
+        val other = planManifestMerge(stored, shuffled, globalOrder, ::keyOf)
+
+        assertEquals(
+            "the slots follow the SET of rails, not the order it arrived in",
+            one.catalogs.associate { it.id to it.order },
+            other.catalogs.associate { it.id to it.order }
+        )
+        assertEquals(
+            "and so does the pairing both stores consume",
+            one.replaced.map { (added, removed) -> added.id to removed.id }.toSet(),
+            other.replaced.map { (added, removed) -> added.id to removed.id }.toSet()
+        )
+        assertEquals(
+            "every stored slot is reused once, and nothing is appended",
+            setOf(10, 11, 12),
+            one.catalogs.map { it.order }.toSet()
+        )
     }
 
     @Test
@@ -280,7 +329,7 @@ class ManifestMergePlanTest {
     }
 
     @Test
-    fun `duplicate names within one type pair first come in manifest order`() {
+    fun `duplicate names within one type pair in id order, not set order`() {
         val plan = planManifestMerge(
             existingCatalogs = listOf(
                 catalog("movie", "x", name = "Dup", order = 0),

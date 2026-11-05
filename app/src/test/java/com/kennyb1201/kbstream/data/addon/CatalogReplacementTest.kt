@@ -37,13 +37,29 @@ class CatalogReplacementTest {
     }
 
     @Test
-    fun `pairs are matched in saved order against manifest order`() {
+    fun `pairs are matched in saved order against canonical newcomer order`() {
+        // Predecessors keep their stored slot order; newcomers are walked
+        // canonically (see pairReplacedCatalogs), so a manifest reorder alone
+        // cannot swap which predecessor a newcomer inherits.
         val pairs = pairReplacedCatalogs(
             existing = listOf(catalog("series", "old-1"), catalog("series", "old-2")),
             fresh = listOf(catalog("series", "new-1"), catalog("series", "new-2"))
         )
 
-        assertEquals(listOf("new-1" to "old-1", "new-2" to "old-2"), pairs.map { it.first.id to it.second.id })
+        assertEquals(
+            listOf("new-1" to "old-1", "new-2" to "old-2"),
+            pairs.map { it.first.id to it.second.id }
+        )
+
+        // The same set listed the other way round plans the same pairing.
+        val reordered = pairReplacedCatalogs(
+            existing = listOf(catalog("series", "old-1"), catalog("series", "old-2")),
+            fresh = listOf(catalog("series", "new-2"), catalog("series", "new-1"))
+        )
+        assertEquals(
+            pairs.map { it.first.id to it.second.id },
+            reordered.map { it.first.id to it.second.id }
+        )
     }
 
     @Test
@@ -93,8 +109,8 @@ class CatalogReplacementTest {
         )
 
         assertEquals(
-            listOf("series-new" to "series-old", "movie-new" to "movie-old"),
-            pairs.map { it.first.id to it.second.id }
+            setOf("series-new" to "series-old", "movie-new" to "movie-old"),
+            pairs.map { it.first.id to it.second.id }.toSet()
         )
     }
 
@@ -115,13 +131,13 @@ class CatalogReplacementTest {
         )
 
         assertEquals(
-            listOf("trending-2" to "trending-1", "search-2" to "search-1"),
-            pairs.map { it.first.id to it.second.id }
+            setOf("trending-2" to "trending-1", "search-2" to "search-1"),
+            pairs.map { it.first.id to it.second.id }.toSet()
         )
     }
 
     @Test
-    fun `a content-embedded rename falls back to the positional pairing`() {
+    fun `a content-embedded rename falls back to the saved-order pairing`() {
         // "Because you watched X" -> "...Y": nothing matches by name, so the
         // saved-order rule still carries the settings across.
         val pairs = pairReplacedCatalogs(
@@ -247,6 +263,20 @@ class CatalogReplacementTest {
         )
         assertEquals(listOf("b", "a", "c"), merged.map { it.id })
         assertEquals(listOf(0, 1, 2), merged.map { it.order })
+    }
+
+    @Test
+    fun `an install starts after the last catalog the profile already has`() {
+        // The global order is a sequence across EVERY add-on, so numbering a
+        // fresh install from 0 put its catalogs in the slots the first add-on
+        // already occupied - and the densifier then interleaved them.
+        val merged = mergeRefreshedCatalogs(
+            oldCatalogs = emptyList(),
+            newCatalogs = listOf(catalog("movie", "a"), catalog("series", "b")),
+            firstOrder = 7
+        )
+
+        assertEquals(listOf(7, 8), merged.map { it.order })
     }
 
     @Test
