@@ -21,6 +21,17 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
 
 /**
+ * The store's own encoding of the pins (see [LibraryHomeRails.encode]).
+ *
+ * One field, and deliberately the same `rails` array the account row carries
+ * (see [LibraryHomeRails.buildBlob]), so a blob written here and one adopted
+ * from a sibling read back through one shape rather than two that can drift.
+ */
+internal data class LibraryHomeRailsBlob(
+    val rails: List<LibraryHomeRailPin> = emptyList()
+)
+
+/**
  * This profile's pinned Library lists, and the switch that puts one there.
  *
  * Stored under the profile-scoped prefs name (see [ProfileStorage.prefsName]),
