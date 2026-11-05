@@ -429,15 +429,70 @@ class MobileBillboardContractTest {
         assertTrue(vm.contains("settled = true"))
         // Seeded in feed order, so the pager's count and order never move.
         assertTrue(vm.contains("_billboardPages.value = feed.map { item -> BillboardPage("))
-        // The default feed is the day pair, interleaved by rank.
-        assertTrue(vm.contains("tmdbRepository.trendingDay(\"movie\")"))
-        assertTrue(vm.contains("tmdbRepository.trendingDay(\"tv\")"))
+        // The default feed is the day pair, interleaved by rank - fetched by
+        // PAGE, because one page is not always a pool (see the walk test).
+        assertTrue(vm.contains("tmdbRepository.trendingDay(\"movie\", walked)"))
+        assertTrue(vm.contains("tmdbRepository.trendingDay(\"tv\", walked)"))
         assertTrue(vm.contains("billboardInterleaveFeeds("))
         // A recomposition carrying the same feed resolves nothing new.
         assertTrue(vm.contains("if (currentKeys == wantedKeys) {"))
         // A failed reload never blanks a published feed - but an answer for a
         // DIFFERENT profile does, because the old one is another profile's
         // content (see the kids-ceiling test below).
+        assertTrue(
+            vm.contains(
+                "if (pages.isNotEmpty() || cachedFor != forProfile) { " +
+                    "_billboardTrendingDay.value = pages }"
+            )
+        )
+    }
+
+    /**
+     * The reported shape: a kids profile whose ceiling left ONE trending
+     * survivor, so the hero had nothing to swipe to and its timer nowhere to
+     * go - "The Cat in the Hat every time, no swipe, no change".
+     *
+     * One page of trending is 40 titles and the ceiling decides every one of
+     * them, so the fix is not a wider filter (that stays exactly as it was) but
+     * more of the FEED: walk the trending pages until the filtered pool fills,
+     * bounded. What is pinned here is that each page goes through the same
+     * fetch (which applies the same ceiling), that the pages accumulate into
+     * one interleave so rank order survives the walk, and every way the walk
+     * can end.
+     */
+    @Test
+    fun `a thin pool walks the trending pages until it fills`() {
+        val vm = billboardBlock()
+
+        assertTrue(
+            "the walk's bound and fullness test is the shared rule, not a local loop",
+            vm.contains(
+                "while (billboardShouldWalkNextPage(pagesWalked = walked, poolSize = pages.size))"
+            )
+        )
+        // Pages accumulate, and the interleave runs over everything walked so
+        // far - page 1's survivors stay ahead of page 2's, movies and shows
+        // still alternate by rank, and the existing de-dupe/cap apply.
+        assertTrue(
+            "survivors accumulate across pages",
+            vm.contains("moviePage?.mapTo(movies) { it.toBillboardPreview(\"movie\") }") &&
+                vm.contains("showPage?.mapTo(shows) { it.toBillboardPreview(\"series\") }")
+        )
+        assertTrue(
+            "and one interleave, over the accumulated lists, is the pool",
+            vm.contains("pages = billboardInterleaveFeeds(movies, shows)")
+        )
+        // The three ways it ends.
+        assertTrue(
+            "a page that did not answer ends the walk with what was gathered",
+            vm.contains("if (moviePage == null || showPage == null) break")
+        )
+        assertTrue(
+            "and so does a page with nothing left on it",
+            vm.contains("if (moviePage.isEmpty() && showPage.isEmpty()) break")
+        )
+        // A failed walk never blanks a published feed, and a DIFFERENT profile
+        // still clears it: the publish rule is untouched by the walk.
         assertTrue(
             vm.contains(
                 "if (pages.isNotEmpty() || cachedFor != forProfile) { " +

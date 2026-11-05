@@ -1829,12 +1829,42 @@ Log.d(
         billboardTrendingFor = forProfile
         billboardTrendingJob?.cancel()
         billboardTrendingJob = viewModelScope.launch {
-            val movies = safeSuspend { tmdbRepository.trendingDay("movie") }.orEmpty()
-            val shows = safeSuspend { tmdbRepository.trendingDay("tv") }.orEmpty()
-            val pages = billboardInterleaveFeeds(
-                movies.map { it.toBillboardPreview("movie") },
-                shows.map { it.toBillboardPreview("series") }
-            )
+            // Walk the trending feed until the pool is FULL, not just page 1.
+            //
+            // One page is 20 movies and 20 shows, and the ceiling decides every
+            // one of them before it reaches here (trendingDay filters each page
+            // it fetches, see TmdbRepository.trendingDay). On a strict kids
+            // ceiling that can leave a single survivor - The Cat in the Hat on
+            // the reported day - and a one-title pool is a hero with nothing to
+            // swipe to and nowhere for its timer to go, which is exactly the
+            // "same title every time, no swipe" report. So keep asking for the
+            // next page while the pool is short.
+            //
+            // No kids-specific branch: a profile with no ceiling fills the cap
+            // from page 1, so the walk never asks for a second page for it.
+            val movies = ArrayList<MetaPreview>(BILLBOARD_MAX_PAGES * 2)
+            val shows = ArrayList<MetaPreview>(BILLBOARD_MAX_PAGES * 2)
+            var walked = 0
+            // Seeded empty: a page 1 that fails leaves the answer empty, and the
+            // publish rule below decides whether that is published at all.
+            var pages: List<MetaPreview> = emptyList()
+            while (billboardShouldWalkNextPage(pagesWalked = walked, poolSize = pages.size)) {
+                walked += 1
+                val moviePage = safeSuspend { tmdbRepository.trendingDay("movie", walked) }
+                val showPage = safeSuspend { tmdbRepository.trendingDay("tv", walked) }
+                moviePage?.mapTo(movies) { it.toBillboardPreview("movie") }
+                showPage?.mapTo(shows) { it.toBillboardPreview("series") }
+                // ONE interleave over everything walked so far, so rank order
+                // holds ACROSS pages (page 1's movies still outrank page 2's)
+                // and the existing de-dupe and cap apply to the whole pool.
+                pages = billboardInterleaveFeeds(movies, shows)
+                // A page that did not answer ends the walk, publishing what was
+                // gathered - including the half that DID answer, which is what
+                // this feed did when it fetched a single page.
+                if (moviePage == null || showPage == null) break
+                // Nothing left to find: the feed is shorter than the walk.
+                if (moviePage.isEmpty() && showPage.isEmpty()) break
+            }
             // Same profile: a failed reload never blanks a published feed. A
             // DIFFERENT profile (or a changed ceiling): an empty answer has to
             // clear it, because leaving the old list published is exactly adult

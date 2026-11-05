@@ -4,6 +4,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,6 +30,42 @@ class BillboardFeedRulesTest {
         type: String = "movie",
         name: String = id
     ) = MetaPreview(id = id, type = type, name = name)
+
+    // ── the trending walk ───────────────────────────────────────────────
+
+    /**
+     * The walk's two stops, as numbers.
+     *
+     * One page of trending is 20 movies and 20 shows and the ceiling decides
+     * every one of them, so a strict ceiling can keep one survivor - a pool a
+     * hero cannot swipe through. The walk asks for more pages until the pool is
+     * full, and the bound is what keeps a pathological day from hammering TMDB
+     * from a Home visit.
+     */
+    @Test
+    fun `the walk stops when the pool is full or the bound is reached`() {
+        assertTrue(
+            "a page that left the pool short is worth another fetch",
+            billboardShouldWalkNextPage(pagesWalked = 1, poolSize = 1)
+        )
+        assertTrue(
+            "and so is the last page the bound allows",
+            billboardShouldWalkNextPage(pagesWalked = 4, poolSize = 9)
+        )
+        assertFalse(
+            "a full pool gains nothing from walking on",
+            billboardShouldWalkNextPage(pagesWalked = 1, poolSize = BILLBOARD_MAX_PAGES)
+        )
+        assertFalse(
+            "the bound is the guard against hammering the feed",
+            billboardShouldWalkNextPage(pagesWalked = 5, poolSize = 0)
+        )
+        assertEquals(
+            "five pages: page 1 plus four more, 200 titles considered",
+            5,
+            BILLBOARD_TRENDING_MAX_WALK_PAGES
+        )
+    }
 
     // ── the default feed: movie #1, TV #1, movie #2, TV #2, ... ──────────
 

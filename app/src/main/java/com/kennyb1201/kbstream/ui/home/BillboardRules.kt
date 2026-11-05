@@ -25,6 +25,33 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 internal const val BILLBOARD_MAX_PAGES = 10
 
 /**
+ * How many trending pages ONE load may walk: page 1 plus four more.
+ *
+ * A page of trending is 20 movies and 20 shows, and the ceiling decides every
+ * title on it, so one page is not always a pool: a strict kids ceiling can keep
+ * a single survivor out of 40, and a one-title pool is a hero with nothing to
+ * swipe to. The walk exists for that day, and this is its guard - five pages is
+ * 200 titles considered, ample once the ceiling has had its say, and small
+ * enough that a pathological day cannot hammer TMDB from a Home visit.
+ *
+ * It is a maximum, not a target: on an ordinary profile page 1 already holds
+ * more than [BILLBOARD_MAX_PAGES], so the walk never asks for a second page.
+ */
+internal const val BILLBOARD_TRENDING_MAX_WALK_PAGES = 5
+
+/**
+ * Whether the trending walk should ask for another page.
+ *
+ * Two reasons to stop, both here so they are testable without a network: the
+ * pool is full (nothing left to gain), or [BILLBOARD_TRENDING_MAX_WALK_PAGES]
+ * pages have been walked. [poolSize] is the INTERLEAVED, de-duped pool - the
+ * same thing the pager would show - never the raw row count, because that is
+ * what "full" means downstream.
+ */
+internal fun billboardShouldWalkNextPage(pagesWalked: Int, poolSize: Int): Boolean =
+    pagesWalked < BILLBOARD_TRENDING_MAX_WALK_PAGES && poolSize < BILLBOARD_MAX_PAGES
+
+/**
  * One billboard page's identity: the title's id AND its type.
  *
  * Not the id alone. TMDB numbers movies and shows in separate spaces, so
