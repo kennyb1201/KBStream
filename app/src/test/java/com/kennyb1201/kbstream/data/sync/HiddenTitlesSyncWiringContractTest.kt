@@ -106,7 +106,10 @@ class HiddenTitlesSyncWiringContractTest {
 
     @Test
     fun `the push consults the gate for this key, not just the builder`() {
-        val push = body(sync, "private suspend fun pushPrefsBlobs(", 6_000)
+        // The window covers the whole gate chain. It grew when the BingeCat
+        // mapping's gate joined it beside the session's - the point of this
+        // assertion is that THIS key has a gate at all, not where in the chain.
+        val push = body(sync, "private suspend fun pushPrefsBlobs(", 8_000)
         assertTrue(
             "without this a fresh device publishes an empty set over the account's " +
                 "hidden titles before its first pull",

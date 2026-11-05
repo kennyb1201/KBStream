@@ -221,10 +221,17 @@ class BingeCatAuthSyncWiringContractTest {
         )
         assertTrue(
             "only when this device is actually connected: $refresh",
-            squash(vm).contains(
+            refresh.contains(
                 "if (next.isConnected) { viewModelScope.launch { runCatching { " +
-                    "repository.publishSessionIfConnected() } } }"
+                    "repository.publishSessionIfConnected() }"
             )
+        )
+        // The same guarded visit is where a MAPPED id is validated against the
+        // account's own listing (the mapping-sync spec's F3), so the page has
+        // one entry point that re-asserts what this device holds and checks it.
+        assertTrue(
+            "and the mapping is validated on the same visit: $refresh",
+            refresh.contains("if (next.isMapped) loadProfiles()")
         )
     }
 

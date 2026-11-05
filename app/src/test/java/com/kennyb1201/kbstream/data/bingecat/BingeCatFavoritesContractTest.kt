@@ -218,10 +218,18 @@ class BingeCatFavoritesContractTest {
             "only a LIKE is read back - BingeCat has no dislike",
             core.contains("return if (favorited) TasteSignals.LIKE else null")
         )
+        // The guard is profile-aware on purpose: a snapshot read under ANOTHER
+        // profile is not this profile's Favorites, and favoritesContains would
+        // refuse it anyway - so warming again is what makes a switch paint the
+        // truth instead of an empty thumb.
         assertTrue(
             "membership comes from the cached rows, never a fresh read per paint",
             core.contains("repository.favoritesContains(") &&
-                core.contains("if (repository.cachedSnapshot() != null) return")
+                core.contains("val cached = repository.cachedSnapshot()") &&
+                core.contains(
+                    "if (cached != null && cached.profileId == " +
+                        "ProfileStorage.activeProfileId(context)) return"
+                )
         )
         assertTrue(
             "the press starts from the PAINTED signal, so a lit thumb clears",

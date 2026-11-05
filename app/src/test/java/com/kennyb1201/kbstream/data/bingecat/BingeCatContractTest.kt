@@ -218,13 +218,20 @@ class BingeCatContractTest {
     fun `both settings rows open the page, and the page survives a process death`() {
         val tv = source("com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt")
         val mobile = source("com/kennyb1201/kbstream/ui/mobile/SettingsScreenMobile.kt")
+        // The label is state-dependent since the mapping-sync spec's F2: a
+        // session with no mapping reads "BingeCat - profile not selected", and
+        // a mapped one stays "BingeCat". Both rows must still open the page.
         assertTrue(
             "the TV row exists and is wired",
-            tv.contains("label = \"BingeCat\"") && tv.contains("onClick = onOpenBingeCat")
+            tv.contains("label = if (bingecatNeedsProfile)") &&
+                tv.contains("\"BingeCat\"") &&
+                tv.contains("onClick = onOpenBingeCat")
         )
         assertTrue(
             "the phone row exists and is wired",
-            mobile.contains("label = \"BingeCat\"") && mobile.contains("onClick = onOpenBingeCat")
+            mobile.contains("label = if (bingecatNeedsProfile)") &&
+                mobile.contains("\"BingeCat\"") &&
+                mobile.contains("onClick = onOpenBingeCat")
         )
         val nav = source("com/kennyb1201/kbstream/NavStateSerialization.kt")
         assertTrue(

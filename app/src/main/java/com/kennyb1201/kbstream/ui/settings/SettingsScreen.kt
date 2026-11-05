@@ -1098,8 +1098,8 @@ fun SettingsScreen(
                                 "Open this to pick one."
                         } else {
                             "Read your BingeCat watchlist, saved list and lists, and " +
-                                "record what you watch - per BingeCat profile. Browse " +
-                                "BingeCat's public lists and import one into your profile there."
+                                "record what you watch - per BingeCat profile. Browse BingeCat's " +
+                                "public lists and import one into your profile there."
                         },
                         onClick = onOpenBingeCat
                     )
