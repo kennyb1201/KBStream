@@ -4,7 +4,9 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -27,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -40,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,12 +91,14 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.mobile.LibraryScreenMobile
+import com.kennyb1201.kbstream.ui.sports.SportsCardBringIntoViewSpec
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -1173,12 +1180,26 @@ internal fun LibraryFilterChip(
             // and the label vanished into it (the "hard to read on hover"
             // report). Focus is carried by the accent border and the glow on
             // every other row in the app; the fill stays a raised surface.
+            //
+            // A SELECTED chip deepens its wash a step instead of flattening
+            // into one accent, because the wash is what says "this is the
+            // filter that is on" while the D-pad sits on it.
             focusedContainerColor = if (selected) {
                 KBAccent.copy(alpha = 0.4f)
             } else {
                 KBSurfaceRaised
             },
-            focusedContentColor = if (selected) KBAccent else KBTextHi
+            // The LABEL never takes the accent on focus, selected or not: it
+            // is accent text on an accent wash the moment a selected chip is
+            // focused, and the pill reads as one solid bright block with the
+            // word gone (the focused WATCHLIST chip, 2026-11-05). Selection is
+            // carried by the fill tint, the accent border and the bold label -
+            // never by the label's color - so the focused label is the same
+            // light tone every other focused surface uses. The unfocused
+            // selected label stays accent: that is what the strip reads as
+            // "selected" when focus is elsewhere (see GenreChipRow, which
+            // learned this exact lesson).
+            focusedContentColor = KBTextHi
         ),
         scale = ClickableSurfaceDefaults.scale(
             focusedScale = KBFocusChip,
@@ -1463,8 +1484,25 @@ private fun ListsPane(
     var createSource by remember { mutableStateOf(LibrarySource.LOCAL_LIST) }
 
     Row(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        RailListColumn(
+            // Room at both ends, INSIDE the clip, for a focused row's grown
+            // edge and glow: at scroll 0 the first row's drawn top is
+            // `padding - overhang`, and no landing can give it that room - the
+            // list is already at its start. The bottom is the landing margin
+            // plus one row gap, because the landing can only bring the LAST row
+            // (the create affordance, taller still with its field open) to that
+            // margin if the list can scroll that far past it.
+            //
+            // KBFocusRowInset (16dp) is the theme's computed row room: the
+            // 12dp glow the shared row cue draws plus the ~1% of its own height
+            // KBFocusRow grows a row by per side. These rows are shorter than
+            // that bound - a 60dp list row overhangs by ~9dp at this rail's 8dp
+            // glow, and the 130dp create field by ~10dp - so 16dp clears both
+            // with room to spare, and 12dp (the floor) would not.
+            contentPadding = PaddingValues(
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset + 8.dp
+            ),
             // The rail is a fixed 280dp column, so it must NOT chain a
             // `fillMaxSize()` after `width(280.dp)`. Modifiers are wrapper
             // nodes and the FIRST size modifier sets the exact width it wraps,
@@ -1548,7 +1586,15 @@ private fun ListsPane(
                             text = list.name,
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selected) KBAccent else KBTextHi,
+                            // Never the accent: a selected row is already an
+                            // accent wash (34% under the D-pad), so an accent
+                            // title was one colour on one colour - the focused
+                            // first row whose photo showed only its count line
+                            // ("50 titles · BingeCat", 2026-11-05). Selection is
+                            // carried by the wash, the accent focus border and
+                            // the bold weight; the title is the same light tone
+                            // in every state, exactly like the chips' labels.
+                            color = KBTextHi,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1660,6 +1706,51 @@ private fun ListsPane(
             // Takes the remaining width beside the list rail; fillMaxSize
             // inside a Row measured against the whole row.
             modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * The personal-lists rail's column: a [LazyColumn] that lands a focused row with
+ * the room its focus cue needs on both sides (see
+ * [SportsCardBringIntoViewSpec]).
+ *
+ * The default landing reads the focused row's LAYOUT rectangle and counts it
+ * visible the moment it fits the viewport, so a row the D-pad scrolls to came to
+ * rest with its grown edge and its glow sheared flat along the column's clip -
+ * the first row's top, and the + NEW LIST affordance's whole bottom edge that
+ * the photo showed half-cut (2026-11-05). `contentPadding` cannot fix that on
+ * its own: it sits inside the clip, and only a bring-into-view spec is handed
+ * the viewport to inset. The same switch Home's rail column, the sports hub and
+ * the detail screen throw - supplied around the list, so the poster grid beside
+ * it keeps its own landing.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RailListColumn(
+    contentPadding: PaddingValues,
+    modifier: Modifier = Modifier,
+    content: LazyListScope.() -> Unit
+) {
+    val density = LocalDensity.current
+    val rowBringIntoViewSpec = remember(density) {
+        SportsCardBringIntoViewSpec(
+            insetPx = with(density) { KBFocusRowInset.toPx() },
+            // This rail's rows carry the small glow, not the shared card's -
+            // the landing has to account for what is actually drawn past the
+            // layout rect.
+            glowPx = with(density) { KBFocusGlowSmall.toPx() },
+            // Rail rows grow by the row step of the shared focus scale, and the
+            // scale pivots at the centre: half the growth lands on each edge.
+            focusedScale = KBFocusRow
+        )
+    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides rowBringIntoViewSpec) {
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = contentPadding,
+            modifier = modifier,
+            content = content
         )
     }
 }

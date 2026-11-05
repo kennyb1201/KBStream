@@ -112,6 +112,98 @@ class UiUniformityBatchAContractTest {
     }
 
     @Test
+    fun `the Library filter chip keeps a selected chip readable while focused`() {
+        // The same rule as the discover row above, on the strip the report came
+        // from (2026-11-05): the focused, already-selected WATCHLIST chip was a
+        // solid bright pill with no word on it - accent text on the accent wash
+        // it was sitting on. Focus now takes the light label in both states; the
+        // wash, the border and the bold label keep saying "selected".
+        val chip = source("ui/library/LibraryScreen.kt")
+            .substringAfter("internal fun LibraryFilterChip(")
+            .substringBefore("scale = ClickableSurfaceDefaults.scale(")
+        assertTrue(
+            "a focused Library chip must take the light label, selected or not",
+            chip.contains("focusedContentColor = KBTextHi")
+        )
+        assertFalse(
+            "no Library filter chip may draw the accent label over the accent " +
+                "wash - that is the unreadable one",
+            chip.contains("focusedContentColor = if (selected) KBAccent")
+        )
+        assertTrue(
+            "the focused selected chip keeps its deeper wash, so focusing it does " +
+                "not flatten selection into the unselected fill",
+            chip.contains(
+                "focusedContainerColor = if (selected) { KBAccent.copy(alpha = 0.4f) } " +
+                    "else { KBSurfaceRaised }"
+            )
+        )
+        assertTrue(
+            "and the unfocused states are unchanged: the selected chip still shows " +
+                "the accent label on its 28% wash while focus is elsewhere",
+            chip.contains("containerColor = when { selected -> KBAccent.copy(alpha = 0.28f)") &&
+                chip.contains("contentColor = when { selected -> KBAccent")
+        )
+    }
+
+    @Test
+    fun `the Library list rail keeps its focused row readable and fully in view`() {
+        // The fifth site of the accent-on-accent family, and the report that
+        // came with it (2026-11-05): the focused first row showed only its count
+        // line, and the + NEW LIST row was half-cut on the bottom edge.
+        val pane = source("ui/library/LibraryScreen.kt")
+            .substringAfter("private fun ListsPane(")
+            .substringBefore("private fun LibraryPosterCard(")
+        assertFalse(
+            "the row's title must not turn accent when the row is selected - a " +
+                "selected row is already an accent wash, and the two together are one " +
+                "bright pill with no word on it",
+            pane.contains("color = if (selected) KBAccent")
+        )
+        assertTrue(
+            "the title takes the light tone in every state",
+            pane.contains("fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium") &&
+                pane.contains("color = KBTextHi")
+        )
+        assertTrue(
+            "selection still reads from the wash and the focus border, which stay",
+            pane.contains(
+                "focusedContainerColor = if (selected) { KBAccent.copy(alpha = 0.34f) } " +
+                    "else { KBSurfaceRaised }"
+            )
+        )
+        assertTrue(
+            "and the count line keeps the half of the old fix that worked",
+            pane.contains("KBTextHi.copy(alpha = 0.82f)")
+        )
+        // The clipping half: room at both ends INSIDE the clip, and a landing
+        // computed from the DRAWN (scaled + glowing) row instead of its layout
+        // rectangle.
+        assertTrue(
+            "both ends of the rail carry the row room, and the last row can scroll " +
+                "far enough to land on its margin",
+            pane.contains("top = KBFocusRowInset") &&
+                pane.contains("bottom = KBFocusRowInset + 8.dp")
+        )
+        assertTrue(
+            "the rail is the shared landing column, not the default one",
+            pane.contains("RailListColumn(") &&
+                pane.contains("CompositionLocalProvider(LocalBringIntoViewSpec provides")
+        )
+        assertTrue(
+            "and that landing accounts for what this rail actually draws past the " +
+                "row - the small glow and half the row-scale growth",
+            pane.contains("SportsCardBringIntoViewSpec(") &&
+                pane.contains("glowPx = with(density) { KBFocusGlowSmall.toPx() }") &&
+                pane.contains("focusedScale = KBFocusRow")
+        )
+        assertTrue(
+            "the rail's own geometry is untouched: 280dp wide, 8dp between rows",
+            pane.contains("width(280.dp)") && pane.contains("Arrangement.spacedBy(8.dp)")
+        )
+    }
+
+    @Test
     fun `the sync section draws one heading, not two`() {
         val sync = source("ui/settings/SyncSection.kt")
         assertFalse(
