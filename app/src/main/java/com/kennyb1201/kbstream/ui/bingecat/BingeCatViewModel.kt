@@ -106,6 +106,16 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
     /** The screen's entry check: the store is the truth, not the last attempt. */
     fun refreshConnectionState() {
         val next = initialState()
+        // Re-assert an existing session to the account. A grant created before
+        // the shared session existed has no other trigger to publish it, and
+        // the sibling then keeps asking for a device code (see
+        // BingeCatRepository.publishSessionIfConnected). Off the composition
+        // thread, and only ever with a real session in the store.
+        if (next.isConnected) {
+            viewModelScope.launch {
+                runCatching { repository.publishSessionIfConnected() }
+            }
+        }
         if (next.isConnected == _uiState.value.isConnected &&
             next.isMapped == _uiState.value.isMapped &&
             next.needsReapproval == _uiState.value.needsReapproval &&

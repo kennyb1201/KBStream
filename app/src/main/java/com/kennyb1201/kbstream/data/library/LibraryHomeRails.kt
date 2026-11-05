@@ -10,7 +10,6 @@ import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.trakt.TraktListRef
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
-import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.serialization.json.JsonArray

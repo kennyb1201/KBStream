@@ -511,6 +511,28 @@ class BingeCatRepository private constructor(private val context: Context?) {
     }
 
     /**
+     * Re-asserts this device's session to the account, when it has one.
+     *
+     * The session is published at connect, at every refresh and at disconnect -
+     * which covers a device that connected AFTER the account's row existed, but
+     * not one that connected BEFORE it did. A TV whose grant predates the shared
+     * session (or whose one publish was lost) has nothing that would ever
+     * trigger another: the bulk push only runs on sign-in or "Sync now", so the
+     * row stayed local and every sibling kept showing "Device link required" -
+     * the "the BingeCat login isn't syncing" report. Opening the BingeCat page is
+     * proof the viewer is looking at THIS connection, so it re-asserts what this
+     * device holds: the same one-row enqueue connect uses.
+     *
+     * Nothing is published without a session: a blank store is "never connected"
+     * (or a deliberate disconnect, which publishes its own tombstone) and must
+     * never blank the account's copy - see [com.kennyb1201.kbstream.data.sync.BingeCatAuthRules].
+     */
+    fun publishSessionIfConnected() {
+        if (store.read() == null) return
+        publishAuthToSync()
+    }
+
+    /**
      * Publishes this profile's BingeCat session immediately, bypassing the bulk
      * push's "nothing to publish" skip.
      *

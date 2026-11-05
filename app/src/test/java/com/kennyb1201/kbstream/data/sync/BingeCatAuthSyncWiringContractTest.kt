@@ -198,7 +198,38 @@ class BingeCatAuthSyncWiringContractTest {
         )
     }
 
+    @Test
+    fun `a session that predates the account copy asserts itself when the page opens`() {
+        // The publish at connect/refresh/disconnect covers a device that
+        // connected AFTER the row existed. One that connected BEFORE it has no
+        // remaining trigger: the bulk push runs only on sign-in or Sync now, so
+        // its row stayed local and every sibling kept asking for a device code.
+        val assertSession = functionBody(repository, "fun publishSessionIfConnected()")
+        assertTrue(
+            "nothing may be published without a session: $assertSession",
+            assertSession.contains("if (store.read() == null) return")
+        )
+        assertTrue(
+            "and with one, exactly the row connect publishes: $assertSession",
+            assertSession.contains("publishAuthToSync()")
+        )
+        val vm = source(VIEW_MODEL)
+        val refresh = functionBody(vm, "fun refreshConnectionState()")
+        assertTrue(
+            "the page's entry check is where it fires: $refresh",
+            refresh.contains("repository.publishSessionIfConnected()")
+        )
+        assertTrue(
+            "only when this device is actually connected: $refresh",
+            squash(vm).contains(
+                "if (next.isConnected) { viewModelScope.launch { runCatching { " +
+                    "repository.publishSessionIfConnected() } } }"
+            )
+        )
+    }
+
     private companion object {
+        const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/bingecat/BingeCatViewModel.kt"
         const val PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
         const val SUPABASE_SYNC = "com/kennyb1201/kbstream/data/sync/SupabaseSync.kt"
         const val REPOSITORY = "com/kennyb1201/kbstream/data/bingecat/BingeCatRepository.kt"
