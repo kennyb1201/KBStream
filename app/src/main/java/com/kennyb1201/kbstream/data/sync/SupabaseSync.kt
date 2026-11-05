@@ -2323,6 +2323,16 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // And the Library lists pinned to Home, on the same rule plus one
+            // half of its own: a profile that never pinned one publishes
+            // nothing, while a profile that removed its LAST pin still does -
+            // the empty row IS its answer, and skipping it would let a sibling
+            // put the rail back (see LibraryHomeRails.shouldPublish).
+            if (key == PrefsPayloadBuilder.KEY_LIBRARY_HOME_RAILS &&
+                !PrefsPayloadBuilder.hasLibraryHomeRailsToPublish(context)
+            ) {
+                return@forEach
+            }
             // And the hidden titles, on the watched-overrides gate rather than
             // the taste one: "a device that only ever unhid still has something
             // to say", so the test is hides OR removal records, never hides

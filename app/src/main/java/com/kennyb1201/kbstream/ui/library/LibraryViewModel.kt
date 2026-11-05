@@ -13,8 +13,10 @@ import com.kennyb1201.kbstream.data.library.LibraryTombstones
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.TastePlacement
 import com.kennyb1201.kbstream.data.library.TasteSignals
+import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
+import com.kennyb1201.kbstream.data.library.watchlistShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
@@ -963,7 +965,40 @@ class LibraryViewModel(
                     }
                 }
 
-            val lists = localLists + mdbLists + traktLists + bingecatLists
+            // The connected accounts' WATCHLISTS, as rows beside their lists.
+            // A watchlist is the one list every account has, and until now it
+            // had no row in this rail - only the merged WATCHLIST filter - so
+            // it had nothing to pin to Home either (see LibraryHomeRails). The
+            // count is the rows just read, so a row never claims more than the
+            // filter it opens holds.
+            val watchlistLists = buildList {
+                if (simklConnected) {
+                    add(watchlistLibraryList(LibrarySource.SIMKL_WATCHLIST, simklItems.size))
+                }
+                if (mdbListConfigured) {
+                    add(
+                        watchlistLibraryList(
+                            LibrarySource.MDBLIST_WATCHLIST,
+                            mdbListWatchlist.size
+                        )
+                    )
+                }
+                if (traktConnected) {
+                    add(watchlistLibraryList(LibrarySource.TRAKT_WATCHLIST, traktWatchlist.size))
+                }
+                if (bingecatReady) {
+                    add(
+                        watchlistLibraryList(
+                            LibrarySource.BINGECAT_WATCHLIST,
+                            bingecatWatchlist.size
+                        )
+                    )
+                }
+            }
+
+            // Watchlists last, so the lists the viewer made stay at the top of
+            // the rail in the order they always had.
+            val lists = localLists + mdbLists + traktLists + bingecatLists + watchlistLists
 
             if (version != requestVersion) return@launch
 
@@ -1096,11 +1131,26 @@ class LibraryViewModel(
                         )
                     }
                 }
+            // The watchlist rows keep the counts the full refresh gave them:
+            // this path is a local-list mutation, which cannot change what an
+            // account's watchlist holds (and must not drop the rows, or every
+            // rename here would take the pinnable watchlists away until the
+            // next full refresh).
             _uiState.value = _uiState.value.copy(
-                lists = localLists + mdbLists + traktLists + bingecatLists
+                lists = localLists + mdbLists + traktLists + bingecatLists +
+                    _uiState.value.lists.filter { it.source.isWatchlistSource }
             )
         }
     }
+
+    /** One account's watchlist as a row of the personal-lists rail. */
+    private fun watchlistLibraryList(source: LibrarySource, itemCount: Int) = LibraryList(
+        id = watchlistShelfId(source),
+        name = source.watchlistTitle,
+        itemCount = itemCount,
+        source = source,
+        remoteId = WATCHLIST_REMOTE_ID
+    )
 
     private fun loadListItems(list: LibraryList) {
         // Increment, do not just read: switching lists A -> B quickly left both
@@ -1159,6 +1209,14 @@ class LibraryViewModel(
                     listRemoteId = remoteId
                 )
             }
+        }
+
+        if (list.source.isWatchlistSource) {
+            // The rows the WATCHLIST filter already merged for this account:
+            // same objects, so a watchlist opened as a list cannot show a title
+            // the watchlist does not (tombstones and the kids ceiling are
+            // applied where that merge is built).
+            return canonicalWatchlist.filter { it.source == list.source }
         }
 
         val entries = runCatchingCancellable {

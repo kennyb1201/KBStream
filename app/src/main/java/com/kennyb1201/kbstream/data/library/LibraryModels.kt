@@ -90,6 +90,30 @@ enum class LibrarySource(val label: String) {
             BINGECAT_LIST -> "BingeCat"
             else -> label
         }
+
+    /**
+     * True for a source whose whole contribution is one account's WATCHLIST.
+     *
+     * The Library's WATCHLIST filter merges these four into one grid, and that
+     * is still the only place the merge itself is drawn - but each of them is
+     * also a LIST the viewer collects into, so each gets its own row in the
+     * personal-lists rail (see [watchlistShelfId]) and can be pinned to Home
+     * like any hand-made list. MY LIST and the BingeCat saved list are not here:
+     * My List has its own filter, and BingeCat's favourites are read-only.
+     */
+    val isWatchlistSource: Boolean
+        get() = this == TRAKT_WATCHLIST || this == MDBLIST_WATCHLIST ||
+            this == SIMKL_WATCHLIST || this == BINGECAT_WATCHLIST
+
+    /** The heading a watchlist row carries, so four of them can be told apart. */
+    val watchlistTitle: String
+        get() = when (this) {
+            TRAKT_WATCHLIST -> "Trakt watchlist"
+            MDBLIST_WATCHLIST -> "MDBList watchlist"
+            SIMKL_WATCHLIST -> "Simkl watchlist"
+            BINGECAT_WATCHLIST -> "BingeCat watchlist"
+            else -> "Watchlist"
+        }
 }
 
 /**
@@ -102,6 +126,27 @@ enum class LibrarySource(val label: String) {
  * callers test [LibraryList.remoteId] / the source rather than the sign.
  */
 fun traktListShelfId(traktId: Int): Int = Int.MIN_VALUE + traktId.coerceAtLeast(1)
+
+/**
+ * The rail id for one account's WATCHLIST row.
+ *
+ * A watchlist is not one of the account's named lists, so it has no service id
+ * to carry; the row still needs a [LibraryList.id] nothing else can reach (the
+ * lists rail is keyed on it) and a stable identity for its Home pin. Both come
+ * from the SOURCE rather than from the row's slot, so adding or removing a
+ * neighbour cannot renumber it - the same rule [traktListShelfId] follows. The
+ * ids sit at the top of the Int range, clear of Trakt's bottom range, MDBList's
+ * positive ids and the local store's negative ones.
+ */
+fun watchlistShelfId(source: LibrarySource): Int = Int.MAX_VALUE - source.ordinal
+
+/**
+ * The wire id of a watchlist row, used as the Home pin's identity.
+ *
+ * One constant is enough because the pin's key is `source + id`: the source is
+ * already in it, and the value must never collide with a real list's remoteId.
+ */
+const val WATCHLIST_REMOTE_ID = "watchlist"
 
 /**
  * One row in the Library tab. A row is either a whole title (movie or

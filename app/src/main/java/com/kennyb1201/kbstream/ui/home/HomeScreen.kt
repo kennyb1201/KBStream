@@ -57,6 +57,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -146,7 +147,11 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.youtube.isYouTubeIdentityBlocked
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailItems
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
@@ -3200,6 +3205,196 @@ private fun blendPickPreview(pick: BlendPick): MetaPreview =
  */
 // LocalBringIntoViewSpec is still experimental; the enclosing rail column opts
 // in the same way (see BuiltinContinueWatchingRail).
+/**
+ * One Library list the viewer pinned to Home, with its rows already fetched.
+ *
+ * The pin is kept beside the items because the title has to be drawable before
+ * the fetch resolves (and after a fetch that failed): the rail's name is the
+ * list's, not something the service tells us per item.
+ */
+private data class LibraryHomeRailUi(
+    val pin: LibraryHomeRailPin,
+    val items: List<MetaPreview>
+)
+
+/**
+ * The pinned Library lists, loaded off the main thread.
+ *
+ * Re-runs when the pinned set changes: [LibraryHomeRails.pins] is read on each
+ * composition (a small prefs row, the same read the rail below does for other
+ * arrangement data), so pinning a list in Library and backing out to Home shows
+ * the rail without a restart. An empty list is the ordinary state - most
+ * profiles never pin one - so nothing draws and nothing is fetched.
+ */
+@Composable
+private fun rememberLibraryHomeRails(): State<List<LibraryHomeRailUi>> {
+    val context = LocalContext.current
+    val pins = LibraryHomeRails.pins(context)
+    return produceState(initialValue = emptyList(), pins) {
+        value = withContext(Dispatchers.IO) {
+            val tmdb = TmdbRepository.getInstance(context)
+            pins.mapNotNull { pin ->
+                // The Kids Mode ceiling applies here for the same reason it
+                // applies to the Library's own remote rows: the list belongs to
+                // the ACCOUNT, so a kids profile on that account must not see a
+                // pinned list's adult titles on Home.
+                val items = tmdb.kidsFilterMetas(
+                    LibraryHomeRailItems.load(context, pin).mapNotNull { it.homeRailMeta() }
+                )
+                // A list that answered with nothing is not a rail: an empty
+                // heading is a promise Home cannot keep.
+                if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)
+            }
+        }
+    }
+}
+
+/**
+ * One Library row as a rail card.
+ *
+ * The id is what the detail screen is opened by, so it is the SAME id shape the
+ * catalog rails carry: an IMDb id when the row has one (add-ons and every
+ * tracker prefer it), otherwise `tmdb:<id>`. A row with neither cannot be
+ * opened, so it is dropped rather than drawn as a dead card.
+ */
+private fun LibraryItem.homeRailMeta(): MetaPreview? {
+    val imdb = imdbId?.takeIf { it.isNotBlank() }
+    val tmdb = tmdbId?.takeIf { it > 0 }?.let { "tmdb:$it" }
+    val id = imdb ?: tmdb ?: return null
+    return MetaPreview(
+        id = id,
+        type = mediaType,
+        name = title,
+        poster = posterUrl,
+        releaseInfo = year?.toString()
+    )
+}
+
+/**
+ * A Library list, as a Home rail.
+ *
+ * The cards are the Home cards - the same shapes, the same poster overrides,
+ * the same focus registration - because a list the viewer pinned is a rail like
+ * any other, not a second-class row. It has no long-press menu of its own: the
+ * shared poster menu's actions are keyed on a title's ids, not on the list it
+ * was seen in, and a second menu here would be a copy that could drift from it.
+ */
+@Composable
+private fun LibraryListHomeRail(
+    rail: LibraryHomeRailUi,
+    landscapeCards: Boolean,
+    bringIntoViewSpec: BringIntoViewSpec,
+    /** The band reserved under a focused rail is built from its title's box. */
+    onTitleHeight: (Int) -> Unit,
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
+    onFocusedCard: (key: String, requester: FocusRequester) -> Unit,
+    onSelectHero: (MetaPreview) -> Unit,
+    onOpen: (MetaPreview) -> Unit,
+    /** The same watched badges every other rail card carries. */
+    isWatched: (MetaPreview) -> Boolean,
+    isPartiallyWatched: (MetaPreview) -> Boolean
+) {
+    val overridePaths = rememberImageOverridePaths()
+    val cardWidth = if (landscapeCards) HomeLandscapeWidth else HomePosterWidth
+    val cardHeight = if (landscapeCards) HomeLandscapeHeight else HomePosterHeight
+
+    Column(
+        modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
+    ) {
+        SectionTitle(rail.pin.name, onHeight = onTitleHeight)
+
+        CompositionLocalProvider(
+            LocalBringIntoViewSpec provides bringIntoViewSpec
+        ) {
+            LazyRow(
+                contentPadding = PaddingValues(
+                    start = RailHorizontalStartPadding,
+                    end = TvSafeAreaHorizontal,
+                    top = 10.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                itemsIndexed(
+                    items = rail.items,
+                    // The rail is part of the key: the same title can sit in
+                    // two pinned lists, and one card's requester must not
+                    // overwrite the other's (the bug the catalog rails key
+                    // their cards against).
+                    key = { _, meta ->
+                        "librail|" + rail.pin.key + "|" + meta.type + ":" + meta.id
+                    },
+                    contentType = { _, _ -> "library-list-card" }
+                ) { index, meta ->
+                    val requester = remember { FocusRequester() }
+                    val cardKey =
+                        "librail|" + rail.pin.key + "|" + meta.type + ":" + meta.id
+                    DisposableEffect(requester, cardKey) {
+                        cardFocusRequesters[cardKey] = requester
+                        onDispose { cardFocusRequesters.remove(cardKey) }
+                    }
+
+                    val cardModifier = Modifier
+                        .heroSourceElement(meta.type, meta.id)
+                        .homeRailHeadLeftEdgeStop(index == 0)
+                        .focusRequester(requester)
+                        .width(cardWidth)
+                        .height(cardHeight)
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) {
+                                onFocusedCard(cardKey, requester)
+                                onSelectHero(meta)
+                            }
+                        }
+
+                    Box(
+                        modifier = Modifier
+                            .width(cardWidth)
+                            .height(cardHeight + PosterFocusHeadroom)
+                            .padding(end = HomeRailGap),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (landscapeCards) {
+                            LandscapeCard(
+                                // No resolved landscape art for a library row:
+                                // the service's own poster is the backdrop and
+                                // the title is drawn in the corner - the same
+                                // fallback an artwork-less catalog uses, rather
+                                // than a blank tile.
+                                backdropUrl = imageOverrideCardBackdropUrl(
+                                    paths = overridePaths,
+                                    rawId = meta.id,
+                                    fallbackUrl = meta.poster
+                                ),
+                                logoUrl = null,
+                                fallbackTitle = meta.name,
+                                contentDescription = meta.name,
+                                isWatched = isWatched(meta),
+                                isPartiallyWatched = isPartiallyWatched(meta),
+                                onClick = { onOpen(meta) },
+                                modifier = cardModifier
+                            )
+                        } else {
+                            PosterCard(
+                                posterUrl = imageOverridePosterUrl(
+                                    paths = overridePaths,
+                                    rawId = meta.id,
+                                    fallbackUrl = meta.poster
+                                ),
+                                contentDescription = meta.name,
+                                isWatched = isWatched(meta),
+                                isPartiallyWatched = isPartiallyWatched(meta),
+                                onClick = { onOpen(meta) },
+                                modifier = cardModifier
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun BuiltinTopPicksRail(
@@ -5787,6 +5982,41 @@ fun HomeScreen(
         }
     }
 
+    // Library lists the viewer put on Home (see LibraryHomeRails). The rows are
+    // fetched HERE rather than in the ViewModel: the pins are a prefs row, not
+    // part of the catalog build, and a list that cannot be fetched (a service
+    // that is down, a list deleted on the other device) simply does not draw -
+    // it must never turn Home into an error screen for a rail the viewer added.
+    val pinnedLibraryRails by rememberLibraryHomeRails()
+
+    fun androidx.compose.foundation.lazy.LazyListScope.libraryHomeRailItems() {
+        itemsIndexed(
+            items = pinnedLibraryRails,
+            key = { _, rail -> "librail|" + rail.pin.key },
+            contentType = { _, _ -> "library-list-rail" }
+        ) { _, rail ->
+            LibraryListHomeRail(
+                rail = rail,
+                landscapeCards = landscapeCards,
+                bringIntoViewSpec = railCardsBringIntoViewSpec,
+                onTitleHeight = { railTitleHeightPx = it.toFloat() },
+                cardFocusRequesters = railFocusRequesters,
+                onFocusedCard = { cardKey, requester ->
+                    focusedCardRequester = requester
+                    viewModel.lastFocusedRailItemKey = cardKey
+                },
+                onSelectHero = { meta -> selectHero(meta) },
+                onOpen = { meta -> onItemClick(meta) },
+                isWatched = { meta ->
+                    viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                },
+                isPartiallyWatched = { meta ->
+                    viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
+                }
+            )
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -6500,6 +6730,13 @@ fun HomeScreen(
                             }
                         }
                     }
+
+                    // The viewer's own Library lists, after the rails the
+                    // arrangement placed. They are not in that arrangement yet
+                    // (the home manager does not list a library list), so this
+                    // is where they sit: at the end of Home, in the order they
+                    // were put there.
+                    libraryHomeRailItems()
 
                 }
             }

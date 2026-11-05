@@ -411,6 +411,18 @@ object PrefsPayloadBuilder {
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"
+
+    /**
+     * The Library lists pinned to Home (see
+     * com.kennyb1201.kbstream.data.library.LibraryHomeRails).
+     *
+     * A Home row the viewer built, so it travels like the browse chips and the
+     * rail arrangement do - with the same "nothing pinned here publishes
+     * nothing" rule, plus one half those two do not need: removing the last pin
+     * is a deliberate answer that DOES publish, or the sibling's next push would
+     * put the rail back.
+     */
+    const val KEY_LIBRARY_HOME_RAILS = "library_home_rails"
     const val KEY_ADDONS = "addons"
     const val KEY_SIMKL_AUTH = "simkl_auth"
 
@@ -473,6 +485,11 @@ object PrefsPayloadBuilder {
     fun buildAll(context: Context): List<Pair<String, JsonObject>> = listOf(
         KEY_DISPLAY_PREFS to buildDisplayPrefs(context),
         KEY_ADDONS to buildAddons(context),
+        // Skipped by the push when this profile never pinned a list (see
+        // hasLibraryHomeRailsToPublish): an untouched device must not publish
+        // its empty row over the account's rails.
+        KEY_LIBRARY_HOME_RAILS to
+            com.kennyb1201.kbstream.data.library.LibraryHomeRails.buildBlob(context),
         // The bulk push skips this blob when it carries nothing (see
         // SupabaseSync.pushPrefsBlobs) — an empty Simkl blob published by a
         // device that never connected erases the account's session elsewhere.
@@ -554,6 +571,15 @@ object PrefsPayloadBuilder {
             put(BingeCatAuthRules.SIGNED_OUT_FIELD, signedOut)
         }
     }
+
+    /**
+     * True when this profile has something to say about the Library lists on
+     * Home: it has edited the row at least once, including "removed them all".
+     * A device that never pinned anything publishes nothing - see
+     * [com.kennyb1201.kbstream.data.library.LibraryHomeRails.shouldPublish].
+     */
+    fun hasLibraryHomeRailsToPublish(context: Context): Boolean =
+        com.kennyb1201.kbstream.data.library.LibraryHomeRails.shouldPublish(context)
 
     /**
      * True when this profile has something to say about its BingeCat session: a
@@ -1321,6 +1347,8 @@ object PrefsPayloadApplier {
         when (prefKey) {
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS ->
                 applyDisplayPrefs(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_LIBRARY_HOME_RAILS ->
+                applyLibraryHomeRails(context, payload, profileId, live)
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload, profileId)
             PrefsPayloadBuilder.KEY_SIMKL_AUTH ->
                 applySimklAuth(context, payload, profileId, live)
@@ -1358,6 +1386,55 @@ object PrefsPayloadApplier {
         // stores can repaint a screen that is on it: a sibling profile's row is
         // picked up by the next composition after that profile is switched to.
         if (changed && live) _revision.value += 1
+    }
+
+    /**
+     * Pinned Library lists: the blob replaced wholesale, behind the same
+     * last-edit guard the home order and the browse chips use - an older
+     * sibling copy must not revert a pin the viewer just made here.
+     *
+     * An unreadable (or absent) rails array is "nothing to apply", never "clear
+     * them": the applier cannot tell an older payload's missing field from an
+     * intentional empty row, and the empty row has its own valid shape
+     * (`"rails": []`).
+     */
+    private fun applyLibraryHomeRails(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        val rails = com.kennyb1201.kbstream.data.library.LibraryHomeRails
+            .parseBlob(payload) ?: return
+        val prefs = profilePrefs(
+            context,
+            com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNC_STORE,
+            profileId
+        )
+        val remoteUpdated = payloadUpdatedAt(payload)
+        if (!HomeListBlobRules.shouldApply(
+                remoteUpdated,
+                prefs.getLong(
+                    com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
+                    0L
+                )
+            )
+        ) {
+            return
+        }
+        prefs.edit()
+            .putString(
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNC_BLOB_KEY,
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails.encode(rails)
+            )
+            .putLong(
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails.SYNCED_AT_KEY,
+                remoteUpdated ?: System.currentTimeMillis()
+            )
+            .apply()
+        // Home reads the pins while it composes, so a rail adopted from the
+        // account appears without waiting for some other state change.
+        if (live) _revision.value += 1
     }
 
     private fun applyBadgePack(context: Context, payload: JsonObject, profileId: String?) {

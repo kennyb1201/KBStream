@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,10 +51,13 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -258,6 +262,13 @@ fun LibraryScreen(
     // at all for the others; both are wrong now that a list can be renamed here
     // and deleted from the service that holds it, so the press opens a choice.
     var listMenu by remember { mutableStateOf<LibraryList?>(null) }
+    // Bumped whenever a list is put on Home or taken off it, so the rail's own
+    // "ON HOME" marker and the dialog's label re-read the pinned set without
+    // waiting for a refresh of the lists themselves (which does not change).
+    var homeRailRevision by remember { mutableIntStateOf(0) }
+    val pinnedHomeRailKeys = remember(homeRailRevision, state.lists) {
+        LibraryHomeRails.pins(context).mapTo(mutableSetOf()) { it.key }
+    }
 
     // A list waiting for its new name, and one waiting to be deleted from its
     // own source (or from this device, for a local list).
@@ -541,15 +552,16 @@ fun LibraryScreen(
                     loading = state.loading,
                     onListSelect = { viewModel.selectList(it) },
                     onListLongPress = { list ->
-                        // Every manage-list source gets the menu now: rename
-                        // where the API allows it, and a delete that names the
-                        // service when the list lives there. Asked about first
-                        // - a whole list leaving on one stray press is not a
-                        // choice a long press should be able to make.
-                        if (list.source.canManageList) {
-                            listMenu = list
-                        }
+                        // EVERY list row gets the menu now, not only the ones
+                        // this app can rename: "Show on Home" is an answer
+                        // about this viewer's Home and needs no write to the
+                        // service, so a MDBList/Trakt/BingeCat list that cannot
+                        // be renamed here can still become a Home rail. Rename
+                        // and delete stay gated on canManageList (they are
+                        // answered inside the dialog).
+                        listMenu = list
                     },
+                    pinnedHomeRailKeys = pinnedHomeRailKeys,
                     onCreateList = { source, name -> viewModel.createList(source, name) },
                     createSources = listOfNotNull(
                         LibrarySource.LOCAL_LIST,
@@ -628,16 +640,39 @@ fun LibraryScreen(
     }
 
     listMenu?.let { list ->
+        // One pin object for the row, so the label, the write and the rail's
+        // marker all name the same list identity (see libraryHomeRailId).
+        val pin: LibraryHomeRailPin? = libraryHomeRailPinFor(list)
         LibraryListActionsDialog(
             list = list,
+            onHome = pin?.let { LibraryHomeRails.isPinned(context, it) } == true,
             onDismiss = { listMenu = null },
-            onRename = {
+            onToggleHome = {
+                if (pin != null) {
+                    LibraryHomeRails.setPinned(
+                        context,
+                        pin,
+                        !LibraryHomeRails.isPinned(context, pin)
+                    )
+                    homeRailRevision++
+                }
                 listMenu = null
-                listPendingRename = list
             },
-            onDelete = {
-                listMenu = null
-                listPendingDelete = list
+            onRename = if (list.source.canManageList) {
+                {
+                    listMenu = null
+                    listPendingRename = list
+                }
+            } else {
+                null
+            },
+            onDelete = if (list.source.canManageList) {
+                {
+                    listMenu = null
+                    listPendingDelete = list
+                }
+            } else {
+                null
             }
         )
     }
@@ -841,8 +876,10 @@ private fun createSourceLabel(source: LibrarySource): String = when (source) {
 /**
  * What can be done to one list, asked before anything happens.
  *
- * Two rows, each naming its own effect: RENAME (the list keeps its titles) and
- * the delete, whose wording names WHERE it happens - "REMOVE FROM THIS DEVICE"
+ * Every row names its own effect: SHOW ON HOME / HIDE FROM HOME (a Home row
+ * this device draws, which needs no write to the service at all - the one
+ * action available on every list), RENAME (the list keeps its titles), and the
+ * delete, whose wording names WHERE it happens - "REMOVE FROM THIS DEVICE"
  * for a local list, "DELETE FROM TRAKT" and friends for a remote one. The
  * second is the distinction this dialog exists for: the same press used to mean
  * "hide it here" while a service copy survived, and a whole-list delete on a
@@ -854,9 +891,14 @@ private fun createSourceLabel(source: LibrarySource): String = when (source) {
 @Composable
 private fun LibraryListActionsDialog(
     list: LibraryList,
+    /** Whether this list is already a row on Home (the label answers the press). */
+    onHome: Boolean,
     onDismiss: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit
+    onToggleHome: () -> Unit,
+    /** Null for a source whose lists this app cannot rename (renames are the service's). */
+    onRename: (() -> Unit)?,
+    /** Null for the same reason as [onRename] - or when deleting is not offered at all. */
+    onDelete: (() -> Unit)?
 ) {
     val cancelFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
@@ -884,27 +926,45 @@ private fun LibraryListActionsDialog(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                     )
                 }
-                KBCard(onClick = onRename) {
+                // The one action every list has, whatever service holds it:
+                // the rail is Home's arrangement, not the service's, so
+                // nothing has to be writable anywhere for a list to become a
+                // row on Home - which is what makes a read-only watchlist list
+                // and an account's own list behave the same here.
+                KBCard(onClick = onToggleHome) {
                     Text(
-                        text = "RENAME",
+                        text = if (onHome) "HIDE FROM HOME" else "SHOW ON HOME",
                         color = KBTextHi,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                     )
                 }
-                KBCard(onClick = onDelete) {
-                    Text(
-                        text = if (list.source.isLocalList) {
-                            "REMOVE FROM THIS DEVICE"
-                        } else {
-                            "DELETE FROM ${list.source.deleteDestinationLabel.uppercase()}"
-                        },
-                        color = KBAccent,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                    )
+                onRename?.let { rename ->
+                    KBCard(onClick = rename) {
+                        Text(
+                            text = "RENAME",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+                onDelete?.let { delete ->
+                    KBCard(onClick = delete) {
+                        Text(
+                            text = if (list.source.isLocalList) {
+                                "REMOVE FROM THIS DEVICE"
+                            } else {
+                                "DELETE FROM ${list.source.deleteDestinationLabel.uppercase()}"
+                            },
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1104,7 +1164,20 @@ internal fun LibraryFilterChip(
                 selected -> KBAccent
                 focused -> KBTextHi
                 else -> KBTextLo
-            }
+            },
+            // The FOCUSED colors have to be stated too, not inferred from the
+            // `containerColor` above: tv-material3 defaults a focused surface
+            // to the theme's `primary`, and KBStream's primary is the accent -
+            // so focusing a chip painted it solid lime under a near-white label
+            // and the label vanished into it (the "hard to read on hover"
+            // report). Focus is carried by the accent border and the glow on
+            // every other row in the app; the fill stays a raised surface.
+            focusedContainerColor = if (selected) {
+                KBAccent.copy(alpha = 0.4f)
+            } else {
+                KBSurfaceRaised
+            },
+            focusedContentColor = if (selected) KBAccent else KBTextHi
         ),
         scale = ClickableSurfaceDefaults.scale(
             focusedScale = KBFocusChip,
@@ -1358,6 +1431,8 @@ private fun ListsPane(
     loading: Boolean,
     onListSelect: (LibraryList) -> Unit,
     onListLongPress: (LibraryList) -> Unit,
+    /** Keys of the lists already pinned to Home (see LibraryHomeRails). */
+    pinnedHomeRailKeys: Set<String>,
     onCreateList: (LibrarySource, String) -> Unit,
     /**
      * The sources a list can be created on, in the order the chips show them.
@@ -1407,12 +1482,9 @@ private fun ListsPane(
                 // can actually change - a local list, or one of the accounts'
                 // own managed lists. A source with neither (Simkl) gets no
                 // press rather than a menu of refusals.
-                val onRowLongPress: (() -> Unit)? =
-                    if (list.source.canManageList) {
-                        { onListLongPress(list) }
-                    } else {
-                        null
-                    }
+                // Always present: the dialog holds "Show on Home" for every
+                // source, and gates rename/delete itself on canManageList.
+                val onRowLongPress: (() -> Unit) = { onListLongPress(list) }
                 Surface(
                     onClick = { onListSelect(list) },
                     shape = ClickableSurfaceDefaults.shape(
@@ -1424,7 +1496,21 @@ private fun ListsPane(
                             focused -> KBSurfaceRaised
                             else -> KBSurface
                         },
-                        contentColor = KBTextHi
+                        contentColor = KBTextHi,
+                        // Stated, not inherited: the tv-material3 default for a
+                        // focused surface is the theme's `primary`, which here
+                        // is the accent - so a focused list row filled lime and
+                        // its title (near-white) disappeared, leaving only the
+                        // grey count line readable on top of it. This rail was
+                        // the one surface in the app that left that default in
+                        // place; every other row carries focus with the accent
+                        // border and glow over a raised fill.
+                        focusedContainerColor = if (selected) {
+                            KBAccent.copy(alpha = 0.34f)
+                        } else {
+                            KBSurfaceRaised
+                        },
+                        focusedContentColor = KBTextHi
                     ),
                     // A rail row, so it takes the row step of the shared focus
                     // scale -- and the press-in every other row in the app
@@ -1465,10 +1551,23 @@ private fun ListsPane(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val onHome = libraryHomeRailPinFor(list)?.let {
+                            it.key in pinnedHomeRailKeys
+                        } == true
                         Text(
-                            text = "${list.itemCount} titles · $sourceLabel",
+                            text = "${list.itemCount} titles · $sourceLabel" +
+                                if (onHome) " · On Home" else "",
                             style = MaterialTheme.typography.labelSmall,
-                            color = KBTextLo
+                            // Brighter while the row is the one under the remote:
+                            // the count line is the line the photo showed
+                            // surviving on the old lime fill, so it must not be
+                            // the OTHER line that goes dim now that the fill is
+                            // dark again.
+                            color = if (focused || selected) {
+                                KBTextHi.copy(alpha = 0.82f)
+                            } else {
+                                KBTextLo
+                            }
                         )
                     }
                 }
