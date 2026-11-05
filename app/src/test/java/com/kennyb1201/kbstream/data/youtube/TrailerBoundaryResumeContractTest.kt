@@ -34,6 +34,9 @@ import org.junit.Test
 class TrailerBoundaryResumeContractTest {
 
     private val extractor = source(INNER_TUBE)
+    // The picks themselves moved to their own file so the ranking is driven by
+    // unit tests; the exclusion defence lives there now.
+    private val picks = source(PICKS)
     private val launcher = source(LAUNCHER)
     private val player = source(NATIVE_PLAYER)
     private val home = source(HOME_SCREEN)
@@ -69,16 +72,18 @@ class TrailerBoundaryResumeContractTest {
         )
         assertTrue(
             "every pick reads the allowed pools, or one shape slips the exclusion",
-            extractor.contains("pickBestHls(allowedHls)") &&
+            extractor.contains("pickBestHls(allowedHls, PREFERRED_SEPARATE_CLIENT)") &&
                 extractor.contains(
                     "pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)"
                 ) &&
                 extractor.contains("allowedAudio.sortedWith(") &&
-                extractor.contains("allowedProgressive.sortedWith(")
+                extractor.contains(
+                    "pickBest(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)"
+                )
         )
         assertTrue(
             "pickBest's own defence uses the same set",
-            extractor.contains("val eligible = items.filterNot { it.client in excludeClients }")
+            picks.contains("val eligible = items.filterNot { it.client in excludeClients }")
         )
         assertTrue(
             "the single-argument entry point still behaves byte-identically",
@@ -683,6 +688,7 @@ class TrailerBoundaryResumeContractTest {
     private companion object {
         const val YOUTUBE = "com/kennyb1201/kbstream/data/youtube/"
         const val INNER_TUBE = "${YOUTUBE}InnerTubeExtractor.kt"
+        const val PICKS = "${YOUTUBE}TrailerSourcePicks.kt"
         const val LAUNCHER = "${YOUTUBE}TrailerPlayerLauncher.kt"
         const val PO_TRACE = "${YOUTUBE}PoTokenTrace.kt"
         const val NATIVE_PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"

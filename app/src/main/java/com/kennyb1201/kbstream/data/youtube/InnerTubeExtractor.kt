@@ -106,11 +106,21 @@ object InnerTubeExtractor {
     private const val DEFAULT_USER_AGENT = YouTubeClients.DEFAULT_USER_AGENT
 
     /**
-     * Preferred client for adaptive video/audio picks. android_vr used to be
-     * first but its sessions have started returning LOGIN_REQUIRED at higher
-     * rates; android/tv/ios remain the reliable anonymous clients. Every source
-     * this extractor returns carries its client's UA so playback requests
-     * match the signature.
+     * Preferred client for the trailer's FIRST mount: the adaptive video/audio
+     * picks, the HLS manifest pick and the progressive pick all take this
+     * client's source whenever one is usable, and fall back to the rest of the
+     * pool only when it has none. android_vr used to be first but its sessions
+     * have started returning LOGIN_REQUIRED at higher rates; android/tv/ios
+     * remain the reliable anonymous clients. Every source this extractor
+     * returns carries its client's UA so playback requests match the signature.
+     *
+     * The progressive and HLS picks used to rank the WHOLE pool by format score
+     * first, with client priority only as the last tiebreak, so a higher-scored
+     * android_vr source won the first mount and died at ~15 s (2026-11-05
+     * capture, video aHrMFtt40_Q: android_vr progressive, fully tokened, died at
+     * 15.1 s; the android replacement resumed and played to the end). A client
+     * is preferred here, not banned: when it has no usable source the pool is
+     * every eligible client again, android_vr included.
      */
     internal const val PREFERRED_SEPARATE_CLIENT = "android"
 
@@ -123,14 +133,6 @@ object InnerTubeExtractor {
     internal const val KIND_ADAPTIVE = "adaptive"
     internal const val KIND_PROGRESSIVE = "progressive"
 
-    /**
-     * TV playback ceiling for trailers. YouTube serves up to 4K in adaptive
-     * formats; 4K VP9 overwhelms TV hardware decoders (Realtek TCL stutters,
-     * Firestick never buffers enough and gives up). Trailers are hero/inline
-     * content — 1080p is the right tradeoff, and H.264 has far wider hardware
-     * decode coverage than VP9/AV1 on TV SoCs.
-     */
-    private const val MAX_TRAILER_HEIGHT = 1080
     private const val PREFERRED_VIDEO_MIME = "avc"
 
     /**
@@ -153,16 +155,6 @@ object InnerTubeExtractor {
         val fetchedAt: Long = System.currentTimeMillis()
     )
 
-    internal data class StreamCandidate(
-        val client: String,
-        val priority: Int,
-        val url: String,
-        val score: Double,
-        val hasN: Boolean,
-        val height: Int,
-        val ext: String
-    )
-
     /**
      * What one client's player response contributes to the pools.
      *
@@ -183,12 +175,6 @@ object InnerTubeExtractor {
         /** False for a real error status (UNPLAYABLE, ERROR, ...). */
         val playable: Boolean get() = status == null || status == "OK"
     }
-
-    private data class ManifestVariant(
-        val url: String,
-        val height: Int,
-        val bandwidth: Long
-    )
 
     private data class RequestResponse(
         val ok: Boolean,
@@ -446,7 +432,7 @@ object InnerTubeExtractor {
         // seeking without reopening googlevideo URLs at arbitrary byte offsets.
         // HLS manifests are signed for the client that received them, so the
         // manifest fetch (and its segment fetches) must carry that client's UA.
-        val bestHls = pickBestHls(allowedHls)
+        val bestHls = pickBestHls(allowedHls, PREFERRED_SEPARATE_CLIENT)
         if (bestHls != null) {
             Log.d(TAG, "Using HLS trailer manifest (client=${bestHls.first})")
             return PlayableSource.Muxed(
@@ -529,11 +515,13 @@ object InnerTubeExtractor {
                     "falling through to muxed progressive"
             )
         }
-        val bestProgressive = allowedProgressive.sortedWith(
-            compareByDescending<StreamCandidate> { it.score }
-                .thenBy { if (it.hasN) 1 else 0 }
-                .thenBy { it.priority }
-        ).firstOrNull()
+        // The same preferred-client-first shape as the adaptive pick above: the
+        // pool is the preferred (android) client's progressives when it has
+        // any, and every eligible client's only when it does not. Score ranks
+        // WITHIN that pool - it must not be able to put another client's source
+        // first, which is how an android_vr first mount died at ~15 s while
+        // android's own progressive played the trailer through.
+        val bestProgressive = pickBest(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)
 
         val resolvedProgressive = bestProgressive?.let {
             resolveReachableUrl(it.url, userAgentFor(it.client))
@@ -907,62 +895,43 @@ object InnerTubeExtractor {
                 .joinToString(",")
         }
 
-    private fun pickBest(
-        items: List<StreamCandidate>,
-        preferredClient: String,
-        excludeClients: Set<String> = emptySet()
-    ): StreamCandidate? {
-        // Defence in depth: the pools are already filtered by the caller, but
-        // this is the one function that decides what plays, so an excluded
-        // client must never win by being the preferred one.
-        val eligible = items.filterNot { it.client in excludeClients }
-        val preferred = eligible.filter { it.client == preferredClient }
-        val pool = if (preferred.isNotEmpty()) preferred else eligible
-        return pool.sortedWith(
-            compareByDescending<StreamCandidate> { it.score }
-                .thenBy { if (it.hasN) 1 else 0 }
-                .thenBy { it.priority }
-        ).firstOrNull()
-    }
-
     /** UA of the client a candidate URL was signed for (probes must match it). */
     private fun userAgentFor(clientKey: String): String? = YouTubeClients.userAgentFor(clientKey)
 
+    /**
+     * The trailer's HLS manifest, a preferred client's whenever one is usable.
+     *
+     * Within a pool the rule is unchanged: the highest variant at or below the
+     * TV ceiling (then the widest), and that pool's lowest variant as the last
+     * resort when everything in it exceeds the ceiling. What is new is the order
+     * the pools are consulted in - the preferred client's manifests first, then
+     * every manifest - so a taller variant from another client can never be the
+     * first mount while the preferred client has one at all. A client is
+     * demoted, not banned: with no preferred manifest parsed, the whole pool is
+     * ranked exactly as before.
+     *
+     * The ceiling keeps its say across clients: an in-ceiling variant from ANY
+     * client still beats an above-ceiling one from the preferred client, because
+     * an above-ceiling variant can itself be the reason a TV mount fails.
+     */
     private suspend fun pickBestHls(
-        hlsUrls: List<Triple<String, Int, String>>
+        hlsUrls: List<Triple<String, Int, String>>,
+        preferredClient: String
     ): Triple<String, Int, String>? {
-        // Prefer the highest variant at or below the TV ceiling; if every
-        // variant exceeds it (rare), fall back to the lowest available
-        // rather than refusing to play.
-        var best: Pair<ManifestVariant, Triple<String, Int, String>>? = null
-        var lowest: Pair<ManifestVariant, Triple<String, Int, String>>? = null
-        for (entry in hlsUrls) {
-            val manifestUrl = entry.third
+        // Parse each manifest once: the client preference ranks the MANIFESTS,
+        // and a manifest that would not parse is not a usable source for its
+        // client either.
+        val parsed = hlsUrls.mapNotNull { entry ->
             try {
                 // Signed for `entry.first`'s client: fetch its manifest with
                 // that client's UA (see parseHlsManifest comment).
-                val variants = parseHlsManifest(manifestUrl, userAgentFor(entry.first))
-                for (variant in variants) {
-                    // The lowest variant across every manifest is the last-
-                    // resort pick when nothing fits under the ceiling.
-                    if (lowest == null || variant.height < lowest.first.height) {
-                        lowest = variant to entry
-                    }
-                    if (variant.height > MAX_TRAILER_HEIGHT) continue
-                    if (
-                        best == null ||
-                        variant.height > best.first.height ||
-                        (variant.height == best.first.height &&
-                            variant.bandwidth > best.first.bandwidth)
-                    ) {
-                        best = variant to entry
-                    }
-                }
+                entry to parseHlsManifest(entry.third, userAgentFor(entry.first))
             } catch (error: Exception) {
                 Log.w(TAG, "HLS manifest parse failed: ${error.message}")
+                null
             }
-        }
-        return (best ?: lowest)?.second
+        }.filter { it.second.isNotEmpty() }
+        return pickHlsManifest(parsed, preferredClient)
     }
 
     // ── Watch config (api key + visitor data) ─────────────────────────
