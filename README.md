@@ -5,9 +5,9 @@
 
 # KBStream
 
-A media streaming app for Android TV / Fire TV. Discovers movies and series
+A media streaming app for Android TV / Fire TV and phones. Discovers movies and series
 via TMDB, resolves playback through Stremio-style addons and KB
-collections, tracks watching across devices via Simkl, Trakt, Mdblist, and Supabase sync, and
+collections, tracks watching across devices via Simkl, Trakt, MDBList, BingeCat, and Supabase sync, and
 plays it all in a native ExoPlayer-based player (including IPTV live TV with
 EPG).
 
@@ -50,12 +50,35 @@ EPG).
 - **Kids Mode** — per-profile rating ceiling (PG-13 / PG / G "or lower")
   enforced on every content surface: search, discover rails, collections,
   actor filmographies, detail recommendations, and Continue Watching /
-  Upcoming (including account-wide Simkl items). Optional per-profile
+  Upcoming (including account-wide Simkl and BingeCat items). Optional per-profile
   toggles: hide addon management, kid-safe Live TV channel filter, PIN to
   leave the profile, daily watch-time limit, and a bedtime lock — each with
   parent-PIN override where relevant.
-- **Integrations** — Simkl (watch history sync + live scrobbling), Trakt (watch history sync + live scrobbling, Mdblist (watch history sync + live scrobbling)
-  MDBList ratings, Omdb awards, IPTV (M3U + XMLTV EPG), YouTube trailers.
+- **Library** — personal lists, watchlists, a calendar of upcoming episodes,
+  and any list pinned as a Home rail.
+- **Sports Hub** — live scores with watch options that match games to
+  channels.
+- **Free TV** — free US live TV from the iptv-org lineup, with guide data from
+  the built-in guides and the FAST guides (Pluto, Samsung, Plex, Roku).
+- **Ratings & taste** — numeric ratings (1–10) sent to Trakt, Simkl, and
+  MDBList, and thumbs up/down as a local taste signal that feeds the
+  recommendations — a thumbs-up also adds the title to BingeCat favorites.
+- **Offline downloads** — download titles for offline viewing.
+- **TV Home screensaver** — an idle overlay on TV Home that cycles loaded
+  backdrops with the clearlogo and genre; on/off switch and timeout in
+  Settings.
+- **Mobile billboard** — a marquee hero on the phone Home screen cycling
+  trending titles, with Play and Details.
+- **Integrations** — Simkl, Trakt, and MDBList (watch history sync + live
+  scrobbling; MDBList also takes ratings), OMDb awards, IPTV (M3U + XMLTV
+  EPG), YouTube trailers, TorBox (debrid resolution with a cached-only
+  filter).
+- **BingeCat** — the Stremio addon (dynamic catalogs, Because-you-watched
+  rails, lists, search) and the Public API integration: Library lists and
+  watchlist, watch-history tracking, save/unsave titles, thumbs-up adding
+  titles to BingeCat favorites, community public-lists browsing and
+  import, and per-profile mapping that syncs across devices along with
+  the login.
 - **Diagnostics** — Settings → About → Copy diagnostics writes a report of the
   build, device, account and sync health, and of where this session's time
   went: the slowest operations, ranked by name. Network time is filed under the
@@ -65,9 +88,9 @@ EPG).
 
 ## Building
 
-Requirements: JDK 17, Android SDK platform API 37 (with SDK Build Tools 36),
-and Gradle via the wrapper (Gradle 9.8.0, Android Gradle Plugin 9.4.1, Kotlin
-2.4.20, KSP 2.3.12). AGP fetches the platform and build-tools itself once the
+Requirements: JDK 17, Android SDK platform API 37,
+and Gradle via the wrapper (Gradle 9.8.2, Android Gradle Plugin 9.5.0, Kotlin
+2.4.21, KSP 2.3.12). AGP fetches the platform and build-tools itself once the
 SDK licenses are accepted, so only JDK 17 and an Android SDK install are
 strictly needed.
 
@@ -76,6 +99,8 @@ strictly needed.
    ```properties
    TMDB_API_KEY=...
    SIMKL_CLIENT_ID=...
+   TRAKT_CLIENT_ID=...
+   BINGECAT_CLIENT_ID=...
    MDBLIST_API_KEY=...
    SUPABASE_URL=...
    SUPABASE_ANON_KEY=...
@@ -83,6 +108,7 @@ strictly needed.
    ```
 
    Environment variables with the same names work too (that's what CI uses).
+   SUPABASE_PUBLISHABLE_KEY is accepted in place of SUPABASE_ANON_KEY.
 
 2. Build a debug APK:
 
@@ -116,7 +142,8 @@ You do **not** need an NDK on your own machine. The `Build KBStream APK`
 workflow runs the script in a cached step before the APK builds and uploads the
 result as the `media3-ffmpeg-decoder-video` artifact, so every published release
 ships software video decoding. The step after it fails the job if the AAR is
-missing, so a release without one cannot go out unnoticed — **download that
+missing, unless the run was started by hand with `allow_missing_ffmpeg` — so a
+release never ships without software decoding by accident. **Download that
 artifact from any green run and drop it in `libs/`** instead of compiling it
 yourself. The AAR is built from the tag in `MEDIA3_TAG`, which must match the
 media3 version in `app/build.gradle.kts`.
@@ -149,7 +176,7 @@ unpositioned plain text, while the MPV engine renders the same file correctly.
 The second native build in this repo closes that gap with libass itself:
 
 ```sh
-# needs an Android NDK r28, plus autoconf/automake/libtool/pkg-config/meson/ninja
+# needs an Android NDK r28 (r27+ works; r28 recommended), plus autoconf/automake/libtool/pkg-config/meson/ninja
 scripts/build_libass.sh
 # -> app/src/main/jniLibs/{arm64-v8a,armeabi-v7a}/libassjni.so
 ./gradlew assembleDebug
@@ -224,11 +251,10 @@ which is why `MpvVideoOutput`'s GPU path now opens `gpu-next` instead of `gpu`.
 it would silently be the base-layer-only playback the swap exists to remove.
 
 The swap is not source-compatible, and that is the thing to know before editing
-`MpvBackend`: the new AAR reuses the `io.github.abdallahmehiz:mpv-android-lib`
+the engine: the new AAR reuses the `io.github.abdallahmehiz:mpv-android-lib`
 shell (`classes.jar`, `libplayer.so`, `libc++_shared.so`, `libxml2.so`) and only
-swaps the `libmpv.so`/FFmpeg natives, so it exposes `is.xyz.mpv.MPV` — a class —
-where the old one exposed the `MPVLib` singleton. `MpvBackend` holds an instance
-for that reason. (That shell was itself trialled against the `vo=gpu`
+swaps the `libmpv.so`/FFmpeg natives. The engine reaches the library behind one
+seam, `MpvBackend`, and that is the only place the app calls into it. (That shell was itself trialled against the `vo=gpu`
 black-screen failure and removed as a *Maven* dependency, because it produced the
 same black screen — `updateAcquireFence: Did not find frame` repeating, which is
 the platform's libgui frame-timestamp bookkeeping, absent from every native
@@ -240,15 +266,13 @@ Which library an APK carries is named in the log: the engine writes
 `MPV engine up · library=… vo=…` when it comes up, and an attach logs mpv's own
 `wid` (`MPV wid after attach: …`), which splits "the attach did not stick"
 (`wid=0`) from "mpv has the window and the video output renders nothing"
-(`wid!=0`). `MpvAbiConstantsTest` pins the seam from the JVM side: the engine
-names no library, `MpvBackend` is the one file that wraps it, and the mpv ABI
-constants match the linked library.
+(`wid!=0`). `MpvAbiConstantsTest` pins the mpv ABI constants from the JVM side,
+so they match the linked library.
 
 ## Running tests
 
-JVM unit tests cover the Kids Mode rating matrix, legacy value migration, the
-kids catalog invariants, the player's refresh-rate matching, and the background
-workers' retry policies:
+JVM unit tests cover the Kids Mode rating ceiling, the kids catalog vetting,
+the player's refresh-rate matching, and the background workers' retry policies:
 
 ```sh
 ./gradlew testDebugUnitTest
@@ -352,9 +376,9 @@ export KBSTREAM_KEY_PASSWORD=android
 `assembleRelease` is debug-signed too. CI supplies its own keystore.)
 
 - `baselineprofile/` is a test-only module that generates it: it drives the app
-  on the device and writes `app/src/release/generated/baselineProfiles/baseline-prof.txt`,
-  which is committed (`baselineProfile { saveInSrc = true }` in
-  `app/build.gradle.kts`).
+  on the device and writes `app/src/release/generated/baselineProfiles/baseline-prof.txt`
+  (`baselineProfile { saveInSrc = true }` in `app/build.gradle.kts`); it is
+  generated on demand and not kept in the tree.
 - To confirm the profile reached an APK:
   `unzip -l app/build/outputs/apk/release/app-release.apk | grep baseline` —
   it ships as `assets/dexopt/baseline.prof`.
@@ -370,7 +394,8 @@ Re-run it when startup changes, or when a screen on the startup path does.
 
 ```
 app/src/main/java/com/kennyb1201/kbstream/
-  data/            # TMDB, addons, Simkl, MDBList, Trakt, IPTV, Supabase
+  data/            # TMDB, addons, Simkl, MDBList, Trakt, BingeCat, IPTV,
+                   # TorBox/debrid, downloads, sports, YouTube, OMDb, Supabase
                    # sync, profile management, watch history (Room)
   domain/          # stream engine (ranking, auto-select)
   ui/              # Compose for Android TV screens (home, detail, player,
@@ -379,13 +404,14 @@ app/src/main/java/com/kennyb1201/kbstream/
                    # streams, guide, search, library, the genre/studio/decade
                    # browse pages, collections, actor pages, Simkl connect, the
                    # profile picker/editor, add-ons, the catalog builder, the
-                   # sports hub, Settings, viewing stats and imported KB
-                   # collections); see
+                   # sports hub, Settings, viewing stats, downloads, Trakt
+                   # connect, onboarding, and imported KB collections); see
                    # docs/mobile_port.md for status and the deferred-work list
   work/            # background workers (EPG refresh, Simkl sync, addons), plus
                    # WorkPolicies: the retry and reminder-arming decisions they
                    # make, which is the part of this package a JVM test can reach
 baselineprofile/   # baseline profile generator (test-only module, ships nothing)
+.github/           # the Build KBStream APK workflow (gates, tests, lint, publish)
 app/schemas/       # exported Room schema JSON, one per released watch-history
                    # version: the record a Migration is reviewed against.
                    # Watch history is user data (resume points, watched state),
@@ -429,8 +455,15 @@ docs/              # Supabase RLS + Realtime SQL reference
                    #   supabase_realtime.sql -- enable live sync (publication)
                    # mobile_port.md -- the phone port's status, and every item
                    #   deliberately deferred inside a ported screen
+                   # mobile_portrait.md -- portrait browsing on mobile
                    # trakt_integration.md -- Trakt phases A-E1, its Library-tab
                    #   sources, their rules and the three deliberate deferrals
+                   # detail_focus_audit.md -- the TV Detail screen's focus audit
+                   # mobile_hardening_audit.md -- the phone surface audit
+                   # play_listing.md -- Play Store listing copy and assets
+                   # brand/ -- the logo, banner, and store plates (see
+                   #   scripts/render_brand_assets.py)
+                   # index.html -- the docs index page
 ```
 
 ## Notes
