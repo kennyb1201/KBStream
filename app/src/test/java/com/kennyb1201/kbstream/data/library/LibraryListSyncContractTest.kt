@@ -325,10 +325,19 @@ class LibraryListSyncContractTest {
             "label = if (onHome) \"HIDE FROM HOME\" else \"SHOW ON HOME\"",
             "the TV's own wording, so one pin has one name on both form factors"
         )
+        // Pin and unpin are no longer one `!onHome` write: a list can be pinned
+        // under more than one spelling, so Remove drops all of them and Add
+        // writes today's (see pinsNamingList). What the phone must keep is that
+        // it is the same store and the same two answers the TV gives.
         assertContains(
             libraryPhone,
-            "LibraryHomeRails.setPinned(context, pin, !onHome)",
+            "LibraryHomeRails.setPinned(context, pin, true)",
             "pinning from the phone is the same write as from the TV"
+        )
+        assertContains(
+            libraryPhone,
+            "LibraryHomeRails.removePins(context, pinsForRow + pin)",
+            "and removing it drops every spelling of that list's pin"
         )
         // The saved community list is the one exception: its name belongs to its
         // author, so the phone hides rename for it exactly as the TV does.
@@ -535,7 +544,7 @@ class LibraryListSyncContractTest {
     fun `the refresh prunes the rail only from sources that answered`() {
         val vm = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
         val rails = source("com/kennyb1201/kbstream/data/library/LibraryHomeRails.kt")
-        val refresh = vm.substringAfter("fun refresh() {").substringBefore("private fun refreshListsOnly()")
+        val refresh = vm.substringAfter("fun refresh() {").substringBefore("private fun refreshListsOnly(")
         assertContains(
             refresh,
             "var mdbListsAnswered = false",
@@ -609,7 +618,7 @@ class LibraryListSyncContractTest {
     @Test
     fun `a vanished list cannot stay open`() {
         val vm = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
-        val refresh = vm.substringAfter("fun refresh() {").substringBefore("private fun refreshListsOnly()")
+        val refresh = vm.substringAfter("fun refresh() {").substringBefore("private fun refreshListsOnly(")
         assertContains(
             refresh,
             "liveListIds[openList.source.name] ?.contains(libraryHomeRailId(openList)) == false",
@@ -630,7 +639,7 @@ class LibraryListSyncContractTest {
     fun `a list mutation's rail read cannot overwrite a newer answer`() {
         val vm = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
         val body = vm
-            .substringAfter("private fun refreshListsOnly() {")
+            .substringAfter("private fun refreshListsOnly(")
             .substringBefore("/** One account's watchlist as a row")
         assertContains(
             body,

@@ -70,7 +70,9 @@ import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.library.LIBRARY_BROWSE_SCREEN_KEY
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.controlSummary
+import com.kennyb1201.kbstream.data.library.libraryHomeRailIdSpellings
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.pinsNamingList
 import com.kennyb1201.kbstream.data.library.removeActionLabel
 import com.kennyb1201.kbstream.data.library.removeConfirmAction
 import com.kennyb1201.kbstream.data.library.removeConfirmBody
@@ -705,9 +707,24 @@ fun LibraryScreenMobile(
                         subtitle = list.controlSummary
                     ) {
                         val pin = libraryHomeRailPinFor(list)
-                        val onHome = remember(homeRailRevision, list.id, list.source) {
-                            pin != null && LibraryHomeRails.isPinned(context, pin)
+                        // Every pin that names this row, not just the spelling
+                        // this build would write today - the TV's rule, on the
+                        // phone's menu (spec F3, see pinsNamingList).
+                        val pinsForRow = remember(
+                            homeRailRevision,
+                            list.id,
+                            list.source,
+                            list.remoteId,
+                            list.name
+                        ) {
+                            pinsNamingList(
+                                LibraryHomeRails.pins(context),
+                                list.source.name,
+                                libraryHomeRailIdSpellings(list),
+                                list.name
+                            )
                         }
+                        val onHome = pinsForRow.isNotEmpty()
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (list.source.canManageList && !list.liked) {
                                 KBButton(
@@ -725,11 +742,15 @@ fun LibraryScreenMobile(
                                     label = if (onHome) "HIDE FROM HOME" else "SHOW ON HOME",
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    LibraryHomeRails.setPinned(context, pin, !onHome)
-                                    homeRailRevision += 1
-                                    if (!onHome) {
+                                    if (onHome) {
+                                        // Every spelling goes, or the ghost rail
+                                        // stays on Home.
+                                        LibraryHomeRails.removePins(context, pinsForRow + pin)
+                                    } else {
+                                        LibraryHomeRails.setPinned(context, pin, true)
                                         notice = "\"${list.name}\" is now a row on Home."
                                     }
+                                    homeRailRevision += 1
                                     listMenu = null
                                 }
                             }

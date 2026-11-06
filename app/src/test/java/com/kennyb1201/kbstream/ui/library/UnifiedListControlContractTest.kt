@@ -139,15 +139,18 @@ class UnifiedListControlContractTest {
             }
         )
         listOf(
-            "suspend fun createList(name: String)",
-            "suspend fun renameList(ref: String, name: String)",
-            "suspend fun deleteList(ref: String)"
-        ).forEach { header ->
+            "suspend fun createList(name: String)" to "false",
+            // A rename answers what it landed on, so its "never ran" answer is
+            // null rather than false - same promise, one identity older (the
+            // Home pin follows it: see LibraryListRenameRules).
+            "suspend fun renameList(ref: String, name: String)" to "null",
+            "suspend fun deleteList(ref: String)" to "false"
+        ).forEach { (header, neverRan) ->
             val fn = body(bingeCatRepo, header)
             assertTrue("$header must go through the shared write contract: $fn", fn.contains("submitListWrite("))
             assertTrue(
                 "a write that never ran is not a success: $fn",
-                fn.contains("ListWriteResult.Skipped -> false")
+                fn.contains("ListWriteResult.Skipped -> $neverRan")
             )
         }
         val shared = body(bingeCatRepo, "private suspend fun submitListWrite(")

@@ -502,6 +502,51 @@ class HomeViewModel(
         _upNext.asStateFlow()
 
     /**
+     * The show name of every Continue Watching parent this profile's history
+     * holds, keyed by each spelling a card can carry (`upNextIdentifier` of the
+     * parent id, and the row's own id).
+     *
+     * The hidden-titles filter needs a SHOW's name, and a card does not always
+     * arrive with one: a resume row whose season never resolved is built without
+     * a `showTitle`, and the card's own title can then be an episode's. The
+     * parent row the builders read (`WatchHistoryEntity.name`) is the show's, so
+     * it is published here - from the same history flow the rail is built from,
+     * which means a name is already in hand when a card needs it and nothing
+     * reads the database again (see `upNextHiddenIdentity`).
+     */
+    private val _continueWatchingShowNames =
+        MutableStateFlow<Map<String, String>>(
+            emptyMap()
+        )
+
+    val continueWatchingShowNames: StateFlow<Map<String, String>> =
+        _continueWatchingShowNames.asStateFlow()
+
+    /**
+     * Re-publishes the name map from one history read. A full replace, so a
+     * profile switch cannot carry the previous profile's names into this one.
+     */
+    private fun publishContinueWatchingShowNames(
+        rows: List<WatchHistoryEntity>
+    ) {
+        val names =
+            buildMap<String, String> {
+                rows.forEach { row ->
+                    val name =
+                        row.name.trim().takeIf { it.isNotEmpty() }
+                            ?: return@forEach
+                    upNextIdentifier(row.parentId)
+                        ?.let { identifier -> put(identifier, name) }
+                    put(row.id, name)
+                }
+            }
+
+        if (names != _continueWatchingShowNames.value) {
+            _continueWatchingShowNames.value = names
+        }
+    }
+
+    /**
      * Upcoming episodes: one entry per CAUGHT-UP show whose TMDB detail carries
      * a future "next episode to air", plus the next UNAIRED episode of every
      * show this profile is caught up on but which is not on Continue Watching.
@@ -5584,6 +5629,12 @@ Log.d(
                     // abandoned episode.
                     val history =
                         dropSupersededResumeRows(rawHistory)
+
+                    // The hidden-titles filter's name leg (see
+                    // upNextHiddenIdentity): published from the same rows the
+                    // cards are built from, so a card that arrived without a
+                    // show title still has the show's name to be matched by.
+                    publishContinueWatchingShowNames(rawHistory)
 
                     val requestVersion =
                         nextUpNextRequestVersion()

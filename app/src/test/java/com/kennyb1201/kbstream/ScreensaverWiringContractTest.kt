@@ -180,10 +180,16 @@ class ScreensaverWiringContractTest {
                             continueWatchingMenu == null &&
                             upcomingMenu == null &&
                             posterMenu == null &&
-                            browseShortcutMenu == null
+                            browseShortcutMenu == null &&
+                            !heroTrailerPlaying
                     """
                 )
             )
+        )
+        assertTrue(
+            "and a PLAYING hero trailer gates it too: watching one produces no key " +
+                "presses, so the overlay used to arm over the trailer and stop it",
+            squash(home).contains("!heroTrailerPlaying")
         )
         assertTrue(
             "returning to Home (from Settings included) has to pick up a changed pref",

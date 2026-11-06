@@ -53,6 +53,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -153,6 +154,7 @@ import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.key
+import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
@@ -1360,7 +1362,16 @@ private fun HomeHero(
     // brings no metadata at all, and left on the bottom anchor its mark (or the
     // genre/decade name standing in for one) floats in the lower third of an
     // otherwise empty panel.
-    centerLogo: Boolean = false
+    centerLogo: Boolean = false,
+    /**
+     * Whether a trailer is PLAYING on this hero, reported on every change (see
+     * [heroTrailerPlaying] for what counts). Home's screensaver gate holds on
+     * it: a trailer watched without touching the remote must not be covered by
+     * the idle overlay. Reported rather than read from above because the state
+     * belongs to the player mounted down here, while the gate lives in
+     * HomeScreen above the whole page.
+     */
+    onTrailerPlayingChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val title = meta?.name ?: preview.name
@@ -1416,6 +1427,32 @@ private fun HomeHero(
     // position from a previous session.
     var resolvedTrailer by remember(trailerKey) {
         mutableStateOf<HeroTrailerPlayback?>(null)
+    }
+
+    // The mounted trailer has drawn a frame. Keyed by the playback instance, so
+    // a replacement (a retry, a resume re-arm) starts unpainted again and the
+    // crossfade cannot reveal an empty surface.
+    var trailerFrameShown by remember(resolvedTrailer) {
+        mutableStateOf(false)
+    }
+
+    // What Home's idle gate reads. Deliberately NOT `trailerPlaying` above: that
+    // one is "a trailer is wanted and has a key", which stays true through a
+    // hold, a failed resolve and the ended backdrop, so it would hold the overlay
+    // off forever (spec §2, settler 4). Mounted + painted is playing; every other
+    // state is not (see heroTrailerPlaying).
+    val trailerOnScreen = heroTrailerPlaying(
+        mounted = resolvedTrailer != null,
+        frameRendered = trailerFrameShown
+    )
+    LaunchedEffect(trailerOnScreen) {
+        onTrailerPlayingChange(trailerOnScreen)
+    }
+    // A hero that leaves the composition mid-trailer (navigating to a title,
+    // switching to a folder) must not leave the gate held on a player that no
+    // longer exists.
+    DisposableEffect(Unit) {
+        onDispose { onTrailerPlayingChange(false) }
     }
 
     // Identical replays spent on this trailer, against MAX_IDENTICAL_REPLAYS.
@@ -2109,7 +2146,10 @@ private fun HomeHero(
                                 // The same key the trailer.death line records, so
                                 // the watchdog's fire line joins to it.
                                 videoId = trailerKey,
-                                onFirstFrame = { firstFrameRendered = true },
+                                onFirstFrame = {
+                                    firstFrameRendered = true
+                                    trailerFrameShown = true
+                                },
                                 // The clip's own clock: the ordinary failure
                                 // callback carries a position but no duration,
                                 // and the death plan needs the length.
@@ -2995,7 +3035,10 @@ private fun HomeHeroHost(
     // True while something covers the hero (the TV screensaver): the trailer
     // stops through the same autoPlayTrailer switch its own settings toggle
     // uses, so there is no second stop path to keep in step.
-    trailerSuppressed: Boolean = false
+    trailerSuppressed: Boolean = false,
+    // The same trailer's own playing state, reported back up: the screensaver's
+    // arm gate needs it and nothing else on this screen does.
+    onTrailerPlayingChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -3171,6 +3214,7 @@ private fun HomeHeroHost(
             // A browse chip's hero is its mark or its name and nothing else, so
             // it sits in the middle of the panel rather than at the bottom.
             centerLogo = heroBrowse != null,
+            onTrailerPlayingChange = onTrailerPlayingChange,
             // One animation per settled item. A folder or a browse chip brings
             // its own art with it (or has none to wait for), so those settle
             // immediately; a catalog title waits for the resolve that publishes
@@ -4785,23 +4829,34 @@ fun HomeScreen(
         }
     }
     val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
+    // The show name of every Continue Watching parent this profile's history
+    // holds, for a card that arrived without one (see upNextHiddenIdentity).
+    val cwShowNames by
+        viewModel.continueWatchingShowNames.collectAsStateWithLifecycle()
     // A hidden show's Continue Watching / Up Next cards come from history and
     // from Simkl rather than from the rails above, so they are filtered here
     // too. (The Upcoming rail's schedule is a separate flow and is filtered at
     // its own read below.)
-    val upNext = remember(upNextRaw, hiddenTitleKeys) {
-        upNextRaw.filterNot { item ->
-            HiddenTitles.hides(
-                hiddenTitleKeys,
-                item.parentType
-                    ?: if (item.season != null) "series" else "movie",
-                item.showTitle ?: item.title,
-                null,
-                item.parentId,
-                item.id
-            )
-        }
+    //
+    // The identity is the CARD's, widened (see upNextHiddenIdentity): the rails
+    // twenty lines up dropped the hidden title from the same key set while this
+    // filter kept its CW card, because a card names its show with
+    // (parentType, show title, ids) chosen for the rail, and those three can
+    // each miss where the rail meta's own (type, name, year, id) hit.
+    val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames) {
+        upNextRaw.map { item -> item to item.hiddenDecision(hiddenTitleKeys, cwShowNames) }
     }
+    val upNext = remember(cwFilterPass) {
+        cwFilterPass.filterNot { (_, decision) -> decision.hidden }.map { (item, _) -> item }
+    }
+    // What the filter decided, for COPY DIAGNOSTICS - after composition, so a
+    // capture can say which identity each card was matched by. Kept for the
+    // cards it KEPT too: a kept card whose name matches a hidden entry is the
+    // next investigation's starting point (spec F2, see CwFilterTrace).
+    val cwFilterLines = remember(cwFilterPass) {
+        cwFilterPass.map { (_, decision) -> decision.line }
+    }
+    SideEffect { CwFilterTrace.recordAll(cwFilterLines) }
     val upcomingScheduleRaw by
         viewModel.upcomingSchedule.collectAsStateWithLifecycle()
     // ...and the Upcoming rail's own schedule is filtered here too. It is a
@@ -5362,6 +5417,15 @@ fun HomeScreen(
         mutableStateOf<FocusRequester?>(null)
     }
 
+    // Whether the hero is PLAYING a trailer right now, reported by the hero
+    // itself (see its onTrailerPlayingChange). Two jobs, and they are the two
+    // halves of the reported bug: it holds the arm gate while a trailer is on
+    // screen (F1), and its falling edge restarts the idle wait, because the last
+    // key press is stale by the time a long trailer ends (F2).
+    var heroTrailerPlaying by remember {
+        mutableStateOf(false)
+    }
+
     // What Home could show right now, for the arm decision and for the idle
     // wait's resolve pass. CANDIDATES, not slides: each one still needs the
     // clean (textless-ranked) backdrop the pass resolves, because a rail item's
@@ -5410,6 +5474,10 @@ fun HomeScreen(
     // means they are mid-task, not idle. A pool with no backdrop+clearlogo
     // title (all of them, on an add-on that ships neither) is the same answer
     // as switched off - Home simply stays Home, with no empty state to explain.
+    //
+    // And not while the hero is PLAYING a trailer: watching one is the opposite
+    // of idle, and it produces no key presses to push the deadline out, so the
+    // overlay used to arm over it and then stop it (field, TV, 2026-11-05).
     val screensaverArmed =
         screensaverEnabled &&
             homeResumed &&
@@ -5419,7 +5487,33 @@ fun HomeScreen(
             continueWatchingMenu == null &&
             upcomingMenu == null &&
             posterMenu == null &&
-            browseShortcutMenu == null
+            browseShortcutMenu == null &&
+            !heroTrailerPlaying
+
+    // The falling edge of the trailer is activity that produced no key press:
+    // the wait restarts from the moment the picture returns to its backdrop
+    // rather than arming the overlay the instant the trailer ends (F2). One
+    // write, and only on that edge - see screensaverIdleClockAfterTrailer.
+    // Written in a side effect rather than in a LaunchedEffect on purpose: the
+    // wait loop below reads this clock on its very first statement, and the
+    // restart has to have landed before that loop relaunches on the same frame
+    // the gate opens again. Effects are dispatched after the composition's side
+    // effects, so the edge is reset before the wait reads it, whatever order
+    // the two are declared in.
+    var screensaverTrailerWasPlaying by remember {
+        mutableStateOf(false)
+    }
+    SideEffect {
+        if (screensaverTrailerWasPlaying != heroTrailerPlaying) {
+            screensaverLastKeyAt = screensaverIdleClockAfterTrailer(
+                wasPlaying = screensaverTrailerWasPlaying,
+                playing = heroTrailerPlaying,
+                nowMs = SystemClock.uptimeMillis(),
+                lastKeyAtMs = screensaverLastKeyAt
+            )
+            screensaverTrailerWasPlaying = heroTrailerPlaying
+        }
+    }
 
     fun exitScreensaver() {
         screensaverVisible = false
@@ -6113,7 +6207,10 @@ fun HomeScreen(
                 // A trailer heard under the overlay would be audio from a
                 // screen the viewer is not looking at: the hero's own stop
                 // path, not a second player control.
-                trailerSuppressed = screensaverVisible
+                trailerSuppressed = screensaverVisible,
+                // ...and the reverse signal: a playing trailer holds the
+                // overlay off until it ends (see screensaverArmed).
+                onTrailerPlayingChange = { heroTrailerPlaying = it }
             )
 
             // KB parity: the rows list gets the custom vertical
@@ -6856,13 +6953,20 @@ fun HomeScreen(
                 // show off every screen, so the show's own id and the row's
                 // stream key both go in (a card with no parent id still
                 // hides itself from Continue Watching).
-                hideTarget = hideTarget(
-                    menuItem.showTitle ?: menuItem.title,
-                    menuItem.parentType
-                        ?: if (menuItem.season != null) "series" else "movie",
-                    menuItem.poster,
-                    listOf(menuItem.parentId, menuItem.id)
-                ),
+                //
+                // And the keys are the FILTER's own (see upNextHiddenIdentity),
+                // so hide and match agree: a title hidden from this card is a
+                // title the widened filter recognises on the next frame.
+                hideTarget = menuItem.hiddenIdentity(cwShowNames).let { identity ->
+                    hideTarget(
+                        identity.title ?: menuItem.title,
+                        identity.mediaType,
+                        menuItem.poster,
+                        // Minus this device's history row id: the hidden set is
+                        // synced, and a row id means nothing on a sibling.
+                        identity.ids.filter { it != menuItem.historyRowId }
+                    )
+                },
                 // No "Add to Library" / "Add to list" here: these cards are
                 // an in-progress episode, and the library actions belong to
                 // the SHOW - they live on the show's own poster menu (the

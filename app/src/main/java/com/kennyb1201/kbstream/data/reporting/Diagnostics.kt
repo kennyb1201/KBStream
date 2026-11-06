@@ -150,6 +150,14 @@ object Diagnostics {
         SportsTier1Trace.block()?.lines()?.forEach { line -> report.appendLine(line) }
         artLine()?.let { report.appendLine(it) }
         heroArtLine()?.let { report.appendLine(it) }
+        // What the hidden-titles filter decided for each Continue Watching card,
+        // and the identity it decided by. The rails log the same title's meta id
+        // and drop it correctly, so a hidden title surviving on CW could not be
+        // explained from a capture: the card's own (type, show title, ids) is
+        // built from history and tracker feeds, and may name the show
+        // differently from the rail beside it (see [CwFilterTrace] and the
+        // `cw.filter:` spec). Absent until Home has filtered a rail.
+        CwFilterTrace.lines().forEach { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see

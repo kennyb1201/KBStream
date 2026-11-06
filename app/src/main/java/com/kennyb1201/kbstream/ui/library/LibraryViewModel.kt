@@ -1,13 +1,16 @@
 package com.kennyb1201.kbstream.ui.library
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.titleOwnedByAnotherProfile
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
+import com.kennyb1201.kbstream.data.library.LibraryListRename
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LibraryTombstones
@@ -455,6 +458,10 @@ class LibraryViewModel(
      * The row is repainted ONLY after a success, and the rail is re-read after
      * that: a rename the account refused (a list that is not the viewer's) must
      * not leave a name on the TV that the service does not have.
+     *
+     * AND the pin follows in the same breath (spec F1): a pinned list renamed
+     * here used to keep the pin it was given, name and id both, which draws the
+     * renamed rail and, underneath it, the old pin's rail with nothing in it.
      */
     fun renameList(list: LibraryList, name: String) {
         val trimmed = name.trim()
@@ -472,43 +479,51 @@ class LibraryViewModel(
         }
         viewModelScope.launch {
             val appContext = getApplication<Application>()
+            // The source's own rename, and the identity it landed on: null is a
+            // rename that did not happen, and then nothing - the pin included -
+            // may change (spec F1 step 3).
             val renamed = when (list.source) {
                 LibrarySource.LOCAL_LIST -> LocalLibraryStore.renameList(
                     appContext,
                     list.id,
                     trimmed
-                )
+                ).let { if (it) LibraryListRename() else null }
 
                 LibrarySource.TRAKT_LIST -> list.remoteId?.let { id ->
                     withContext(Dispatchers.IO) {
                         runCatchingCancellable {
                             traktRepository.renameList(id, trimmed)
-                        }.getOrDefault(false)
+                        }.getOrNull()
                     }
-                } ?: false
+                }
 
                 LibrarySource.MDBLIST_LIST -> withContext(Dispatchers.IO) {
                     runCatchingCancellable {
                         MdbListClient.renameList(appContext, list.id, trimmed)
                     }.getOrDefault(false)
-                }
+                }.let { if (it) LibraryListRename() else null }
 
                 LibrarySource.BINGECAT_LIST -> list.remoteId?.let { ref ->
                     withContext(Dispatchers.IO) {
                         runCatchingCancellable {
                             bingecatRepository.renameList(ref, trimmed)
-                        }.getOrDefault(false)
+                        }.getOrNull()
                     }
-                } ?: false
+                }
 
-                else -> false
+                else -> null
             }
-            if (!renamed) {
+            if (renamed == null) {
                 noteListAction(
                     "Couldn't rename \"${list.name}\" on ${list.locationLabel}."
                 )
                 return@launch
             }
+            // F1: the rail names the list it is a rail FOR, in the same breath
+            // as the rename - the way the delete path unpins in the same breath
+            // as the delete. One write, on the pre-rename identity, and nothing
+            // at all when the list was never pinned.
+            val renamedPin = repinRenamedList(appContext, list, trimmed, renamed.remoteId)
             val state = _uiState.value
             val sameList = { candidate: LibraryList ->
                 candidate.id == list.id && candidate.source == list.source
@@ -523,8 +538,43 @@ class LibraryViewModel(
                 pushDisplay()
             }
             if (list.source == LibrarySource.LOCAL_LIST) return@launch
-            refreshListsOnly()
+            refreshListsOnly(keepPin = renamedPin)
         }
+    }
+
+    /**
+     * Points [list]'s Home rail at the identity it has now that it was renamed.
+     *
+     * [newRemoteId] is what the rename itself answered (see [LibraryListRename]);
+     * null means the id did not change, so the pin keeps the one it has and only
+     * its title is rewritten - the same call either way (spec F1 step 2).
+     *
+     * The ids to match on are the ones the list could be pinned under BEFORE the
+     * rename: the service id the rename addressed it by, and the rail's numeric
+     * fallback. A list that was never pinned changes nothing, and a failed store
+     * write costs the rail, not the Library row.
+     */
+    private fun repinRenamedList(
+        context: Context,
+        list: LibraryList,
+        newName: String,
+        newRemoteId: String?
+    ): LibraryHomeRailPin {
+        val previousIds = buildSet {
+            list.remoteId?.takeIf { it.isNotBlank() }?.let { add(it) }
+            add("id:" + list.id)
+        }
+        val renamedPin = LibraryHomeRailPin(
+            source = list.source.name,
+            id = newRemoteId?.takeIf { it.isNotBlank() } ?: libraryHomeRailId(list),
+            name = newName
+        )
+        runCatching {
+            LibraryHomeRails.repinAfterRename(context, renamedPin, previousIds)
+        }.onFailure {
+            Log.w(TAG, "Home rail re-pin after rename failed: ${it.message}")
+        }
+        return renamedPin
     }
 
     /**
@@ -1338,10 +1388,15 @@ class LibraryViewModel(
      * mutation's answer is the newer truth, and the refresh's publish is skipped
      * rather than allowed to overwrite it.
      */
-    private fun refreshListsOnly() {
+    private fun refreshListsOnly(keepPin: LibraryHomeRailPin? = null) {
         val version = ++requestVersion
         viewModelScope.launch {
             val appContext = getApplication<Application>()
+            // Each leg below is also the answer to "which lists still exist",
+            // so it says whether it ANSWERED: the pin prune at the end of this
+            // path (spec F2) may only drop a rail for a source that answered
+            // (see withoutVanishedPins), and a failed or unconfigured read must
+            // never read as "the list is gone".
             val localLists = LocalLibraryStore.userLists(appContext)
             val mdbListConfigured = MdbListClient.isConfigured(appContext)
             val mdbLists = if (mdbListConfigured) {
@@ -1386,9 +1441,11 @@ class LibraryViewModel(
             // local-list mutation costs no request - and a BingeCat create or
             // delete (which drops that cache) re-reads here, which is the only
             // way the new/removed list reaches the rail in the same breath.
-            val bingecatLists = runCatchingCancellable {
+            val bingecatReadAt = System.currentTimeMillis()
+            val bingecatSnapshot = runCatchingCancellable {
                 bingecatRepository.snapshot()
-            }.getOrNull()?.lists.orEmpty()
+            }.getOrNull()
+            val bingecatLists = bingecatSnapshot?.lists.orEmpty()
                 .mapIndexedNotNull { index, list ->
                     list.name.takeIf { it.isNotBlank() }?.let { name ->
                         LibraryList(
@@ -1410,6 +1467,51 @@ class LibraryViewModel(
                 }
                 return@launch
             }
+
+            // The ids each source still has, for the pin prune below - and the
+            // same rule the full refresh's map follows: only a source that
+            // ANSWERED is in here, and only when this path read its WHOLE set.
+            //
+            // BingeCat qualifies when the snapshot was FETCHED during this pass:
+            // a rename drops its cache, so the read right after one is the
+            // site's answer, while a cached snapshot from before the rename
+            // still names the old ref and would prune the pin the rename just
+            // wrote.
+            //
+            // MDBList and Trakt are ABSENT, exactly as they are in the full
+            // refresh's map: the reads here are the account's own lists, and the
+            // liked/saved community lists are not part of this path. Counting
+            // them as "live" would prune every pinned saved list - and their
+            // renames do not need the prune at all, because F1 takes the new id
+            // from the rename's own answer. Local lists are absent for the same
+            // reason the full refresh leaves them out: their pins follow the
+            // deletion tombstones (dropLocalPins), not a lists read.
+            val liveListIds = buildMap {
+                if (bingecatSnapshot != null && bingecatSnapshot.listsComplete &&
+                    bingecatSnapshot.refreshedAtMs >= bingecatReadAt
+                ) {
+                    put(
+                        LibrarySource.BINGECAT_LIST.name,
+                        bingecatLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                    )
+                }
+            }
+            // The pin the rename in this breath just wrote is kept even if this
+            // read has not caught up with it yet: the pin is the newer answer,
+            // and dropping the rail because a list read lagged the write would
+            // be the fix un-doing itself.
+            val liveForPrune = keepPin?.let { pin ->
+                liveListIds[pin.source]?.let { live ->
+                    liveListIds + (pin.source to (live + pin.id))
+                } ?: liveListIds
+            } ?: liveListIds
+
+            // F2: this refresh is a rename's own read, so it prunes in the same
+            // breath - not at the next launch, where the launch reconcile's
+            // fresh-snapshot guard may decline to prune and the ghost rail
+            // survives. Best-effort, like the full refresh's.
+            runCatching { LibraryHomeRails.reconcilePins(appContext, liveForPrune) }
+                .onFailure { Log.w(TAG, "Home rail reconcile failed: ${it.message}") }
 
             // The watchlist rows keep the counts the full refresh gave them:
             // this path is a local-list mutation, which cannot change what an

@@ -38,6 +38,59 @@ internal fun screensaverIdleTimeoutMs(minutes: Int): Long =
     minutes.coerceIn(1, 60) * 60_000L
 
 /**
+ * Whether the hero's trailer counts as PLAYING for the idle gate.
+ *
+ * Mounted AND drawing a frame, and nothing else. Field (TV, 2026-11-05): "the
+ * screensaver opens and interrupts trailers playing" - the arm gate knew about
+ * menus and the top bar and nothing about the trailer, so a long hero trailer
+ * watched without touching the remote outlived the idle timeout and the overlay
+ * armed over it (and then stopped it, through the suppression path that already
+ * existed for exactly that cover).
+ *
+ * Both halves are load-bearing, in opposite directions:
+ *
+ *  - a trailer with NO source mounted is not playing. That covers the pre-warm,
+ *    a resolve in flight, the identity hold (a cold mint with nothing to mount),
+ *    a ladder that gave up, and the backdrop after ENDED. Holding the gate for
+ *    any of those would wedge Home awake on a hero that will never play -
+ *    settler 4, and the case a `trailerKey != null` test would have got wrong.
+ *  - a source mounted but with no frame drawn yet is not playing either: the
+ *    pooled player's surface is an unpainted rectangle at that point and the
+ *    backdrop is still the picture on screen (see HomeHero's crossfade).
+ *
+ * There is no pause to consider on the TV hero - the only pause is the ACTIVITY
+ * pausing, which already clears `homeResumed` and with it the whole gate.
+ */
+internal fun heroTrailerPlaying(
+    mounted: Boolean,
+    frameRendered: Boolean
+): Boolean = mounted && frameRendered
+
+/**
+ * The idle clock after the hero's trailer-playing state changes.
+ *
+ * The falling edge - the trailer ended, failed out, or the viewer stopped it -
+ * restarts the wait from [nowMs], because the last key press is stale by the end
+ * of a long trailer: nothing about watching a four-minute trailer is "idle", and
+ * a wait measured from the press before it would find `remaining <= 0` and arm
+ * the overlay the instant the picture returned to its backdrop. This is the same
+ * restart `exitScreensaver` gives its own dismissing press.
+ *
+ * Every other report - the rising edge, and any read that does not change the
+ * state - leaves the clock alone. Continuously bumping it while playing would
+ * turn the timeout into "time since the trailer started" and drift the deadline
+ * on every state read; and a rising edge deliberately does not reset either,
+ * because starting a trailer is not a press (the key handler already records
+ * real ones).
+ */
+internal fun screensaverIdleClockAfterTrailer(
+    wasPlaying: Boolean,
+    playing: Boolean,
+    nowMs: Long,
+    lastKeyAtMs: Long
+): Long = if (wasPlaying && !playing) nowMs else lastKeyAtMs
+
+/**
  * Whether [this] title can be a slide: it has its own clearlogo.
  *
  * The logo is the one piece of art Home already owns, and the one the corner

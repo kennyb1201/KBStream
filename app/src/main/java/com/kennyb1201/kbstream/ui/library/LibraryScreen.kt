@@ -64,8 +64,9 @@ import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.controlAttribution
 import com.kennyb1201.kbstream.data.library.controlSummary
-import com.kennyb1201.kbstream.data.library.key
+import com.kennyb1201.kbstream.data.library.libraryHomeRailIdSpellings
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.pinsNamingList
 import com.kennyb1201.kbstream.data.library.removeActionLabel
 import com.kennyb1201.kbstream.data.library.removeConfirmAction
 import com.kennyb1201.kbstream.data.library.removeConfirmBody
@@ -281,8 +282,13 @@ fun LibraryScreen(
     // "ON HOME" marker and the dialog's label re-read the pinned set without
     // waiting for a refresh of the lists themselves (which does not change).
     var homeRailRevision by remember { mutableIntStateOf(0) }
-    val pinnedHomeRailKeys = remember(homeRailRevision, state.lists) {
-        LibraryHomeRails.pins(context).mapTo(mutableSetOf()) { it.key }
+    // The pins as they stand. Both readers - the row's "· On Home" and the
+    // menu's one toggle - look up EVERY spelling a list can be pinned under
+    // (see pinsNamingList): a pin written as `id:<n>` before the row carried a
+    // service id names the same list, and reading only today's spelling made
+    // the row say it was not on Home while its rail sat on Home.
+    val homeRailPins = remember(homeRailRevision, state.lists) {
+        LibraryHomeRails.pins(context)
     }
 
     // A list waiting for its new name, and one waiting to be deleted from its
@@ -576,7 +582,7 @@ fun LibraryScreen(
                         // answered inside the dialog).
                         listMenu = list
                     },
-                    pinnedHomeRailKeys = pinnedHomeRailKeys,
+                    homeRailPins = homeRailPins,
                     onCreateList = { source, name -> viewModel.createList(source, name) },
                     createSources = listOfNotNull(
                         LibrarySource.LOCAL_LIST,
@@ -658,17 +664,31 @@ fun LibraryScreen(
         // One pin object for the row, so the label, the write and the rail's
         // marker all name the same list identity (see libraryHomeRailId).
         val pin: LibraryHomeRailPin? = libraryHomeRailPinFor(list)
+        // Every pin that names this row, not just the spelling this build would
+        // write today: a list pinned as `id:<n>` (before the row carried a
+        // service id) or left behind under an older id reads as ON Home here, so
+        // the toggle offers Remove instead of a second Add - the tap that drew
+        // the second rail (spec F3).
+        val pinsForRow = remember(homeRailRevision, list.id, list.source, list.remoteId, list.name) {
+            pinsNamingList(
+                LibraryHomeRails.pins(context),
+                list.source.name,
+                libraryHomeRailIdSpellings(list),
+                list.name
+            )
+        }
         LibraryListActionsDialog(
             list = list,
-            onHome = pin?.let { LibraryHomeRails.isPinned(context, it) } == true,
+            onHome = pinsForRow.isNotEmpty(),
             onDismiss = { listMenu = null },
             onToggleHome = {
                 if (pin != null) {
-                    LibraryHomeRails.setPinned(
-                        context,
-                        pin,
-                        !LibraryHomeRails.isPinned(context, pin)
-                    )
+                    if (pinsForRow.isEmpty()) {
+                        LibraryHomeRails.setPinned(context, pin, true)
+                    } else {
+                        // Remove drops EVERY spelling, or the ghost stays.
+                        LibraryHomeRails.removePins(context, pinsForRow + pin)
+                    }
                     homeRailRevision++
                 }
                 listMenu = null
@@ -1462,8 +1482,11 @@ private fun ListsPane(
     loading: Boolean,
     onListSelect: (LibraryList) -> Unit,
     onListLongPress: (LibraryList) -> Unit,
-    /** Keys of the lists already pinned to Home (see LibraryHomeRails). */
-    pinnedHomeRailKeys: Set<String>,
+    /**
+     * The pins as they stand, for the row's "· On Home" marker - read through
+     * `pinsNamingList` so every spelling of a list's pin counts.
+     */
+    homeRailPins: List<LibraryHomeRailPin>,
     onCreateList: (LibrarySource, String) -> Unit,
     /**
      * The sources a list can be created on, in the order the chips show them.
@@ -1606,9 +1629,12 @@ private fun ListsPane(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        val onHome = libraryHomeRailPinFor(list)?.let {
-                            it.key in pinnedHomeRailKeys
-                        } == true
+                        val onHome = pinsNamingList(
+                            homeRailPins,
+                            list.source.name,
+                            libraryHomeRailIdSpellings(list),
+                            list.name
+                        ).isNotEmpty()
                         Text(
                             // Count and source from the one wording module, which
                             // names the OWNER of a saved community list as well as

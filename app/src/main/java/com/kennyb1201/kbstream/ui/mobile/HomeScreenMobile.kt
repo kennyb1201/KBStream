@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -93,6 +94,7 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
@@ -166,6 +168,8 @@ import com.kennyb1201.kbstream.ui.home.UpNextBadge
 import com.kennyb1201.kbstream.ui.home.UpNextItem
 import com.kennyb1201.kbstream.ui.home.UpcomingEpisode
 import com.kennyb1201.kbstream.ui.home.formatTimeLeft
+import com.kennyb1201.kbstream.ui.home.hiddenDecision
+import com.kennyb1201.kbstream.ui.home.hiddenIdentity
 import com.kennyb1201.kbstream.ui.home.upNextEpisodeLabel as tvUpNextEpisodeLabel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerDisplayName
 import com.kennyb1201.kbstream.ui.kb.HomeEntry
@@ -353,20 +357,26 @@ fun HomeScreenMobile(
         }
 
         val upNextRaw by viewModel.upNext.collectAsStateWithLifecycle()
+        // The show name of every Continue Watching parent this profile's history
+        // holds, for a card that arrived without one (see upNextHiddenIdentity).
+        val cwShowNames by
+            viewModel.continueWatchingShowNames.collectAsStateWithLifecycle()
         // Continue Watching comes from history and Simkl rather than from the
-        // rails, so it is filtered here as well (see HomeScreen).
-        val upNext = remember(upNextRaw, hiddenTitleKeys) {
-            upNextRaw.filterNot { item ->
-                HiddenTitles.hides(
-                    hiddenTitleKeys,
-                    item.parentType ?: if (item.season != null) "series" else "movie",
-                    item.showTitle ?: item.title,
-                    null,
-                    item.parentId,
-                    item.id
-                )
-            }
+        // rails, so it is filtered here as well (see HomeScreen) - the same
+        // decision, from the same card identity, because this is the screen the
+        // hidden-title report came from: the rails dropped the show and this
+        // row kept it.
+        val cwFilterPass = remember(upNextRaw, hiddenTitleKeys, cwShowNames) {
+            upNextRaw.map { item -> item to item.hiddenDecision(hiddenTitleKeys, cwShowNames) }
         }
+        val upNext = remember(cwFilterPass) {
+            cwFilterPass.filterNot { (_, decision) -> decision.hidden }.map { (item, _) -> item }
+        }
+        // For COPY DIAGNOSTICS, after composition (spec F2, see CwFilterTrace).
+        val cwFilterLines = remember(cwFilterPass) {
+            cwFilterPass.map { (_, decision) -> decision.line }
+        }
+        SideEffect { CwFilterTrace.recordAll(cwFilterLines) }
         val upcomingRaw by viewModel.upcomingSchedule.collectAsStateWithLifecycle()
         // The Upcoming rail's schedule is its own flow - the filter on upNext
         // does not reach it - so a hidden show's next episode used to surface
@@ -1174,6 +1184,7 @@ fun HomeScreenMobile(
                     logo = item.clearLogo
                 )
                 val isWatched = viewModel.watchedKey(meta.id, mediaType) in watchedKeys
+                val hideIdentity = item.hiddenIdentity(cwShowNames)
                 val hidesTitle = rememberHidesEpisodeTitle(
                     inProgress = item.startPositionMs > 0
                 )
@@ -1256,11 +1267,16 @@ fun HomeScreenMobile(
                             viewModel.removeFromContinueWatching(item)
                         }
                     ),
+                    // The filter's own identity, both ways: the keys this hide
+                    // stores are the keys the rail matches on the next frame
+                    // (see upNextHiddenIdentity).
                     hideTarget = hideTarget(
-                        item.showTitle ?: item.title,
-                        mediaType,
+                        hideIdentity.title ?: item.title,
+                        hideIdentity.mediaType,
                         item.poster,
-                        listOf(item.parentId, item.id)
+                        // Minus this device's history row id: the hidden set is
+                        // synced, and a row id means nothing on a sibling.
+                        hideIdentity.ids.filter { it != item.historyRowId }
                     ),
                     onDismiss = { continueWatchingMenu = null }
                 )

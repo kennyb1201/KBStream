@@ -627,6 +627,78 @@ internal fun upNextTitleKey(item: UpNextItem): String =
         ?: "title:${upNextMediaType(item.parentType)}:"
 
 /**
+ * This card's pass through the hidden-titles filter (see
+ * [upNextHiddenDecision] for the rule and why the identity had to widen).
+ *
+ * The only part that belongs to the rail rather than to the rule is the lookup:
+ * a card that arrived without a show title takes its show's name from the
+ * parent row, which HomeViewModel publishes off the same history read these
+ * cards are built from (see `continueWatchingShowNames`). Both spellings a card
+ * can carry are tried - the parent id as the rail keys it, and the history row
+ * id it was built from.
+ */
+internal fun UpNextItem.hiddenDecision(
+    hiddenKeys: Set<String>,
+    showNamesFromHistory: Map<String, String>
+): UpNextHiddenDecision =
+    upNextHiddenDecision(
+        hiddenKeys = hiddenKeys,
+        parentType = parentType,
+        title = title,
+        showTitle = showTitle,
+        episodeTitle = episodeTitle,
+        season = season,
+        episode = episode,
+        parentId = parentId,
+        id = id,
+        tmdbId = tmdbId,
+        historyRowId = historyRowId,
+        showNameFromHistory = historyShowName(showNamesFromHistory)
+    )
+
+/**
+ * The same identity, for the other direction: the long-press "Hide everywhere"
+ * on a Continue Watching card stores its keys from this (see the card menus in
+ * HomeScreen / HomeScreenMobile).
+ *
+ * Both directions have to agree, or the settler that hides a title from its own
+ * CW card breaks in exactly the case this fix widens: the old menu stored a TMDB
+ * id as "movie::tmdb:n" (its own `season != null` guess) and the widened filter
+ * then asked as "series::tmdb:n", so the hide would leave the card on screen.
+ * One rule, two callers.
+ */
+internal fun UpNextItem.hiddenIdentity(
+    showNamesFromHistory: Map<String, String>
+): UpNextHiddenIdentity =
+    upNextHiddenIdentity(
+        parentType = parentType,
+        title = title,
+        showTitle = showTitle,
+        episodeTitle = episodeTitle,
+        season = season,
+        episode = episode,
+        parentId = parentId,
+        id = id,
+        tmdbId = tmdbId,
+        historyRowId = historyRowId,
+        showNameFromHistory = historyShowName(showNamesFromHistory)
+    )
+
+/**
+ * The show name the card is missing, from its parent row's name - tried under
+ * both spellings the card carries (the rail's parent key and the history row
+ * id). Null when this profile's history holds no row for the card (a tracker
+ * card, typically), which leaves the name leg to the card's own `showTitle`.
+ */
+private fun UpNextItem.historyShowName(
+    showNamesFromHistory: Map<String, String>
+): String? =
+    parentId
+        ?.let { upNextIdentifier(it) }
+        ?.let { showNamesFromHistory[it] }
+        ?: historyRowId?.let { showNamesFromHistory[it] }
+
+/**
  * True when this card came from a TRACKER account (Simkl, MDBList, Trakt)
  * rather than from this profile's own watch history.
  *

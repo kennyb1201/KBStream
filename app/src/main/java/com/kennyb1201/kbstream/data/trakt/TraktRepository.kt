@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.library.LibraryListRename
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListDirectory
@@ -1647,19 +1648,26 @@ class TraktRepository private constructor(private val context: Context?) {
      * body, and Trakt keeps their saved values (see [TraktListWriteRequest]). A
      * list that is not the viewer's own - a public list someone else made, or a
      * list this account only follows - is refused by the server and comes back
-     * here as false, which is the honest answer: nothing was renamed.
+     * here as null, which is the honest answer: nothing was renamed.
+     *
+     * A success carries the list's id AFTER the rename, because Trakt derives a
+     * list's slug from its name: the id a Home pin was made of can move under a
+     * rename, and only this answer says where it moved to (see
+     * [LibraryListRename]).
      */
-    suspend fun renameList(listId: String, name: String): Boolean {
+    suspend fun renameList(listId: String, name: String): LibraryListRename? {
         val trimmed = name.trim()
-        if (listId.isBlank() || trimmed.isEmpty()) return false
-        if (!TraktConfig.isConfigured) return false
-        val token = validAccessToken() ?: return false
-        if (!guard.tryAcquire()) return false
+        if (listId.isBlank() || trimmed.isEmpty()) return null
+        if (!TraktConfig.isConfigured) return null
+        val token = validAccessToken() ?: return null
+        if (!guard.tryAcquire()) return null
         val response = runCatchingCancellable {
             api.updateList("Bearer $token", listId, TraktListWriteRequest(name = trimmed))
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return null
         noteRetryAfter(response)
-        return response.isSuccessful
+        if (!response.isSuccessful) return null
+        val slug = response.body()?.ids?.slug?.takeIf { it.isNotBlank() }
+        return LibraryListRename(slug)
     }
 
     /**

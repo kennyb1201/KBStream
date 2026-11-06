@@ -103,6 +103,53 @@ object LibraryHomeRails {
     }
 
     /**
+     * Re-points a list's pin at the identity it has now that it was renamed.
+     *
+     * The same breath as the rename, the way the delete path unpins in the
+     * same breath as the delete: [setPinned] alone could only ever reach the
+     * pin whose key survived the rename, and a service that derives the id from
+     * the name (Trakt's slug, BingeCat's ref) leaves the old pin pointing at a
+     * list that no longer answers. [previousIds] is why the old pin is still
+     * found - see [repinnedAfterRename].
+     *
+     * ONE write for the remove-old/add-new pair: a sibling reading the account
+     * row mid-rename must never see two pins for one list, or it would draw the
+     * second rail this fix exists to prevent. Returns true when the store
+     * changed; no pin for the list, or an identical rewrite, writes nothing (a
+     * rename must never CREATE a pin).
+     */
+    fun repinAfterRename(
+        context: Context,
+        renamed: LibraryHomeRailPin,
+        previousIds: Set<String>
+    ): Boolean {
+        val current = pins(context)
+        val updated = repinnedAfterRename(current, renamed, previousIds)
+        if (updated == current) return false
+        write(context, updated)
+        return true
+    }
+
+    /**
+     * Drops [spellings] in one write.
+     *
+     * What the toggle's Remove needs once a list can be pinned under more than
+     * one spelling (see [pinsNamingList]): removing only the spelling this build
+     * would write today leaves the ghost rail exactly where it was. Publishing is
+     * the point, as it is for every other pin edit: the sibling loses the rail
+     * too.
+     */
+    fun removePins(context: Context, spellings: Collection<LibraryHomeRailPin>): Boolean {
+        if (spellings.isEmpty()) return false
+        val keys = spellings.mapTo(mutableSetOf()) { it.key }
+        val current = pins(context)
+        val kept = current.filterNot { it.key in keys }
+        if (kept.size == current.size) return false
+        write(context, kept)
+        return true
+    }
+
+    /**
      * Drops the pins of the local lists in [deletedListIds], as a local edit.
      *
      * Called from [LocalLibraryStore.deleteList], so the pin goes in the same

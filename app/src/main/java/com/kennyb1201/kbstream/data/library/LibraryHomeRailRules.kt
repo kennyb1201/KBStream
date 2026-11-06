@@ -57,6 +57,19 @@ internal fun libraryHomeRailId(list: LibraryList): String =
     list.remoteId?.takeIf { it.isNotBlank() } ?: ("id:" + list.id)
 
 /**
+ * Every id a pin for [list] can be found under: the one this build would write
+ * today, and the rail's numeric fallback.
+ *
+ * Both are live pin keys in the field. A row is pinned under `remoteId` once the
+ * source's lists read has one, but an older pin - or one written from a row whose
+ * `remoteId` was missing that day - carries `id:<n>` instead, and the two name
+ * the same list. The toggle reads all of them (see `pinsNamingList`) rather than
+ * deciding the row is not on Home and adding a second rail.
+ */
+internal fun libraryHomeRailIdSpellings(list: LibraryList): Set<String> =
+    setOf(libraryHomeRailId(list), "id:" + list.id)
+
+/**
  * The pin [list] would add, or null when the row cannot be a rail.
  *
  * A row with no name cannot title a rail, so it is not pinnable at all rather

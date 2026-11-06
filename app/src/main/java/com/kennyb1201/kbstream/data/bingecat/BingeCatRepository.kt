@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.library.LibraryListRename
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -1118,19 +1119,32 @@ class BingeCatRepository private constructor(private val context: Context?) {
         }
     }
 
-    /** Renames one user list by its own `ref` (`lists:write`). */
-    suspend fun renameList(ref: String, name: String): Boolean {
+    /**
+     * Renames one user list by its own `ref` (`lists:write`).
+     *
+     * A success answers with the list's ref AFTER the rename when the answer
+     * carries one: a Home pin is keyed on that ref, and a service that derives
+     * it from the name moves the pin's key under a rename. Null is a rename that
+     * did not land, and nothing about the list's rail may change either (see
+     * [LibraryListRename]).
+     */
+    suspend fun renameList(ref: String, name: String): LibraryListRename? {
         val trimmed = name.trim()
-        if (ref.isBlank() || trimmed.isEmpty()) return false
+        if (ref.isBlank() || trimmed.isEmpty()) return null
         val body = BingeCatListPatchRequest(name = trimmed)
         return when (
             val result = submitListWrite("list rename $ref") { token, _ ->
                 service.patchList("Bearer $token", ref, body)
             }
         ) {
-            ListWriteResult.Skipped -> false
-            ListWriteResult.Failed -> false
-            is ListWriteResult.Accepted -> listWriteLanded(result.body)
+            ListWriteResult.Skipped -> null
+            ListWriteResult.Failed -> null
+            is ListWriteResult.Accepted -> {
+                val answer = result.body
+                if (!listWriteLanded(answer)) return null
+                val renamedRef = (answer as? BingeCatListResponse)?.list?.ref
+                LibraryListRename(renamedRef?.takeIf { it.isNotBlank() })
+            }
         }
     }
 

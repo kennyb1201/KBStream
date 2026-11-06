@@ -192,4 +192,78 @@ class ScreensaverRulesTest {
             SCREENSAVER_IDLE_POLL_MS in 250L..5_000L
         )
     }
+
+    /**
+     * Field (TV, 2026-11-05): "the screensaver opens and interrupts trailers
+     * playing". The gate knew about menus and the top bar and nothing about the
+     * trailer; the idle clock only knew about key presses, and a trailer watched
+     * without touching the remote produced none. So a trailer longer than the
+     * timeout was covered by the overlay - which then stopped it through the
+     * suppression path that existed for exactly that cover. The interruption was
+     * the ARMING.
+     */
+    @Test
+    fun `only a mounted trailer that has drawn a frame is playing`() {
+        assertTrue(
+            "a trailer on screen is the case the gate exists for",
+            heroTrailerPlaying(mounted = true, frameRendered = true)
+        )
+        assertFalse(
+            "mounted but unpainted is a black rectangle with the backdrop still over it",
+            heroTrailerPlaying(mounted = true, frameRendered = false)
+        )
+        assertFalse(
+            "no source is a pre-warm, a resolve in flight, a hold, or the ended " +
+                "backdrop - none of which may hold Home awake (settler 4)",
+            heroTrailerPlaying(mounted = false, frameRendered = false)
+        )
+    }
+
+    @Test
+    fun `the wait restarts from the moment playback ends, and only then`() {
+        val pressed = 1_000L
+        val ended = 400_000L
+        assertEquals(
+            "a long trailer's last key press is stale: the wait starts at its end, " +
+                "not at the press before it, or the overlay arms the instant the " +
+                "picture returns to its backdrop",
+            ended,
+            screensaverIdleClockAfterTrailer(
+                wasPlaying = true,
+                playing = false,
+                nowMs = ended,
+                lastKeyAtMs = pressed
+            )
+        )
+        assertEquals(
+            "the rising edge must not reset: starting a trailer is not a press",
+            pressed,
+            screensaverIdleClockAfterTrailer(
+                wasPlaying = false,
+                playing = true,
+                nowMs = ended,
+                lastKeyAtMs = pressed
+            )
+        )
+        assertEquals(
+            "and a report that changes nothing must not drift the deadline either",
+            pressed,
+            screensaverIdleClockAfterTrailer(
+                wasPlaying = true,
+                playing = true,
+                nowMs = ended,
+                lastKeyAtMs = pressed
+            )
+        )
+        assertEquals(
+            "a still-idle Home keeps the clock it had",
+            pressed,
+            screensaverIdleClockAfterTrailer(
+                wasPlaying = false,
+                playing = false,
+                nowMs = ended,
+                lastKeyAtMs = pressed
+            )
+        )
+    }
 }
