@@ -61,10 +61,11 @@ enum class PublicListDirectory(
 /**
  * One public list, as a card and as the detail screen draw it.
  *
- * [ref] is the identity every later call is addressed by: Trakt's list slug
- * (falling back to its numeric id) and MDBList's numeric list id. It is the
- * card's key as well, so a save's phase is tracked against the same identity the
- * list is opened by.
+ * [ref] is the identity every later call is addressed by: the list's NUMERIC id,
+ * for both vendors (Trakt's items and like endpoints are `/lists/{id}` and its
+ * docs say "You must use an integer id"; a slug there 404s). It is the card's key
+ * as well, so a save's phase is tracked against the same identity the list is
+ * opened by.
  *
  * [officialSlug] is MDBList's official-list route (`/lists/official/{slug}/
  * items`); an official list has a numeric id like any other and can be liked

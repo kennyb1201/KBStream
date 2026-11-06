@@ -36,8 +36,11 @@ class TraktListRefParserTest {
             "trakt.tv/lists/12345" to "12345",
             "lists/12345" to "12345",
             "  https://trakt.tv/lists/12345?trakt_return_to=/home#top  " to "12345",
-            // A slug-addressed public list takes the same branch: the id field
-            // carries the slug and Trakt's id-only endpoint accepts either.
+            // A slug-addressed public list still parses the same way: whatever
+            // follows `lists` is kept verbatim. Trakt's id-only endpoints do NOT
+            // accept a slug - that is the 404 the public-list screens hit - but
+            // a KB source can name one, and the parser's job is the address, not
+            // the endpoint's opinion of it.
             "https://trakt.tv/lists/my-list" to "my-list"
         ).forEach { (raw, listId) ->
             assertEquals(

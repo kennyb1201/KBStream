@@ -1332,9 +1332,9 @@ class TraktRepository private constructor(private val context: Context?) {
     }
 
     /**
-     * One public list's titles, readable BEFORE it is saved - Trakt addresses
-     * any user's list by (owner, slug) or by the list id alone, so there is no
-     * import-first hole here.
+     * One public list's titles, readable BEFORE it is saved - the items endpoint
+     * takes a list's numeric id, which every public list carries
+     * ([PublicListCard.ref] is exactly that), so there is no import-first hole.
      */
     suspend fun publicListTitles(card: PublicListCard): PublicListsAnswer<List<PublicListTitle>> {
         if (!TraktConfig.isConfigured || !hasToken()) return PublicListsAnswer.NotConnected
@@ -1473,13 +1473,20 @@ class TraktRepository private constructor(private val context: Context?) {
     /**
      * One wire list as the card the surface draws.
      *
-     * A list with no addressable id is dropped: every later call (like, titles)
-     * is addressed by it, so a card that cannot be opened is worse than no card -
+     * The card's ref is the list's NUMERIC Trakt id and nothing else. Both calls
+     * that use it are `/lists/{id}` - the items read and the like write - and the
+     * docs describe that segment as "Trakt ID ... Example: 55", with "You must use
+     * an integer id" on the sibling list read. A slug there is a different
+     * namespace and answers 404 on both halves, so it is never the address even
+     * when the wire carries one.
+     *
+     * A list with no numeric id is dropped: every later call (like, titles) is
+     * addressed by it, so a card that cannot be opened is worse than no card -
      * the same rule [userLists] applies to the Library rail.
      */
     private fun TraktPublicList.toPublicCard(rowLikes: Int?): PublicListCard? {
         val displayName = name?.takeIf { it.isNotBlank() } ?: return null
-        val ref = ids?.slug?.takeIf { it.isNotBlank() } ?: ids?.trakt?.toString() ?: return null
+        val ref = ids?.trakt?.toString() ?: return null
         return PublicListCard(
             vendor = PublicListVendor.TRAKT,
             ref = ref,

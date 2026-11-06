@@ -377,6 +377,49 @@ class PublicListsWiringContractTest {
         }
     }
 
+    @Test
+    fun `a Trakt card is addressed by its numeric id, never its slug`() {
+        // Both calls behind a card are /lists/{id}, and Trakt's docs say "You must
+        // use an integer id". A slug there 404s on both halves of every public
+        // list - what the screen painted as "Trakt refused this request for this
+        // account" - and on the like write behind SAVE.
+        val trakt = read(TRAKT_REPOSITORY)
+        val card = memberBody(trakt, "private fun TraktPublicList.toPublicCard(")
+        assertTrue(
+            "the card's ref must be the numeric id: it is the only form the items " +
+                "read and the like write accept",
+            card.contains("val ref = ids?.trakt?.toString() ?: return null")
+        )
+        assertFalse(
+            "the slug must never be the address, even when the wire carries one",
+            card.contains("ids?.slug")
+        )
+        assertTrue(
+            "the titles read, both halves and the like all take the card's ref, so " +
+                "the one ref rule reaches every call it addresses",
+            trakt.contains("readPublicListHalf(token, card.ref, \"movies\")") &&
+                trakt.contains("readPublicListHalf(token, card.ref, \"shows\")") &&
+                trakt.contains("api.likeList(\"Bearer \$token\", ref)")
+        )
+    }
+
+    @Test
+    fun `a list both owned and liked still draws one Library row`() {
+        // The own-list read addresses a row by its slug; a liked card now carries
+        // the numeric id. Matching only one form would draw two rows for one list,
+        // with a hard delete promised on one and an unlike on the other.
+        val vm = read(LIBRARY_VM)
+        assertTrue(
+            "the owned-list read must keep both address forms for the liked-card check",
+            vm.contains("traktOwnedRefs += remoteId") &&
+                vm.contains("traktId.takeIf { it > 0 }?.let { traktOwnedRefs += it.toString() }")
+        )
+        assertTrue(
+            "and the liked leg must drop a card the account already owns",
+            vm.contains(".filterNot { card -> card.ref in traktOwnedRefs }")
+        )
+    }
+
     private companion object {
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
         const val NAV_SERIALIZATION = "com/kennyb1201/kbstream/NavStateSerialization.kt"

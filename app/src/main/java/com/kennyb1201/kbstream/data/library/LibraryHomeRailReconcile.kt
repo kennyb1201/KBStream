@@ -4,6 +4,7 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import kotlinx.coroutines.delay
@@ -29,6 +30,10 @@ import kotlinx.coroutines.delay
  * of [liveListIds] and prunes nothing (see [withoutVanishedPins]), because an
  * outage reported as "these lists are gone" would delete a working rail on this
  * device and publish that mistake to the account.
+ *
+ * What is "live" is the Library rail's own answer, saved community lists
+ * included: a pin can name a list the viewer liked rather than one they own,
+ * and only the source's full set can say whether that list still exists.
  */
 object LibraryHomeRailReconcile {
 
@@ -73,6 +78,12 @@ object LibraryHomeRailReconcile {
      * The ids are [libraryHomeRailId]'s, the same helper the Library rail and
      * the pin itself use, so a list cannot be known by one name here and
      * another there.
+     *
+     * A Trakt source answers with BOTH of its reads or with neither: a saved
+     * community list is a Library row on the same rail as an own list (the
+     * Library's full refresh reads them together for the same reason), so an
+     * own-lists answer with the liked read failed would read every pinned saved
+     * list as gone.
      */
     private suspend fun liveListIds(
         context: Context,
@@ -83,8 +94,14 @@ object LibraryHomeRailReconcile {
         if (LibrarySource.TRAKT_LIST.name in wanted) {
             val trakt = TraktRepository.getInstance(context)
             if (trakt.isConfigured() && trakt.hasToken()) {
-                runCatchingCancellable { trakt.userLists() }.getOrNull()?.let { lists ->
-                    live[LibrarySource.TRAKT_LIST.name] = lists.mapNotNullTo(mutableSetOf()) { list ->
+                val own = runCatchingCancellable { trakt.userLists() }.getOrNull()
+                // Only a Loaded answer is a statement about which lists exist:
+                // NotConnected / Failed / Blocked mean this source did not
+                // answer, and the map then leaves its pins alone.
+                val liked = runCatchingCancellable { trakt.likedPublicLists() }.getOrNull()
+                    ?.let { answer -> (answer as? PublicListsAnswer.Loaded)?.value }
+                if (own != null && liked != null) {
+                    val ids = own.mapNotNullTo(mutableSetOf()) { list ->
                         val traktId = list.ids?.trakt ?: 0
                         val remoteId = list.ids?.slug
                             ?: traktId.takeIf { it > 0 }?.toString()
@@ -99,6 +116,13 @@ object LibraryHomeRailReconcile {
                             )
                         )
                     }
+                    // A saved community list is a row on the same rail, so its
+                    // pin has to be counted as live or every launch would prune
+                    // it. The card's ref IS the id that row's pin carries (the
+                    // Library builds the row's `remoteId` from it), which is why
+                    // this needs no LibraryList of its own.
+                    liked.mapTo(ids) { card -> card.ref }
+                    live[LibrarySource.TRAKT_LIST.name] = ids
                 }
             }
         }

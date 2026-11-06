@@ -1104,6 +1104,12 @@ class LibraryViewModel(
             }
 
             var traktListsAnswered = false
+            // The refs a liked card is matched against below. An own list is
+            // addressed by its slug here, while a liked card carries the numeric
+            // id (the only form `lists/{id}` accepts), so both forms of every
+            // owned list are kept - or a list that is both owned and liked would
+            // draw two rows with two different promises behind their delete.
+            val traktOwnedRefs = HashSet<String>()
             val traktLists = if (traktConnected) {
                 runCatchingCancellable {
                     traktRepository.userLists().mapNotNull { list ->
@@ -1111,6 +1117,8 @@ class LibraryViewModel(
                         val remoteId = list.ids?.slug ?: traktId.takeIf { it > 0 }?.toString()
                         val name = list.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                         if (remoteId.isNullOrBlank()) return@mapNotNull null
+                        traktOwnedRefs += remoteId
+                        traktId.takeIf { it > 0 }?.let { traktOwnedRefs += it.toString() }
                         LibraryList(
                             id = traktListShelfId(traktId),
                             name = name,
@@ -1147,7 +1155,7 @@ class LibraryViewModel(
                     // the read above, with its hard-delete meaning; drawing it
                     // again would offer two rows for one list with two different
                     // promises behind their delete.
-                    .filterNot { card -> traktLists.any { it.remoteId == card.ref } }
+                    .filterNot { card -> card.ref in traktOwnedRefs }
                     .map { card ->
                         LibraryList(
                             id = likedListShelfId(PublicListVendor.TRAKT.wire, card.ref),

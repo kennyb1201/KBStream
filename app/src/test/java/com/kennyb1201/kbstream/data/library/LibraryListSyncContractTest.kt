@@ -733,6 +733,20 @@ class LibraryListSyncContractTest {
             "trakt.isConfigured() && trakt.hasToken()",
             "an unconfigured Trakt says nothing about its lists"
         )
+        // A saved community list is a row on the same rail as an own list, so its
+        // read feeds the same id set: leaving it out made every launch read a
+        // pinned saved list as gone and prune its rail for good.
+        assertContains(
+            launch,
+            "runCatchingCancellable { trakt.likedPublicLists() }.getOrNull()",
+            "the launch pass counts saved lists as live, not just owned ones"
+        )
+        // ...and only an answer that named lists is a statement about them.
+        assertContains(
+            launch,
+            "(answer as? PublicListsAnswer.Loaded)?.value",
+            "a failed liked read is not an empty liked set"
+        )
     }
 
     @Test
