@@ -187,7 +187,11 @@ class DetailFocusChainWiringContractTest {
             )
         )
         assertTrue(
-            detail.contains("return focusRow(target, fromColumn, from, direction, presence)")
+            "and its answer is kept rather than returned blind: a move that " +
+                "landed nowhere is what the page has to notice (see the fall-through " +
+                "to the default search below)",
+            detail.contains("val landed = if (target == DetailRow.MEDIA") &&
+                detail.contains("focusRow(target, fromColumn, from, direction, presence)")
         )
         assertTrue(
             "and the one row the move does NOT land through focusRow is the " +
@@ -197,7 +201,7 @@ class DetailFocusChainWiringContractTest {
                 "the viewer has no reason to expect",
             detail.contains(
                 "if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) { " +
-                    "lastMediaCardColumn = fromColumn return focusMediaStrip(from) }"
+                    "lastMediaCardColumn = fromColumn focusMediaStrip(from) }"
             )
         )
     }
@@ -229,13 +233,19 @@ class DetailFocusChainWiringContractTest {
             revealArm >= 0 && nextRow > revealArm
         )
         assertTrue(
-            "the walk's own end is where the press STAYS: with no row left that " +
-                "way it is consumed where the viewer is, never handed to the " +
-                "default search with only the bottom spacer below it",
+            "the walk's own end is still logged, so an exhaustion is visible in " +
+                "a capture rather than silent",
             detail.contains(
                 "Log.w(TAG, \"focusRow: could not focus \$target or any row beyond it\")"
             ) &&
                 detail.contains("focusRow(nextTarget, fromColumn, target, direction, presence)")
+        )
+        assertTrue(
+            "but the walk's end is NOT a consumed press any more: the row the " +
+                "press started from decides whether it was a real edge of the " +
+                "page, and the handler answers false otherwise",
+            detail.contains("focusRow: could not focus \$target or any row beyond it\")") &&
+                detail.contains("DetailFocusChain.isPageEdge(from, direction, presence)")
         )
         assertFalse(
             "the walk steps strictly the way the press was going, which is what " +
@@ -448,7 +458,7 @@ class DetailFocusChainWiringContractTest {
     }
 
     @Test
-    fun `a row this page has is retried once before the press steps over it`() {
+    fun `a row this page has is retried while its chips register, not once`() {
         // The 2026-10-14 field race: the keywords rail was present and on
         // screen, but its chips had not finished registering, so the first ask
         // failed and the press skipped a row that was there. A row the page HAS
@@ -480,12 +490,16 @@ class DetailFocusChainWiringContractTest {
             next > reveal
         )
         assertTrue(
-            "the retry is one frame then one more ask, and nothing else",
+            "the retry is a bounded loop of asks rather than a single one: a " +
+                "rail still registering its chips answers nothing for several " +
+                "frames, and one failed frame is not the row's verdict",
             detail.contains(
                 "suspend fun retryChipColumn(rowKey: String, fromColumn: Int): Boolean"
             ) &&
+                detail.contains("while (attempts < RETRY_CHIP_STEPS)") &&
                 detail.contains("delay(RETRY_CHIP_DELAY_MS)") &&
-                detail.contains("private const val RETRY_CHIP_DELAY_MS = 50L")
+                detail.contains("private const val RETRY_CHIP_DELAY_MS = 50L") &&
+                detail.contains("private const val RETRY_CHIP_STEPS = 4")
         )
         assertTrue(
             "a failed ask on a row that was there is logged as a retry, so the " +
@@ -513,15 +527,81 @@ class DetailFocusChainWiringContractTest {
             reveal.contains("DetailChipColumns.columnFor(fromColumn, columns)")
         )
         val scroll = reveal.indexOf("rail.scrollToItem(column)")
-        val ask = reveal.indexOf("if (focusChipColumn(rowKey, fromColumn)) return true")
+        val ask = reveal.indexOf("if (chipColumnReady(rowKey) && focusChipColumn(rowKey, fromColumn))")
         assertTrue("the rail must actually be scrolled", scroll >= 0)
         assertTrue("and only then asked for the focus", ask > scroll)
+        assertTrue(
+            "and only once the rail has chips to give: a slot that is still " +
+                "null is a question not yet answerable, and reading it as \"this " +
+                "row will not take the focus\" is what walked the press past a " +
+                "row that was on screen",
+            detail.contains("fun chipColumnReady(rowKey: String): Boolean") &&
+                detail.contains("chipColumnRequesters[rowKey]?.any { it != null } == true")
+        )
 
         assertTrue(
             "every chip rail the chain can move into has a state to scroll",
             detail.contains("fun railStateFor(rowKey: String): LazyListState? = when (rowKey)") &&
                 detail.contains("KEYWORDS_ROW_KEY -> keywordsRowState") &&
                 detail.contains("MEDIA_ROW_KEY -> mediaRowState")
+        )
+    }
+
+    @Test
+    fun `a press the walk cannot land is never swallowed mid-page`() {
+        // The 2026-11 field report: on some titles a DOWN off a genre chip, a
+        // season chip or an episode chip did nothing at all. The walk asked the
+        // rows below, every one of them was still composing, the walk ran out
+        // - and the old arm answered `true`, so the key was consumed with the
+        // focus unmoved. Mid-page that press is handed to the platform's
+        // default search instead; only a real edge of the page may stay put.
+        val move = detail
+            .substringAfter("suspend fun moveFocusVertical(")
+            .substringBefore("fun detailRowVerticalFocus(")
+        assertTrue(
+            "the unlanded move hands the press to the page's one fall-through " +
+                "rather than consuming it",
+            move.contains("return fallThroughIfMidPage(from, direction, presence)")
+        )
+        assertTrue(
+            "the edge is decided from the row the press STARTED on, against the " +
+                "loaded rows - not from where the walk stopped, which can be the " +
+                "bottom row of a page the press was in the middle of",
+            detail.contains(
+                "if (DetailFocusChain.isPageEdge(from, direction, presence)) return false"
+            )
+        )
+        assertTrue(
+            "and a press that is not at an edge runs Compose's own geometric " +
+                "search, which is the move a surface with no chain entry gets",
+            detail.contains("return focusByGeometry(direction)")
+        )
+        assertTrue(
+            "the season chips' DOWN takes the same fall-through: the episode " +
+                "cards under the chip are what that press means, and a listing " +
+                "that is still arriving is not an answer",
+            detail.contains(
+                "if (!focusSeasonOrEpisode()) { fallThroughIfMidPage( DetailRow.EPISODES, " +
+                    "DetailFocusDirection.DOWN, presence ) }"
+            )
+        )
+        assertTrue(
+            "run from this page's focus manager, so it moves from where the " +
+                "viewer actually is rather than from a remembered chip",
+            detail.contains("val focusManager = LocalFocusManager.current") &&
+                detail.contains("focusManager.moveFocus(")
+        )
+        assertTrue(
+            "the search reports whether it moved anything, so a press with " +
+                "nothing in that direction anywhere is still a press that went " +
+                "nowhere rather than a success",
+            detail.substringAfter("fun focusByGeometry(").contains(".getOrDefault(false)")
+        )
+        assertFalse(
+            "and the exhausted walk no longer answers a consumed press",
+            detail.contains(
+                "could not focus \$target or any row beyond it\") true"
+            )
         )
     }
 

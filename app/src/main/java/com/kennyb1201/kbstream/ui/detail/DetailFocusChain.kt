@@ -166,9 +166,9 @@ internal object DetailFocusChain {
      *
      * Null is only ever reached going DOWN out of the bottom row of the page -
      * [DetailRow.HEADER] always exists and sits at the top, so an upward walk
-     * always ends on it. The caller reads null as the end of the page: the press
-     * is consumed and the focus stays where the viewer left it, rather than
-     * being handed to the default search (see the screen's handler).
+     * always ends on it. Null is the END OF THE PAGE and nothing else: whether
+     * a press that reaches it is consumed is [isPageEdge]'s question, and the
+     * screen decides it there (see the screen's handler).
      */
     fun nextRow(
         from: DetailRow,
@@ -189,5 +189,45 @@ internal object DetailFocusChain {
         }
 
         return null
+    }
+
+    /**
+     * Whether a press that could not move the focus is at a REAL EDGE of the
+     * page, where staying put is the honest answer.
+     *
+     * The page's vertical handlers consume the key they own up front - the move
+     * itself is asynchronous, because a rail the scroll disposed has to be put
+     * back and then asked again a frame at a time - so a press that cannot land
+     * anywhere used to be consumed with the focus unmoved: the reported dead
+     * remote on a title whose rows in that direction were still loading (or
+     * were thinner than the page the chain assumed). Mid-page there is ALWAYS
+     * something the press can do - the default geometric search, which is what
+     * any surface without a chain entry would have got - so the only presses
+     * that may be swallowed are these, at the page's edges:
+     *
+     *  - UP out of [DetailRow.HEADER], the fixed action row above the list:
+     *    there is nothing above the page to move to, and it has been consumed
+     *    that way since the header existed.
+     *  - UP out of [DetailRow.GENRE], the chips painted in that same fixed
+     *    header just under the action row: the only thing above them is the row
+     *    that just failed to take the focus, so a search from there can only
+     *    leave the page - which reads as the focus jumping off the screen, the
+     *    one thing an unlanded press must never do.
+     *  - DOWN out of the last row this page actually has, [presence] being the
+     *    loaded data's own answer: below that row is the end of the page.
+     *
+     * Verified against the loaded rows rather than against where the walk
+     * happened to stop, because a walk can stop at the bottom row of the page
+     * having started mid-page: the press came from a row with rows below it,
+     * and the rows below just would not take the focus. That press is mid-page
+     * and must not be swallowed.
+     */
+    fun isPageEdge(
+        row: DetailRow,
+        direction: DetailFocusDirection,
+        presence: DetailRowPresence
+    ): Boolean = when (direction) {
+        DetailFocusDirection.UP -> row == DetailRow.HEADER || row == DetailRow.GENRE
+        DetailFocusDirection.DOWN -> nextRow(row, DetailFocusDirection.DOWN, presence) == null
     }
 }

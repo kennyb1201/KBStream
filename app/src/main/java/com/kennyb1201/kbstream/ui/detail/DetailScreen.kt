@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -74,6 +75,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -345,13 +347,29 @@ private const val RETURN_FOCUS_STEPS = 15
 private const val RETURN_FOCUS_DELAY_MS = 40L
 
 /**
- * The one-frame wait before [retryChipColumn] asks a present-but-unready row
- * again: the 2026-10-14 GENRE -> KEYWORDS race, where
- * the rail is on screen but its chips have not registered yet. Long enough for
- * a frame to be laid out, short enough that a row which is genuinely not there
- * is still stepped over without a felt pause.
+ * The wait before [retryChipColumn] asks a present-but-unready row again: the
+ * 2026-10-14 GENRE -> KEYWORDS race, where the rail is on screen but its chips
+ * have not registered yet. Long enough for a frame to be laid out, short enough
+ * that a row which is genuinely not there is still stepped over without a felt
+ * pause.
  */
 private const val RETRY_CHIP_DELAY_MS = 50L
+
+/**
+ * How many of those waits a row the page HAS gets before the walk steps over
+ * it.
+ *
+ * One ask a frame later was not enough: a rail that is still being composed -
+ * the keywords rail after a drill-down, the episode section while its season
+ * listing is landing - registers its chips several frames after the row is on
+ * screen, so a single retry failed and the press walked on as if the row could
+ * not take the focus at all. Four frames is ~200ms: past the two or three
+ * frames a rail needs to file its first chip, and short enough that the walk
+ * over a page of unready rows still lands well inside the second, because this
+ * budget is spent ONCE PER ROW and ONLY on a row `presence` says this page has -
+ * a row that is not there is still stepped over with no wait.
+ */
+private const val RETRY_CHIP_STEPS = 4
 
 /**
  * Scrolls the detail list until the item keyed [rowKey] is on screen, trying
@@ -688,6 +706,10 @@ fun DetailScreen(
 
     val scope = rememberCoroutineScope()
 
+    // Compose's own focus search, used for the one press the chain has no row
+    // for anymore (see [focusByGeometry]).
+    val focusManager = LocalFocusManager.current
+
     // The vertical move in flight, if any (see [startFocusMove]).
     var focusMoveInFlight by remember { mutableStateOf<Job?>(null) }
 
@@ -708,6 +730,67 @@ fun DetailScreen(
     fun startFocusMove(move: suspend () -> Unit) {
         focusMoveInFlight?.cancel()
         focusMoveInFlight = scope.launch { move() }
+    }
+
+    /**
+     * The press's fall-through: Compose's own geometric focus search, run from
+     * wherever the focus actually is, in the direction the viewer pressed.
+     *
+     * This is the move any surface WITHOUT a chain handler would have got
+     * anyway - the overview's toggle, the fact cards and the ratings strip all
+     * rely on it - so it is the honest answer for a chain press that found no
+     * row it could land on. It cannot be left to the key event: the page's
+     * handlers consume the key they own immediately (the move is asynchronous
+     * by necessity, see [startFocusMove]), so "return false and let the default
+     * search run" is no longer something the handler can still do. The search
+     * is therefore STARTED here, once the chain has said it has nothing to
+     * offer that way and the press is not at a real edge of the page (see
+     * [DetailFocusChain.isPageEdge]).
+     *
+     * The field report behind this: on titles whose rows in the pressed
+     * direction were still loading (or were fewer than the page assumed), every
+     * row in the walk failed on the same frame, the walk ran out, and the press
+     * was consumed with the focus unmoved - the "press does nothing at all" on
+     * a genre, season or episode chip.
+     *
+     * Answers whether the search moved the focus, so "the walk found nothing and
+     * so did the platform" is reported rather than assumed.
+     */
+    fun focusByGeometry(direction: DetailFocusDirection): Boolean =
+        runCatching {
+            focusManager.moveFocus(
+                when (direction) {
+                    DetailFocusDirection.UP -> FocusDirection.Up
+                    DetailFocusDirection.DOWN -> FocusDirection.Down
+                }
+            )
+        }.getOrDefault(false)
+
+    /**
+     * What a chain move does with a press its landing could not place.
+     *
+     * [from] is the row the press STARTED on, and that is the row [presence]
+     * has to be asked about: a walk can end on the bottom row of the page
+     * having started in the middle of it, and the rows it stepped over were
+     * there all along - they were just not ready to take the focus yet. So only
+     * the two real edges stay put, and every other press is handed to the
+     * platform's default search ([focusByGeometry]) instead of being consumed
+     * where it stands.
+     *
+     * Answers whether the press ended up moving anything, so a move that went
+     * nowhere at all is reported rather than assumed to have worked.
+     */
+    fun fallThroughIfMidPage(
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        presence: DetailRowPresence
+    ): Boolean {
+        if (DetailFocusChain.isPageEdge(from, direction, presence)) return false
+        Log.w(
+            TAG,
+            "$from $direction had no landing; falling through to the default search"
+        )
+        return focusByGeometry(direction)
     }
 
     /**
@@ -1050,19 +1133,42 @@ fun DetailScreen(
     }
 
     /**
-     * [focusChipColumn], asked once more a frame later.
+     * Whether the rail keyed [rowKey] has registered any chip yet.
+     *
+     * The slots are filed as the rail COMPOSES ([registerChipColumn]), so an
+     * empty list is a rail that is not in the tree, and a list of nulls is a
+     * rail whose chips have not been laid out. Either way a column ask cannot
+     * land - and, crucially, cannot be read as "this row will not take the
+     * focus": the question has not been answered yet, it has not been asked.
+     * The 2026-11 field report (a title that stranded on a genre, season or
+     * episode chip with the press doing nothing at all) is exactly that answer
+     * arriving one frame too early, once per row, until the walk ran out.
+     */
+    fun chipColumnReady(rowKey: String): Boolean =
+        chipColumnRequesters[rowKey]?.any { it != null } == true
+
+    /**
+     * [focusChipColumn], asked again across a few bounded frames while the row's
+     * chips register.
      *
      * The 2026-10-14 field race: a rail this page HAS can be composed on screen
      * while its chips are still registering, so the first ask fails and the
      * press used to step straight over a row that was there - the reported
-     * "GENRE -> KEYWORDS looked like a skip". One frame is the whole point: the
-     * chips either register or the row really cannot answer, and the caller
-     * then walks on. Only [focusRow]'s present-but-unanswered arm calls it, so a
-     * row that is not on this page is still stepped over with no wait at all.
+     * "GENRE -> KEYWORDS looked like a skip". The retry is gated on the row's
+     * OWN readiness now: it keeps asking only while the rail has chips filed
+     * ([chipColumnReady]) and the ask is still short of the column, for at most
+     * [RETRY_CHIP_STEPS] frames. Only [focusRow]'s present-but-unanswered arm
+     * calls it, so a row that is not on this page is still stepped over with no
+     * wait at all.
      */
     suspend fun retryChipColumn(rowKey: String, fromColumn: Int): Boolean {
-        delay(RETRY_CHIP_DELAY_MS)
-        return focusChipColumn(rowKey, fromColumn)
+        var attempts = 0
+        while (attempts < RETRY_CHIP_STEPS) {
+            delay(RETRY_CHIP_DELAY_MS)
+            if (focusChipColumn(rowKey, fromColumn)) return true
+            attempts++
+        }
+        return false
     }
 
     /**
@@ -1110,8 +1216,16 @@ fun DetailScreen(
             // scroll that brings it back: the row's own key among the visible
             // items is the proof that asking is worth doing. Firing at a card
             // that is not composed yet fails silently, which is the stranding.
+            //
+            // A rail whose chips are already filed counts as composed even when
+            // the row is not a list item at all: the genre chips live in the
+            // fixed header above the list, so their key is never among the
+            // visible items and this loop used to spend its whole budget
+            // waiting for a row that could not appear - then report a failure
+            // for a rail that was on screen all along.
             val composed =
-                detailListState.layoutInfo.visibleItemsInfo.any { it.key == rowKey }
+                chipColumnReady(rowKey) ||
+                    detailListState.layoutInfo.visibleItemsInfo.any { it.key == rowKey }
             if (composed) {
                 // The chip rail is lazy a second time: the chip in the press's
                 // COLUMN can be disposed inside a rail that is on screen (see
@@ -1138,7 +1252,13 @@ fun DetailScreen(
                         railScrolled = true
                     }
                 }
-                if (focusChipColumn(rowKey, fromColumn)) return true
+                // Asked only once the rail has chips to give: a null slot is a
+                // question not yet answerable, not a "no" (see
+                // [chipColumnReady]) - and the loop keeps asking across its
+                // frames until the column lands or the budget runs out.
+                if (chipColumnReady(rowKey) && focusChipColumn(rowKey, fromColumn)) {
+                    return true
+                }
             }
             delay(RETURN_FOCUS_DELAY_MS)
             attempts++
@@ -2399,10 +2519,12 @@ fun DetailScreen(
      * press to the NEXT row that way rather than throwing the viewer back to the
      * top of the page, which is a move nobody asked for and, from the bottom of
      * a long page, a disorienting one. The walk is bounded by the chain's own
-     * row list and ends in the top-of-page arm.
+     * row list and ends by answering FALSE: the row the press started from
+     * decides whether that is a page edge or a mid-page miss (see
+     * [moveFocusVertical]).
      *
-     * A rail this page HAS but that did not answer is asked ONE more time a
-     * frame later ([retryChipColumn]) before the walk moves on: the 2026-10-14
+     * A rail this page HAS but that did not answer is asked again across a few
+     * bounded frames ([retryChipColumn]) before the walk moves on: the 2026-10-14
      * field race, where the row is on screen but its chips are still
      * registering, so the first ask fails and the press looked like it skipped
      * a row that was there. [presence] is what tells that apart from a row the
@@ -2480,7 +2602,16 @@ fun DetailScreen(
                         DetailFocusChain.nextRow(target, direction, presence)
                     if (nextTarget == null) {
                         Log.w(TAG, "focusRow: could not focus $target or any row beyond it")
-                        true
+                        // NOT consumed here any more. Every row this direction
+                        // had was asked and none of them took the focus, which
+                        // is a mid-page miss on a page whose sections were
+                        // still arriving - and the old `true` turned exactly
+                        // that into a dead press (a genre, season or episode
+                        // chip that did nothing at all, title by title). The
+                        // press goes to [moveFocusVertical], which knows the row
+                        // it started on and can tell a real page edge from this
+                        // (see [DetailFocusChain.isPageEdge]).
+                        false
                     } else {
                         focusRow(nextTarget, fromColumn, target, direction, presence)
                     }
@@ -2559,6 +2690,13 @@ fun DetailScreen(
      * rather than a press handed to the default search (see
      * [detailRowVerticalFocus]).
      *
+     * A non-null target that turns out to be unlandable is the other case, and
+     * it is NOT the end of the page even when the walk stops on the bottom row:
+     * every row below the press can be there and still be composed too late to
+     * take a focus. That press is mid-page, so it is handed to the platform's
+     * default search rather than consumed where it stands
+     * ([DetailFocusChain.isPageEdge], [focusByGeometry]).
+     *
      * The one row that is not landed through [focusRow] is the Media row on the
      * way DOWN: its strip is what that press means (see below).
      */
@@ -2598,11 +2736,22 @@ fun DetailScreen(
         // reported "I land on the first trailer and have to press UP to reach
         // the tabs". The column the press arrived with is recorded either way,
         // so the strip can hand it back on the way up.
-        if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
-            lastMediaCardColumn = fromColumn
-            return focusMediaStrip(from)
-        }
-        return focusRow(target, fromColumn, from, direction, presence)
+        val landed =
+            if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+                lastMediaCardColumn = fromColumn
+                focusMediaStrip(from)
+            } else {
+                focusRow(target, fromColumn, from, direction, presence)
+            }
+        if (landed) return true
+
+        // Nothing landed - not the row the press aimed at, not any row beyond it
+        // - and this is where the press used to be swallowed with the focus
+        // unmoved. Only the two real edges of the page may still do that; every
+        // other press falls through to the platform's default geometric search,
+        // which is a move the viewer can see, rather than a key the page took
+        // and did nothing with (see [fallThroughIfMidPage]).
+        return fallThroughIfMidPage(from, direction, presence)
     }
 
     /**
@@ -2745,9 +2894,15 @@ fun DetailScreen(
      * while a viewer pressing DOWN on a chip means the episode cards directly
      * under it (see [focusSeasonOrEpisode]).
      *
-     * Consumed either way. The default search here was worse than nothing: any
-     * focus that lands on a chip also SELECTS its season, so a search that picked
-     * the wrong chip could re-trigger a seasonal swap (see onSeasonFocused).
+     * Consumed either way, and each press has its own landing: UP is the chain's
+     * row above the section, DOWN is the episode cards under the chip. Neither
+     * is ever handed to the default search as a FIRST resort - the chips share a
+     * row, and any focus that lands on a chip also SELECTS its season, so a
+     * search that picked a neighbouring chip could re-trigger a seasonal swap
+     * (see onSeasonFocused). The search is only reached when that landing could
+     * not be placed at all, where the alternative is a press that does nothing
+     * (see [fallThroughIfMidPage]); DOWN can only find nodes BELOW the chip, so
+     * it cannot be another season chip.
      */
     fun seasonChipVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
         nonRailVerticalFocus(
@@ -2761,7 +2916,23 @@ fun DetailScreen(
                     )
                 }
             },
-            onDown = { startFocusMove { focusSeasonOrEpisode() } }
+            onDown = {
+                startFocusMove {
+                    // The episode cards under the chip are what this press
+                    // means, and when they are still arriving it must not be
+                    // a press that does nothing: the same rule as every other
+                    // chain move - mid-page it falls through to the default
+                    // search instead of being consumed here (the reported "a
+                    // season chip that did nothing at all").
+                    if (!focusSeasonOrEpisode()) {
+                        fallThroughIfMidPage(
+                            DetailRow.EPISODES,
+                            DetailFocusDirection.DOWN,
+                            presence
+                        )
+                    }
+                }
+            }
         )
 
     /**

@@ -97,11 +97,22 @@ class DetailFocusGraphContractTest {
             "DOWN is the episode cards directly under the chips, NOT the chain's " +
                 "DOWN out of EPISODES - that row is the season chips and the " +
                 "cards at once, so its DOWN is the cast rail",
-            seasonHandler.contains("onDown = { startFocusMove { focusSeasonOrEpisode() } }")
+            seasonHandler.contains("startFocusMove {") &&
+                seasonHandler.contains("if (!focusSeasonOrEpisode())")
+        )
+        assertTrue(
+            "and when those cards are still arriving the press is not swallowed: " +
+                "it takes the page's own fall-through, which is a mid-page press " +
+                "and so ends in the default search, not on the chip again",
+            seasonHandler.contains(
+                "fallThroughIfMidPage( DetailRow.EPISODES, " +
+                    "DetailFocusDirection.DOWN, presence )"
+            )
         )
         assertFalse(
-            "and the generic EPISODES DOWN move is nowhere near this handler",
-            seasonHandler.contains("DetailFocusDirection.DOWN")
+            "and the generic EPISODES DOWN move - the cast rail - is nowhere " +
+                "near this handler",
+            seasonHandler.contains("moveFocusVertical( DetailRow.EPISODES, DetailFocusDirection.DOWN")
         )
     }
 

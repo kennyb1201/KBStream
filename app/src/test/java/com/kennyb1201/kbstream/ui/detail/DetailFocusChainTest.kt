@@ -483,4 +483,71 @@ class DetailFocusChainTest {
             }
         }
     }
+
+    @Test
+    fun `only a real edge of the page may swallow a press that cannot move`() {
+        // The 2026-11 field report: a vertical press off a genre, season or
+        // episode chip did nothing at all on titles whose rows in that direction
+        // were still composing. The walk asked every row, ran out, and the page
+        // consumed the key - so it is the chain's own job to say whether the
+        // press was at an edge (where staying put is right) or mid-page (where
+        // it must not be).
+        val midPage = presence(
+            genre = true,
+            keywords = true,
+            episodes = true,
+            people = true,
+            media = true
+        )
+        assertFalse(
+            "DOWN off a chip that has rows below it is mid-page, however the " +
+                "walk ended: the rows below are there, they just would not take " +
+                "the focus yet",
+            DetailFocusChain.isPageEdge(DetailRow.GENRE, DetailFocusDirection.DOWN, midPage)
+        )
+        assertFalse(
+            "and the same press on a title with a single row below it",
+            DetailFocusChain.isPageEdge(DetailRow.KEYWORDS, DetailFocusDirection.DOWN, midPage)
+        )
+        assertTrue(
+            "DOWN out of the LAST row the page has is the bottom edge, and that " +
+                "press stays where it is",
+            DetailFocusChain.isPageEdge(DetailRow.MEDIA, DetailFocusDirection.DOWN, midPage)
+        )
+        assertTrue(
+            "which is the last row THIS page has, not the last row the chain has: " +
+                "a movie with no Media row ends on Whatever is painted last",
+            DetailFocusChain.isPageEdge(
+                DetailRow.PEOPLE,
+                DetailFocusDirection.DOWN,
+                presence(genre = true, people = true)
+            )
+        )
+        assertTrue(
+            "UP out of the fixed header row is the top edge: there is nothing " +
+                "above the page, and that press has always stayed put",
+            DetailFocusChain.isPageEdge(DetailRow.HEADER, DetailFocusDirection.UP, midPage)
+        )
+        assertTrue(
+            "UP out of the genre chips is the top edge as well: they are painted " +
+                "in the fixed header directly under the action row, so the only " +
+                "thing above them is the row that just failed - and a search " +
+                "from there leaves the page instead of moving in it",
+            DetailFocusChain.isPageEdge(DetailRow.GENRE, DetailFocusDirection.UP, midPage)
+        )
+        assertFalse(
+            "but UP out of any row inside the list is mid-page, even when the " +
+                "header is all that is above it: the press still has somewhere to go",
+            DetailFocusChain.isPageEdge(DetailRow.KEYWORDS, DetailFocusDirection.UP, midPage)
+        )
+        assertTrue(
+            "and on a page whose only row is the header, DOWN from it is the " +
+                "bottom edge as well as the top one - there is nothing else there",
+            DetailFocusChain.isPageEdge(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence()
+            )
+        )
+    }
 }
