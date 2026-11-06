@@ -636,11 +636,13 @@ class DetailScreenMobileContractTest {
             mobile.contains("trailerExcludedClients = plan.excludedClients") &&
                 mobile.contains("TrailerPlayerLauncher.invalidate(key)")
         )
+        // An identity refusal is not the same death as a spent ladder, so the
+        // kind is the refusal's own label when that is what failed.
         assertTrue(
             "the chunk range and format that died are read for the death line",
             mobile.contains("PoTokenTrace.chunkDeathFor(key)") &&
                 mobile.contains("itag = signedUrl?.let { googlevideoItag(it) }") &&
-                mobile.contains("kind = source?.deathKind()")
+                mobile.contains("else source?.deathKind()")
         )
         assertTrue(
             "and the death is written to the trace the diagnostics report prints",
@@ -652,7 +654,7 @@ class DetailScreenMobileContractTest {
                 "silently fatal on this surface",
             header.contains("onIdentityBlocked = onTrailerRefused") &&
                 mobile.contains("onTrailerRefused = { positionMs, durationMs ->") &&
-                mobile.contains("requestTrailerRetry(positionMs, durationMs)")
+                mobile.contains("requestTrailerRetry(positionMs, durationMs, identity = true)")
         )
         assertTrue(
             "stopping and leaving the page silence the pooled player",

@@ -330,10 +330,13 @@ class LibraryListSyncContractTest {
             "LibraryHomeRails.setPinned(context, pin, !onHome)",
             "pinning from the phone is the same write as from the TV"
         )
+        // The saved community list is the one exception: its name belongs to its
+        // author, so the phone hides rename for it exactly as the TV does.
         assertContains(
             libraryPhone,
-            "if (list.source.canManageList) {",
-            "rename is offered where the source accepts it"
+            "if (list.source.canManageList && !list.liked) {",
+            "rename is offered where the source accepts it, and never on a saved " +
+                "community list"
         )
         assertContains(
             libraryPhone,
@@ -579,9 +582,12 @@ class LibraryListSyncContractTest {
             "LibraryHomeRails.reconcilePins(appContext, liveListIds)",
             "the refresh is where a website-side delete becomes visible"
         )
+        // Both reads behind the source feed the id set now: a saved community
+        // list is a row on the same rail, and leaving it out would prune its pin
+        // on every refresh.
         assertContains(
             refresh,
-            "mdbLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }",
+            "(mdbLists + mdbLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }",
             "the live ids are the pin's own identity helper, never a second scheme"
         )
         assertContains(
@@ -632,7 +638,10 @@ class LibraryListSyncContractTest {
             "the mutation's read is a newer request, so it supersedes a full refresh " +
                 "still in flight instead of being overwritten by it"
         )
-        val guard = body.indexOf("if (version != requestVersion) return@launch")
+        // The guard is brace-form here because it also clears the superseded
+        // refresh's "remotes are still loading" flag before returning; what this
+        // pins is the version comparison and where it sits, not its shape.
+        val guard = body.indexOf("if (version != requestVersion)")
         val publish = body.indexOf("_uiState.value = _uiState.value.copy(")
         assertTrue("the guard must exist", guard >= 0)
         assertTrue("and it must be before the publish", publish > guard)

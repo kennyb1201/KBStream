@@ -436,7 +436,9 @@ class MobileBillboardContractTest {
         )
         assertTrue(home.contains("HeroInlineTrailerPlayer("))
         assertTrue(home.contains("TrailerPlayerPool.releaseForReuse()"))
-        assertTrue(home.contains("// Silent: the page keeps its backdrop, with no banner and no"))
+        assertTrue(
+            home.contains("// Silent ON SCREEN: the page keeps its backdrop, with no banner")
+        )
         // Only the current page may play, and a page change stops it.
         assertTrue(home.contains("LaunchedEffect(pagerState.currentPage) { stopTrailer() }"))
         assertTrue(

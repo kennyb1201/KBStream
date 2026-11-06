@@ -163,9 +163,12 @@ class BingeCatAuthSyncWiringContractTest {
             )
         )
         val disconnect = functionBody(repository, "suspend fun disconnect()")
+        // Disconnect addresses the profile's OWN pinned store now (a sibling
+        // profile's session must not be tombstoned by this one's sign-out), so
+        // the store reference is `pinnedStore`; the tombstone is the same write.
         assertTrue(
             "a deliberate disconnect leaves the tombstone: $disconnect",
-            disconnect.contains("store.markSignedOut()")
+            disconnect.contains(".markSignedOut()")
         )
         assertTrue(
             "and publishes it only if the tombstone actually took: $disconnect",

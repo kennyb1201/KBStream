@@ -140,7 +140,7 @@ class TokenlessResolveWiringContractTest {
                 "return@withLock Result.failure(TokenlessHoldException(videoId, error))"
             ) &&
                 flat(home).contains("if (error is TokenlessHoldException) {") &&
-                flat(mobileHome).contains("if (it is TokenlessHoldException) {")
+                flat(mobileHome).contains("if (error is TokenlessHoldException) {")
         )
     }
 
@@ -209,9 +209,12 @@ class TokenlessResolveWiringContractTest {
 
     @Test
     fun `the billboard plans its deaths instead of re-signing the same class`() {
+        // The signature carries the refusal's identity flag now (an identity
+        // refusal takes the ladder's verdict before the plan's), so the anchor is
+        // the declaration rather than its old one-line parameter list.
         val retry = between(
             mobileHome,
-            "fun requestTrailerRetry(positionMs: Long, durationMs: Long): Boolean {",
+            "fun requestTrailerRetry(",
             "return true"
         )
 
@@ -240,7 +243,12 @@ class TokenlessResolveWiringContractTest {
             "both failure shapes come through the plan",
             flat(mobileHome).contains("onTrailerFailed = { positionMs ->") &&
                 flat(mobileHome).contains("onTrailerIdentityBlocked = { positionMs, durationMs ->") &&
-                flat(mobileHome).contains("requestTrailerRetry(positionMs, durationMs)")
+                // The refusal's own shape is what carries the identity flag, so a
+                // spent ladder and a refused client do not plan the same retry.
+                flat(mobileHome).contains("requestTrailerRetry(positionMs, durationMs = 0L)") &&
+                flat(mobileHome).contains(
+                    "requestTrailerRetry(positionMs, durationMs, identity = true)"
+                )
         )
         assertTrue(
             "a natural end is still a stop, not a retry",

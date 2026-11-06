@@ -42,9 +42,13 @@ class TraktLibraryContractTest {
         assertTrue("the repository is held", vm.contains("TraktRepository.getInstance"))
         assertTrue("the watchlist is read", vm.contains("traktRepository.watchlist()"))
         assertTrue("personal lists are read", vm.contains("traktRepository.userLists()"))
+        // The user half of the route is the list's OWNER now, because a saved
+        // community list is not this account's and `me` does not resolve it; an
+        // own list still reads as `me` through the fallback.
         assertTrue(
-            "a list's items are read through the account's own list path",
-            vm.contains("TraktListRef(user = \"me\"")
+            "a list's items are read through the owning account's list path",
+            vm.contains("TraktListRef(user = owner") &&
+                vm.contains("?: \"me\"")
         )
         assertTrue("watchlist rows are tagged", vm.contains("LibrarySource.TRAKT_WATCHLIST"))
         assertTrue("list rows are tagged", vm.contains("LibrarySource.TRAKT_LIST"))

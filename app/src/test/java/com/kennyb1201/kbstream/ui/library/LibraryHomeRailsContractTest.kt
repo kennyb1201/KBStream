@@ -67,10 +67,12 @@ class LibraryHomeRailsContractTest {
             "the dialog offers the switch for every list",
             squash(dialog).contains("if (onHome) \"HIDE FROM HOME\" else \"SHOW ON HOME\"")
         )
+        // The saved community list is the second reason a rename row is absent:
+        // its name is its author's, so the flag alone no longer decides.
         assertTrue(
             "and hides rename/delete only where the service forbids them",
             squash(library).contains(
-                "onRename = if (list.source.canManageList) {"
+                "onRename = if (list.source.canManageList && !list.liked) {"
             )
         )
     }

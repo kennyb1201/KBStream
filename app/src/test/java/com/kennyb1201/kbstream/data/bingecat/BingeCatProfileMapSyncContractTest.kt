@@ -365,11 +365,18 @@ class BingeCatProfileMapSyncContractTest {
         // Both clear sites - disconnect and the stale-id clear - must leave a
         // tombstone: a bare local clear is not a disconnect (F1), and it would
         // also republish as 'never mapped' and be re-adopted by the next pull.
-        val clears = occurrences(repository, "mapping.clear()")
-        assertTrue("every mapping.clear() site is pinned here", clears == 2)
-        var from = repository.indexOf("mapping.clear()")
-        while (from >= 0) {
-            val window = repository.substring(from, (from + 700).coerceAtMost(repository.length))
+        // Two sites, and the case differs because the receivers do: disconnect
+        // clears the PROFILE's pinned mapping (a sibling's is not this sign-out's
+        // to drop) and the stale-id helper clears the repository's own.
+        val sites = Regex("(?i)mapping\\.clear\\(\\)").findAll(repository)
+            .map { it.range.first }
+            .toList()
+        assertTrue(
+            "every mapping clear site is pinned here (found ${sites.size})",
+            sites.size == 2
+        )
+        sites.forEach { at ->
+            val window = repository.substring(at, (at + 700).coerceAtMost(repository.length))
             assertContains(
                 window,
                 "recordBingeCatMappingChanged(context, cleared = true)",
@@ -380,7 +387,6 @@ class BingeCatProfileMapSyncContractTest {
                 "publishMappingToSync()",
                 "and published, or the sibling keeps an orphaned mapping"
             )
-            from = repository.indexOf("mapping.clear()", from + "mapping.clear()".length)
         }
     }
 
