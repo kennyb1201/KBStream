@@ -155,6 +155,7 @@ import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
 import com.kennyb1201.kbstream.ui.browse.rememberFocusHandBack
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
+import com.kennyb1201.kbstream.ui.components.CarriedArt
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
@@ -3342,21 +3343,36 @@ private fun LibraryListHomeRail(
                     // drew title-only tiles beside rails that had posters.
                     // Such a row is resolved by its id - the same TMDB lookup a
                     // landscape card already makes (see
-                    // [rememberGlobalLandscapeArt] and [rememberTitlePosterArt]) -
-                    // while a row that HAS art passes enabled = false and is
-                    // drawn exactly as before (so Trakt's rails are untouched).
+                    // [rememberGlobalLandscapeArt] and [rememberTitlePosterArt]).
                     // The title stays the fallback for an id TMDB cannot draw.
-                    val hasOwnArt = !meta.poster.isNullOrBlank()
+                    //
+                    // A row's OWN poster is a first attempt, not a verdict (see
+                    // [CarriedArt]): Trakt's rails ship a poster URL that can
+                    // fail to load, and the old "has art" test switched the
+                    // resolvers off on the strength of the URL alone - so the
+                    // rail sat title-only beside a BingeCat rail of posters.
+                    // The URL is drawn while it loads (no call, no change), and
+                    // once its loader reports a failure the resolvers are armed
+                    // and the card uses what TMDB answers.
+                    var carriedArtFailed by remember(meta.poster) {
+                        mutableStateOf(false)
+                    }
+                    val carriedArt = remember(meta.poster, carriedArtFailed) {
+                        CarriedArt(meta.poster, carriedArtFailed)
+                    }
                     val resolvedPoster = rememberTitlePosterArt(
                         id = meta.id,
                         type = meta.type,
-                        enabled = !hasOwnArt
+                        enabled = !carriedArt.usable
                     )
                     val resolvedLandscapeArt = rememberGlobalLandscapeArt(
-                        enabled = landscapeCards && !hasOwnArt,
+                        enabled = landscapeCards && !carriedArt.usable,
                         addonId = meta.id,
                         addonType = meta.type,
-                        addonBackdrop = meta.poster
+                        // The still is only offered as the resolver's fallback
+                        // while it is still art: a URL the loader has refused
+                        // must not be handed back as the answer.
+                        addonBackdrop = carriedArt.effective
                     )
 
                     val cardModifier = Modifier
@@ -3392,10 +3408,11 @@ private fun LibraryListHomeRail(
                                     paths = overridePaths,
                                     rawId = meta.id,
                                     fallbackUrl = resolvedLandscapeArt.first
-                                        ?: meta.poster
+                                        ?: carriedArt.effective
                                         ?: resolvedPoster
                                 ),
                                 logoUrl = resolvedLandscapeArt.second,
+                                onBackdropError = { carriedArtFailed = true },
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
@@ -3408,8 +3425,9 @@ private fun LibraryListHomeRail(
                                 posterUrl = imageOverridePosterUrl(
                                     paths = overridePaths,
                                     rawId = meta.id,
-                                    fallbackUrl = meta.poster ?: resolvedPoster
+                                    fallbackUrl = carriedArt.effective ?: resolvedPoster
                                 ),
+                                onPosterError = { carriedArtFailed = true },
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
                                 isPartiallyWatched = isPartiallyWatched(meta),

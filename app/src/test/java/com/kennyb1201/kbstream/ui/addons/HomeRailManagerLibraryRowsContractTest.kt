@@ -226,18 +226,24 @@ class HomeRailManagerLibraryRowsContractTest {
     @Test
     fun `a rail row with no art is drawn by its id`() {
         assertTrue(
-            "the card only resolves when the row has no art of its own",
-            home.contains("val hasOwnArt = !meta.poster.isNullOrBlank()") &&
-                home.contains("enabled = !hasOwnArt")
+            "the card resolves when the row has no art of its own - absent, or " +
+                "carried and failed to load (see CarriedArt and the 2026-11 Trakt " +
+                "art report: a URL is a first attempt, not a verdict)",
+            home.contains("val carriedArt = remember(meta.poster, carriedArtFailed)") &&
+                home.contains("CarriedArt(meta.poster, carriedArtFailed)") &&
+                home.contains("enabled = !carriedArt.usable")
         )
         assertTrue(
             "the resolved poster is the portrait fallback, and the title is " +
                 "still the last resort",
-            home.contains("fallbackUrl = meta.poster ?: resolvedPoster")
+            home.contains("fallbackUrl = carriedArt.effective ?: resolvedPoster")
         )
         assertTrue(
             "the landscape card takes the resolved backdrop and clearlogo",
-            home.contains("fallbackUrl = resolvedLandscapeArt.first ?: meta.poster ?: resolvedPoster") &&
+            home.contains(
+                "fallbackUrl = resolvedLandscapeArt.first ?: carriedArt.effective " +
+                    "?: resolvedPoster"
+            ) &&
                 home.contains("logoUrl = resolvedLandscapeArt.second")
         )
         assertTrue(
@@ -276,12 +282,12 @@ class HomeRailManagerLibraryRowsContractTest {
         assertTrue(
             "the phone's pinned rail makes the same two resolutions, so the two " +
                 "screens draw the same cards",
-            mobileHome.contains("val hasOwnArt = !meta.poster.isNullOrBlank()") &&
-                mobileHome.contains("fallbackUrl = meta.poster ?: resolvedPoster")
+            mobileHome.contains("CarriedArt(meta.poster, carriedArtFailed)") &&
+                mobileHome.contains("fallbackUrl = carriedArt.effective ?: resolvedPoster")
         )
         assertFalse(
-            "and a row that HAS art (Trakt, MDBList) is not looked up at all - " +
-                "its rail renders exactly as it did",
+            "and a row whose art LOADS (Trakt, MDBList) is not looked up at all - " +
+                "its rail renders exactly as it did, with no extra TMDB call",
             mobileHome.contains("enabled = true") && posterArt.contains("enabled = true")
         )
     }

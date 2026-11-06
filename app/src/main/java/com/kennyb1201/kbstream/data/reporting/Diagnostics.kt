@@ -158,6 +158,12 @@ object Diagnostics {
         // differently from the rail beside it (see [CwFilterTrace] and the
         // `cw.filter:` spec). Absent until Home has filtered a rail.
         CwFilterTrace.lines().forEach { report.appendLine(it) }
+        // What each pinned Library rail's rows CARRIED as art, per load. A
+        // Trakt rail drawn title-only is either a read that shipped no poster
+        // URL or one that shipped URLs that do not load - and only the rail can
+        // tell those apart (see [LibraryRailArtTrace]). Absent until a pinned
+        // rail has loaded.
+        LibraryRailArtTrace.lines().forEach { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see

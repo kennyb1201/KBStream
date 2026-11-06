@@ -122,6 +122,7 @@ import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
 import com.kennyb1201.kbstream.ui.home.rememberLibraryHomeRails
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.CarriedArt
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.armHeroSource
 import com.kennyb1201.kbstream.ui.components.heroSourceOnPress
@@ -2915,18 +2916,28 @@ private fun MobileLibraryListRail(
                 // The same two resolutions the TV rail makes: a row with no art
                 // of its own (BingeCat's media carries none) is drawn by its id,
                 // and a row that HAS a poster (Trakt, MDBList) resolves nothing
-                // and is drawn exactly as before.
-                val hasOwnArt = !meta.poster.isNullOrBlank()
+                // while that poster loads.
+                //
+                // A carried poster is a first ATTEMPT, not a verdict (see
+                // [CarriedArt]): a Trakt URL that does not load used to leave
+                // the tile title-only with the resolvers switched off, while
+                // the BingeCat rail beside it had its posters.
+                var carriedArtFailed by remember(meta.poster) {
+                    mutableStateOf(false)
+                }
+                val carriedArt = remember(meta.poster, carriedArtFailed) {
+                    CarriedArt(meta.poster, carriedArtFailed)
+                }
                 val resolvedPoster = rememberTitlePosterArt(
                     id = meta.id,
                     type = meta.type,
-                    enabled = !hasOwnArt
+                    enabled = !carriedArt.usable
                 )
                 val resolvedLandscapeArt = rememberGlobalLandscapeArt(
-                    enabled = landscapeCards && !hasOwnArt,
+                    enabled = landscapeCards && !carriedArt.usable,
                     addonId = meta.id,
                     addonType = meta.type,
-                    addonBackdrop = meta.poster
+                    addonBackdrop = carriedArt.effective
                 )
                 if (landscapeCards) {
                     LandscapeCard(
@@ -2938,10 +2949,11 @@ private fun MobileLibraryListRail(
                             paths = overridePaths,
                             rawId = meta.id,
                             fallbackUrl = resolvedLandscapeArt.first
-                                ?: meta.poster
+                                ?: carriedArt.effective
                                 ?: resolvedPoster
                         ),
                         logoUrl = resolvedLandscapeArt.second,
+                        onBackdropError = { carriedArtFailed = true },
                         fallbackTitle = meta.name,
                         contentDescription = meta.name,
                         isWatched = watched,
@@ -2960,8 +2972,9 @@ private fun MobileLibraryListRail(
                         posterUrl = imageOverridePosterUrl(
                             paths = overridePaths,
                             rawId = meta.id,
-                            fallbackUrl = meta.poster ?: resolvedPoster
+                            fallbackUrl = carriedArt.effective ?: resolvedPoster
                         ),
+                        onPosterError = { carriedArtFailed = true },
                         contentDescription = meta.name,
                         isWatched = watched,
                         isPartiallyWatched = partiallyWatched,

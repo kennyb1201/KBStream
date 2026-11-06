@@ -4,6 +4,8 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.addon.AppContextHolder
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.reporting.LibraryRailArtTrace
+import com.kennyb1201.kbstream.data.reporting.libraryRailCarriedArtLine
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -387,7 +389,7 @@ object LibraryHomeRailItems {
                 entries = repository.listItems(ref)
                 if (entries.isNotEmpty()) break
             }
-            entries.mapNotNull { entry ->
+            val rows = entries.mapNotNull { entry ->
                 val media = entry.media
                 val title = media.title?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val imdbId = media.ids?.imdb?.takeIf { it.isNotBlank() }
@@ -405,6 +407,22 @@ object LibraryHomeRailItems {
                     listRemoteId = pin.id
                 )
             }
+            // Which fork this load was, for COPY DIAGNOSTICS: how many rows
+            // shipped a poster URL and how many did not. A Trakt rail drawn
+            // title-only is either a read that carried no art or one that
+            // carried art that does not load, and the card cannot tell those
+            // apart from the outside (see [LibraryRailArtTrace]).
+            LibraryRailArtTrace.record(
+                rail = "trakt-list:${pin.id}",
+                line = libraryRailCarriedArtLine(
+                    source = "trakt list",
+                    listName = pin.name,
+                    listId = pin.id,
+                    carried = rows.count { !it.posterUrl.isNullOrBlank() },
+                    missing = rows.count { it.posterUrl.isNullOrBlank() }
+                )
+            )
+            rows
         }
 
         LibrarySource.MDBLIST_LIST -> {
