@@ -4,6 +4,10 @@ import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
 import com.kennyb1201.kbstream.data.kb.railMoveChangesOrder
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.key
+import com.kennyb1201.kbstream.data.library.pinsMoveChangesOrder
 
 /**
  * One row of the Home rail manager: a built-in rail, a browse rail, a built
@@ -46,6 +50,18 @@ internal data class HomeRailManagerRow(
      */
     val isCustomCatalog: Boolean = false,
     /**
+     * A Library list the viewer pinned to Home (see `LibraryHomeRails`).
+     *
+     * Not an arrangement row: its position is the pin's own order at the END of
+     * Home, and its title is the name the pin stores. That is why it carries
+     * the pin itself - the operations the manager offers write the pins blob,
+     * never the arrangement prefs, and this flag is how the row's buttons know
+     * which of the two they are looking at.
+     */
+    val isLibraryRail: Boolean = false,
+    /** The pin behind a [isLibraryRail] row; null for every other kind. */
+    val libraryPin: LibraryHomeRailPin? = null,
+    /**
      * Whether each reorder press would actually change where the rail sits on
      * Home, decided by the same transforms that perform the move.
      */
@@ -68,7 +84,14 @@ internal fun homeRailManagerRows(
     configurations: List<CatalogConfiguration>,
     collectionsState: AddonsViewModel.CollectionUiState,
     kidsMaxAge: Int?,
-    isGuest: Boolean
+    isGuest: Boolean,
+    /**
+     * The viewer's pinned Library lists, in pin order - the order they are
+     * drawn in at the end of Home. Empty on a surface that does not manage
+     * them: the phone's Home is arranged here but its manager is separate work,
+     * so it passes nothing and lists exactly what it did before.
+     */
+    libraryPins: List<LibraryHomeRailPin> = emptyList()
 ): List<HomeRailManagerRow> {
     val collectionByKey = collectionsState.collections.associateBy { it.key }
     val addonByKey = configurations.associateBy {
@@ -98,7 +121,7 @@ internal fun homeRailManagerRows(
         collectionsState.collections.map { it.key }
     val orderedKeys = mergedHomeRailKeys(prefs, movableDefaults)
 
-    return orderedKeys.mapNotNull { key ->
+    val arrangementRows = orderedKeys.mapNotNull { key ->
         val browseRail = browseRailByKey[key]
         val row = if (browseRail != null) {
             // isCollection is the flag that carries the PIN control, and this
@@ -194,4 +217,53 @@ internal fun homeRailManagerRows(
             canMoveBottom = railMoveChangesOrder(prefs, movableDefaults, key, Int.MAX_VALUE)
         )
     }
+
+    // The viewer's own Library lists, after the arranged rails - exactly where
+    // Home draws them (see `HomeScreen.libraryHomeRailItems`), in pin order.
+    // They are not part of the arrangement at all: a pin lives in its own blob,
+    // the home manager has no slot for one, and pretending otherwise would give
+    // the rail two owners. One row per pin, including a pin whose list no
+    // longer answers (the ghost a rename left behind) - removing it must not
+    // depend on the list loading, or the rail that cannot be loaded is also a
+    // rail that cannot be removed.
+    val libraryRows = libraryPins.map { pin ->
+        HomeRailManagerRow(
+            key = pin.key,
+            isCollection = false,
+            config = null,
+            collectionKey = null,
+            title = pin.name,
+            subtitle = "Library · " + libraryRailSourceLabel(pin.source),
+            // The arrangement's pin flag is a different thing (see
+            // KBHomeOrderPrefs.pinned): a Library row is pinned by definition,
+            // and showing it as an arrangement pin would put a pin glyph and a
+            // pin button on a row neither of them acts on.
+            isPinned = false,
+            isHidden = false,
+            isLibraryRail = true,
+            libraryPin = pin,
+            canMoveTop = pinsMoveChangesOrder(libraryPins, pin.key, Int.MIN_VALUE),
+            canMoveUp = pinsMoveChangesOrder(libraryPins, pin.key, -1),
+            canMoveDown = pinsMoveChangesOrder(libraryPins, pin.key, +1),
+            canMoveBottom = pinsMoveChangesOrder(libraryPins, pin.key, Int.MAX_VALUE)
+        )
+    }
+
+    return arrangementRows + libraryRows
 }
+
+/**
+ * The service a Library pin names, short enough for a manager subtitle.
+ *
+ * The Library's own labels say which KIND of row it is ("BingeCat list",
+ * "Trakt list"); the manager already says LIBRARY in the kind chip, so the
+ * subtitle only has to name the service. A source this build does not know
+ * falls back to its stored name rather than vanishing from the row.
+ */
+internal fun libraryRailSourceLabel(source: String): String =
+    runCatching { LibrarySource.valueOf(source) }.getOrNull()
+        ?.label
+        ?.substringBefore(" ·")
+        ?.removeSuffix(" list")
+        ?: source.ifBlank { "Library" }
+

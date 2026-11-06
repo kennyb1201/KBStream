@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
 import com.kennyb1201.kbstream.data.library.libraryHomeRailId
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.libraryListRowKey
 import com.kennyb1201.kbstream.data.library.likedListShelfId
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
@@ -1241,8 +1242,15 @@ class LibraryViewModel(
 
             // Watchlists last, so the lists the viewer made stay at the top of
             // the rail in the order they always had.
-            val lists = localLists + mdbLists + mdbLiked + traktLists + traktLiked +
-                bingecatLists + watchlistLists
+            // One row per list identity, first answer wins. The rail's lazy
+            // column is keyed on that identity (see libraryListRowKey), and a
+            // key used twice is a fatal crash (ANDROID-T). The sources already
+            // try not to draw one list twice - an owned list that is also liked
+            // is filtered out of the liked read - but the same saved list can
+            // still arrive twice (an overlapping page), so the rail's own data
+            // is what guarantees each identity appears once.
+            val lists = (localLists + mdbLists + mdbLiked + traktLists + traktLiked +
+                bingecatLists + watchlistLists).distinctBy { libraryListRowKey(it) }
 
             // The list sources that ANSWERED this refresh, and the ids each of
             // them still has. A source that failed, is not configured or is not

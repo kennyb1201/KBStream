@@ -65,6 +65,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.controlAttribution
 import com.kennyb1201.kbstream.data.library.controlSummary
 import com.kennyb1201.kbstream.data.library.libraryHomeRailIdSpellings
+import com.kennyb1201.kbstream.data.library.libraryListRowKey
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
 import com.kennyb1201.kbstream.data.library.pinsNamingList
 import com.kennyb1201.kbstream.data.library.removeActionLabel
@@ -1545,7 +1546,10 @@ private fun ListsPane(
                 .width(280.dp)
                 .fillMaxHeight()
         ) {
-            items(lists, key = { list -> list.id }) { list ->
+            // Keyed on the list's own identity, not on its LibraryList.id: two
+            // shelves can share that one number, and a key used twice is a
+            // fatal crash in a lazy list (ANDROID-T). See libraryListRowKey.
+            items(lists, key = { list -> libraryListRowKey(list) }) { list ->
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
                 // The manage gesture: rename and delete for a list this app

@@ -131,6 +131,46 @@ object LibraryHomeRails {
     }
 
     /**
+     * Moves one pinned rail by [delta] places (see [movedPins]).
+     *
+     * Pin order is the order the rails are drawn in at the end of Home, so this
+     * is what the Home manager's arrows write for a Library row. ONE write, and
+     * only when the order actually changes: a press at the end of the group is
+     * not an edit, and must not republish the row.
+     *
+     * Publishing is the point, exactly as it is for a pin: the sibling account
+     * holds the same pins and would otherwise keep its own order, so a reorder
+     * made on one TV has to travel.
+     */
+    fun movePinned(context: Context, pin: LibraryHomeRailPin, delta: Int): Boolean {
+        val current = pins(context)
+        val updated = movedPins(current, pin.key, delta)
+        if (updated == current) return false
+        write(context, updated)
+        return true
+    }
+
+    /**
+     * Renames one pinned rail, in place.
+     *
+     * The pin's stored name IS the rail's heading (see [LibraryHomeRailPin]), so
+     * a rename here is a same-key replace through [setPinned] - never an
+     * arrangement title override, which would give the heading a second source
+     * of truth that the Library and the next sync would disagree with.
+     *
+     * Works on a pin whose list cannot be loaded (a stale pin): the key is
+     * stored, not derived from the service.
+     */
+    fun renamePinned(context: Context, pin: LibraryHomeRailPin, name: String): Boolean {
+        val trimmed = name.trim().takeIf { it.isNotEmpty() } ?: return false
+        if (trimmed == pin.name) return false
+        val current = pins(context)
+        if (current.none { it.key == pin.key }) return false
+        setPinned(context, pin.copy(name = trimmed), true)
+        return true
+    }
+
+    /**
      * Drops [spellings] in one write.
      *
      * What the toggle's Remove needs once a list can be pinned under more than

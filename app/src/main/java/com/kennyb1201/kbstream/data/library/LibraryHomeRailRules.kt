@@ -57,6 +57,24 @@ internal fun libraryHomeRailId(list: LibraryList): String =
     list.remoteId?.takeIf { it.isNotBlank() } ?: ("id:" + list.id)
 
 /**
+ * The identity a lists-rail row is keyed on in the Library's lazy column.
+ *
+ * Not [LibraryList.id]: those ids share ONE Int with every other shelf, and
+ * the bands are not airtight - a BingeCat list sits on `Int.MIN_VALUE / 2 +
+ * index` and a saved community list on `Int.MIN_VALUE / 2 + hash`, a local
+ * list's id is a negative creation time, and a Trakt list's is `Int.MIN_VALUE
+ * + id`. Two rows that land on the same number are a hard crash in a lazy list
+ * ("Key was already used", ANDROID-T), and it is reachable: the same saved list
+ * read twice - an overlapping page - lands on one id twice.
+ *
+ * The source plus [libraryHomeRailId] is the pair the rail itself uses to name
+ * a list, so the key is the same identity a Home pin carries: stable across
+ * refreshes, and unique per row even when two services pick the same number.
+ */
+internal fun libraryListRowKey(list: LibraryList): String =
+    libraryHomeRailKey(list.source.name, libraryHomeRailId(list))
+
+/**
  * Every id a pin for [list] can be found under: the one this build would write
  * today, and the rail's numeric fallback.
  *
@@ -83,6 +101,50 @@ fun libraryHomeRailPinFor(list: LibraryList): LibraryHomeRailPin? {
         name = name
     )
 }
+
+/**
+ * [pins] with the one named [key] moved by [delta] places.
+ *
+ * The same move semantics the rail arrangement uses (see
+ * `railMoveChangesOrder`): -1 / +1 are one step, [Int.MIN_VALUE] is the top of
+ * the pinned group and [Int.MAX_VALUE] its bottom, and nothing is clamped into
+ * a move that would not change the order. Pin order IS rail order on Home
+ * (see `LibraryHomeRails.pins`), so this list is the whole arrangement of the
+ * viewer's Library rails.
+ *
+ * A [key] no pin carries is not an error - the ghost pin a rename left behind
+ * can be removed and moved by the same key - it simply moves nothing.
+ */
+fun movedPins(
+    pins: List<LibraryHomeRailPin>,
+    key: String,
+    delta: Int
+): List<LibraryHomeRailPin> {
+    val from = pins.indexOfFirst { it.key == key }
+    if (from < 0) return pins
+    val to = when {
+        delta == Int.MIN_VALUE -> 0
+        delta == Int.MAX_VALUE -> pins.lastIndex
+        else -> (from + delta).coerceIn(0, pins.lastIndex)
+    }
+    if (to == from) return pins
+    val moved = pins.toMutableList()
+    moved.add(to, moved.removeAt(from))
+    return moved
+}
+
+/**
+ * Whether a move of [key] by [delta] would actually change where the rail sits.
+ *
+ * The manager draws an arrow only when pressing it does something (the same
+ * exactness the arrangement rows already keep): the first pinned rail has no
+ * "up", the last none of "down".
+ */
+fun pinsMoveChangesOrder(
+    pins: List<LibraryHomeRailPin>,
+    key: String,
+    delta: Int
+): Boolean = movedPins(pins, key, delta) != pins
 
 /**
  * [pins] minus the ones whose local list was deleted.

@@ -171,6 +171,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscapeArt
 import com.kennyb1201.kbstream.ui.components.rememberMotionMs
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
@@ -185,6 +186,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberTitlePosterArt
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
@@ -3319,6 +3321,28 @@ private fun LibraryListHomeRail(
                         onDispose { cardFocusRequesters.remove(cardKey) }
                     }
 
+                    // A Library row may carry no art of its own: BingeCat's
+                    // media is a title, a year and ids, and its rail drew
+                    // title-only tiles beside Trakt rails that had posters.
+                    // Such a row is resolved by its id - the same TMDB lookup a
+                    // landscape card already makes (see
+                    // [rememberGlobalLandscapeArt] and [rememberTitlePosterArt]) -
+                    // while a row that HAS art passes enabled = false and is
+                    // drawn exactly as before (so Trakt's rails are untouched).
+                    // The title stays the fallback for an id TMDB cannot draw.
+                    val hasOwnArt = !meta.poster.isNullOrBlank()
+                    val resolvedPoster = rememberTitlePosterArt(
+                        id = meta.id,
+                        type = meta.type,
+                        enabled = !hasOwnArt
+                    )
+                    val resolvedLandscapeArt = rememberGlobalLandscapeArt(
+                        enabled = landscapeCards && !hasOwnArt,
+                        addonId = meta.id,
+                        addonType = meta.type,
+                        addonBackdrop = meta.poster
+                    )
+
                     val cardModifier = Modifier
                         .heroSourceElement(meta.type, meta.id)
                         .homeRailHeadLeftEdgeStop(index == 0)
@@ -3341,17 +3365,20 @@ private fun LibraryListHomeRail(
                     ) {
                         if (landscapeCards) {
                             LandscapeCard(
-                                // No resolved landscape art for a library row:
-                                // the service's own poster is the backdrop and
-                                // the title is drawn in the corner - the same
-                                // fallback an artwork-less catalog uses, rather
-                                // than a blank tile.
+                                // The card's backdrop: the viewer's chosen
+                                // still, else the row's own poster when it has
+                                // one (Trakt), else the resolved backdrop
+                                // (BingeCat), else its resolved poster - and
+                                // with none of those the title is drawn in the
+                                // corner. Never a blank tile.
                                 backdropUrl = imageOverrideCardBackdropUrl(
                                     paths = overridePaths,
                                     rawId = meta.id,
-                                    fallbackUrl = meta.poster
+                                    fallbackUrl = resolvedLandscapeArt.first
+                                        ?: meta.poster
+                                        ?: resolvedPoster
                                 ),
-                                logoUrl = null,
+                                logoUrl = resolvedLandscapeArt.second,
                                 fallbackTitle = meta.name,
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),
@@ -3364,7 +3391,7 @@ private fun LibraryListHomeRail(
                                 posterUrl = imageOverridePosterUrl(
                                     paths = overridePaths,
                                     rawId = meta.id,
-                                    fallbackUrl = meta.poster
+                                    fallbackUrl = meta.poster ?: resolvedPoster
                                 ),
                                 contentDescription = meta.name,
                                 isWatched = isWatched(meta),

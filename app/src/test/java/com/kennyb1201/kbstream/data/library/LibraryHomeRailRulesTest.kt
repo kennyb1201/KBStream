@@ -164,4 +164,63 @@ class LibraryHomeRailRulesTest {
         assertEquals(pin.key, rebuilt.key)
         assertEquals("list:BINGECAT_LIST|ref-9", pin.key)
     }
+
+    /**
+     * The lazy column's key.
+     *
+     * Two rows on one key is a fatal crash (ANDROID-T), and one Int is shared by
+     * every shelf: a BingeCat list and a saved community list both sit on
+     * `Int.MIN_VALUE / 2 + n`, a local list carries a negative creation time and
+     * a Trakt list `Int.MIN_VALUE + id`. So the key must name the LIST, and two
+     * different lists may never answer with one key - and one list read twice
+     * must answer with one key, so the rail can collapse the repeat.
+     */
+    @Test
+    fun `the rail key tells two shelves on one id apart`() {
+        // `bingecatShelfId(2)`'s number: the BingeCat band and the saved-list
+        // band are both `Int.MIN_VALUE / 2 + n` (see bingecatShelfId /
+        // likedListShelfId), so one number really can name two lists.
+        val sharedId = Int.MIN_VALUE / 2 + 2
+        val bingecat = LibraryList(
+            id = sharedId,
+            name = "Top 10 Starz",
+            itemCount = 9,
+            source = LibrarySource.BINGECAT_LIST,
+            remoteId = "ref-123"
+        )
+        // A saved community list whose masked hash landed on the BingeCat row's
+        // number - the case the bands do not rule out.
+        val liked = LibraryList(
+            id = sharedId,
+            name = "Neo-noir",
+            itemCount = 30,
+            source = LibrarySource.TRAKT_LIST,
+            remoteId = "neo-noir"
+        )
+
+        assertEquals(bingecat.id, liked.id)
+        assertNotEquals(libraryListRowKey(bingecat), libraryListRowKey(liked))
+        assertEquals("list:BINGECAT_LIST|ref-123", libraryListRowKey(bingecat))
+        assertEquals("list:TRAKT_LIST|neo-noir", libraryListRowKey(liked))
+    }
+
+    @Test
+    fun `the rail key survives a reindex and repeats for one list`() {
+        val list = LibraryList(
+            id = Int.MIN_VALUE / 2,
+            name = "Top 10 Starz",
+            itemCount = 9,
+            source = LibrarySource.BINGECAT_LIST,
+            remoteId = "ref-123"
+        )
+        // Reindexed after a neighbour went away: same key, or the rail drops and
+        // rebuilds the row on every refresh.
+        assertEquals(
+            libraryListRowKey(list),
+            libraryListRowKey(list.copy(id = Int.MIN_VALUE / 2 + 5))
+        )
+        // Read twice (an overlapping page): ONE key, so the rail's distinctBy
+        // collapses the repeat instead of handing a lazy list a duplicate.
+        assertEquals(libraryListRowKey(list), libraryListRowKey(list.copy(itemCount = 10)))
+    }
 }

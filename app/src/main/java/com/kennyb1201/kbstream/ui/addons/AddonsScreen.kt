@@ -141,6 +141,14 @@ fun AddonsScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
     var showCatalogManager by remember { mutableStateOf(false) }
+    // The Library lists pinned to Home, and the revision that re-reads them.
+    // A pin is its own blob: nothing in the arrangement state bumps when one is
+    // moved, renamed or removed here, so the manager owns its own read.
+    var libraryPinsRevision by remember { mutableStateOf(0) }
+    var renameLibraryPin by remember {
+        mutableStateOf<com.kennyb1201.kbstream.data.library.LibraryHomeRailPin?>(null)
+    }
+    var renameLibraryDraft by remember { mutableStateOf("") }
     // Two callers ask for this dialog and then navigate here: Home's "all
     // rails are hidden" card (HD-P2-5) and Settings' "Home / Collections"
     // row. Consume the one-shot request as the screen appears: the flag is
@@ -540,6 +548,9 @@ fun AddonsScreen(
     }
 
     if (showCatalogManager) {
+        val libraryPins = remember(libraryPinsRevision) {
+            com.kennyb1201.kbstream.data.library.LibraryHomeRails.pins(context)
+        }
         CatalogManagerDialog(
             configurations = catalogConfigurations,
             collectionsState = collectionsState,
@@ -612,7 +623,49 @@ fun AddonsScreen(
                 renameCatalogDraft = config.catalog.displayName
                 renameCatalogTarget = config
             },
+            // A Library list's row is the pin, not an arrangement slot: its
+            // arrows rewrite the pins' order, its rename rewrites the pin's
+            // stored name and its remove unpins. All three go through the pins
+            // store, so the change syncs account-wide exactly like a pin made
+            // in the Library (see LibraryHomeRails.write).
+            libraryPins = libraryPins,
+            onLibraryMove = { pin, delta ->
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails
+                    .movePinned(context, pin, delta)
+                libraryPinsRevision += 1
+            },
+            onLibraryRename = { pin ->
+                renameLibraryPin = pin
+                renameLibraryDraft = pin.name
+            },
+            onLibraryRemove = { pin ->
+                // Reads the pin's stored key, so a ghost rail (a renamed
+                // list's stale pin, with no Library row of its own) is
+                // removable whether or not its list still resolves.
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails
+                    .setPinned(context, pin, false)
+                libraryPinsRevision += 1
+            },
             onDismiss = { showCatalogManager = false }
+        )
+    }
+
+    renameLibraryPin?.let { pin ->
+        RenameCatalogDialog(
+            currentName = renameLibraryDraft,
+            // A pin's stored name IS its rail's heading, so there is no default
+            // to reset to - the RESET row is not offered.
+            hasCustomName = false,
+            heading = "RENAME LIBRARY RAIL",
+            onNameChange = { renameLibraryDraft = it },
+            onDismiss = { renameLibraryPin = null },
+            onSave = {
+                com.kennyb1201.kbstream.data.library.LibraryHomeRails
+                    .renamePinned(context, pin, renameLibraryDraft)
+                libraryPinsRevision += 1
+                renameLibraryPin = null
+            },
+            onReset = { renameLibraryPin = null }
         )
     }
 

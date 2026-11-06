@@ -138,7 +138,9 @@ import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscapeArt
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.rememberTitlePosterArt
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBCard
 import com.kennyb1201.kbstream.ui.components.touch.LandscapeCard
@@ -2880,6 +2882,22 @@ private fun MobileLibraryListRail(
             ) { _, meta ->
                 val watched = isWatched(meta)
                 val partiallyWatched = !watched && isPartiallyWatched(meta)
+                // The same two resolutions the TV rail makes: a row with no art
+                // of its own (BingeCat's media carries none) is drawn by its id,
+                // and a row that HAS a poster (Trakt, MDBList) resolves nothing
+                // and is drawn exactly as before.
+                val hasOwnArt = !meta.poster.isNullOrBlank()
+                val resolvedPoster = rememberTitlePosterArt(
+                    id = meta.id,
+                    type = meta.type,
+                    enabled = !hasOwnArt
+                )
+                val resolvedLandscapeArt = rememberGlobalLandscapeArt(
+                    enabled = landscapeCards && !hasOwnArt,
+                    addonId = meta.id,
+                    addonType = meta.type,
+                    addonBackdrop = meta.poster
+                )
                 if (landscapeCards) {
                     LandscapeCard(
                         // A Library row carries the service's poster but not a
@@ -2889,9 +2907,11 @@ private fun MobileLibraryListRail(
                         backdropUrl = imageOverrideCardBackdropUrl(
                             paths = overridePaths,
                             rawId = meta.id,
-                            fallbackUrl = meta.poster
+                            fallbackUrl = resolvedLandscapeArt.first
+                                ?: meta.poster
+                                ?: resolvedPoster
                         ),
-                        logoUrl = null,
+                        logoUrl = resolvedLandscapeArt.second,
                         fallbackTitle = meta.name,
                         contentDescription = meta.name,
                         isWatched = watched,
@@ -2910,7 +2930,7 @@ private fun MobileLibraryListRail(
                         posterUrl = imageOverridePosterUrl(
                             paths = overridePaths,
                             rawId = meta.id,
-                            fallbackUrl = meta.poster
+                            fallbackUrl = meta.poster ?: resolvedPoster
                         ),
                         contentDescription = meta.name,
                         isWatched = watched,

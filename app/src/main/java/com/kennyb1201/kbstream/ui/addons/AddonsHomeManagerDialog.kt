@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowUp
@@ -85,7 +86,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * move we scroll to the row's new index and re-focus the SAME button there.
  */
 private class CatalogRowFocus {
-    enum class Slot { TOGGLE, PIN, TOP, UP, DOWN, BOTTOM }
+    enum class Slot { TOGGLE, PIN, TOP, UP, DOWN, BOTTOM, REMOVE }
 
     val toggle = FocusRequester()
     val pin = FocusRequester()
@@ -94,6 +95,9 @@ private class CatalogRowFocus {
     val down = FocusRequester()
     val bottom = FocusRequester()
 
+    /** The remove button a Library row carries (see [HomeRailManagerRow.isLibraryRail]). */
+    val remove = FocusRequester()
+
     fun of(slot: Slot): FocusRequester? = when (slot) {
         Slot.TOGGLE -> toggle
         Slot.PIN -> pin
@@ -101,6 +105,7 @@ private class CatalogRowFocus {
         Slot.UP -> up
         Slot.DOWN -> down
         Slot.BOTTOM -> bottom
+        Slot.REMOVE -> remove
     }
 }
 
@@ -141,6 +146,23 @@ internal fun CatalogManagerDialog(
     onBuiltinMove: (String, Int) -> Unit,
     onBuiltinRename: (String) -> Unit,
     onRename: (CatalogConfiguration) -> Unit,
+    /**
+     * The Library lists pinned to Home, in pin order (empty on a surface that
+     * does not manage them - see [homeRailManagerRows]).
+     */
+    libraryPins: List<com.kennyb1201.kbstream.data.library.LibraryHomeRailPin> =
+        emptyList(),
+    /** A library row's arrow: rewrites the pins' order, not the arrangement's. */
+    onLibraryMove: (
+        com.kennyb1201.kbstream.data.library.LibraryHomeRailPin,
+        Int
+    ) -> Unit = { _, _ -> },
+    /** A library row's rename: rewrites the pin's stored name, which titles the rail. */
+    onLibraryRename:
+        (com.kennyb1201.kbstream.data.library.LibraryHomeRailPin) -> Unit = {},
+    /** A library row's remove: unpins it, whether or not its list still loads. */
+    onLibraryRemove:
+        (com.kennyb1201.kbstream.data.library.LibraryHomeRailPin) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     BackHandler(onBack = onDismiss)
@@ -178,12 +200,13 @@ internal fun CatalogManagerDialog(
     // draws the same rows from the same function, so the two screens cannot
     // disagree about a row, its order, or whether an arrow would move it.
     val rows: List<HomeRailManagerRow> =
-        remember(configurations, collectionsState, homeOrderVersion) {
+        remember(configurations, collectionsState, homeOrderVersion, libraryPins) {
             homeRailManagerRows(
                 configurations = configurations,
                 collectionsState = collectionsState,
                 kidsMaxAge = kidsMaxAge,
-                isGuest = isGuest
+                isGuest = isGuest,
+                libraryPins = libraryPins
             )
         }
 
@@ -199,10 +222,40 @@ internal fun CatalogManagerDialog(
         // index; the key-based restore finds it there).
         pendingFocus = row.key to slot
         when {
+            // A Library row's arrows move the PIN, not an arrangement slot: its
+            // position on Home is the pin's order at the end of the column.
+            row.isLibraryRail -> row.libraryPin?.let { pin -> onLibraryMove(pin, delta) }
             row.isBuiltinRail -> onBuiltinMove(row.key, delta)
             row.isCollection -> onCollectionMove(row.key, delta)
             else -> row.config?.let { onCatalogMove(it, delta) }
         }
+    }
+
+    /**
+     * Remove a Library row, keeping focus in the list.
+     *
+     * The row leaves the dialog on the press (its pin is gone), which disposes
+     * the focused button; parking on the next row's toggle first is the same
+     * thing [hideRowKeepFocus] does for a hidden rail. Removing is the only way
+     * a ghost pin goes: the list it names has no Library row to offer Remove,
+     * and hiding is not offered for a Library rail (the blob has no hidden
+     * flag, and hiding must not be smuggled in as an unpin).
+     */
+    fun removeLibraryRow(row: HomeRailManagerRow) {
+        val pin = row.libraryPin ?: return
+        val index = visibleRows.indexOfFirst { it.key == row.key }
+        val neighborKey = when (index) {
+            -1 -> null
+            else -> visibleRows.getOrNull(index + 1)?.key
+                ?: visibleRows.getOrNull(index - 1)?.key
+        }
+        if (neighborKey != null) {
+            rowRequesters[neighborKey]?.toggle?.let { requester ->
+                runCatching { requester.requestFocus() }
+            }
+        }
+        pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
+        onLibraryRemove(pin)
     }
 
     /**
@@ -537,10 +590,16 @@ internal fun CatalogManagerDialog(
                         onMove = { slot, delta -> moveRow(row, slot, delta) },
                         onRename = {
                             when {
+                                // A Library rail's heading IS its pin's stored
+                                // name, so the same rename button edits the pin
+                                // rather than an arrangement title override.
+                                row.isLibraryRail ->
+                                    row.libraryPin?.let(onLibraryRename)
                                 row.isBuiltinRail -> onBuiltinRename(row.key)
                                 !row.isCollection -> row.config?.let { onRename(it) }
                             }
                         },
+                        onRemove = { removeLibraryRow(row) },
                         // A move re-orders this item inside the LazyColumn; the
                         // row animates to its new slot instead of teleporting,
                         // which matters here because a move also restores focus
@@ -577,6 +636,9 @@ internal fun CatalogManagerDialog(
                             onPin = {},
                             onMove = { _, _ -> },
                             onRename = {},
+                            // A Library rail has no hidden state, so no real row
+                            // is ever in this section with one to remove.
+                            onRemove = {},
                             // A SHOW/HIDE press moves the row between the two
                             // lists; animating both ends makes the rail
                             // visibly leave one and arrive in the other.
@@ -655,6 +717,8 @@ private fun UnifiedManagerRow(
     onPin: () -> Unit,
     onMove: (CatalogRowFocus.Slot, Int) -> Unit,
     onRename: () -> Unit,
+    /** Only a Library row draws this: a pin is removed here, never hidden. */
+    onRemove: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -679,7 +743,8 @@ private fun UnifiedManagerRow(
                 isCollection = row.isCollection,
                 isBrowseRow = row.isBrowseRail,
                 isBuiltinRow = row.isBuiltinRail,
-                isCustomCatalogRow = row.isCustomCatalog
+                isCustomCatalogRow = row.isCustomCatalog,
+                isLibraryRow = row.isLibraryRail
             )
             if (row.isPinned) {
                 Icon(
@@ -698,7 +763,13 @@ private fun UnifiedManagerRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(start = 8.dp, end = 6.dp)
             )
-            if (isHiddenSection) {
+            // A Library rail has no hide: the pins blob has no hidden flag and
+            // hiding must not be smuggled in as an unpin, so the press a viewer
+            // wants there is REMOVE (line 2), not a toggle that would unpin the
+            // rail while calling itself "hidden".
+            if (row.isLibraryRail) {
+                // Nothing in this slot; the row's own controls are on line 2.
+            } else if (isHiddenSection) {
                 // A toggle reading "off" on a rail that is absent from Home
                 // says nothing about it; SHOW says what the press will do.
                 KBCard(
@@ -763,7 +834,19 @@ private fun UnifiedManagerRow(
                     )
                 }
                 Spacer(modifier = Modifier.width(4.dp))
-                if (row.isCollection) {
+                if (row.isLibraryRail) {
+                    // The pin's removal. A ghost rail (a renamed list's stale
+                    // pin) has no Library row to remove it from, so this is the
+                    // only door it has - and it works on the stored key, so a
+                    // list that no longer loads can still be taken off Home.
+                    CatalogIconButton(
+                        icon = Icons.Filled.Delete,
+                        contentDescription = "Remove from Home",
+                        tint = KBDanger,
+                        onClick = onRemove,
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.remove)
+                    )
+                } else if (row.isCollection) {
                     CatalogIconButton(
                         icon = Icons.Filled.PushPin,
                         contentDescription = if (row.isPinned) {
@@ -835,7 +918,8 @@ private fun RailKindChip(
     isCollection: Boolean,
     isBrowseRow: Boolean = false,
     isBuiltinRow: Boolean = false,
-    isCustomCatalogRow: Boolean = false
+    isCustomCatalogRow: Boolean = false,
+    isLibraryRow: Boolean = false
 ) {
     Surface(
         shape = KBShapeSmall,
@@ -850,6 +934,7 @@ private fun RailKindChip(
     ) {
         Text(
             text = when {
+                isLibraryRow -> "LIBRARY"
                 isCustomCatalogRow -> "CUSTOM"
                 isBuiltinRow -> "BUILT-IN"
                 isBrowseRow -> "BROWSE"
