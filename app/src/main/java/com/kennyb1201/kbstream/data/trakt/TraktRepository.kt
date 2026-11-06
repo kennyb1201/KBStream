@@ -1189,7 +1189,7 @@ class TraktRepository private constructor(private val context: Context?) {
         if (!force) cachedPublicLists(directory)?.let { return PublicListsAnswer.Loaded(it) }
         val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
 
-        val answer: PublicListsAnswer<List<TraktPublicList>> = when (directory) {
+        val answer: PublicListsAnswer<List<Pair<TraktPublicList, Int?>>> = when (directory) {
             PublicListDirectory.TRAKT_POPULAR -> readPublicPages { page ->
                 api.popularLists("Bearer $token", page = page)
             }.mapRows { row -> row.list?.let { list -> list to row.likeCount } }
@@ -1203,16 +1203,12 @@ class TraktRepository private constructor(private val context: Context?) {
             else -> PublicListsAnswer.Failed("vendor")
         }
 
-        return when (answer) {
-            is PublicListsAnswer.Loaded -> {
-                val cards = answer.value
-                    .mapNotNull { (list, likes) -> list.toPublicCard(likes) }
-                publicListCache[directory.wire] = CachedPublicLists(cards, System.currentTimeMillis())
-                PublicListsAnswer.Loaded(cards)
-            }
-
-            else -> answer
+        val cards = answer.toCards()
+        (cards as? PublicListsAnswer.Loaded)?.let { loaded ->
+            publicListCache[directory.wire] =
+                CachedPublicLists(loaded.value, System.currentTimeMillis())
         }
+        return cards
     }
 
     /**
@@ -1226,15 +1222,10 @@ class TraktRepository private constructor(private val context: Context?) {
         val trimmed = query.trim()
         if (!PublicListRules.searchEnabled(trimmed)) return PublicListsAnswer.Loaded(emptyList())
         val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
-        val answer = readPublicPages { page ->
+        return readPublicPages { page ->
             api.searchByType("Bearer $token", "list", trimmed, page = page)
         }.mapRows { row -> row.list?.let { list -> list to null } }
-        return when (answer) {
-            is PublicListsAnswer.Loaded ->
-                PublicListsAnswer.Loaded(answer.value.mapNotNull { (list, _) -> list.toPublicCard(null) })
-
-            else -> answer
-        }
+            .toCards()
     }
 
     /**
@@ -1247,20 +1238,41 @@ class TraktRepository private constructor(private val context: Context?) {
         val answer = readPublicPages { page ->
             api.likedLists("Bearer $token", page = page)
         }.mapRows { row -> row.list?.let { list -> list to null } }
+            .toCards()
         return when (answer) {
             is PublicListsAnswer.Loaded -> {
                 // `liked = true` because this read IS the liked set: Library uses
                 // it to route a row's delete to an unlike rather than to Trakt's
                 // hard list delete.
-                val cards = answer.value.mapNotNull { (list, _) ->
-                    list.toPublicCard(null)?.copy(liked = true)
-                }
+                val cards = answer.value.map { it.copy(liked = true) }
                 likedListRefs += cards.map { it.ref }
                 PublicListsAnswer.Loaded(cards)
             }
 
-            else -> answer
+            is PublicListsAnswer.Failed -> PublicListsAnswer.Failed(answer.reason)
+            PublicListsAnswer.NotConnected -> PublicListsAnswer.NotConnected
+            is PublicListsAnswer.Blocked -> PublicListsAnswer.Blocked(answer.reason)
         }
+    }
+
+    /**
+     * The rows' cards, or the answer that stopped them.
+     *
+     * The three reads above hand back (list, row-like-count) pairs because the
+     * row shapes differ while the list does not; this is the one place that pair
+     * becomes the surface's card, so a failure keeps its own kind (a spent
+     * allowance is not a network error) instead of collapsing into an empty list.
+     */
+    private fun PublicListsAnswer<List<Pair<TraktPublicList, Int?>>>.toCards():
+        PublicListsAnswer<List<PublicListCard>> = when (this) {
+        is PublicListsAnswer.Loaded ->
+            PublicListsAnswer.Loaded(
+                value.mapNotNull { (list, likes) -> list.toPublicCard(likes) }
+            )
+
+        is PublicListsAnswer.Failed -> PublicListsAnswer.Failed(reason)
+        PublicListsAnswer.NotConnected -> PublicListsAnswer.NotConnected
+        is PublicListsAnswer.Blocked -> PublicListsAnswer.Blocked(reason)
     }
 
     /**

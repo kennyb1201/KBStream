@@ -2105,14 +2105,14 @@ private fun MobileBillboard(
                     // ordinary failure and stays re-armable - and a HOLD is not
                     // a verdict at all (a cold mint, not a refused client), so it
                     // must stay re-armable too.
-                    if (it is TokenlessHoldException) {
+                    if (error is TokenlessHoldException) {
                         Log.w(
                             TAG,
                             "Billboard trailer key=$key held without a source to " +
                                 "mount; leaving it re-armable " +
                                 "(excluded=${pending.excludedClients.sorted()})"
                         )
-                    } else if (heroTrailerResolveFailurePoisons(pending.excludedClients, it)) {
+                    } else if (heroTrailerResolveFailurePoisons(pending.excludedClients, error)) {
                         TrailerPlayerLauncher.markIdentityBlocked(key)
                     }
                 }
