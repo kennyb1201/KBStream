@@ -22,6 +22,7 @@ import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.browseHomeRails
 import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
+import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
