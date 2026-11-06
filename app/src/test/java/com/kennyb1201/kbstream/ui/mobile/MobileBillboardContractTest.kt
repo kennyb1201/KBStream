@@ -733,8 +733,18 @@ class MobileBillboardContractTest {
         assertTrue(
             "its death line names the resolve kind, as the TV hero's does",
             home.contains(
-                "kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),"
+                "val deadKind = if (identity) PoTokenTrace.resolveKind() else " +
+                    "source?.deathKind()"
             )
+        )
+        assertTrue(
+            "and the retry carries the dying mount's facts so the answer to it can " +
+                "close the same line with them instead of the replacement's",
+            home.contains("deadKind = deadKind,") &&
+                home.contains("deadItag = deadItag,") &&
+                home.contains("kind = pending.deadKind,") &&
+                home.contains("itag = pending.deadItag,") &&
+                home.contains("chunkOffsetBytes = pending.deadChunkOffsetBytes,")
         )
     }
 

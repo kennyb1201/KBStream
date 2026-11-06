@@ -228,9 +228,13 @@ object PoTokenTrace {
      * Called from the chunked data source itself, at the moment it stops
      * retrying - the one place the byte offset, the stream length and the
      * reason still exist. Observation only: nothing in the retry, chunk-size or
-     * backoff logic reads this back, so VOD playback is unchanged. The line it
-     * feeds is [recordTrailerDeath]'s, not its own: an offset with no death
-     * around it is not a fact a capture can use.
+     * backoff logic reads this back, so VOD playback is unchanged.
+     *
+     * It has a line of its own in [lines] (`trailer.chunk:`) AS WELL as being
+     * quoted on the death line: a death line is rewritten by every answer to
+     * the retry it asked for, and the chunk record is independent evidence that
+     * must survive that. One clip's offset is never attributed to another
+     * ([chunkDeathFor] does the matching).
      */
     @Synchronized
     fun recordChunkDeath(
@@ -381,6 +385,15 @@ object PoTokenTrace {
      * `none: retries spent` - the ladder had no untried class left and the one
      * identical replay was already spent, so no replacement was requested at
      * all. It is the line that says "this is as far as the retry rules go".
+     *
+     * ONE line per death, WHOLESALE overwritten: a death and the answer to the
+     * retry it asked for are the same event, so the second call replaces the
+     * first rather than adding a line. That is why a caller answering a retry
+     * must pass the DYING mount's [kind]/[itag]/[chunkOffsetBytes]/
+     * [chunkTotalBytes] again - carried on its own pending record - and must not
+     * read them off the replacement it just resolved: the replacement describes
+     * the fix, and a capture needs the failure. Only `resume=` is the answer's
+     * own (it names the client that signed the replacement).
      */
     @Synchronized
     fun recordTrailerDeath(
@@ -446,7 +459,8 @@ object PoTokenTrace {
 
     /**
      * Oldest-first, stable order: the two contexts, the resolve, the pre-warm,
-     * then events.
+     * then events, then the trailer's death and the chunk death that preceded it
+     * (see [recordChunkDeath] for why that range gets a line of its own).
      *
      * The pre-warm line is printed even when it was never recorded, as
      * `state=cold`: a capture from a device that never warmed has to be able to
@@ -461,6 +475,20 @@ object PoTokenTrace {
         add(warmLine ?: "pot.warm: state=$WARM_COLD")
         eventLine?.let { add(it) }
         deathLine?.let { add(it) }
+        // Standalone, after the death line and independent of it: the death
+        // line is overwritten by every answer to its retry (a chunk read that
+        // died on the first mount, then a replacement that resolved, is ONE
+        // death line), so quoting the offset only there lost it precisely when
+        // a retry worked. Absence still means "no chunk record" - nothing here
+        // invents a range, and this is only printed for the clip it was
+        // recorded for.
+        chunkDeath?.let { chunk ->
+            add(
+                "trailer.chunk: video=${chunk.videoId ?: "?"} " +
+                    "offset=${chunk.offsetBytes}/${chunk.totalBytes ?: "?"} " +
+                    "reason=${chunk.reason}"
+            )
+        }
     }
 
     /** Test seam. */

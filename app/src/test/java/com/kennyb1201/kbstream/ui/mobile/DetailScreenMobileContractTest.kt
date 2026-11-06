@@ -73,8 +73,31 @@ class DetailScreenMobileContractTest {
             "and its death line uses the resolve kind the TV hero records, not the " +
                 "dead source's",
             detail.contains(
-                "kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),"
+                "val deadKind = if (identity) PoTokenTrace.resolveKind() else " +
+                    "source?.deathKind()"
             )
+        )
+        assertTrue(
+            "that kind is read ONCE and used by both the first write and the retry " +
+                "record, so the two cannot drift",
+            detail.contains("kind = deadKind,") &&
+                detail.contains("deadKind = deadKind,")
+        )
+        assertTrue(
+            "and the retry the death asks for carries its itag and chunk range, " +
+                "because the answer knows only the REPLACEMENT",
+            detail.contains("itag = deadItag,") &&
+                detail.contains("deadItag = deadItag,") &&
+                detail.contains("deadChunkOffsetBytes = chunk?.offsetBytes,") &&
+                detail.contains("deadChunkTotalBytes = streamBytes")
+        )
+        assertTrue(
+            "so both overwrites of this line close it with the dying facts",
+            detail.contains("kind = pending.deadKind,") &&
+                detail.contains("itag = pending.deadItag,") &&
+                detail.contains("chunkOffsetBytes = pending.deadChunkOffsetBytes,") &&
+                detail.contains("chunkTotalBytes = pending.deadChunkTotalBytes") &&
+                !detail.contains("kind = source.deathKind(),")
         )
     }
 
@@ -641,7 +664,7 @@ class DetailScreenMobileContractTest {
         assertTrue(
             "the chunk range and format that died are read for the death line",
             mobile.contains("PoTokenTrace.chunkDeathFor(key)") &&
-                mobile.contains("itag = signedUrl?.let { googlevideoItag(it) }") &&
+                mobile.contains("val deadItag = signedUrl?.let { googlevideoItag(it) }") &&
                 mobile.contains("else source?.deathKind()")
         )
         assertTrue(

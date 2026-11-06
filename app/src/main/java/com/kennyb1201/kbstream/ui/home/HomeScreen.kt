@@ -1586,10 +1586,13 @@ private fun HomeHero(
                     PoTokenTrace.recordTrailerDeath(
                         videoId = key,
                         client = pending.deadClient,
-                        kind = PoTokenTrace.resolveKind(),
+                        kind = pending.deadKind,
                         positionMs = pending.positionMs,
                         durationMs = pending.durationMs,
-                        resume = "blocked"
+                        resume = "blocked",
+                        itag = pending.deadItag,
+                        chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                        chunkTotalBytes = pending.deadChunkTotalBytes
                     )
                     trailerPendingResume = null
                     Log.e(
@@ -1648,12 +1651,18 @@ private fun HomeHero(
                             PoTokenTrace.recordTrailerDeath(
                                 videoId = key,
                                 client = pending.deadClient,
-                                kind = PoTokenTrace.resolveKind(),
+                                // The dying mount's facts, not this
+                                // replacement's: `resume=` is the outcome, the
+                                // rest is the failure.
+                                kind = pending.deadKind,
                                 positionMs = pending.positionMs,
                                 durationMs = pending.durationMs,
                                 resume = "client " +
                                     (TrailerPlayerLauncher.signingClient(trailerKey)
-                                        ?: "unknown") + " ok"
+                                        ?: "unknown") + " ok",
+                                itag = pending.deadItag,
+                                chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                                chunkTotalBytes = pending.deadChunkTotalBytes
                             )
                         }
                         Log.w(
@@ -1674,10 +1683,13 @@ private fun HomeHero(
                             PoTokenTrace.recordTrailerDeath(
                                 videoId = key,
                                 client = pending.deadClient,
-                                kind = PoTokenTrace.resolveKind(),
+                                kind = pending.deadKind,
                                 positionMs = pending.positionMs,
                                 durationMs = pending.durationMs,
-                                resume = "none: no other client"
+                                resume = "none: no other client",
+                                itag = pending.deadItag,
+                                chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                                chunkTotalBytes = pending.deadChunkTotalBytes
                             )
                             if (error is TokenlessHoldException) {
                                 // Held, not refused: the replacement resolve
@@ -1724,10 +1736,13 @@ private fun HomeHero(
                     PoTokenTrace.recordTrailerDeath(
                         videoId = key,
                         client = pending.deadClient,
-                        kind = PoTokenTrace.resolveKind(),
+                        kind = pending.deadKind,
                         positionMs = pending.positionMs,
                         durationMs = pending.durationMs,
-                        resume = "cancelled"
+                        resume = "cancelled",
+                        itag = pending.deadItag,
+                        chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                        chunkTotalBytes = pending.deadChunkTotalBytes
                     )
                 }
             }
@@ -1772,6 +1787,12 @@ private fun HomeHero(
         // chunk is worth in media time), else what the chunker last believed.
         val streamBytes = chunk?.totalBytes
             ?: signedUrl?.let { googlevideoBytes(it) }
+        // The dying mount's facts, as the write below quotes them and as the
+        // resume record carries them: the resolve that answers this request
+        // knows only the replacement, and the death line it rewrites must keep
+        // saying what died (see HeroTrailerResume).
+        val deadKind = source?.deathKind()
+        val deadItag = signedUrl?.let { googlevideoItag(it) }
         val plan = heroTrailerRetryPlan(
             positionMs = positionMs,
             durationMs = length,
@@ -1792,7 +1813,7 @@ private fun HomeHero(
         PoTokenTrace.recordTrailerDeath(
             videoId = key,
             client = dead,
-            kind = source?.deathKind(),
+            kind = deadKind,
             positionMs = positionMs,
             durationMs = length,
             resume = if (plan.verdict == HeroTrailerResumeVerdict.RESUME) {
@@ -1800,7 +1821,7 @@ private fun HomeHero(
             } else {
                 "none: retries spent"
             },
-            itag = signedUrl?.let { googlevideoItag(it) },
+            itag = deadItag,
             attempt = attempt,
             change = change,
             chunkOffsetBytes = chunk?.offsetBytes,
@@ -1829,7 +1850,13 @@ private fun HomeHero(
             durationMs = length,
             deadClient = dead,
             excludedClients = plan.excludedClients,
-            requestId = trailerResumeSeq
+            requestId = trailerResumeSeq,
+            // Ride along so the resolve's outcome closes this line with the
+            // facts it opened with, not with the replacement's.
+            deadKind = deadKind,
+            deadItag = deadItag,
+            deadChunkOffsetBytes = chunk?.offsetBytes,
+            deadChunkTotalBytes = streamBytes
         )
         // The record is what the effect reads; it is cleared only when that
         // resolve has an outcome (see the effect's try/finally).
@@ -2181,10 +2208,17 @@ private fun HomeHero(
                                             PoTokenTrace.recordTrailerDeath(
                                                 videoId = key,
                                                 client = resume.deadClient,
-                                                kind = PoTokenTrace.resolveKind(),
+                                                // Still the DYING mount's facts, not
+                                                // this replacement's: it ended, but
+                                                // what was being diagnosed is the
+                                                // death the resume answered.
+                                                kind = resume.deadKind,
                                                 positionMs = resume.positionMs,
                                                 durationMs = resume.durationMs,
-                                                resume = "replacement ended"
+                                                resume = "replacement ended",
+                                                itag = resume.deadItag,
+                                                chunkOffsetBytes = resume.deadChunkOffsetBytes,
+                                                chunkTotalBytes = resume.deadChunkTotalBytes
                                             )
                                         }
                                     }
@@ -2204,10 +2238,13 @@ private fun HomeHero(
                                             PoTokenTrace.recordTrailerDeath(
                                                 videoId = key,
                                                 client = resume.deadClient,
-                                                kind = PoTokenTrace.resolveKind(),
+                                                kind = resume.deadKind,
                                                 positionMs = positionMs,
                                                 durationMs = resume.durationMs,
-                                                resume = "replacement failed"
+                                                resume = "replacement failed",
+                                                itag = resume.deadItag,
+                                                chunkOffsetBytes = resume.deadChunkOffsetBytes,
+                                                chunkTotalBytes = resume.deadChunkTotalBytes
                                             )
                                         }
                                     }
@@ -2237,6 +2274,16 @@ private fun HomeHero(
                                         // Display name (cache, else the trace's
                                         // fallback) is what the death line says.
                                         val died = TrailerPlayerLauncher.signingClient(key)
+                                        // The dying mount's own facts, for the same
+                                        // reason requestTrailerRetry reads them: this
+                                        // is a FIRST write, and the resolve the
+                                        // record below asks for rewrites it.
+                                        val deadSource = trailerMountedSource
+                                        val deadUrl = deadSource?.signedUrl()
+                                        val deadChunk = PoTokenTrace.chunkDeathFor(key)
+                                        val deadBytes = deadChunk?.totalBytes
+                                            ?: deadUrl?.let { googlevideoBytes(it) }
+                                        val deadItag = deadUrl?.let { googlevideoItag(it) }
                                         // The EXCLUSION grows from the cache's own
                                         // answer only: the trace's last resolve is
                                         // whatever ran last in the process, and
@@ -2265,7 +2312,10 @@ private fun HomeHero(
                                                 positionMs = positionMs,
                                                 durationMs = durationMs,
                                                 resume = "client " +
-                                                    (died ?: "unknown") + " died"
+                                                    (died ?: "unknown") + " died",
+                                                itag = deadItag,
+                                                chunkOffsetBytes = deadChunk?.offsetBytes,
+                                                chunkTotalBytes = deadBytes
                                             )
                                             Log.w(
                                                 TAG,
@@ -2293,7 +2343,11 @@ private fun HomeHero(
                                                 durationMs = durationMs,
                                                 deadClient = died,
                                                 excludedClients = excluded,
-                                                requestId = trailerResumeSeq
+                                                requestId = trailerResumeSeq,
+                                                deadKind = PoTokenTrace.resolveKind(),
+                                                deadItag = deadItag,
+                                                deadChunkOffsetBytes = deadChunk?.offsetBytes,
+                                                deadChunkTotalBytes = deadBytes
                                             )
                                             trailerPendingResume = request
                                             trailerLastResume = request
@@ -2303,7 +2357,10 @@ private fun HomeHero(
                                                 kind = PoTokenTrace.resolveKind(),
                                                 positionMs = positionMs,
                                                 durationMs = durationMs,
-                                                resume = "pending"
+                                                resume = "pending",
+                                                itag = deadItag,
+                                                chunkOffsetBytes = deadChunk?.offsetBytes,
+                                                chunkTotalBytes = deadBytes
                                             )
                                             Log.w(
                                                 TAG,

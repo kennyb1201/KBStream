@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.youtube
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -293,6 +295,170 @@ class TrailerDeathRecordTest {
 
         assertNull(PoTokenTrace.chunkDeathFor(VIDEO_ID))
         assertNull("and nothing claims it a second time", PoTokenTrace.chunkDeathFor(null))
+    }
+
+    // ── the line the retry REWRITES ────────────────────────────────────────
+
+    /**
+     * The 2026-11-06 deep dive (§1.3): the first write carries the dying
+     * mount's facts and the overwrite that follows a resolved retry replaced
+     * them with the REPLACEMENT's - so a paste after a trailer death could no
+     * longer say which mount died, what format it was, or whether its chunk read
+     * was what failed. The four facts now ride on the pending record and are
+     * passed back here, so the second write closes the same line with them.
+     */
+    @Test
+    fun `an answer to the retry keeps the dying mount's kind, itag and chunk`() {
+        PoTokenTrace.recordChunkDeath(
+            videoId = VIDEO_ID,
+            offsetBytes = CHUNK_OFFSET,
+            totalBytes = STREAM_BYTES,
+            reason = "InvalidResponseCodeException:403"
+        )
+        // The first write: the dying mount's own shape, format and range.
+        val chunk = PoTokenTrace.chunkDeathFor(VIDEO_ID)
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "android_vr",
+            kind = "progressive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending",
+            itag = "18",
+            attempt = 0,
+            change = "first",
+            chunkOffsetBytes = chunk?.offsetBytes,
+            chunkTotalBytes = chunk?.totalBytes
+        )
+        // The overwrite, as the resolve makes it: the replacement is `android`
+        // and its shape is `adaptive`, and NONE of that is passed - the record's
+        // own dying facts are, plus the outcome.
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "android_vr",
+            kind = "progressive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "client android ok",
+            itag = "18",
+            attempt = 1,
+            change = "class:android_vr",
+            chunkOffsetBytes = chunk?.offsetBytes,
+            chunkTotalBytes = chunk?.totalBytes
+        )
+
+        val deaths = PoTokenTrace.lines().filter { it.startsWith("trailer.death:") }
+        assertEquals(
+            "one line, because a death and its answer are one event",
+            1,
+            deaths.size
+        )
+        assertEquals(
+            "the dying mount's kind/itag/chunk survive the overwrite, and only " +
+                "the outcome is the replacement's",
+            "trailer.death: video=$VIDEO_ID client=android_vr kind=progressive " +
+                "itag=18 at=20400/140849 chunk=2097152/7331840 " +
+                "retry=1/class:android_vr resume=client android ok",
+            deaths.single()
+        )
+    }
+
+    @Test
+    fun `a death with no chunk record writes no chunk and no itag on either write`() {
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending",
+            attempt = 0,
+            change = "first"
+        )
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "client android ok",
+            attempt = 1,
+            change = "class:tv"
+        )
+
+        assertEquals(
+            "a carried null stays null: absence keeps meaning 'no chunk record', " +
+                "never an invented range",
+            "trailer.death: video=$VIDEO_ID client=tv kind=adaptive at=20400/140849 " +
+                "retry=1/class:tv resume=client android ok",
+            PoTokenTrace.lines().single { it.startsWith("trailer.death:") }
+        )
+    }
+
+    @Test
+    fun `a recorded chunk death gets a standalone line that outlives the overwrite`() {
+        PoTokenTrace.recordChunkDeath(
+            videoId = VIDEO_ID,
+            offsetBytes = CHUNK_OFFSET,
+            totalBytes = STREAM_BYTES,
+            reason = "InvalidResponseCodeException:403"
+        )
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending"
+        )
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "client android ok"
+        )
+
+        assertTrue(
+            "the range is its own evidence, printed after the death line and " +
+                "independent of which write is standing",
+            PoTokenTrace.lines().contains(
+                "trailer.chunk: video=$VIDEO_ID offset=2097152/7331840 " +
+                    "reason=InvalidResponseCodeException:403"
+            )
+        )
+
+        PoTokenTrace.clear()
+        PoTokenTrace.recordTrailerDeath(
+            videoId = VIDEO_ID,
+            client = "tv",
+            kind = "adaptive",
+            positionMs = 20_400L,
+            durationMs = 140_849L,
+            resume = "pending"
+        )
+        assertFalse(
+            "and with no chunk record the line is absent rather than empty",
+            PoTokenTrace.lines().any { it.startsWith("trailer.chunk:") }
+        )
+    }
+
+    @Test
+    fun `a chunk death with no id or no length is printed as unknown, not guessed`() {
+        PoTokenTrace.recordChunkDeath(
+            videoId = null,
+            offsetBytes = CHUNK_OFFSET,
+            totalBytes = null,
+            reason = "SocketTimeoutException"
+        )
+
+        assertTrue(
+            "the capture gets the range it has and '?' for what it does not",
+            PoTokenTrace.lines().contains(
+                "trailer.chunk: video=? offset=2097152/? reason=SocketTimeoutException"
+            )
+        )
     }
 
     @Test

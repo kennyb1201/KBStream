@@ -42,13 +42,30 @@ internal const val MAX_HERO_TRAILER_RESUMES = 4
  * fallback); [excludedClients] is the STRICT, cache-derived set the resolve is
  * told to skip. The two are deliberately not the same value: see
  * `TrailerPlayerLauncher.cachedSigningClient`.
+ *
+ * [deadKind] / [deadItag] / [deadChunkOffsetBytes] / [deadChunkTotalBytes] are
+ * the DYING MOUNT's own facts, captured where the death line was first written
+ * from the source that was mounted at that moment. They ride along because the
+ * death line is rewritten by whatever answers this request, and that answer
+ * knows only the REPLACEMENT: without these, a retry that succeeded replaced
+ * "kind=progressive chunk=<offset>/<total>" with the replacement's
+ * "kind=adaptive" and no chunk at all, so a capture could no longer say which
+ * mount died or whether its chunk read was what failed.
  */
 internal data class HeroTrailerResume(
     val positionMs: Long,
     val durationMs: Long,
     val deadClient: String?,
     val excludedClients: Set<String>,
-    val requestId: Long
+    val requestId: Long,
+    /** The shape of the source that died (`hls`/`adaptive`/`progressive`), or null. */
+    val deadKind: String? = null,
+    /** The `itag` of the format that died, when its URL named one. */
+    val deadItag: String? = null,
+    /** The chunk byte offset the dying mount's read died at, when recorded. */
+    val deadChunkOffsetBytes: Long? = null,
+    /** The stream length in bytes at that moment, or null when unknown. */
+    val deadChunkTotalBytes: Long? = null
 )
 
 /** Whether a refusal may be answered with another resume, or ends the video. */

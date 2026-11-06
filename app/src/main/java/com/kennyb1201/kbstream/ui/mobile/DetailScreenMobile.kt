@@ -1033,6 +1033,27 @@ fun DetailScreenMobile(
             // by the player's own clock (see onProgress).
             val length = if (durationMs > 0L) durationMs else trailerDurationMs
             val dead = TrailerPlayerLauncher.signingClient(key)
+            // The dying mount's own facts, read BEFORE the identity ladder can
+            // return: the first write below quotes them, and the retry the death
+            // asks for carries them on to the overwrite that answers it (see
+            // MobileTrailerRetry). Without that ride-along the overwrite quoted
+            // the REPLACEMENT's shape and no chunk at all, so a capture could no
+            // longer say which mount died or whether its chunk read was the
+            // thing that failed.
+            val chunk = PoTokenTrace.chunkDeathFor(key)
+            val source = trailerMountedSource
+            val signedUrl = source?.signedUrl()
+            // The stream's own numbers: `clen` off the URL the resolve signed
+            // (what a chunk is worth in media time), else what the chunker last
+            // believed. Either may be absent, which the skip handles by falling
+            // back to the constant one.
+            val streamBytes = chunk?.totalBytes
+                ?: signedUrl?.let { googlevideoBytes(it) }
+            // The shape the death belongs to: a refusal names the resolve's own
+            // kind (the same vocabulary the TV hero records), an ordinary death
+            // the dead source's.
+            val deadKind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind()
+            val deadItag = signedUrl?.let { googlevideoItag(it) }
             // The IDENTITY ladder's verdict first: a refused URL class is not an
             // ordinary death, and its exhaustion is the one case that must BLOCK
             // the video for the session (the TV hero's rule, which this owner
@@ -1049,10 +1070,18 @@ fun DetailScreenMobile(
                     PoTokenTrace.recordTrailerDeath(
                         videoId = key,
                         client = dead,
-                        kind = PoTokenTrace.resolveKind(),
+                        kind = deadKind,
                         positionMs = positionMs,
                         durationMs = length,
-                        resume = "client " + (dead ?: "unknown") + " died"
+                        resume = "client " + (dead ?: "unknown") + " died",
+                        // This write is terminal (the video is blocked below),
+                        // and it used to be the ONE death line a capture could
+                        // still read the chunk range off - except it named
+                        // neither. A refusal that happened on a chunk read is
+                        // exactly the case that needs both.
+                        itag = deadItag,
+                        chunkOffsetBytes = chunk?.offsetBytes,
+                        chunkTotalBytes = streamBytes
                     )
                     TrailerPlayerLauncher.markIdentityBlocked(key)
                     Log.w(
@@ -1064,15 +1093,6 @@ fun DetailScreenMobile(
                     return false
                 }
             }
-            val chunk = PoTokenTrace.chunkDeathFor(key)
-            val source = trailerMountedSource
-            val signedUrl = source?.signedUrl()
-            // The stream's own numbers: `clen` off the URL the resolve signed
-            // (what a chunk is worth in media time), else what the chunker last
-            // believed. Either may be absent, which the skip handles by falling
-            // back to the constant one.
-            val streamBytes = chunk?.totalBytes
-                ?: signedUrl?.let { googlevideoBytes(it) }
             val plan = heroTrailerRetryPlan(
                 positionMs = positionMs,
                 durationMs = length,
@@ -1093,7 +1113,7 @@ fun DetailScreenMobile(
             PoTokenTrace.recordTrailerDeath(
                 videoId = key,
                 client = dead,
-                kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),
+                kind = deadKind,
                 positionMs = positionMs,
                 durationMs = length,
                 resume = if (plan.verdict == HeroTrailerResumeVerdict.RESUME) {
@@ -1101,7 +1121,7 @@ fun DetailScreenMobile(
                 } else {
                     "none: retries spent"
                 },
-                itag = signedUrl?.let { googlevideoItag(it) },
+                itag = deadItag,
                 attempt = attempt,
                 change = change,
                 chunkOffsetBytes = chunk?.offsetBytes,
@@ -1127,7 +1147,14 @@ fun DetailScreenMobile(
                 change = change,
                 deadClient = dead,
                 deathPositionMs = positionMs,
-                durationMs = length
+                durationMs = length,
+                // The facts this line opened with, so the resolve that answers
+                // it closes the SAME line with them rather than with its own
+                // replacement's shape and no chunk range.
+                deadKind = deadKind,
+                deadItag = deadItag,
+                deadChunkOffsetBytes = chunk?.offsetBytes,
+                deadChunkTotalBytes = streamBytes
             )
             // The cached URL is the one that just died (or, after an identical
             // replay, the one about to be replaced): drop it so the resolve
@@ -1199,14 +1226,20 @@ fun DetailScreenMobile(
                     PoTokenTrace.recordTrailerDeath(
                         videoId = key,
                         client = pending.deadClient,
-                        kind = source.deathKind(),
+                        // The dying mount's facts, not this replacement's: the
+                        // outcome (`resume=`) is the replacement's, the failure
+                        // is not.
+                        kind = pending.deadKind,
                         positionMs = pending.deathPositionMs,
                         durationMs = pending.durationMs,
                         resume = "client " +
                             (TrailerPlayerLauncher.signingClient(key)
                                 ?: "unknown") + " ok",
+                        itag = pending.deadItag,
                         attempt = pending.attempt,
-                        change = pending.change
+                        change = pending.change,
+                        chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                        chunkTotalBytes = pending.deadChunkTotalBytes
                     )
                 }
                 trailerMountedSource = source
@@ -1226,12 +1259,15 @@ fun DetailScreenMobile(
                 PoTokenTrace.recordTrailerDeath(
                     videoId = key,
                     client = pending.deadClient,
-                    kind = trailerMountedSource?.deathKind(),
+                    kind = pending.deadKind,
                     positionMs = pending.deathPositionMs,
                     durationMs = pending.durationMs,
                     resume = "none: no other client",
+                    itag = pending.deadItag,
                     attempt = pending.attempt,
-                    change = pending.change
+                    change = pending.change,
+                    chunkOffsetBytes = pending.deadChunkOffsetBytes,
+                    chunkTotalBytes = pending.deadChunkTotalBytes
                 )
             }
         }
@@ -2693,7 +2729,11 @@ private data class MobileTrailerRetry(
     val change: String,
     val deadClient: String?,
     val deathPositionMs: Long,
-    val durationMs: Long
+    val durationMs: Long,
+    val deadKind: String?,
+    val deadItag: String?,
+    val deadChunkOffsetBytes: Long?,
+    val deadChunkTotalBytes: Long?
 )
 
 /** The header: backdrop, clearlogo or title, and the meta line. */
