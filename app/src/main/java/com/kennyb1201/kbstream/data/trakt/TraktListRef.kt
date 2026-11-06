@@ -111,3 +111,35 @@ object TraktListRefParser {
         return TraktListRef(user = null, listId = segments.first())
     }
 }
+
+/**
+ * The reads a PINNED Trakt list needs, in the order they should be tried.
+ *
+ * A Home rail pin (data.library's `LibraryHomeRailPin`) stores the id its
+ * Library row had - the row's remoteId - and for a Trakt list that id has two
+ * shapes whose reads are different endpoints:
+ *
+ *  - a **numeric** id is a PUBLIC list's own Trakt id - the number Trakt's
+ *    canonical `trakt.tv/lists/12345` address carries, and what a liked
+ *    public-list row's ref holds. The endpoint that answers it takes no owner
+ *    (`GET /lists/{id}/items/{type}`), so it is read ownerless;
+ *  - everything else is an own list's remoteId, a slug, which is only readable
+ *    under the account: `GET users/me/lists/{slug}/items/{type}`.
+ *
+ * Reading a public pin as `users/me/lists/{numeric}` is a 404, not an error the
+ * callers can see: [TraktRepository.listItems] answers an empty list, so the
+ * rail loaded nothing and Home drew no rail at all.
+ *
+ * The second entry exists for the pin whose shape points the wrong way - an
+ * older numeric pin for a PRIVATE own list, which Trakt only serves under the
+ * account. It is tried only when the first read came back empty, so the two
+ * common cases still cost one call, and a list is one rail whichever read found
+ * it.
+ */
+fun traktListReadsForPinnedId(listId: String): List<TraktListRef> {
+    val id = listId.trim()
+    if (id.isEmpty()) return emptyList()
+    val ownerless = TraktListRef(user = null, listId = id)
+    val own = TraktListRef(user = "me", listId = id)
+    return if (id.all { it in '0'..'9' }) listOf(ownerless, own) else listOf(own)
+}

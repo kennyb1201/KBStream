@@ -433,19 +433,27 @@ fun HomeScreenMobile(
                     }
                 }
             }
-        val homeEntries = remember(railsShown, kbState, builtinWithContent) {
-            KBHomeSlots.buildMergedEntries(context, railsShown, kbState, builtinWithContent)
-        }
-
-        // The viewer's own Library lists, after everything the arrangement
-        // placed: the same end-of-Home position the television draws them in,
-        // and the same loader - one rule for which lists make a rail (no empty
+        // The viewer's own Library lists, fetched by the same loader the
+        // television uses - one rule for which lists make a rail (no empty
         // heading, the kids ceiling, an id a card can be opened by), so the two
         // screens cannot disagree about what is pinned. It is read on each
         // composition rather than harnessed to the Library screen's own
         // revision tick: the pins are a prefs row, and a rail must appear (or
         // go) on the next frame after a pin, with no restart.
+        //
+        // Read BEFORE the merge: a pin is an entry in the ONE Home order now
+        // (see KBHomeSlots), so the merge needs its key to place it, and the
+        // column below needs its rows to draw it.
         val pinnedLibraryRails by rememberLibraryHomeRails()
+        val homeEntries = remember(railsShown, kbState, builtinWithContent, pinnedLibraryRails) {
+            KBHomeSlots.buildMergedEntries(
+                context,
+                railsShown,
+                kbState,
+                builtinWithContent,
+                libraryPins = pinnedLibraryRails.map { rail -> rail.pin }
+            )
+        }
 
         // The two rows this screen draws itself, titled the way the television
         // titles them (see `HomeScreen.builtinRailTitle`): the name the home
@@ -874,6 +882,43 @@ fun HomeScreenMobile(
                             else -> Unit
                         }
 
+                        // A pinned Library list, in the slot the ONE Home
+                        // order gave it - above, between or below the catalogs,
+                        // exactly where the TV draws it for the same profile.
+                        // The entry carries the PIN; the rows come from the
+                        // loader above, and a list that answered nothing keeps
+                        // its slot empty rather than drawing a bare heading.
+                        is HomeEntry.LibraryRail -> {
+                            val pinnedRail = pinnedLibraryRails.firstOrNull { rail ->
+                                rail.pin.key == entry.pin.key
+                            }
+                            if (pinnedRail != null) {
+                                item(
+                                    key = "librail|" + entry.pin.key,
+                                    contentType = "library-list-rail"
+                                ) {
+                                    MobileLibraryListRail(
+                                        rail = pinnedRail,
+                                        landscapeCards = landscapeCards,
+                                        posterWidth = railPosterSize.width,
+                                        posterHeight = railPosterSize.height,
+                                        landscapeWidth = railLandscapeWidth,
+                                        landscapeHeight = railLandscapeHeight,
+                                        overridePaths = overridePaths,
+                                        isWatched = { meta ->
+                                            viewModel.watchedKey(meta.id, meta.type) in
+                                                watchedKeys
+                                        },
+                                        isPartiallyWatched = { meta ->
+                                            viewModel.watchedKey(meta.id, meta.type) in
+                                                partialWatchedKeys
+                                        },
+                                        onOpen = onItemClick
+                                    )
+                                }
+                            }
+                        }
+
                         is HomeEntry.Collection -> item(
                             // id AND title: two imported collections can both
                             // have no id, and a bare title then collides when
@@ -1080,33 +1125,10 @@ fun HomeScreenMobile(
                     }
                 }
 
-                // The viewer's pinned Library lists, after the rails the
-                // arrangement placed - the phone's end of Home, in the order
-                // they were pinned. They are not in that arrangement (the home
-                // manager does not list a library list), so this is where they
-                // sit on both screens.
-                itemsIndexed(
-                    items = pinnedLibraryRails,
-                    key = { _, rail -> "librail|" + rail.pin.key },
-                    contentType = { _, _ -> "library-list-rail" }
-                ) { _, rail ->
-                    MobileLibraryListRail(
-                        rail = rail,
-                        landscapeCards = landscapeCards,
-                        posterWidth = railPosterSize.width,
-                        posterHeight = railPosterSize.height,
-                        landscapeWidth = railLandscapeWidth,
-                        landscapeHeight = railLandscapeHeight,
-                        overridePaths = overridePaths,
-                        isWatched = { meta ->
-                            viewModel.watchedKey(meta.id, meta.type) in watchedKeys
-                        },
-                        isPartiallyWatched = { meta ->
-                            viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
-                        },
-                        onOpen = onItemClick
-                    )
-                }
+                // Nothing is appended after the arranged rows any more: the
+                // viewer's pinned Library lists are entries IN that order now
+                // (see KBHomeSlots), so drawing them here as well would draw
+                // every one of them twice.
 
                 // ...and the add-ons whose catalogs did not answer, named. A
                 // failed catalog produces no rail, so the only symptom used to

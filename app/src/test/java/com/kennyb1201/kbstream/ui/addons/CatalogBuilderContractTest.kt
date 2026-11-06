@@ -442,8 +442,11 @@ class CatalogBuilderContractTest {
         // hardcoded/app-built block that used to force a null-base-URL rail to
         // the top is gone), so a built catalog is arranged like anything else.
         assertTrue(
-            "it must be arrangeable through the shared merged order",
-            slots.contains("mergedHomeRailKeys(arrangement, defaults)")
+            "it must be arrangeable through the shared merged order - the whole " +
+                "Home column, pinned Library lists included",
+            slots.contains("homeColumnRailKeys(") &&
+                slots.contains("defaults = defaults,") &&
+                slots.contains("libraryKeys = libraryPins.map { pin -> pin.key }")
         )
     }
 

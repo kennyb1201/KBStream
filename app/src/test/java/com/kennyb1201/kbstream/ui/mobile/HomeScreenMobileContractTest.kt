@@ -269,7 +269,10 @@ class HomeScreenMobileContractTest {
             "HomeEntry.BuiltinRail",
             "HomeEntry.Collection",
             "HomeEntry.BrowseRail",
-            "HomeEntry.AddonRail"
+            "HomeEntry.AddonRail",
+            // A pinned Library list is a rail of that same merged order now, so
+            // the loop that renders the order has to render it too.
+            "HomeEntry.LibraryRail"
         ).forEach { branch ->
             assertTrue("the entries loop must render $branch", mobile.contains(branch))
         }

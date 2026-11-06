@@ -13,9 +13,11 @@ import org.junit.Test
  *
  *  1. A pinned BingeCat list showed on Home but was not in the catalog manager,
  *     so it could not be moved, renamed or removed from the surface a viewer
- *     rearranges Home on. Its row is the PIN (`list:<source>|<id>`), its arrows
- *     write the pins' order, its rename writes the pin's stored name and its
- *     remove unpins - the arrangement prefs are never touched for one.
+ *     rearranges Home on. Its row is the PIN (`list:<source>|<id>`), its rename
+ *     writes the pin's stored name and its remove unpins. Its arrows write the
+ *     HOME ORDER, like every other row's: a pinned list is a rail of the one
+ *     column since the pinned lists stopped being a block of their own at the
+ *     foot of Home.
  *  2. BingeCat's wire media carries no art, so the rail's cards drew their
  *     titles while Trakt rails (whose rows ship images) looked right. A row with
  *     no art is resolved by its id; a row WITH art resolves nothing.
@@ -58,6 +60,8 @@ class HomeRailManagerLibraryRowsContractTest {
         source("com/kennyb1201/kbstream/ui/addons/AddonsScreen.kt")
     private val store =
         source("com/kennyb1201/kbstream/data/library/LibraryHomeRails.kt")
+    private val viewModel =
+        source("com/kennyb1201/kbstream/ui/addons/AddonsViewModel.kt")
     private val home =
         source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt")
     private val mobileHome =
@@ -68,20 +72,25 @@ class HomeRailManagerLibraryRowsContractTest {
         source("com/kennyb1201/kbstream/ui/components/GlobalLandscapeArt.kt")
 
     @Test
-    fun `the pinned rails are listed after the arrangement, as the pins stand`() {
+    fun `the pinned rails are listed in the one column, as the pins stand`() {
         assertTrue(
             "the manager must be told the pins (a surface that does not manage " +
                 "them passes none)",
             rows.contains("libraryPins: List<LibraryHomeRailPin> = emptyList()")
         )
         assertTrue(
-            "one row per pin, in pin order",
-            rows.contains("val libraryRows = libraryPins.map { pin ->")
+            "one row per pin, in the columns's order - the pins are what the " +
+                "column appends when the Home order has not placed one yet",
+            rows.contains("val libraryRows = column.mapNotNull { key ->") &&
+                rows.contains("val pin = pinByKey[key] ?: return@mapNotNull null")
         )
         assertTrue(
-            "appended AFTER the arranged rails - the same end-of-Home placement " +
-                "the rails themselves have",
-            rows.contains("return arrangementRows + libraryRows")
+            "interleaved with them, in the ONE column Home draws - the manager must " +
+                "list the order the arrows act on, not the arrangement plus a tail",
+            rows.contains("val column = homeColumnRailKeys(") &&
+                rows.contains("val rowByKey = (arrangementRows + libraryRows).associateBy") &&
+                rows.contains("return column.mapNotNull { key -> rowByKey[key] }") &&
+                !rows.contains("return arrangementRows + libraryRows")
         )
         assertTrue(
             "the row's key is the pin's stable key, the one the Home rail is " +
@@ -99,11 +108,14 @@ class HomeRailManagerLibraryRowsContractTest {
             rows.contains("isPinned = false") && rows.contains("isLibraryRail = true")
         )
         assertTrue(
-            "its arrows are exact against the PINS list, not the arrangement",
-            rows.contains("canMoveUp = pinsMoveChangesOrder(libraryPins, pin.key, -1)") &&
+            "its arrows are exact against the COLUMN - the same ordering every " +
+                "other row's are decided against, so an up that crosses a catalog is " +
+                "offered and an up at the top of Home is not",
+            rows.contains("canMoveUp = railMoveChangesOrder(prefs, column, pin.key, -1)") &&
                 rows.contains(
-                    "canMoveBottom = pinsMoveChangesOrder(libraryPins, pin.key, Int.MAX_VALUE)"
-                )
+                    "canMoveTop = railMoveChangesOrder(prefs, column, pin.key, Int.MIN_VALUE)"
+                ) &&
+                !rows.contains("pinsMoveChangesOrder(")
         )
     }
 
@@ -172,12 +184,13 @@ class HomeRailManagerLibraryRowsContractTest {
     }
 
     @Test
-    fun `the writes go through the pins store, so they sync like a pin`() {
+    fun `a move writes the home order and the other two writes go through the pins store`() {
         assertTrue(
-            "a move writes the pins blob once, and only when the order changed",
-            store.contains("fun movePinned(") &&
-                store.contains("val updated = movedPins(current, pin.key, delta)") &&
-                store.contains("if (updated == current) return false")
+            "a move is an arrangement edit: it writes the ONE home order, through " +
+                "the same core a catalog's arrows use, and never the pins blob",
+            screen.contains("onLibraryMove = { pin, delta -> viewModel.moveLibraryRail(pin.key, delta) }") &&
+                viewModel.contains("fun moveLibraryRail(key: String, delta: Int) {") &&
+                !store.contains("fun movePinned(")
         )
         assertTrue(
             "a Library row's rename is a same-key replace, never an arrangement " +
@@ -276,12 +289,15 @@ class HomeRailManagerLibraryRowsContractTest {
     @Test
     fun `nothing else about the manager moved`() {
         assertTrue(
-            "the arrangement rows are still built from the merged order",
-            rows.contains("val orderedKeys = mergedHomeRailKeys(prefs, movableDefaults)")
+            "the arrangement rows are still built from the merged order - now the " +
+                "whole column, so the arrows cross to a pinned list and back",
+            rows.contains("val column = homeColumnRailKeys(") &&
+                rows.contains("val arrangementKeys = column.filterNot { key -> pinByKey.containsKey(key) }") &&
+                rows.contains("val arrangementRows = arrangementKeys.mapNotNull { key ->")
         )
         assertTrue(
-            "with the same exactness for their own arrows",
-            rows.contains("canMoveUp = railMoveChangesOrder(prefs, movableDefaults, key, -1)")
+            "with the same exactness for every row's arrows",
+            rows.contains("canMoveUp = railMoveChangesOrder(prefs, column, key, -1)")
         )
         assertTrue(
             "and the same kind chip for every other row",

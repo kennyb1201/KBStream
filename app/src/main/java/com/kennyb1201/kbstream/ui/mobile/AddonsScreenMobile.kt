@@ -57,6 +57,7 @@ import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
+import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest
 import com.kennyb1201.kbstream.ui.addons.AddonPresets
@@ -574,16 +575,13 @@ fun AddonsScreenMobile(
                     renameCatalogDraft = config.catalog.displayName
                     renameCatalogTarget = config
                 },
-                // A Library list's row is the pin, not an arrangement slot: its
-                // arrows rewrite the pins' order, its rename rewrites the pin's
-                // stored name and its remove unpins. All three go through the
-                // pins store, so the change syncs account-wide exactly like a
-                // pin made in the Library (see LibraryHomeRails.write).
+                // A Library list's row carries the pin for its NAME (rename
+                // writes the pin's stored name and remove unpins), but its
+                // arrows are the same arrows every other row has: the Home ORDER
+                // decides where the rail sits, so a move is an arrangement edit
+                // and syncs as one. The pins blob is left alone.
                 libraryPins = libraryPins,
-                onLibraryMove = { pin, delta ->
-                    LibraryHomeRails.movePinned(context, pin, delta)
-                    libraryPinsRevision += 1
-                },
+                onLibraryMove = { pin, delta -> viewModel.moveLibraryRail(pin.key, delta) },
                 onLibraryRename = { pin ->
                     renameLibraryPin = pin
                     renameLibraryDraft = pin.name

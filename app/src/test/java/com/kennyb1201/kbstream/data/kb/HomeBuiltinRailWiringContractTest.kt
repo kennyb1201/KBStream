@@ -114,8 +114,11 @@ class HomeBuiltinRailWiringContractTest {
             !home.contains("key = \"upcoming_schedule\"")
         )
         assertTrue(
-            "the merge must be told which built-ins have content",
-            home.contains("buildMergedEntries(context, rails, kbState, builtinWithContent)")
+            "the merge must be told which built-ins have content (and, since the " +
+                "pinned Library lists are entries of that same merge, which pins exist)",
+            home.contains("buildMergedEntries(") &&
+                home.contains("builtinWithContent,") &&
+                home.contains("libraryPins = pinnedLibraryRails.map { rail -> rail.pin }")
         )
     }
 

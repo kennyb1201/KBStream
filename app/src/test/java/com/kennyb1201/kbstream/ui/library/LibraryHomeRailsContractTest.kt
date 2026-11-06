@@ -98,8 +98,11 @@ class LibraryHomeRailsContractTest {
     @Test
     fun `Home draws a rail for every pinned list, and none for an empty one`() {
         assertTrue(
-            "the column asks for the pinned rails",
-            squash(home).contains("libraryHomeRailItems()")
+            "the column draws the pinned rails from its merged entries - a pinned " +
+                "list is an entry of the one Home order, not a block after it",
+            squash(home).contains(
+                "is com.kennyb1201.kbstream.ui.kb.HomeEntry.LibraryRail ->"
+            ) && !squash(home).contains("libraryHomeRailItems()")
         )
         assertTrue(
             "they are loaded once per pinned set, off the main thread",
@@ -174,7 +177,7 @@ class LibraryHomeRailsContractTest {
         listOf(
             "LibrarySource.LOCAL_LIST" to "LocalLibraryStore.listItems(context, id)",
             "LibrarySource.BINGECAT_LIST" to "BingeCatRepository.getInstance(context).listRows(pin.id)",
-            "LibrarySource.TRAKT_LIST" to "TraktListRef(user = \"me\", listId = pin.id)",
+            "LibrarySource.TRAKT_LIST" to "traktListReadsForPinnedId(pin.id)",
             "LibrarySource.MDBLIST_LIST" to "MdbListClient.getListItems(context, id)",
             "LibrarySource.TRAKT_WATCHLIST" to "TraktRepository.getInstance(context).watchlist()",
             "LibrarySource.MDBLIST_WATCHLIST" to "MdbListClient.getWatchlist(context)",
@@ -186,7 +189,20 @@ class LibraryHomeRailsContractTest {
             assertTrue("$branch must load its own rows, found no $call", store.contains(call))
         }
         assertTrue(
-            "a title the viewer told the Library to forget stays off the rail too",
+            "a Trakt pin is read by the path its id names, not always as the " +
+                "account's own list - a liked PUBLIC list is pinned by its numeric " +
+                "id, which Trakt answers ownerless, and a `users/me/lists/{numeric}` " +
+                "read of it 404s to an empty rail",
+            squash(store)
+                .substringAfter("LibrarySource.TRAKT_LIST ->")
+                .substringBefore("LibrarySource.MDBLIST_LIST ->")
+                .let { branch ->
+                    branch.contains("traktListReadsForPinnedId(pin.id)") &&
+                        !branch.contains("TraktListRef(user = \"me\"")
+                }
+        )
+        assertTrue(
+            "and a title the viewer told the Library to forget stays off the rail too",
             squash(store).contains(
                 "LibraryTombstones.removedFrom(items, LocalLibraryStore.tombstones(context))"
             )

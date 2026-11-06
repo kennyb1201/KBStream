@@ -32,6 +32,16 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
  * hidden. They are the only keys outside the two import families that get a
  * pin control, which is why "may this key be pinned?" is asked through
  * [KBHomeOrderPrefs.isPinnableKey] rather than through the collection test.
+ *
+ * A PINNED LIBRARY LIST also takes an entry in [order], under the key its pin
+ * carries (`list:<source>|<id>`, see `LibraryHomeRails`) - it is a rail of the
+ * same column, not a block appended after it (see [homeColumnRailKeys]). Those
+ * keys are never in [pinned]: pinning means "keep this rail at the top" for a
+ * collection, and a Library list is pinned by a different store that also
+ * decides WHICH lists are on Home. An arrangement that names no entry for a pin
+ * draws it at the end, in pin order, so an order written before this existed -
+ * and an order read by a build that does not know these keys - keeps working;
+ * the old build simply ignores entries it cannot place.
  */
 @JsonClass(generateAdapter = true)
 data class KBHomeOrder(
@@ -198,7 +208,15 @@ internal fun moveRailInMergedOrder(
         .filter { it !in prefs.hiddenSet }
     val from = visible.indexOf(key)
     if (from == -1) return prefs
-    val to = (from + delta).coerceIn(0, visible.lastIndex)
+    // The ends are matched, not added: `from + Int.MAX_VALUE` overflows to a
+    // negative index, so a "very bottom" press used to land the rail at the
+    // TOP of the column (and the overflow is why the ends had a separate path
+    // that only the arrangement's own rails could take).
+    val to = when (delta) {
+        Int.MIN_VALUE -> 0
+        Int.MAX_VALUE -> visible.lastIndex
+        else -> (from + delta).coerceIn(0, visible.lastIndex)
+    }
     if (from == to) return prefs
 
     val ordered = visible.toMutableList()
@@ -215,15 +233,99 @@ internal fun moveRailInMergedOrder(
 }
 
 /**
+ * The whole Home column: the arranged rails AND the viewer's pinned Library
+ * lists, in ONE order.
+ *
+ * A pinned Library list used to be a rail in a second list: the arrangement
+ * placed the catalogs, collections and built-ins, and Home appended the pinned
+ * lists after all of them (see `LibraryHomeRails.pins`). Nothing could cross
+ * that fence - the last arranged rail had no "down" and the first pinned list
+ * no "up" - and the viewer's own lists were permanently the tail of Home.
+ *
+ * The column is that fence removed: the pin keys become arrangement keys like
+ * any other, so [mergedHomeRailKeys] places them by the stored order exactly
+ * as it places a catalog.
+ *
+ * [libraryKeys] is the pins in PIN order, appended after the arrangement's own
+ * defaults on purpose - that tail is the fallback. A pin with no entry in the
+ * stored order (every pin, until the viewer moves it; and a pin made on a
+ * build that has not placed it yet) then lands at the end of the column, in
+ * pin order, which is exactly where Home drew it before. A stored entry naming
+ * a key no pin carries any more (a removed pin) is not in the column at all:
+ * [mergedHomeRailKeys] drops keys outside [defaults], so a dangling entry is
+ * skipped rather than drawn as a blank slot.
+ */
+internal fun homeColumnRailKeys(
+    prefs: KBHomeOrder,
+    defaults: List<String>,
+    libraryKeys: List<String>
+): List<String> {
+    return mergedHomeRailKeys(prefs, defaults + libraryKeys)
+}
+
+/**
+ * Moves one rail one step in the whole Home column (see [homeColumnRailKeys]).
+ *
+ * The single transform behind every arrow in the rail manager, whatever kind of
+ * rail the row is: a Library list's UP now steps past the catalog above it, and
+ * a catalog's DOWN past the Library list below it, because both are moved in
+ * the one ordered list Home draws.
+ *
+ * [delta] takes its usual values: ±1 is one step, Int.MIN_VALUE the very top and
+ * Int.MAX_VALUE the very bottom.
+ *
+ * Both ends are the ENDS OF THE COLUMN, not of the arrangement block:
+ *  - the very bottom unpins the key (as it always did) and then places it last,
+ *    below the pinned Library lists too;
+ *  - the very top still PINS a pinnable rail (that is how a collection reaches
+ *    the absolute first slot), and for any other rail - a catalog, a built-in,
+ *    a Library list - it takes the head of the order block, which is the highest
+ *    place a rail that cannot be pinned can sit.
+ *
+ * A move that would not change the column returns [prefs] untouched, so the
+ * caller can skip the write and the dialog does not look like it swallowed the
+ * press.
+ */
+internal fun moveRailInHomeColumn(
+    prefs: KBHomeOrder,
+    column: List<String>,
+    key: String,
+    delta: Int
+): KBHomeOrder {
+    return when {
+        delta == Int.MIN_VALUE && KBHomeOrderPrefs.isPinnableKey(key) ->
+            moveRailToEnd(prefs, key, toTop = true)
+
+        // Unpin first, then place last: the same two halves moveRailToEnd's
+        // bottom has, but through the column so "last" means below the Library
+        // rails. A key that cannot be pinned is not in `pinned` to begin with.
+        delta == Int.MAX_VALUE ->
+            moveRailInMergedOrder(
+                normalizeHomeOrder(prefs).let { it.copy(pinned = it.pinned - key) },
+                column,
+                key,
+                delta
+            )
+
+        else -> moveRailInMergedOrder(prefs, column, key, delta)
+    }
+}
+
+/**
  * Whether the given move would actually change the arrangement.
  *
  * The manager uses this for its arrow buttons' enabled state, so an arrow is
- * offered exactly when pressing it does something: the same transforms decide
- * the answer as perform the move, so the two cannot drift.
+ * offered exactly when pressing it does something: the same transform decides
+ * the answer as performs the move ([moveRailInHomeColumn]), so the two cannot
+ * drift.
  *
- * [delta] takes the same values [moveRailInMergedOrder] and [moveRailToEnd]
- * do, with Int.MIN_VALUE meaning "the very top" and Int.MAX_VALUE "the very
- * bottom".
+ * [defaults] is the whole Home column (see [homeColumnRailKeys]) - arrangement
+ * keys and Library pin keys together. Passing only the arranged rails would
+ * disable the arrows that cross the old fence, which is the bug this rule is
+ * here to keep shut.
+ *
+ * [delta] takes the same values [moveRailInHomeColumn] does, with
+ * Int.MIN_VALUE meaning "the very top" and Int.MAX_VALUE "the very bottom".
  */
 internal fun railMoveChangesOrder(
     prefs: KBHomeOrder,
@@ -231,11 +333,7 @@ internal fun railMoveChangesOrder(
     key: String,
     delta: Int
 ): Boolean {
-    return when (delta) {
-        Int.MIN_VALUE -> moveRailToEnd(prefs, key, toTop = true) != prefs
-        Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false) != prefs
-        else -> moveRailInMergedOrder(prefs, defaults, key, delta) != prefs
-    }
+    return moveRailInHomeColumn(prefs, defaults, key, delta) != prefs
 }
 
 /**

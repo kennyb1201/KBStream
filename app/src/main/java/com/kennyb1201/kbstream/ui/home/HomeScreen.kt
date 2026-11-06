@@ -3280,7 +3280,15 @@ private fun LibraryListHomeRail(
     onOpen: (MetaPreview) -> Unit,
     /** The same watched badges every other rail card carries. */
     isWatched: (MetaPreview) -> Boolean,
-    isPartiallyWatched: (MetaPreview) -> Boolean
+    isPartiallyWatched: (MetaPreview) -> Boolean,
+    /**
+     * Up from a card of the rail drawn FIRST on Home opens the top bar (see
+     * `homeTopRailUpHook`), exactly as it does from any other first rail. A
+     * pinned list can now be that rail - the arrangement may put it above every
+     * catalog - and without this the one rail at the top of the screen would be
+     * the one place Up went nowhere.
+     */
+    onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
     val overridePaths = rememberImageOverridePaths()
     val cardWidth = if (landscapeCards) HomeLandscapeWidth else HomePosterWidth
@@ -3363,6 +3371,7 @@ private fun LibraryListHomeRail(
                                 onSelectHero(meta)
                             }
                         }
+                        .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
 
                     Box(
                         modifier = Modifier
@@ -4898,9 +4907,28 @@ fun HomeScreen(
             }
         }
     }
-    val mergedEntries = remember(rails, kbState, builtinWithContent) {
+    // Library lists the viewer put on Home (see LibraryHomeRails). The rows are
+    // fetched HERE rather than in the ViewModel: the pins are a prefs row, not
+    // part of the catalog build, and a list that cannot be fetched (a service
+    // that is down, a list deleted on the other device) simply does not draw -
+    // it must never turn Home into an error screen for a rail the viewer added.
+    //
+    // Read BEFORE the merge because the pins are rails of the merged column now:
+    // the merge needs their keys to place them, and the drawing needs their rows.
+    val pinnedLibraryRails by rememberLibraryHomeRails()
+
+    val mergedEntries = remember(rails, kbState, builtinWithContent, pinnedLibraryRails) {
         com.kennyb1201.kbstream.ui.kb.KBHomeSlots
-            .buildMergedEntries(context, rails, kbState, builtinWithContent)
+            .buildMergedEntries(
+                context,
+                rails,
+                kbState,
+                builtinWithContent,
+                // The pinned Library lists are rails OF the column now: the
+                // merge places them by the one Home order, and the column below
+                // draws whichever entry the order produced.
+                libraryPins = pinnedLibraryRails.map { rail -> rail.pin }
+            )
     }
 
     // A rail's section title honors a rename from the home manager; an
@@ -6070,58 +6098,73 @@ fun HomeScreen(
             null
         }
 
-    // The built-in rows, in the arrangement's order, for the two branches of the
-    // rail column that draw no catalog rails at all (a failed build, and none to
-    // build): there is nothing to interleave them with, and they are still worth
-    // drawing, because they read local history and the local schedule. Base drew
-    // them at column scope above both of those cards.
-    fun androidx.compose.foundation.lazy.LazyListScope.builtinRailItems() {
-        val builtins =
-            mergedEntries.mapNotNull {
-                it as? com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail
-            }
-        builtins.forEachIndexed { index, entry ->
-            item(key = "builtin|" + entry.key.removePrefix("builtin:")) {
-                drawBuiltinRail(
-                    entry.key,
-                    com.kennyb1201.kbstream.ui.kb.isTopRailEntry(index)
-                )
-            }
-        }
+    /**
+     * One pinned Library list, drawn where the merged order put it.
+     *
+     * The entry carries the PIN; this finds the rows. A list that answered
+     * nothing has no rail to draw, so the entry keeps its slot and draws
+     * nothing - never a bare heading, and never a failure card for a rail the
+     * viewer added.
+     */
+    @Composable
+    fun PinnedLibraryRail(
+        rail: LibraryHomeRailUi,
+        onUpPressed: ((FocusRequester) -> Unit)?
+    ) {
+        LibraryListHomeRail(
+            rail = rail,
+            landscapeCards = landscapeCards,
+            bringIntoViewSpec = railCardsBringIntoViewSpec,
+            onTitleHeight = { railTitleHeightPx = it.toFloat() },
+            cardFocusRequesters = railFocusRequesters,
+            onFocusedCard = { cardKey, requester ->
+                focusedCardRequester = requester
+                viewModel.lastFocusedRailItemKey = cardKey
+            },
+            onSelectHero = { meta -> selectHero(meta) },
+            onOpen = { meta -> onItemClick(meta) },
+            isWatched = { meta ->
+                viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+            },
+            isPartiallyWatched = { meta ->
+                viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
+            },
+            onUpPressed = onUpPressed
+        )
     }
 
-    // Library lists the viewer put on Home (see LibraryHomeRails). The rows are
-    // fetched HERE rather than in the ViewModel: the pins are a prefs row, not
-    // part of the catalog build, and a list that cannot be fetched (a service
-    // that is down, a list deleted on the other device) simply does not draw -
-    // it must never turn Home into an error screen for a rail the viewer added.
-    val pinnedLibraryRails by rememberLibraryHomeRails()
+    /** The loaded rail behind one merged pin entry, or null while it has none. */
+    fun pinnedLibraryRailFor(key: String): LibraryHomeRailUi? =
+        pinnedLibraryRails.firstOrNull { rail -> rail.pin.key == key }
 
-    fun androidx.compose.foundation.lazy.LazyListScope.libraryHomeRailItems() {
-        itemsIndexed(
-            items = pinnedLibraryRails,
-            key = { _, rail -> "librail|" + rail.pin.key },
-            contentType = { _, _ -> "library-list-rail" }
-        ) { _, rail ->
-            LibraryListHomeRail(
-                rail = rail,
-                landscapeCards = landscapeCards,
-                bringIntoViewSpec = railCardsBringIntoViewSpec,
-                onTitleHeight = { railTitleHeightPx = it.toFloat() },
-                cardFocusRequesters = railFocusRequesters,
-                onFocusedCard = { cardKey, requester ->
-                    focusedCardRequester = requester
-                    viewModel.lastFocusedRailItemKey = cardKey
-                },
-                onSelectHero = { meta -> selectHero(meta) },
-                onOpen = { meta -> onItemClick(meta) },
-                isWatched = { meta ->
-                    viewModel.watchedKey(meta.id, meta.type) in watchedKeys
-                },
-                isPartiallyWatched = { meta ->
-                    viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
+    // The rows that are NOT catalog rails, in the merged order - for the branch
+    // of the rail column that draws no catalog rails at all (a failed build, and
+    // none to build): there is nothing to interleave them with, and they are
+    // still worth drawing, because they read local history, the local schedule
+    // and the viewer's own pinned lists. Base drew the two built-ins at column
+    // scope above both of those cards.
+    fun androidx.compose.foundation.lazy.LazyListScope.nonCatalogRailItems() {
+        mergedEntries.forEachIndexed { index, entry ->
+            when (entry) {
+                is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
+                    item(key = "builtin|" + entry.key.removePrefix("builtin:")) {
+                        drawBuiltinRail(
+                            entry.key,
+                            com.kennyb1201.kbstream.ui.kb.isTopRailEntry(index)
+                        )
+                    }
+
+                is com.kennyb1201.kbstream.ui.kb.HomeEntry.LibraryRail -> {
+                    val rail = pinnedLibraryRailFor(entry.pin.key)
+                    if (rail != null) {
+                        item(key = "librail|" + entry.pin.key) {
+                            PinnedLibraryRail(rail, topRailUpHook(index))
+                        }
+                    }
                 }
-            )
+
+                else -> Unit
+            }
         }
     }
 
@@ -6290,7 +6333,7 @@ fun HomeScreen(
                         // built-ins were dropped from the one state they matter
                         // most in.
                         rails.isEmpty() && !isLoading -> {
-                            builtinRailItems()
+                            nonCatalogRailItems()
                             item(key = "empty", contentType = "status") {
                                 // The shared status card, with the retry as its
                                 // own focusable action rather than the whole
@@ -6428,6 +6471,8 @@ fun HomeScreen(
                                             "browse-rail"
                                         is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
                                             "builtin-rail"
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.LibraryRail ->
+                                            "library-list-rail"
                                     }
                                 }
                             ) { entryIndex, entry ->
@@ -6443,6 +6488,23 @@ fun HomeScreen(
                                             com.kennyb1201.kbstream.ui.kb
                                                 .isTopRailEntry(entryIndex)
                                         )
+
+                                    // A pinned Library list, in the slot the
+                                    // ONE home order gave it - above, between
+                                    // or below the catalogs, whichever the
+                                    // viewer arranged. Its rows were fetched
+                                    // with the pins; a list that answered
+                                    // nothing draws no rail rather than a
+                                    // heading over empty space.
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.LibraryRail -> {
+                                        val rail = pinnedLibraryRailFor(e.pin.key)
+                                        if (rail != null) {
+                                            PinnedLibraryRail(
+                                                rail,
+                                                topRailUpHook(entryIndex)
+                                            )
+                                        }
+                                    }
 
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
                                         com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
@@ -6828,13 +6890,10 @@ fun HomeScreen(
                         }
                     }
 
-                    // The viewer's own Library lists, after the rails the
-                    // arrangement placed. They are not in that arrangement yet
-                    // (the home manager does not list a library list), so this
-                    // is where they sit: at the end of Home, in the order they
-                    // were put there.
-                    libraryHomeRailItems()
-
+                    // Nothing is appended after the column any more: the
+                    // viewer's pinned Library lists are entries IN it (see
+                    // KBHomeSlots), so drawing them here as well would draw
+                    // every one of them twice.
                 }
             }
         }

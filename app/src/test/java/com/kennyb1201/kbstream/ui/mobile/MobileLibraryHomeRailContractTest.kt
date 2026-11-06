@@ -93,19 +93,28 @@ class MobileLibraryHomeRailContractTest {
     }
 
     @Test
-    fun `the phone draws the pinned rails at the end of Home, in pin order`() {
+    fun `the phone draws a pinned rail where the one Home order puts it`() {
         val entries = mobileHome.indexOf("homeEntries.forEach")
-        val rails = mobileHome.indexOf("items = pinnedLibraryRails")
-        assertTrue("the phone must still draw the arranged entries", entries > 0)
+        assertTrue("the phone must still draw the merged entries", entries > 0)
+        // A pinned list is an ENTRY in that walk now, not a block appended after
+        // it - which is what let it sit above a catalog instead of only at the
+        // foot of Home. The entry carries the pin; the rows come from the loader.
         assertTrue(
-            "the pinned rails sit AFTER the arranged entries - the end of Home, " +
-                "as on the TV",
-            rails > entries
+            "the pinned rails are entries of the merged order",
+            mobileHome.contains("is HomeEntry.LibraryRail ->") &&
+                mobileHome.contains(
+                    "val pinnedRail = pinnedLibraryRails.firstOrNull { rail ->"
+                )
+        )
+        assertTrue(
+            "and nothing is appended after that walk any more, or every pin would " +
+                "be drawn twice",
+            !mobileHome.contains("items = pinnedLibraryRails")
         )
         assertTrue(
             "one rail per pin, keyed by the pin so a removed pin cannot stand in " +
                 "for the next one",
-            mobileHome.contains("key = { _, rail -> \"librail|\" + rail.pin.key }")
+            mobileHome.contains("key = \"librail|\" + entry.pin.key")
         )
         assertTrue(
             "the rail is the pin's name plus what the loaded items ARE - the " +
@@ -115,9 +124,9 @@ class MobileLibraryHomeRailContractTest {
             )
         )
         assertTrue(
-            "the pin's own order is the order they were put there - no sort, no " +
-                "alphabet",
-            mobileHome.contains("items = pinnedLibraryRails") &&
+            "the merge is handed the pins, so it can place them - and in the order " +
+                "they were pinned, no sort, no alphabet",
+            mobileHome.contains("libraryPins = pinnedLibraryRails.map { rail -> rail.pin }") &&
                 !mobileHome.contains("pinnedLibraryRails.sorted")
         )
     }
@@ -239,8 +248,10 @@ class MobileLibraryHomeRailContractTest {
                 screen.contains("libraryPinsRevision += 1")
         )
         assertTrue(
-            "move writes the pins blob",
-            screen.contains("LibraryHomeRails.movePinned(context, pin, delta)")
+            "move writes the HOME ORDER - a pinned list is a rail of that one " +
+                "column now, and where it sits is not an edit to which lists are pinned",
+            screen.contains("onLibraryMove = { pin, delta -> viewModel.moveLibraryRail(pin.key, delta) }") &&
+                !screen.contains("LibraryHomeRails.movePinned(")
         )
         assertTrue(
             "remove is the existing unpin",
@@ -256,10 +267,11 @@ class MobileLibraryHomeRailContractTest {
     }
 
     @Test
-    fun `the TV block and the catalog rails are untouched`() {
+    fun `the TV column and the catalog rails are untouched`() {
         assertTrue(
-            "the TV still places its pinned rails at the end of its column",
-            tvHome.contains("libraryHomeRailItems()")
+            "the TV draws its pinned rails from the same merged order, in the same walk",
+            tvHome.contains("is com.kennyb1201.kbstream.ui.kb.HomeEntry.LibraryRail ->") &&
+                !tvHome.contains("libraryHomeRailItems()")
         )
         assertTrue(
             "the TV rail is still the focus-aware one",

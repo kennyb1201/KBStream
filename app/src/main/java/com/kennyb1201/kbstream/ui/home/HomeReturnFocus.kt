@@ -60,6 +60,10 @@ internal fun homeEntryItemKey(entry: HomeEntry): String = when (entry) {
     is HomeEntry.Collection -> "kb|" + (entry.collection.id ?: entry.collection.title)
     is HomeEntry.BrowseRail -> "browse|" + entry.key
     is HomeEntry.BuiltinRail -> "builtin|" + entry.key.removePrefix("builtin:")
+    // The same spelling the pinned Library rails' column used when they were
+    // appended after the arrangement, so a remembered card still finds its row
+    // now that they are placed inside it.
+    is HomeEntry.LibraryRail -> "librail|" + entry.pin.key
 }
 
 /** The rails column's hero spacer is always its first item. */

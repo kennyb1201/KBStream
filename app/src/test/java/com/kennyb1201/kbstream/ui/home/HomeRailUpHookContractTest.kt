@@ -106,16 +106,17 @@ class HomeRailUpHookContractTest {
     }
 
     @Test
-    fun `the built-in rows are drawn when no catalog rail exists`() {
+    fun `the rows that are not catalogs are drawn when no catalog rail exists`() {
         val home = source(HOME)
         assertTrue(
-            "one place emits the built-ins for the branches that have no rail column",
-            home.contains("builtinRailItems()")
+            "one place emits the built-ins - and the pinned Library lists, which are " +
+                "entries of the same merge - for the branch that has no rail column",
+            home.contains("nonCatalogRailItems()")
         )
         assertEquals(
             "declared once and called from the one branch that has no rail column",
             2,
-            home.split("builtinRailItems()").size - 1
+            home.split("nonCatalogRailItems()").size - 1
         )
         assertTrue(
             "the empty-state branch draws them",

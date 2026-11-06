@@ -62,7 +62,9 @@ import com.kennyb1201.kbstream.data.kb.browseHomeRails
 import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.chipKey
-import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
+import com.kennyb1201.kbstream.data.kb.homeColumnRailKeys
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KB_ART_FADE_MS
@@ -99,7 +101,7 @@ internal fun visibleBuiltinRailKeys(
 
 /**
  * The merged rail order Home draws: one arrangement for every rail on Home,
- * assembled from [mergedHomeRailKeys] over the same defaults list the home
+ * assembled by [homeColumnRailKeys] over the same defaults list the home
  * manager builds. A rail is placed purely by its arrangement key's slot in
  * that order - built-ins (Continue Watching, Upcoming, the two Top Today rows),
  * browse rails, built catalogs, add-on catalogs and imported collections
@@ -121,7 +123,20 @@ object KBHomeSlots {
         context: android.content.Context,
         rails: List<Rail>,
         state: KBHomeViewModel.UiState,
-        builtinWithContent: Set<String> = emptySet()
+        builtinWithContent: Set<String> = emptySet(),
+        /**
+         * The viewer's pinned Library lists, in pin order - rails of the same
+         * column as every catalog, collection and built-in (see
+         * [homeColumnRailKeys]). Passed as PINS rather than as ready-made
+         * rails: a pin is placed by the arrangement, and its rows are fetched
+         * by the screen that draws it, so the merge only has to decide where
+         * it sits.
+         *
+         * Empty on any caller that does not draw them, which is why this
+         * defaults: the merge then produces exactly the arrangement it always
+         * did.
+         */
+        libraryPins: List<LibraryHomeRailPin> = emptyList()
     ): List<HomeEntry> {
         val addonEntries = rails.mapIndexed { index, rail ->
             HomeEntry.AddonRail(rail, index)
@@ -257,7 +272,7 @@ object KBHomeSlots {
 
 
         // One list, and the SAME one the home manager draws and the reorder
-        // core moves within (see mergedHomeRailKeys and
+        // core moves within (see homeColumnRailKeys and
         // AddonsViewModel.homeRailDefaults): built-ins (the two app rows and
         // the two Top Today rows), then the browse rails, then the built
         // catalogs, then the add-on catalogs, then the collections. Home no
@@ -274,7 +289,17 @@ object KBHomeSlots {
             addAll(addonEntries.map { entry -> addonKeyByRail.getValue((entry as HomeEntry.AddonRail).rail) })
             addAll(collectionByKey.keys)
         }
-        val mergedOrder = mergedHomeRailKeys(arrangement, defaults)
+        // The pin keys join the arrangement's own keys, so a Library rail is
+        // placed by the stored order like any other rail instead of being
+        // appended at the tail by the screen (the fence this removes). A pin
+        // with no entry yet stays at the end, in pin order - see
+        // [homeColumnRailKeys].
+        val pinByKey = libraryPins.associateBy { pin -> pin.key }
+        val mergedOrder = homeColumnRailKeys(
+            prefs = arrangement,
+            defaults = defaults,
+            libraryKeys = libraryPins.map { pin -> pin.key }
+        )
 
         // The manager's rename for one arrangement key, or null when it carries
         // none. A blank name is treated as "no override" (withRename never
@@ -301,6 +326,15 @@ object KBHomeSlots {
                     } else {
                         emptyList()
                     }
+
+                // A pinned Library list: the entry carries the PIN, and the
+                // screen maps it to the loaded rail (a list that answered
+                // nothing has no rail to draw, so the entry is placed but
+                // draws nothing - never a blank slot). An entry naming a pin
+                // that no longer exists never reaches here: its key is not in
+                // the column at all.
+                pinByKey.containsKey(key) ->
+                    listOf(HomeEntry.LibraryRail(pinByKey.getValue(key)))
 
                 key == legacyBrowseKey || key in browseKeys -> browseEntriesFor(key)
 
@@ -382,6 +416,19 @@ sealed class HomeEntry {
     data class BrowseRail(val rail: BrowseHomeRail) : HomeEntry() {
         /** Arrangement key of this rail. */
         val key: String get() = rail.key
+    }
+
+    /**
+     * One Library list the viewer pinned to Home.
+     *
+     * It carries the pin and nothing else: the pin IS the rail's identity and
+     * its heading, and the rows are fetched by the screen (see
+     * `rememberLibraryHomeRails`), because a list that cannot be fetched must
+     * cost Home a rail, not an error screen.
+     */
+    data class LibraryRail(val pin: LibraryHomeRailPin) : HomeEntry() {
+        /** Arrangement key of this rail - the pin's own (see `libraryHomeRailKey`). */
+        val key: String get() = pin.key
     }
 }
 

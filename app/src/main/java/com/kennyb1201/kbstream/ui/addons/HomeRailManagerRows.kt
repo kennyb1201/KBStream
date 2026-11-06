@@ -2,12 +2,11 @@ package com.kennyb1201.kbstream.ui.addons
 
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
-import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
+import com.kennyb1201.kbstream.data.kb.homeColumnRailKeys
 import com.kennyb1201.kbstream.data.kb.railMoveChangesOrder
 import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.key
-import com.kennyb1201.kbstream.data.library.pinsMoveChangesOrder
 
 /**
  * One row of the Home rail manager: a built-in rail, a browse rail, a built
@@ -52,11 +51,11 @@ internal data class HomeRailManagerRow(
     /**
      * A Library list the viewer pinned to Home (see `LibraryHomeRails`).
      *
-     * Not an arrangement row: its position is the pin's own order at the END of
-     * Home, and its title is the name the pin stores. That is why it carries
-     * the pin itself - the operations the manager offers write the pins blob,
-     * never the arrangement prefs, and this flag is how the row's buttons know
-     * which of the two they are looking at.
+     * A rail of the same column as every other row: its position is the Home
+     * order's (the arrangement), and its title is the name the PIN stores. That
+     * is why it carries the pin itself - the arrows write the arrangement like
+     * any row's, while RENAME and REMOVE write the pins blob - and this flag is
+     * how the row's buttons know which of the two they are looking at.
      */
     val isLibraryRail: Boolean = false,
     /** The pin behind a [isLibraryRail] row; null for every other kind. */
@@ -86,10 +85,9 @@ internal fun homeRailManagerRows(
     kidsMaxAge: Int?,
     isGuest: Boolean,
     /**
-     * The viewer's pinned Library lists, in pin order - the order they are
-     * drawn in at the end of Home. Empty on a surface that does not manage
-     * them: the phone's Home is arranged here but its manager is separate work,
-     * so it passes nothing and lists exactly what it did before.
+     * The viewer's pinned Library lists, in pin order - which is also the
+     * fallback order for any pin the Home order has not placed yet. Empty on a
+     * surface that does not manage them, which is why it defaults.
      */
     libraryPins: List<LibraryHomeRailPin> = emptyList()
 ): List<HomeRailManagerRow> {
@@ -119,9 +117,21 @@ internal fun homeRailManagerRows(
         customCatalogByKey.keys.toList() +
         addonByKey.keys +
         collectionsState.collections.map { it.key }
-    val orderedKeys = mergedHomeRailKeys(prefs, movableDefaults)
+    // The pin keys join the column at the same place Home places them (see
+    // `homeColumnRailKeys`): after the arrangement's own defaults, so a pin the
+    // Home order has not placed yet still lists at the end, in pin order.
+    val pinByKey = libraryPins.associateBy { pin -> pin.key }
+    val column = homeColumnRailKeys(
+        prefs = prefs,
+        defaults = movableDefaults,
+        libraryKeys = libraryPins.map { pin -> pin.key }
+    )
 
-    val arrangementRows = orderedKeys.mapNotNull { key ->
+    // Every row is built against [column], so a move the manager offers is a
+    // move Home can make - including the ones that cross between an arrangement
+    // rail and a pinned list, which the split into two lists used to forbid.
+    val arrangementKeys = column.filterNot { key -> pinByKey.containsKey(key) }
+    val arrangementRows = arrangementKeys.mapNotNull { key ->
         val browseRail = browseRailByKey[key]
         val row = if (browseRail != null) {
             // isCollection is the flag that carries the PIN control, and this
@@ -211,22 +221,26 @@ internal fun homeRailManagerRows(
         // Exact, not a guess: an arrow is offered when pressing it would
         // actually change where the rail sits on Home.
         row.copy(
-            canMoveTop = railMoveChangesOrder(prefs, movableDefaults, key, Int.MIN_VALUE),
-            canMoveUp = railMoveChangesOrder(prefs, movableDefaults, key, -1),
-            canMoveDown = railMoveChangesOrder(prefs, movableDefaults, key, +1),
-            canMoveBottom = railMoveChangesOrder(prefs, movableDefaults, key, Int.MAX_VALUE)
+            canMoveTop = railMoveChangesOrder(prefs, column, key, Int.MIN_VALUE),
+            canMoveUp = railMoveChangesOrder(prefs, column, key, -1),
+            canMoveDown = railMoveChangesOrder(prefs, column, key, +1),
+            canMoveBottom = railMoveChangesOrder(prefs, column, key, Int.MAX_VALUE)
         )
     }
 
-    // The viewer's own Library lists, after the arranged rails - exactly where
-    // Home draws them (see `HomeScreen.libraryHomeRailItems`), in pin order.
-    // They are not part of the arrangement at all: a pin lives in its own blob,
-    // the home manager has no slot for one, and pretending otherwise would give
-    // the rail two owners. One row per pin, including a pin whose list no
-    // longer answers (the ghost a rename left behind) - removing it must not
-    // depend on the list loading, or the rail that cannot be loaded is also a
-    // rail that cannot be removed.
-    val libraryRows = libraryPins.map { pin ->
+    // The viewer's own Library lists, where the ONE Home order puts them - the
+    // same walk that placed the catalogs above, filtered to the pin keys. Their
+    // arrows are decided against [column], not against the pins alone: UP on the
+    // first pin has to be able to put it above a catalog (the arrows used to be
+    // dark there by construction). The move itself writes the HOME ORDER - a
+    // move is not a pin edit, so the pins blob keeps the order it had as the
+    // fallback for a new install.
+    //
+    // One row per pin, including a pin whose list no longer answers (the ghost a
+    // rename left behind) - removing it must not depend on the list loading, or
+    // the rail that cannot be loaded is also a rail that cannot be removed.
+    val libraryRows = column.mapNotNull { key ->
+        val pin = pinByKey[key] ?: return@mapNotNull null
         HomeRailManagerRow(
             key = pin.key,
             isCollection = false,
@@ -242,14 +256,19 @@ internal fun homeRailManagerRows(
             isHidden = false,
             isLibraryRail = true,
             libraryPin = pin,
-            canMoveTop = pinsMoveChangesOrder(libraryPins, pin.key, Int.MIN_VALUE),
-            canMoveUp = pinsMoveChangesOrder(libraryPins, pin.key, -1),
-            canMoveDown = pinsMoveChangesOrder(libraryPins, pin.key, +1),
-            canMoveBottom = pinsMoveChangesOrder(libraryPins, pin.key, Int.MAX_VALUE)
+            canMoveTop = railMoveChangesOrder(prefs, column, pin.key, Int.MIN_VALUE),
+            canMoveUp = railMoveChangesOrder(prefs, column, pin.key, -1),
+            canMoveDown = railMoveChangesOrder(prefs, column, pin.key, +1),
+            canMoveBottom = railMoveChangesOrder(prefs, column, pin.key, Int.MAX_VALUE)
         )
     }
 
-    return arrangementRows + libraryRows
+    // One row per column entry, in the column's order: the arrangement rows and
+    // the Library rows are built apart only because they are built from
+    // different data, and are returned interleaved because Home draws them
+    // interleaved.
+    val rowByKey = (arrangementRows + libraryRows).associateBy { row -> row.key }
+    return column.mapNotNull { key -> rowByKey[key] }
 }
 
 /**

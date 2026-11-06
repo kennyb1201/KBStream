@@ -17,8 +17,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
-import com.kennyb1201.kbstream.data.kb.moveRailInMergedOrder
-import com.kennyb1201.kbstream.data.kb.moveRailToEnd
+import com.kennyb1201.kbstream.data.kb.moveRailInHomeColumn
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.browseHomeRails
@@ -465,6 +464,22 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * Move a PINNED LIBRARY LIST (a Library rail) in the Home column.
+     *
+     * The same call as a catalog's or a built-in's, because a pinned list is a
+     * rail of the same column now: the arrows step it past the catalog above it
+     * and stop at the ends of the whole column, instead of only swapping places
+     * inside the pinned block at the foot of Home.
+     *
+     * It writes the home ORDER, never the pins blob: which lists are pinned is a
+     * separate statement from where they sit, and a move that rewrote the pins'
+     * order would publish a pin edit for a rail that was not pinned or unpinned.
+     */
+    fun moveLibraryRail(key: String, delta: Int) {
+        moveRailInArrangement(key, delta)
+    }
+
+    /**
      * Hide or show a BUILT-IN rail.
      *
      * Deliberately NOT [toggleCollectionHidden]: that one derives the current
@@ -514,27 +529,21 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Shared reorder core. Works on the merged VISIBLE rail keys (the exact
-     * list the manager dialog shows and Home renders):
-     *  - ±1 steps one slot; pinned keys stay pinned inside the pinned block.
-     *  - Int.MIN_VALUE (VERY TOP) pins a COLLECTION to the absolute first
-     *    rail; a CATALOG goes to the head of the order block instead, which is
-     *    the highest a catalog can sit (pinned collections render above it).
-     *    Catalogs are never pinned — see [moveRailToEnd].
-     *  - Int.MAX_VALUE (VERY BOTTOM) unpins the key and appends it after
-     *    everything else.
+     * Shared reorder core. Works on the merged VISIBLE rail keys — the exact
+     * list the manager dialog shows and Home renders, which is the whole Home
+     * column including the pinned Library lists (see [moveRailInHomeColumn]):
+     *  - ±1 steps one slot, whatever kind of rail is above or below: a catalog
+     *    steps down past a pinned Library list, and the list steps up past the
+     *    catalog.
+     *  - Int.MIN_VALUE (VERY TOP) pins a COLLECTION to the absolute first rail;
+     *    any other rail goes to the head of the order block, which is the
+     *    highest a rail that cannot be pinned can sit.
+     *  - Int.MAX_VALUE (VERY BOTTOM) unpins the key and puts it last in the
+     *    column, below the pinned Library lists too.
      */
     private fun moveRailInArrangement(key: String, delta: Int) {
         persistHomeOrder { prefs ->
-            when (delta) {
-                Int.MIN_VALUE -> moveRailToEnd(prefs, key, toTop = true)
-
-                Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false)
-
-                // The order the manager draws and Home renders, so a press
-                // lands where the user aimed - see [moveRailInMergedOrder].
-                else -> moveRailInMergedOrder(prefs, homeRailDefaults(), key, delta)
-            }
+            moveRailInHomeColumn(prefs, homeRailDefaults(), key, delta)
         }
     }
 
@@ -585,6 +594,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         val collectionKeys = _collections.value.collections.map { it.key }
+        // The pinned Library lists are rails of this same column: a move has to
+        // know about them or a catalog could never step past one, and Very
+        // Bottom would land above them. Read from the store rather than kept in
+        // state here - the pins blob is its own row (see LibraryHomeRails) and
+        // this list is rebuilt per move, which is soon enough.
+        val libraryKeys = com.kennyb1201.kbstream.data.library.LibraryHomeRails
+            .pins(getApplication())
+            .map { pin -> pin.key }
         // Which built-ins belong to THIS profile: a kids profile does not
         // draw the two Top Today rows (Home swaps its pinned batch for the
         // kids rails), and a guest profile draws its own rails after them -
@@ -599,7 +616,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         // (and so a show/hide leaves the arrangement otherwise untouched).
         // A hidden rail is filtered out by the hidden set, not by omission.
         return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest) +
-            browseKeys + customKeys + addonKeys + collectionKeys
+            browseKeys + customKeys + addonKeys + collectionKeys + libraryKeys
     }
 
     private fun persistHomeOrder(

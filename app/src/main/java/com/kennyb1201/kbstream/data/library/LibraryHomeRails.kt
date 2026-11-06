@@ -8,8 +8,9 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
-import com.kennyb1201.kbstream.data.trakt.TraktListRef
+import com.kennyb1201.kbstream.data.trakt.TraktListEntry
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
+import com.kennyb1201.kbstream.data.trakt.traktListReadsForPinnedId
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -125,26 +126,6 @@ object LibraryHomeRails {
     ): Boolean {
         val current = pins(context)
         val updated = repinnedAfterRename(current, renamed, previousIds)
-        if (updated == current) return false
-        write(context, updated)
-        return true
-    }
-
-    /**
-     * Moves one pinned rail by [delta] places (see [movedPins]).
-     *
-     * Pin order is the order the rails are drawn in at the end of Home, so this
-     * is what the Home manager's arrows write for a Library row. ONE write, and
-     * only when the order actually changes: a press at the end of the group is
-     * not an edit, and must not republish the row.
-     *
-     * Publishing is the point, exactly as it is for a pin: the sibling account
-     * holds the same pins and would otherwise keep its own order, so a reorder
-     * made on one TV has to travel.
-     */
-    fun movePinned(context: Context, pin: LibraryHomeRailPin, delta: Int): Boolean {
-        val current = pins(context)
-        val updated = movedPins(current, pin.key, delta)
         if (updated == current) return false
         write(context, updated)
         return true
@@ -395,8 +376,17 @@ object LibraryHomeRailItems {
         }
 
         LibrarySource.TRAKT_LIST -> {
-            val entries = TraktRepository.getInstance(context)
-                .listItems(TraktListRef(user = "me", listId = pin.id))
+            // Read the pin by the path its id names (see
+            // [traktListReadsForPinnedId]): a liked PUBLIC list is pinned by its
+            // numeric Trakt id, and that endpoint takes no owner - reading it as
+            // `users/me/lists/{numeric}` 404'd, which the repository answers
+            // with an empty list, so the rail drew nothing at all.
+            val repository = TraktRepository.getInstance(context)
+            var entries = emptyList<TraktListEntry>()
+            for (ref in traktListReadsForPinnedId(pin.id)) {
+                entries = repository.listItems(ref)
+                if (entries.isNotEmpty()) break
+            }
             entries.mapNotNull { entry ->
                 val media = entry.media
                 val title = media.title?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
