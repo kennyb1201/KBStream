@@ -3321,9 +3321,9 @@ private fun LibraryListHomeRail(
                         onDispose { cardFocusRequesters.remove(cardKey) }
                     }
 
-                    // A Library row may carry no art of its own: BingeCat's
-                    // media is a title, a year and ids, and its rail drew
-                    // title-only tiles beside Trakt rails that had posters.
+                    // A Library row may carry no art of its own: an imported
+                    // list's media is a title, a year and ids, and its rail
+                    // drew title-only tiles beside rails that had posters.
                     // Such a row is resolved by its id - the same TMDB lookup a
                     // landscape card already makes (see
                     // [rememberGlobalLandscapeArt] and [rememberTitlePosterArt]) -
@@ -3367,8 +3367,8 @@ private fun LibraryListHomeRail(
                             LandscapeCard(
                                 // The card's backdrop: the viewer's chosen
                                 // still, else the row's own poster when it has
-                                // one (Trakt), else the resolved backdrop
-                                // (BingeCat), else its resolved poster - and
+                                // one, else the resolved backdrop for a rail
+                                // that brought none, else its resolved poster - and
                                 // with none of those the title is drawn in the
                                 // corner. Never a blank tile.
                                 backdropUrl = imageOverrideCardBackdropUrl(
