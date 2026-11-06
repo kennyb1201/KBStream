@@ -29,6 +29,7 @@ import com.kennyb1201.kbstream.domain.streamengine.RowMediaType
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -882,16 +884,24 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // lifted for being one.
         val debridAddons = debridBackedAddons()
 
+        // Off Main on purpose: ranking is the one step here that reads every
+        // stream's whole text, repeatedly (see [StreamRanker.rank]), and this
+        // coroutine resumes on Main. A few hundred sources took long enough
+        // there to be reported as an ANR from inside the ranker (Sentry
+        // ANDROID-19), so the pass runs on the default pool and only its answer
+        // comes back to the frame.
         val preppedStreams =
             if (useRanker) {
-                StreamRanker.rank(
-                    allStreams,
-                    requestedEpisode,
-                    dolbyVisionUseful,
-                    runtimeMinutes,
-                    addonOf = addonOf,
-                    debridAddons = debridAddons
-                )
+                withContext(Dispatchers.Default) {
+                    StreamRanker.rank(
+                        allStreams,
+                        requestedEpisode,
+                        dolbyVisionUseful,
+                        runtimeMinutes,
+                        addonOf = addonOf,
+                        debridAddons = debridAddons
+                    )
+                }
             } else {
                 allStreams
             }
@@ -998,41 +1008,47 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // one publication of the resolve that nothing checked, so a resolve that
         // finished after a profile switch repainted the cleared picker with the
         // pre-switch title's tabs (spec C8).
-        val addonGroupList = results
-            .filterIsInstance<AddonLoadResult.Success>()
-            .map { result ->
-                // This add-on's own identity, not the merged map's: two add-ons
-                // can serve the same stream key, and the map keeps only the
-                // last one, which would tell the memory tier and the debrid
-                // tier the wrong add-on's name inside this tab.
-                val addonOfGroup: (Stream) -> String? = { result.addonName }
-                val prepared =
-                    if (useRanker) {
-                        StreamRanker.rank(
-                            result.streams,
-                            requestedEpisode,
-                            dolbyVisionUseful,
-                            runtimeMinutes,
-                            addonOf = addonOfGroup,
-                            debridAddons = debridAddons
-                        )
-                    } else {
-                        result.streams
-                    }
-                val ordered = SourceAddonPreference.ordered(
-                    streams = prepared,
-                    addonOf = addonOfGroup,
-                    outcomes = addonOutcomes
-                )
-                StreamAddonGroup(
-                    addonName = result.addonName,
-                    streams = TorBoxCachedBadges.mark(
-                        StreamBadgeEngine.apply(StreamDedup.collapse(ordered), getApplication()),
-                        knownCached
+        // Same reason as the rank above: every add-on's own list is ranked
+        // again here, and this is the pass the ANR was caught in. Nothing in
+        // the block below reads or writes the UI - it builds lists - so it runs
+        // off Main and the grouped answer is published back on it.
+        val addonGroupList = withContext(Dispatchers.Default) {
+            results
+                .filterIsInstance<AddonLoadResult.Success>()
+                .map { result ->
+                    // This add-on's own identity, not the merged map's: two
+                    // add-ons can serve the same stream key, and the map keeps
+                    // only the last one, which would tell the memory tier and
+                    // the debrid tier the wrong add-on's name inside this tab.
+                    val addonOfGroup: (Stream) -> String? = { result.addonName }
+                    val prepared =
+                        if (useRanker) {
+                            StreamRanker.rank(
+                                result.streams,
+                                requestedEpisode,
+                                dolbyVisionUseful,
+                                runtimeMinutes,
+                                addonOf = addonOfGroup,
+                                debridAddons = debridAddons
+                            )
+                        } else {
+                            result.streams
+                        }
+                    val ordered = SourceAddonPreference.ordered(
+                        streams = prepared,
+                        addonOf = addonOfGroup,
+                        outcomes = addonOutcomes
                     )
-                )
-            }
-            .filter { it.streams.isNotEmpty() }
+                    StreamAddonGroup(
+                        addonName = result.addonName,
+                        streams = TorBoxCachedBadges.mark(
+                            StreamBadgeEngine.apply(StreamDedup.collapse(ordered), getApplication()),
+                            knownCached
+                        )
+                    )
+                }
+                .filter { it.streams.isNotEmpty() }
+        }
 
         // Same ticket guard as the streams themselves - see [isCurrentRequest].
         if (isCurrentRequest(generation)) {

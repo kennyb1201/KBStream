@@ -415,14 +415,33 @@ object StreamRanker {
 
     /**
      * One stream and the facts the rules read, worked out once per stream. The
-     * comparator runs O(n log n) times, so the text join, the URL decode and
-     * the host parse must not happen inside a selector.
+     * comparator runs O(n log n) times, so NOTHING that reads the text may
+     * happen inside a selector - not the join, not a tier test, and not
+     * [score], which is dozens of text rules by itself.
+     *
+     * Every tier and the score are therefore read here, once per stream. They
+     * used to sit in the comparator: a few hundred sources then meant a
+     * few thousand full passes over every text, on the calling thread - the
+     * caller is the picker's own coroutine, which runs on Main - and a slow
+     * box spent seconds there before it drew a row. That is exactly the ANR
+     * Sentry reported inside [isKnownBad] (ANDROID-19, a Smart TV), and moving
+     * the work out of the sort is the fix: the order is identical, because
+     * every one of these values is per-stream and never depends on the
+     * comparison.
      */
     private class Candidate(
         val stream: Stream,
         val text: String,
         val debridServed: Boolean,
-        val episodeRank: Int
+        val episodeRank: Int,
+        /** Can this app open the URL itself (see [isPlayable]). */
+        val playable: Boolean,
+        /** A CAM, a sample, a 3D pair, a dub - see [isKnownBad]. */
+        val knownBad: Boolean,
+        /** The addon's own text claims the copy is ready (see [INSTANT_HINT]). */
+        val instant: Boolean,
+        /** The whole score, see [score]. */
+        val score: Int
     )
 
     /**
@@ -466,7 +485,11 @@ object StreamRanker {
                     text = text,
                     debridServed = isDebridServed(stream, text) ||
                         isDebridBackedByAddon(addonOf(stream), debridAddons),
-                    episodeRank = episodeRank(stream, episode)
+                    episodeRank = episodeRank(stream, episode),
+                    playable = isPlayable(stream),
+                    knownBad = isKnownBad(text),
+                    instant = INSTANT_HINT.containsMatchIn(text),
+                    score = score(stream, text, dolbyVisionUseful, runtimeMinutes)
                 )
             }
             // Playability is its own tier, not a score bonus: no combination of
@@ -477,11 +500,11 @@ object StreamRanker {
             // (AIOStreams with a regex + SEL config): the ranker only speaks
             // where it has something to say.
             .sortedWith(
-                compareByDescending<Candidate> { if (isPlayable(it.stream)) 1 else 0 }
+                compareByDescending<Candidate> { if (it.playable) 1 else 0 }
                     // Known-bad copies sink as a class, above every question of
                     // quality or availability - the only way a cached CAM stays
                     // under an honest 480p, which no score bonus can promise.
-                    .thenBy { if (isKnownBad(it.text)) 1 else 0 }
+                    .thenBy { if (it.knownBad) 1 else 0 }
                     // The episode the request is for, then a source that says
                     // nothing about the episode, then one that names another.
                     // Where the known-bad tier keeps a bad copy of the right
@@ -497,15 +520,8 @@ object StreamRanker {
                     .thenByDescending { if (it.debridServed) 1 else 0 }
                     // Availability, because it is what the sorted addons sort on
                     // first and what the viewer's configuration asked for.
-                    .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.text)) 1 else 0 }
-                    .thenByDescending {
-                        score(
-                            it.stream,
-                            it.text,
-                            dolbyVisionUseful,
-                            runtimeMinutes
-                        )
-                    }
+                    .thenByDescending { if (it.instant) 1 else 0 }
+                    .thenByDescending { it.score }
             )
             .map { it.stream }
 

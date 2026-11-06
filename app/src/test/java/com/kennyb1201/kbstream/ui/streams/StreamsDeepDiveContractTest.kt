@@ -187,8 +187,16 @@ class StreamsDeepDiveContractTest {
     fun `a tab list is prepared by All's rules, so its head is not a demoted row`() {
         val groups = slice(
             viewModel,
-            "val addonGroupList = results",
+            "val addonGroupList = withContext(Dispatchers.Default) {",
             ".filter { it.streams.isNotEmpty() }"
+        )
+        // The pass is the one the ANR was caught in (Sentry ANDROID-19), and it
+        // reads every stream's text on behalf of every tab: it runs on the
+        // default pool, and the merged rank above it does too.
+        assertEquals(
+            "both ranking passes must run off Main, never on the frame",
+            2,
+            Regex("withContext\\(Dispatchers\\.Default\\)").findAll(viewModel).count()
         )
         assertTrue(
             "the title's addon memory must reorder a tab too",

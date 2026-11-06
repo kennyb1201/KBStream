@@ -100,7 +100,9 @@ class PlaybackOrchestrationContractTest {
             Regex("if \\(isCurrentRequest\\(generation\\)\\) \\{").findAll(source).count()
         )
         val publish = source.substring(
-            source.indexOf("val addonGroupList = results"),
+            // The slices are built off Main now (Sentry ANDROID-19), so the
+            // block is the withContext that owns them.
+            source.indexOf("val addonGroupList = withContext(Dispatchers.Default) {"),
             source.indexOf("val rankedMsg =")
         )
         assertTrue(

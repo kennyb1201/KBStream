@@ -85,7 +85,11 @@ class StreamsAddonOrderContractTest {
                 // The slices are built into a local and published under the
                 // request-ticket guard (spec C8); the CONTENT of the list is the
                 // same one the merged sources read.
-                fetch.contains("val addonGroupList = results") &&
+                // The chain still starts from `results`; it is built off Main
+                // now, which is why the first line names the dispatcher
+                // (Sentry ANDROID-19 - the ranker stalled the frame).
+                fetch.contains("val addonGroupList = withContext(Dispatchers.Default) {") &&
+                fetch.contains("results") &&
                 // Published through the cached-only filter's helper (the only
                 // writer of _addonGroups), so the tab is still the same list the
                 // merged sources read before the filter is applied.
