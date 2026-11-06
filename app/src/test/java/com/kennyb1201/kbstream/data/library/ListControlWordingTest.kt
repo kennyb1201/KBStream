@@ -143,4 +143,33 @@ class ListControlWordingTest {
             unnamed.contains("rename it", ignoreCase = true)
         )
     }
+
+    @Test
+    fun `a create destination is named the same on both surfaces`() {
+        // The TV rail's create field and the phone's each draw a chip per
+        // destination, and each used to keep its own copy of these strings.
+        // One function now answers for both.
+        assertEquals(
+            "THIS DEVICE",
+            ListControlWording.createSourceLabel(LibrarySource.LOCAL_LIST)
+        )
+        assertEquals(
+            "TRAKT",
+            ListControlWording.createSourceLabel(LibrarySource.TRAKT_LIST)
+        )
+        assertEquals(
+            "MDBLIST",
+            ListControlWording.createSourceLabel(LibrarySource.MDBLIST_LIST)
+        )
+        assertEquals(
+            "BINGECAT",
+            ListControlWording.createSourceLabel(LibrarySource.BINGECAT_LIST)
+        )
+        // A source with no create of its own still gets a name, upper-cased from
+        // its label, rather than an empty chip.
+        assertEquals(
+            "MDBLIST",
+            ListControlWording.createSourceLabel(LibrarySource.MDBLIST_WATCHLIST)
+        )
+    }
 }

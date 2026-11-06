@@ -61,6 +61,7 @@ import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.ListControlWording
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.library.controlAttribution
 import com.kennyb1201.kbstream.data.library.controlSummary
@@ -900,14 +901,15 @@ private fun LibraryItemMenu(
     )
 }
 
-/** The rail's chip name for one create destination. */
-private fun createSourceLabel(source: LibrarySource): String = when (source) {
-    LibrarySource.LOCAL_LIST -> "THIS DEVICE"
-    LibrarySource.TRAKT_LIST -> "TRAKT"
-    LibrarySource.MDBLIST_LIST -> "MDBLIST"
-    LibrarySource.BINGECAT_LIST -> "BINGECAT"
-    else -> source.label.uppercase()
-}
+/**
+ * The rail's chip name for one create destination.
+ *
+ * The wording itself lives in [ListControlWording], which the phone's create
+ * field reads too - the two surfaces must not name a destination differently.
+ * The name stays here so the dialog below reads as it always has.
+ */
+private fun createSourceLabel(source: LibrarySource): String =
+    ListControlWording.createSourceLabel(source)
 
 /**
  * What can be done to one list, asked before anything happens.

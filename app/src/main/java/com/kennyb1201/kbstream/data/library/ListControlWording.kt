@@ -82,6 +82,24 @@ object ListControlWording {
     fun removeConfirmAction(liked: Boolean): String = if (liked) "REMOVE" else "DELETE"
 
     /**
+     * The chip name for one create destination.
+     *
+     * The TV rail's create field and the phone's ask the same question, and a
+     * destination that reads differently on one of them is the drift this file
+     * exists to prevent - two copies of these four strings is two places to
+     * forget. Local says THIS DEVICE because it is the one source that always
+     * exists and never leaves the device; the rest name the service the list
+     * will live on, which is also where its delete goes.
+     */
+    fun createSourceLabel(source: LibrarySource): String = when (source) {
+        LibrarySource.LOCAL_LIST -> "THIS DEVICE"
+        LibrarySource.TRAKT_LIST -> "TRAKT"
+        LibrarySource.MDBLIST_LIST -> "MDBLIST"
+        LibrarySource.BINGECAT_LIST -> "BINGECAT"
+        else -> source.label.uppercase()
+    }
+
+    /**
      * Why a saved community list has no rename row.
      *
      * Drawn where the rename action would be, so its absence is explained rather

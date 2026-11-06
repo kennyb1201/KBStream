@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,7 +111,9 @@ class LibraryScreenMobileContractTest {
             "viewModel.setSort(",
             "viewModel.toggleHideWatched()",
             "viewModel.selectList(",
-            "viewModel.createLocalList(",
+            // The create names its destination now, so the phone calls the same
+            // per-source entry the TV rail does (local is one of its four).
+            "viewModel.createList(",
             "viewModel.deleteLocalList(",
             "viewModel.removeItem("
         ).forEach { read ->
@@ -234,7 +237,68 @@ class LibraryScreenMobileContractTest {
         assertTrue(
             "a new list can be created from the phone",
             mobile.contains("\"+ NEW LIST\"") &&
-                mobile.contains("viewModel.createLocalList(newListName)")
+                mobile.contains("viewModel.createList(createSource, newListName)")
+        )
+    }
+
+    @Test
+    fun `the phone create field picks its destination, as the rail does`() {
+        val mobile = mobileLibrary()
+        val field = mobile.substringAfter("if (showCreateField) {")
+            .substringBefore("label = \"+ NEW LIST\"")
+
+        // The TV rail's four destinations, in its order, behind its gates: local
+        // always, a tracker only when it is connected, BingeCat only when it is
+        // connected AND mapped (an unmapped profile has no lists API to call).
+        var cursor = -1
+        listOf(
+            "LibrarySource.LOCAL_LIST",
+            "LibrarySource.TRAKT_LIST.takeIf { state.traktConnected }",
+            "LibrarySource.MDBLIST_LIST.takeIf { state.mdbListConfigured }",
+            "LibrarySource.BINGECAT_LIST.takeIf { state.bingecatConnected }"
+        ).forEach { entry ->
+            val at = field.indexOf(entry)
+            assertTrue("the picker must offer $entry, in the rail's order", at > cursor)
+            cursor = at
+        }
+        assertFalse(
+            "Simkl has no custom-lists API, so it is never a create source",
+            field.substringAfter("val createSources = listOfNotNull(").substringBefore(")")
+                .contains("SIMKL")
+        )
+
+        // One label per destination, from the wording the TV rail now shares,
+        // and the choice is what the create sends - THIS DEVICE too, so the
+        // local list keeps exactly the behaviour it had.
+        assertTrue(
+            "each chip is named by the same wording the TV rail uses",
+            field.contains("label = ListControlWording.createSourceLabel(source)")
+        )
+        assertTrue(
+            "the chip press moves the choice the field sends",
+            mobile.contains("var createSource by remember") &&
+                field.contains("onClick = { createSource = source }")
+        )
+        assertEquals(
+            "both the field's DONE and its CREATE button send the chosen source",
+            2,
+            Regex(Regex.escape("viewModel.createList(createSource, newListName)"))
+                .findAll(field).count()
+        )
+        assertFalse(
+            "nothing in the create field bypasses the picker for a local-only list",
+            field.contains("viewModel.createLocalList(newListName)")
+        )
+    }
+
+    @Test
+    fun `a refused list write is said out loud, as on the TV`() {
+        val mobile = mobileLibrary()
+        assertTrue(
+            "the phone reads the rail's one failure message",
+            mobile.contains("val message = state.listActionMessage ?: return@LaunchedEffect") &&
+                mobile.contains("listFeedback.show(message)") &&
+                mobile.contains("viewModel.clearListActionMessage()")
         )
     }
 

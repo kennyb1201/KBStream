@@ -9,6 +9,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,6 +48,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
+import com.kennyb1201.kbstream.data.library.ListControlWording
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
@@ -57,6 +60,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.rememberGlobalLandscape
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.touch.KBButton
 import com.kennyb1201.kbstream.ui.components.touch.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
@@ -125,7 +129,7 @@ import kotlinx.coroutines.delay
  * The TV's focus plumbing (per-card requesters, successor keys, the return
  * focus loop) has no phone twin: hiding or removing a card just removes it.
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun LibraryScreenMobile(
     onItemClick: (mediaType: String, id: String) -> Unit,
@@ -181,7 +185,23 @@ fun LibraryScreenMobile(
         var homeRailRevision by remember { mutableIntStateOf(0) }
         var showCreateField by remember { mutableStateOf(false) }
         var newListName by remember { mutableStateOf("") }
+        // Where the field's CREATE goes, the same choice the TV rail offers.
+        // Local is the default because it is the one source that always exists,
+        // so a viewer with no account connected sees the field they always had.
+        var createSource by remember { mutableStateOf(LibrarySource.LOCAL_LIST) }
         var notice by remember { mutableStateOf<String?>(null) }
+
+        // A list write that failed, said out loud through the shell's one
+        // transient message - the same channel the TV rail reads
+        // (`LibraryScreen`'s listFeedback). A create, rename or delete is a
+        // remote request behind a field or dialog that has already closed, so
+        // without this the refusal is indistinguishable from success.
+        val listFeedback = rememberKBFeedback()
+        LaunchedEffect(state.listActionMessage) {
+            val message = state.listActionMessage ?: return@LaunchedEffect
+            listFeedback.show(message)
+            viewModel.clearListActionMessage()
+        }
 
         // A row with no ids has no detail page; say so instead of a dead tap.
         LaunchedEffect(notice) {
@@ -468,7 +488,45 @@ fun LibraryScreenMobile(
                             }
 
                             if (showCreateField) {
+                                // The create destinations, from what is actually
+                                // connected - the TV rail's four, in its order and
+                                // behind its gates: local always, Trakt when
+                                // connected, MDBList when configured, BingeCat
+                                // when connected AND mapped (an unmapped profile
+                                // has no lists API to call). Simkl is absent by
+                                // nature: its API exposes no custom lists at all.
+                                val createSources = listOfNotNull(
+                                    LibrarySource.LOCAL_LIST,
+                                    LibrarySource.TRAKT_LIST.takeIf { state.traktConnected },
+                                    LibrarySource.MDBLIST_LIST.takeIf { state.mdbListConfigured },
+                                    LibrarySource.BINGECAT_LIST.takeIf { state.bingecatConnected }
+                                )
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    // Drawn above the field so the destination is
+                                    // chosen before the name is typed, as on TV.
+                                    // A single-source Library draws nothing extra
+                                    // and behaves exactly as it always did.
+                                    //
+                                    // FlowRow rather than a scroller: the last
+                                    // destination must be on screen without a
+                                    // swipe, which a horizontal strip would hide.
+                                    if (createSources.size > 1) {
+                                        FlowRow(
+                                            horizontalArrangement =
+                                                Arrangement.spacedBy(8.dp),
+                                            verticalArrangement =
+                                                Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            createSources.forEach { source ->
+                                                TouchChoiceChip(
+                                                    label =
+                                                        ListControlWording.createSourceLabel(source),
+                                                    selected = createSource == source,
+                                                    onClick = { createSource = source }
+                                                )
+                                            }
+                                        }
+                                    }
                                     KBTextField(
                                         value = newListName,
                                         onValueChange = { newListName = it },
@@ -476,7 +534,7 @@ fun LibraryScreenMobile(
                                         modifier = Modifier.fillMaxWidth(),
                                         onDone = {
                                             if (newListName.isNotBlank()) {
-                                                viewModel.createLocalList(newListName)
+                                                viewModel.createList(createSource, newListName)
                                             }
                                             newListName = ""
                                             showCreateField = false
@@ -487,7 +545,7 @@ fun LibraryScreenMobile(
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         if (newListName.isNotBlank()) {
-                                            viewModel.createLocalList(newListName)
+                                            viewModel.createList(createSource, newListName)
                                         }
                                         newListName = ""
                                         showCreateField = false
