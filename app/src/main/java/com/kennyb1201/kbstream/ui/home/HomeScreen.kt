@@ -3350,7 +3350,8 @@ private fun LibraryListHomeRail(
                     // [CarriedArt]): Trakt's rails ship a poster URL that can
                     // fail to load, and the old "has art" test switched the
                     // resolvers off on the strength of the URL alone - so the
-                    // rail sat title-only beside a BingeCat rail of posters.
+                    // rail sat title-only beside an imported-list rail of
+                    // posters, whose rows carry no art and are resolved by id.
                     // The URL is drawn while it loads (no call, no change), and
                     // once its loader reports a failure the resolvers are armed
                     // and the card uses what TMDB answers.
