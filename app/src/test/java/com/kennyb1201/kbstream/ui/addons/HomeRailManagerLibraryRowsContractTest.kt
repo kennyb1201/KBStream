@@ -64,6 +64,8 @@ class HomeRailManagerLibraryRowsContractTest {
         source("com/kennyb1201/kbstream/ui/mobile/HomeScreenMobile.kt")
     private val posterArt =
         source("com/kennyb1201/kbstream/ui/components/TitlePosterArt.kt")
+    private val landscapeArt =
+        source("com/kennyb1201/kbstream/ui/components/GlobalLandscapeArt.kt")
 
     @Test
     fun `the pinned rails are listed after the arrangement, as the pins stand`() {
@@ -111,6 +113,15 @@ class HomeRailManagerLibraryRowsContractTest {
             "the dialog takes the pins and hands them to the row builder",
             dialog.contains("libraryPins: List<com.kennyb1201.kbstream.data.library.LibraryHomeRailPin>") &&
                 dialog.contains("libraryPins = libraryPins")
+        )
+        // A pin is its own blob and nothing in the arrangement state bumps when
+        // one is added, moved, renamed or removed, so the pins have to be one of
+        // the memo keys here as well (the phone dialog had the same gap).
+        assertTrue(
+            "a newly pinned list appears without reopening the dialog, on the TV too",
+            dialog.contains(
+                "remember(configurations, collectionsState, homeOrderVersion, libraryPins)"
+            )
         )
         assertTrue(
             "a move goes to the pin, not to an arrangement slot",
@@ -217,10 +228,31 @@ class HomeRailManagerLibraryRowsContractTest {
                 home.contains("logoUrl = resolvedLandscapeArt.second")
         )
         assertTrue(
-            "one lookup, the same TMDB read the landscape resolver makes - no new " +
-                "call shape",
+            "an IMDb row keeps the lookup it always made",
             posterArt.contains("fetchEnrichedMetaCached(imdbId = id, type = type)") &&
                 posterArt.contains("TmdbRepository.POSTER_BASE + path")
+        )
+        // The rail's id is `imdb ?: "tmdb:<n>"`, and the two namespaces need
+        // two different calls: /find?external_source=imdb_id has nothing to
+        // find for a "tmdb:<n>" id, which is the hole that left a BingeCat rail
+        // (TMDB identity, often no IMDb id) title-only.
+        assertTrue(
+            "a \"tmdb:<n>\" row resolves by its TMDB id, through the numeric-id " +
+                "detail call rather than the IMDb lookup",
+            posterArt.contains("val tmdbId = ImageOverrides.tmdbIdOf(id)") &&
+                posterArt.contains("repository.getDetailByTmdbId(tmdbId, type)")
+        )
+        assertTrue(
+            "and the landscape resolver takes the same branch, so a tmdb-only row " +
+                "gets its backdrop and wordmark too - one fix for poster and still",
+            landscapeArt.contains("val tmdbId = ImageOverrides.tmdbIdOf(request.id)") &&
+                landscapeArt.contains("repository.getDetailByTmdbId(tmdbId, request.type)")
+        )
+        assertTrue(
+            "both doors file under one cache key, so a title resolved by either is " +
+                "served to both and neither repeats a fetch",
+            posterArt.contains("ImageOverrides.tmdbIdOf(") &&
+                landscapeArt.contains("ImageOverrides.tmdbIdOf(")
         )
         assertTrue(
             "and an id TMDB cannot draw leaves the card's own title, never a blank " +

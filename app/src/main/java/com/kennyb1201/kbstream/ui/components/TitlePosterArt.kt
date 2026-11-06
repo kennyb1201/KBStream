@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.platform.LocalContext
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.sync.Semaphore
@@ -21,11 +22,12 @@ import kotlinx.coroutines.sync.withPermit
  * for has no entry in it at all.
  *
  * So this is the lookup the rest of the app already makes for art it does not
- * carry: `TmdbRepository.fetchEnrichedMetaCached` - the same call
+ * carry: TMDB's own detail for the row's id - `getDetailByTmdbId` for a
+ * "tmdb:<n>" row, `fetchEnrichedMetaCached` for an IMDb one, the same two calls
  * [GlobalLandscapeArtCache] resolves a card's backdrop and clearlogo with, and
- * already memory- and disk-cached, so a card costs at most one read per title
- * per session and a cold start re-reads a cached row rather than re-asking
- * TMDB. The memo here only stops a rail that is scrolled away and back from
+ * already memory- and disk-cached under one key, so a card costs at most one
+ * read per title per session and a cold start re-reads a cached row rather than
+ * re-asking TMDB. The memo here only stops a rail that is scrolled away and back from
  * entering the suspend call again; the semaphore is the same six-at-a-time
  * ceiling a screenful of cards composes under.
  *
@@ -53,9 +55,23 @@ internal object TitlePosterArt {
             // are twelve callers for six permits, and the second half must not
             // repeat a lookup the first half already filed.
             if (memo.containsKey(key)) return@withPermit memo[key]
+            val repository = TmdbRepository.getInstance(context.applicationContext)
             val detail = runCatchingCancellable {
-                TmdbRepository.getInstance(context.applicationContext)
-                    .fetchEnrichedMetaCached(imdbId = id, type = type)
+                // The row's id IS the address, and the app's two id namespaces
+                // need two different calls: an IMDb id is resolved through
+                // TMDB's /find, while a "tmdb:<n>" id is already a TMDB id. A
+                // BingeCat media often carries no IMDb id at all (its identity
+                // is TMDB), so handing it to the IMDb lookup - which only ever
+                // asks /find?external_source=imdb_id - can never answer, and
+                // the tile stayed title-only. Both calls file their answer
+                // under the SAME cache key ("movie:tmdb:12345"), so the two
+                // doors share every entry and neither repeats a fetch.
+                val tmdbId = ImageOverrides.tmdbIdOf(id)
+                if (tmdbId != null) {
+                    repository.getDetailByTmdbId(tmdbId, type)
+                } else {
+                    repository.fetchEnrichedMetaCached(imdbId = id, type = type)
+                }
             }.getOrNull()
             val poster = detail?.posterPath
                 ?.takeIf { it.isNotBlank() }

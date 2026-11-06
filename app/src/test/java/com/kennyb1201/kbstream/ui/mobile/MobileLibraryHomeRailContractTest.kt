@@ -108,8 +108,11 @@ class MobileLibraryHomeRailContractTest {
             mobileHome.contains("key = { _, rail -> \"librail|\" + rail.pin.key }")
         )
         assertTrue(
-            "the rail is the pin's name, as the TV headings are",
-            mobileHome.contains("MobileSection(title = rail.pin.name)")
+            "the rail is the pin's name plus what the loaded items ARE - the " +
+                "heading is the only place this rail draws the type",
+            mobileHome.contains(
+                "title = rail.pin.name + libraryRailTypeSuffix(rail.items.map { it.type })"
+            )
         )
         assertTrue(
             "the pin's own order is the order they were put there - no sort, no " +
@@ -182,6 +185,73 @@ class MobileLibraryHomeRailContractTest {
         assertFalse(
             "and the phone must not keep a stale copy of the pins of its own",
             mobileHome.contains("LibraryHomeRails.pins(")
+        )
+    }
+
+    @Test
+    fun `the phone manager manages a pinned rail, from the same rows the TV uses`() {
+        val dialog = source("com/kennyb1201/kbstream/ui/mobile/HomeManagerDialogMobile.kt")
+        val screen = source("com/kennyb1201/kbstream/ui/mobile/AddonsScreenMobile.kt")
+        assertTrue(
+            "the phone dialog takes the pins and hands them to the shared row builder",
+            dialog.contains("libraryPins: List<LibraryHomeRailPin> = emptyList()") &&
+                dialog.contains("libraryPins = libraryPins")
+        )
+        // A pin is its own blob: nothing in the arrangement state bumps when one
+        // is added, moved, renamed or removed, so the row list has to be keyed on
+        // the pins too - or a newly pinned list stays invisible until something
+        // else rebuilds the dialog.
+        assertTrue(
+            "the row list recomputes when the pins change, or a new pin never appears",
+            dialog.contains(
+                "remember(configurations, collectionsState, homeOrderVersion, libraryPins)"
+            )
+        )
+        assertTrue(
+            "a move rewrites the pins' order, not an arrangement slot",
+            dialog.contains(
+                "row.isLibraryRail -> row.libraryPin?.let { pin -> onLibraryMove(pin, delta) }"
+            )
+        )
+        assertTrue(
+            "a rename edits the pin's stored name, which IS the rail's heading",
+            dialog.contains("row.isLibraryRail -> row.libraryPin?.let(onLibraryRename)")
+        )
+        assertTrue(
+            "a remove unpins by the stored key, so a ghost pin is removable too",
+            dialog.contains("onRemove = { row.libraryPin?.let(onLibraryRemove) }")
+        )
+        assertTrue(
+            "the row offers REMOVE and RENAME, and is labelled as a Library rail",
+            dialog.contains("label = \"REMOVE\"") &&
+                dialog.contains("isLibraryRow -> \"LIBRARY\"")
+        )
+        assertTrue(
+            "no hide: the pins blob has no hidden flag, so the toggle is a no-op for one",
+            dialog.contains("row.isLibraryRail -> Unit") &&
+                dialog.contains("if (!row.isLibraryRail) {")
+        )
+        // The writes are the pins store's, the same three the TV screen calls, so
+        // a phone-side edit syncs account-wide like any pin change.
+        assertTrue(
+            "the screen reads the pins when the manager opens and re-reads on every edit",
+            screen.contains("LibraryHomeRails.pins(context)") &&
+                screen.contains("libraryPinsRevision += 1")
+        )
+        assertTrue(
+            "move writes the pins blob",
+            screen.contains("LibraryHomeRails.movePinned(context, pin, delta)")
+        )
+        assertTrue(
+            "remove is the existing unpin",
+            screen.contains("LibraryHomeRails.setPinned(context, pin, false)")
+        )
+        assertTrue(
+            "and rename is the same-key replace, through the shared rename form, with " +
+                "no default to reset to (a pin's name has none)",
+            screen.contains("heading = \"RENAME LIBRARY RAIL\"") &&
+                screen.contains("LibraryHomeRails.renamePinned(context, pin, renameLibraryDraft)") &&
+                screen.contains("hasCustomName = false")
         )
     }
 

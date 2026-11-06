@@ -88,6 +88,42 @@ internal fun libraryHomeRailIdSpellings(list: LibraryList): Set<String> =
     setOf(libraryHomeRailId(list), "id:" + list.id)
 
 /**
+ * What a pinned Library rail's heading says about its content, as a suffix.
+ *
+ * A list is not single-type the way the Because You Watched rails are: it can be
+ * all films, all shows, or a curated mix. The rail header is the only place the
+ * type is drawn (the cards carry no badge), so the heading has to say what the
+ * list ACTUALLY holds - which is why this is computed from the items that
+ * loaded, not from what the service could hold. A list whose rows all resolve to
+ * one type reads as that type even if the source permits both.
+ *
+ * The words and the separator are the Because You Watched headers' own
+ * ("That Show · Series"), so one Home reads one way.
+ *
+ * A DISPLAY suffix only: it is concatenated at render and never written back
+ * into the pin, whose [LibraryHomeRailPin.name] stays the title the rename path
+ * owns. A type this build does not recognise (an add-on's own spelling) adds
+ * nothing rather than guessing a side, so "no suffix" is the honest answer for a
+ * rail that cannot be typed.
+ */
+fun libraryRailTypeSuffix(mediaTypes: Collection<String>): String {
+    var movies = false
+    var series = false
+    mediaTypes.forEach { raw ->
+        when (raw.trim().lowercase()) {
+            "movie", "anime.movie" -> movies = true
+            "series", "show", "tv", "anime", "anime.series" -> series = true
+        }
+    }
+    return when {
+        movies && series -> " · Movies & Series"
+        movies -> " · Movies"
+        series -> " · Series"
+        else -> ""
+    }
+}
+
+/**
  * The pin [list] would add, or null when the row cannot be a rail.
  *
  * A row with no name cannot title a rail, so it is not pinnable at all rather

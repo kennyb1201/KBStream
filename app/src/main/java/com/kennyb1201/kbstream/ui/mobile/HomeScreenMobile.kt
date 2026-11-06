@@ -93,6 +93,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.data.library.libraryRailTypeSuffix
 // The pin's stable key, so two pinned rails of the same list cannot share one
 // LazyColumn slot (the same extension the TV's rail keys itself by).
 import com.kennyb1201.kbstream.data.library.key
@@ -2864,7 +2865,14 @@ private fun MobileLibraryListRail(
     isPartiallyWatched: (MetaPreview) -> Boolean,
     onOpen: (MetaPreview) -> Unit
 ) {
-    MobileSection(title = rail.pin.name) {
+    // The pin's stored name, plus what the loaded items ARE: a pinned list can
+    // be all films, all shows or a mix, and the heading is the only place this
+    // rail draws the type (the cards carry no badge) - the same suffix the TV
+    // rail's heading carries, from the same rule. Display only: the pin keeps
+    // the name the rename owns.
+    MobileSection(
+        title = rail.pin.name + libraryRailTypeSuffix(rail.items.map { it.type })
+    ) {
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)

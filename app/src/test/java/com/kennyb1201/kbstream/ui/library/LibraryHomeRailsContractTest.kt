@@ -123,8 +123,12 @@ class LibraryHomeRailsContractTest {
                 !squash(home).contains("private fun rememberLibraryHomeRails()")
         )
         assertTrue(
-            "and the rail header is the pin's name, as before",
-            squash(home).contains("SectionTitle(rail.pin.name, onHeight = onTitleHeight)")
+            "and the rail header is the pin's name plus its type suffix, computed " +
+                "at render from the items that loaded",
+            squash(home).contains(
+                "SectionTitle( rail.pin.name + libraryRailTypeSuffix(rail.items.map " +
+                    "{ it.type }), onHeight = onTitleHeight )"
+            )
         )
     }
 

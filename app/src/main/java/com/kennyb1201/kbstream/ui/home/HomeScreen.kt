@@ -149,6 +149,7 @@ import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.library.key
+import com.kennyb1201.kbstream.data.library.libraryRailTypeSuffix
 import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.FocusLandingVerdict
@@ -3288,7 +3289,14 @@ private fun LibraryListHomeRail(
     Column(
         modifier = Modifier.padding(start = TvSafeAreaHorizontal, top = 0.dp, bottom = 0.dp)
     ) {
-        SectionTitle(rail.pin.name, onHeight = onTitleHeight)
+        // The pin's stored name, plus what the loaded items ARE: a pinned list
+        // can be all films, all shows or a mix, and the heading is the only
+        // place this rail draws the type (the cards carry no badge). The
+        // suffix is display only - the pin keeps the name the rename owns.
+        SectionTitle(
+            rail.pin.name + libraryRailTypeSuffix(rail.items.map { it.type }),
+            onHeight = onTitleHeight
+        )
 
         CompositionLocalProvider(
             LocalBringIntoViewSpec provides bringIntoViewSpec

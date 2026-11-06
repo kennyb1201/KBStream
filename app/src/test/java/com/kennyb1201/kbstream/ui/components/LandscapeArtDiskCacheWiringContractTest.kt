@@ -200,15 +200,25 @@ class LandscapeArtDiskCacheWiringContractTest {
 
     @Test
     fun `the enriched-metadata lookup is unchanged by this change`() {
+        val body = resolve()
         assertTrue(
-            "the card resolver calls it exactly as before",
-            resolve().contains(
-                "fetchEnrichedMetaCached(\n                            imdbId = request.id,\n                            type = request.type\n                        )"
-            )
+            "an IMDb row still resolves through the same call",
+            body.contains("fetchEnrichedMetaCached(") &&
+                body.contains("imdbId = request.id,") &&
+                body.contains("type = request.type")
         )
         assertFalse(
             "and the landscape layer adds no parameters to it",
-            resolve().contains("fetchEnrichedMetaCached(\n                            imdbId = request.id,\n                            type = request.type,\n")
+            body.contains("fallbackName") || body.contains("full =")
+        )
+        // The one branch this file gained: a row whose id is "tmdb:<n>" is
+        // already a TMDB id, so it takes the numeric-id detail call instead of
+        // the IMDb /find lookup that cannot answer it. Same cache key, so the
+        // two doors share every entry - this test is about the call shape, the
+        // behaviour is pinned where the resolvers are.
+        assertTrue(
+            "a tmdb-only row resolves by its TMDB id, as the rails' ids require",
+            body.contains("getDetailByTmdbId(tmdbId, request.type)")
         )
     }
 

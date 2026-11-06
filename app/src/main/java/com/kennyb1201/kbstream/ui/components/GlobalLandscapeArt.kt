@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.sync.Semaphore
@@ -113,11 +114,22 @@ internal object GlobalLandscapeArtCache {
                         backdrop.getOrNull() to null
                     }
                 } else {
+                    // The row's id is the address, and a "tmdb:<n>" one is a
+                    // TMDB id already: it takes the numeric-id detail call, not
+                    // the IMDb /find lookup that a BingeCat row (TMDB identity,
+                    // no IMDb id) can never satisfy. Both calls file their
+                    // answer under the same cache key, so the two doors share
+                    // every entry. A row with an IMDb id resolves as before.
+                    val tmdbId = ImageOverrides.tmdbIdOf(request.id)
                     val detail = runCatchingCancellable {
-                        repository.fetchEnrichedMetaCached(
-                            imdbId = request.id,
-                            type = request.type
-                        )
+                        if (tmdbId != null) {
+                            repository.getDetailByTmdbId(tmdbId, request.type)
+                        } else {
+                            repository.fetchEnrichedMetaCached(
+                                imdbId = request.id,
+                                type = request.type
+                            )
+                        }
                     }
                     answered = detail.isSuccess
                     detail.getOrNull().landscapeArtUrls()

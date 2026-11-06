@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.settings.BillboardTrailerMode
 import com.kennyb1201.kbstream.ui.addons.AddonsViewModel
@@ -76,6 +77,12 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * reorder stops the TV draws (very top, up, down, very bottom, disabled where a
  * press would change nothing), and RENAME for a built-in or a catalog. A hidden
  * rail shows only SHOW, as on TV.
+ *
+ * The Library lists pinned to Home are appended after the arranged rails, as in
+ * the TV manager, and carry the three operations a pin has: the arrows rewrite
+ * the pins' order, RENAME rewrites the pin's stored name (which IS the rail's
+ * heading) and REMOVE unpins by stored key. No HIDE: the pins blob has no hidden
+ * flag, and unpinning dressed as "hidden" would be a different promise.
  */
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -101,15 +108,31 @@ internal fun HomeManagerDialogMobile(
     onBuiltinMove: (String, Int) -> Unit,
     onBuiltinRename: (String) -> Unit,
     onRename: (CatalogConfiguration) -> Unit,
+    /**
+     * The Library lists pinned to Home, in pin order - the same rows the TV
+     * dialog appends at the end (see [homeRailManagerRows]).
+     */
+    libraryPins: List<LibraryHomeRailPin> = emptyList(),
+    /** A library row's arrow: rewrites the pins' order, not the arrangement's. */
+    onLibraryMove: (LibraryHomeRailPin, Int) -> Unit = { _, _ -> },
+    /** A library row's rename: rewrites the pin's stored name, which titles the rail. */
+    onLibraryRename: (LibraryHomeRailPin) -> Unit = {},
+    /** A library row's remove: unpins it, whether or not its list still loads. */
+    onLibraryRemove: (LibraryHomeRailPin) -> Unit = {},
     onDismiss: () -> Unit
 ) {
-    // Same merge the TV dialog draws, from the same function.
-    val rows = remember(configurations, collectionsState, homeOrderVersion) {
+    // Same merge the TV dialog draws, from the same function - and on the same
+    // keys, pins included: a pin is its own blob and nothing here bumps when one
+    // is added, moved, renamed or removed, so leaving it out of the keys would
+    // leave a newly pinned list invisible until something else rebuilt the
+    // dialog.
+    val rows = remember(configurations, collectionsState, homeOrderVersion, libraryPins) {
         homeRailManagerRows(
             configurations = configurations,
             collectionsState = collectionsState,
             kidsMaxAge = kidsMaxAge,
-            isGuest = isGuest
+            isGuest = isGuest,
+            libraryPins = libraryPins
         )
     }
     val visibleRows = rows.filter { !it.isHidden }
@@ -124,6 +147,9 @@ internal fun HomeManagerDialogMobile(
 
     fun move(row: HomeRailManagerRow, delta: Int) {
         when {
+            // A Library row's arrows move the PIN, not an arrangement slot: its
+            // position on Home is the pin's order at the end of the column.
+            row.isLibraryRail -> row.libraryPin?.let { pin -> onLibraryMove(pin, delta) }
             row.isBuiltinRail -> onBuiltinMove(row.key, delta)
             row.isCollection -> onCollectionMove(row.key, delta)
             else -> row.config?.let { onCatalogMove(it, delta) }
@@ -132,6 +158,9 @@ internal fun HomeManagerDialogMobile(
 
     fun toggle(row: HomeRailManagerRow) {
         when {
+            // A Library rail has no hidden state (the pins blob has none), so
+            // its row offers REMOVE instead of a toggle - see the row below.
+            row.isLibraryRail -> Unit
             row.isBuiltinRail -> onBuiltinHide(row.key)
             row.isCollection -> onCollectionHide(row.collectionKey.orEmpty())
             else -> row.config?.let { onToggle(it, !it.catalog.showOnHome) }
@@ -248,10 +277,16 @@ internal fun HomeManagerDialogMobile(
                         onMove = { delta -> move(row, delta) },
                         onRename = {
                             when {
+                                // A Library rail's heading IS its pin's stored
+                                // name, so the same rename button edits the pin
+                                // rather than an arrangement title override.
+                                row.isLibraryRail ->
+                                    row.libraryPin?.let(onLibraryRename)
                                 row.isBuiltinRail -> onBuiltinRename(row.key)
                                 !row.isCollection -> row.config?.let { onRename(it) }
                             }
-                        }
+                        },
+                        onRemove = { row.libraryPin?.let(onLibraryRemove) }
                     )
                 }
 
@@ -540,7 +575,9 @@ private fun ManagerRowMobile(
     onToggle: () -> Unit,
     onPin: () -> Unit,
     onMove: (Int) -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    /** Only a Library row draws this: a pin is removed here, never hidden. */
+    onRemove: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -560,7 +597,8 @@ private fun ManagerRowMobile(
                 isCollection = row.isCollection,
                 isBrowseRow = row.isBrowseRail,
                 isBuiltinRow = row.isBuiltinRail,
-                isCustomCatalogRow = row.isCustomCatalog
+                isCustomCatalogRow = row.isCustomCatalog,
+                isLibraryRow = row.isLibraryRail
             )
             if (row.isPinned) {
                 Text(
@@ -585,11 +623,17 @@ private fun ManagerRowMobile(
                     .weight(1f)
                     .padding(start = 8.dp, end = 6.dp)
             )
-            ManagerActionMobile(
-                label = if (isHiddenSection) "SHOW" else "HIDE",
-                accent = isHiddenSection,
-                onClick = onToggle
-            )
+            // A Library rail has no hide: the pins blob has no hidden flag and
+            // hiding must not be smuggled in as an unpin, so the press a viewer
+            // wants there is REMOVE (line 2), not a toggle that would unpin the
+            // rail while calling itself "hidden" - the TV row's rule.
+            if (!row.isLibraryRail) {
+                ManagerActionMobile(
+                    label = if (isHiddenSection) "SHOW" else "HIDE",
+                    accent = isHiddenSection,
+                    onClick = onToggle
+                )
+            }
         }
 
         Text(
@@ -610,7 +654,19 @@ private fun ManagerRowMobile(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.padding(start = 22.dp, top = 6.dp)
             ) {
-                if (row.isCollection) {
+                if (row.isLibraryRail) {
+                    // The pin's own two writes: its stored name (the rail's
+                    // heading) and its removal. REMOVE works on the stored key,
+                    // so a ghost rail - a renamed list's stale pin, with no
+                    // Library row of its own - is removable whether or not its
+                    // list still resolves.
+                    ManagerActionMobile(label = "RENAME", onClick = onRename)
+                    ManagerActionMobile(
+                        label = "REMOVE",
+                        accent = true,
+                        onClick = onRemove
+                    )
+                } else if (row.isCollection) {
                     ManagerActionMobile(
                         label = if (row.isPinned) "UNPIN" else "PIN",
                         accent = row.isPinned,
@@ -722,10 +778,12 @@ private fun RailKindChipMobile(
     isCollection: Boolean,
     isBrowseRow: Boolean = false,
     isBuiltinRow: Boolean = false,
-    isCustomCatalogRow: Boolean = false
+    isCustomCatalogRow: Boolean = false,
+    isLibraryRow: Boolean = false
 ) {
     Text(
         text = when {
+            isLibraryRow -> "LIBRARY"
             isCustomCatalogRow -> "CUSTOM"
             isBuiltinRow -> "BUILT-IN"
             isBrowseRow -> "BROWSE"

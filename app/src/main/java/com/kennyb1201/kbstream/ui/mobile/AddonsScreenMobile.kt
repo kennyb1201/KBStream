@@ -55,6 +55,8 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.library.LibraryHomeRailPin
+import com.kennyb1201.kbstream.data.library.LibraryHomeRails
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest
 import com.kennyb1201.kbstream.ui.addons.AddonPresets
@@ -200,6 +202,13 @@ fun AddonsScreenMobile(
     var renameBuiltinHasOverride by remember { mutableStateOf(false) }
     var renameCatalogTarget by remember { mutableStateOf<CatalogConfiguration?>(null) }
     var renameCatalogDraft by remember { mutableStateOf("") }
+    // The Library lists pinned to Home, and the revision that re-reads them.
+    // A pin is its own blob: nothing in the arrangement state bumps when one is
+    // moved, renamed or removed here, so the manager owns its own read - the
+    // same shape the TV screen's manager uses.
+    var libraryPinsRevision by remember { mutableStateOf(0) }
+    var renameLibraryPin by remember { mutableStateOf<LibraryHomeRailPin?>(null) }
+    var renameLibraryDraft by remember { mutableStateOf("") }
 
     // Collections profile import. The phone always has DocumentsUI, but the TV
     // screen's two-step fallback is kept: a custom ROM may still ship no
@@ -506,6 +515,9 @@ fun AddonsScreenMobile(
         }
 
         if (showCatalogManager) {
+            val libraryPins = remember(libraryPinsRevision) {
+                LibraryHomeRails.pins(context)
+            }
             HomeManagerDialogMobile(
                 configurations = catalogConfigurations,
                 collectionsState = collectionsState,
@@ -562,7 +574,43 @@ fun AddonsScreenMobile(
                     renameCatalogDraft = config.catalog.displayName
                     renameCatalogTarget = config
                 },
+                // A Library list's row is the pin, not an arrangement slot: its
+                // arrows rewrite the pins' order, its rename rewrites the pin's
+                // stored name and its remove unpins. All three go through the
+                // pins store, so the change syncs account-wide exactly like a
+                // pin made in the Library (see LibraryHomeRails.write).
+                libraryPins = libraryPins,
+                onLibraryMove = { pin, delta ->
+                    LibraryHomeRails.movePinned(context, pin, delta)
+                    libraryPinsRevision += 1
+                },
+                onLibraryRename = { pin ->
+                    renameLibraryPin = pin
+                    renameLibraryDraft = pin.name
+                },
+                onLibraryRemove = { pin ->
+                    LibraryHomeRails.setPinned(context, pin, false)
+                    libraryPinsRevision += 1
+                },
                 onDismiss = { showCatalogManager = false }
+            )
+        }
+
+        renameLibraryPin?.let { pin ->
+            RenameRailDialogMobile(
+                heading = "RENAME LIBRARY RAIL",
+                currentName = renameLibraryDraft,
+                // A pin's stored name IS its rail's heading, so there is no
+                // default to reset to - the RESET row is not offered.
+                hasCustomName = false,
+                onNameChange = { renameLibraryDraft = it },
+                onDismiss = { renameLibraryPin = null },
+                onSave = {
+                    LibraryHomeRails.renamePinned(context, pin, renameLibraryDraft)
+                    libraryPinsRevision += 1
+                    renameLibraryPin = null
+                },
+                onReset = { renameLibraryPin = null }
             )
         }
 
