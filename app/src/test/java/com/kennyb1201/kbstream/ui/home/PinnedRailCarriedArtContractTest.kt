@@ -40,6 +40,22 @@ class PinnedRailCarriedArtContractTest {
         )
     }
 
+    /**
+     * The phone's twin. The rail in [phone] imports THIS one, not the
+     * television card - both shapes have to be able to report a still that did
+     * not load, or the phone rail's fallback never arms.
+     */
+    private val touchLandscapeCard: String by lazy {
+        normalized(
+            stripComments(
+                read(
+                    "src/main/java/com/kennyb1201/kbstream/ui/components/touch/" +
+                        "TouchLandscapeCard.kt"
+                )
+            )
+        )
+    }
+
     private val loader: String by lazy {
         normalized(
             stripComments(
@@ -132,16 +148,28 @@ class PinnedRailCarriedArtContractTest {
             )
         }
         assertTrue(
-            "the landscape card can report it at all - the callback is wired into " +
-                "the one image it draws, not accepted and forgotten",
-            landscapeCard.contains("onBackdropError: ((Throwable?) -> Unit)? = null") &&
-                landscapeCard.contains("onBackdropError?.invoke(state.result.throwable)")
+            "the phone's rail draws the touch twin, not the television card - the " +
+                "two are separate files and only one of them is compiled into " +
+                "that screen's call",
+            phone.contains("com.kennyb1201.kbstream.ui.components.touch.LandscapeCard")
         )
-        assertTrue(
-            "and a failure still leaves the card its title rather than a blank " +
-                "tile: the card's own text fallback is untouched",
-            landscapeCard.contains("text = contentDescription ?: fallbackTitle ?: \"No Image\"")
-        )
+        listOf("tv" to landscapeCard, "phone (touch twin)" to touchLandscapeCard)
+            .forEach { (name, card) ->
+                assertTrue(
+                    "$name: the card can report a still that did not load - the " +
+                        "callback is wired into the one image it draws, not accepted " +
+                        "and forgotten",
+                    card.contains("onBackdropError: ((Throwable?) -> Unit)? = null") &&
+                        card.contains("onBackdropError?.invoke(state.result.throwable)")
+                )
+                assertTrue(
+                    "$name: and a failure still leaves the card its title rather " +
+                        "than a blank tile - the card's own text fallback is untouched",
+                    card.contains(
+                        "text = contentDescription ?: fallbackTitle ?: \"No Image\""
+                    )
+                )
+            }
     }
 
     @Test

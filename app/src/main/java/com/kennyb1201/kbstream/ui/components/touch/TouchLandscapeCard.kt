@@ -75,7 +75,15 @@ fun LandscapeCard(
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false,
-    rank: Int? = null
+    rank: Int? = null,
+    /**
+     * Reported when [backdropUrl] fails to load, so a caller whose still was a
+     * first attempt can fall back to art it resolves itself (see [CarriedArt]).
+     * The card's own behaviour is unchanged by it: it still draws its title in
+     * place of the failed still. Same hook as the television twin's, so the
+     * phone's pinned rail can make the same fallback the TV rail does.
+     */
+    onBackdropError: ((Throwable?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
@@ -124,7 +132,10 @@ fun LandscapeCard(
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
-                    onError = { hasError = true }
+                    onError = { state ->
+                        hasError = true
+                        onBackdropError?.invoke(state.result.throwable)
+                    }
                 )
             } else {
                 Box(
