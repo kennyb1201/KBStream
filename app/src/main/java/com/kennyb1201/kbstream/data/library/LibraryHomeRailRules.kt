@@ -97,8 +97,13 @@ internal fun libraryHomeRailIdSpellings(list: LibraryList): Set<String> =
  * loaded, not from what the service could hold. A list whose rows all resolve to
  * one type reads as that type even if the source permits both.
  *
- * The words and the separator are the Because You Watched headers' own
- * ("That Show · Series"), so one Home reads one way.
+ * The words are SINGULAR ("Movie", "Series", "Movie & Series"), which is what
+ * every other type suffix in the app says - the catalog rails' `RailTitle`, the
+ * Browse sections, the catalog grid, Settings and the search suggestions all
+ * answer "Movie" - so one app reads one way rather than the pinned rail being
+ * the only plural (Kenny, on TV: "Movies" in the header, "Movie" everywhere
+ * else). The separator is the Because You Watched headers' own ("That Show ·
+ * Series").
  *
  * A DISPLAY suffix only: it is concatenated at render and never written back
  * into the pin, whose [LibraryHomeRailPin.name] stays the title the rename path
@@ -116,8 +121,8 @@ fun libraryRailTypeSuffix(mediaTypes: Collection<String>): String {
         }
     }
     return when {
-        movies && series -> " · Movies & Series"
-        movies -> " · Movies"
+        movies && series -> " · Movie & Series"
+        movies -> " · Movie"
         series -> " · Series"
         else -> ""
     }

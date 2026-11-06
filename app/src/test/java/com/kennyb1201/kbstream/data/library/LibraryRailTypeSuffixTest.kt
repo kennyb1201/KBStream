@@ -9,8 +9,13 @@ import org.junit.Test
  * The rail draws no per-card label (Kenny: the type lives in the header only), so
  * the header has to say what the list actually holds - and a pinned list may be
  * all films, all shows or a mix, unlike the Because You Watched rails, which are
- * single-type by construction and taught the wording ([libraryRailTypeSuffix]
- * repeats their separator and their words on purpose).
+ * single-type by construction. The words are the app's SINGULAR ones
+ * ("Movie", not "Movies"), matching the catalog rails and every other type
+ * suffix in the app; only the separator is Because You Watched's.
+ *
+ * These expectations are the wording itself, so they change WITH the function
+ * (Kenny, TV: the pinned header said "Movies" where the rest of the app says
+ * "Movie").
  *
  * The suffix is computed from the items that LOADED, which is why the rules are
  * about the rows' own `type` spellings: an add-on's "tv" is a series, "anime" is
@@ -21,14 +26,14 @@ class LibraryRailTypeSuffixTest {
 
     @Test
     fun `a single-type list names that type`() {
-        assertEquals(" · Movies", libraryRailTypeSuffix(listOf("movie", "movie")))
+        assertEquals(" · Movie", libraryRailTypeSuffix(listOf("movie", "movie")))
         assertEquals(" · Series", libraryRailTypeSuffix(listOf("series", "series")))
     }
 
     @Test
-    fun `a mixed list says both, in the Because You Watched wording`() {
+    fun `a mixed list says both, singular, with the Because You Watched separator`() {
         assertEquals(
-            " · Movies & Series",
+            " · Movie & Series",
             libraryRailTypeSuffix(listOf("movie", "series", "movie"))
         )
     }
@@ -40,13 +45,13 @@ class LibraryRailTypeSuffixTest {
         assertEquals(" · Series", libraryRailTypeSuffix(listOf("tv")))
         assertEquals(" · Series", libraryRailTypeSuffix(listOf("show")))
         assertEquals(" · Series", libraryRailTypeSuffix(listOf("anime", "anime.series")))
-        assertEquals(" · Movies", libraryRailTypeSuffix(listOf("anime.movie")))
+        assertEquals(" · Movie", libraryRailTypeSuffix(listOf("anime.movie")))
         assertEquals(
-            " · Movies & Series",
+            " · Movie & Series",
             libraryRailTypeSuffix(listOf("anime.movie", "anime"))
         )
         // Case and padding are the wire's, not the rule's.
-        assertEquals(" · Movies", libraryRailTypeSuffix(listOf("  MOVIE  ")))
+        assertEquals(" · Movie", libraryRailTypeSuffix(listOf("  MOVIE  ")))
     }
 
     @Test
@@ -66,8 +71,8 @@ class LibraryRailTypeSuffixTest {
     @Test
     fun `an unknown spelling does not make a single-type list mixed`() {
         // The unknown one is ignored; the known one still names the list, so a
-        // rail of films plus one odd row reads "Movies", not "Movies & Series"
+        // rail of films plus one odd row reads "Movie", not "Movie & Series"
         // and not nothing.
-        assertEquals(" · Movies", libraryRailTypeSuffix(listOf("movie", "channel")))
+        assertEquals(" · Movie", libraryRailTypeSuffix(listOf("movie", "channel")))
     }
 }
