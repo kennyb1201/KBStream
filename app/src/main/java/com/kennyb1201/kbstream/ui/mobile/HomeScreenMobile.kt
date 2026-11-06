@@ -93,6 +93,9 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+// The pin's stable key, so two pinned rails of the same list cannot share one
+// LazyColumn slot (the same extension the TV's rail keys itself by).
+import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.reporting.CwFilterTrace
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -114,7 +117,9 @@ import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
+import com.kennyb1201.kbstream.ui.home.LibraryHomeRailUi
 import com.kennyb1201.kbstream.ui.home.failedAddonsMessage
+import com.kennyb1201.kbstream.ui.home.rememberLibraryHomeRails
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.armHeroSource
@@ -428,6 +433,16 @@ fun HomeScreenMobile(
         val homeEntries = remember(railsShown, kbState, builtinWithContent) {
             KBHomeSlots.buildMergedEntries(context, railsShown, kbState, builtinWithContent)
         }
+
+        // The viewer's own Library lists, after everything the arrangement
+        // placed: the same end-of-Home position the television draws them in,
+        // and the same loader - one rule for which lists make a rail (no empty
+        // heading, the kids ceiling, an id a card can be opened by), so the two
+        // screens cannot disagree about what is pinned. It is read on each
+        // composition rather than harnessed to the Library screen's own
+        // revision tick: the pins are a prefs row, and a rail must appear (or
+        // go) on the next frame after a pin, with no restart.
+        val pinnedLibraryRails by rememberLibraryHomeRails()
 
         // The two rows this screen draws itself, titled the way the television
         // titles them (see `HomeScreen.builtinRailTitle`): the name the home
@@ -1060,6 +1075,34 @@ fun HomeScreenMobile(
                             }
                         }
                     }
+                }
+
+                // The viewer's pinned Library lists, after the rails the
+                // arrangement placed - the phone's end of Home, in the order
+                // they were pinned. They are not in that arrangement (the home
+                // manager does not list a library list), so this is where they
+                // sit on both screens.
+                itemsIndexed(
+                    items = pinnedLibraryRails,
+                    key = { _, rail -> "librail|" + rail.pin.key },
+                    contentType = { _, _ -> "library-list-rail" }
+                ) { _, rail ->
+                    MobileLibraryListRail(
+                        rail = rail,
+                        landscapeCards = landscapeCards,
+                        posterWidth = railPosterSize.width,
+                        posterHeight = railPosterSize.height,
+                        landscapeWidth = railLandscapeWidth,
+                        landscapeHeight = railLandscapeHeight,
+                        overridePaths = overridePaths,
+                        isWatched = { meta ->
+                            viewModel.watchedKey(meta.id, meta.type) in watchedKeys
+                        },
+                        isPartiallyWatched = { meta ->
+                            viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
+                        },
+                        onOpen = onItemClick
+                    )
                 }
 
                 // ...and the add-ons whose catalogs did not answer, named. A
@@ -2788,6 +2831,102 @@ private fun MobileSection(
             }
         }
         content()
+    }
+}
+
+/**
+ * A Library list the viewer pinned to Home, as a touch rail.
+ *
+ * The same rows the television's rail draws, out of the same loader (see
+ * [rememberLibraryHomeRails]), and nothing else: a tap opens the title's Detail
+ * exactly as the phone's catalog cards do - the same source signal for the
+ * hero flight, the same `onItemClick` - because a pinned list is a rail like
+ * any other on this screen. What it does NOT carry is the television's focus
+ * machinery: there is no D-pad here, so no requesters, no bring-into-view and
+ * no hero-follows-focus.
+ *
+ * The watched badges are the shared ones every card on this screen wears. A row
+ * whose art does not resolve still draws its title (the card's own fallback),
+ * which is why one bad poster never costs the rail.
+ */
+@Composable
+private fun MobileLibraryListRail(
+    rail: LibraryHomeRailUi,
+    landscapeCards: Boolean,
+    posterWidth: Dp,
+    posterHeight: Dp,
+    landscapeWidth: Dp,
+    landscapeHeight: Dp,
+    overridePaths: Map<String, String>,
+    isWatched: (MetaPreview) -> Boolean,
+    isPartiallyWatched: (MetaPreview) -> Boolean,
+    onOpen: (MetaPreview) -> Unit
+) {
+    MobileSection(title = rail.pin.name) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            itemsIndexed(
+                items = rail.items,
+                // The rail is part of the key: the same title can sit in two
+                // pinned lists, and one card's slot must not stand in for the
+                // other's when a pin is removed above it (the same key the
+                // television rail spells).
+                key = { _, meta ->
+                    "librail|" + rail.pin.key + "|" + meta.type + ":" + meta.id
+                },
+                contentType = { _, _ -> "library-list-card" }
+            ) { _, meta ->
+                val watched = isWatched(meta)
+                val partiallyWatched = !watched && isPartiallyWatched(meta)
+                if (landscapeCards) {
+                    LandscapeCard(
+                        // A Library row carries the service's poster but not a
+                        // backdrop or a wordmark, so its poster is the still and
+                        // the title is drawn in the corner - the same fallback
+                        // an artwork-less catalog card uses.
+                        backdropUrl = imageOverrideCardBackdropUrl(
+                            paths = overridePaths,
+                            rawId = meta.id,
+                            fallbackUrl = meta.poster
+                        ),
+                        logoUrl = null,
+                        fallbackTitle = meta.name,
+                        contentDescription = meta.name,
+                        isWatched = watched,
+                        isPartiallyWatched = partiallyWatched,
+                        onClick = {
+                            armHeroSource(meta.type, meta.id)
+                            onOpen(meta)
+                        },
+                        modifier = Modifier
+                            .heroSourceOnPress(meta.type, meta.id)
+                            .width(landscapeWidth)
+                            .height(landscapeHeight)
+                    )
+                } else {
+                    PosterCard(
+                        posterUrl = imageOverridePosterUrl(
+                            paths = overridePaths,
+                            rawId = meta.id,
+                            fallbackUrl = meta.poster
+                        ),
+                        contentDescription = meta.name,
+                        isWatched = watched,
+                        isPartiallyWatched = partiallyWatched,
+                        onClick = {
+                            armHeroSource(meta.type, meta.id)
+                            onOpen(meta)
+                        },
+                        modifier = Modifier
+                            .heroSourceOnPress(meta.type, meta.id)
+                            .width(posterWidth)
+                            .height(posterHeight)
+                    )
+                }
+            }
+        }
     }
 }
 

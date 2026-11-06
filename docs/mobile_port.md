@@ -496,6 +496,21 @@ root against TMDB before opening, and a long press raises the TV card's menu
 (details, play manually, play from beginning, watched/unwatched, remove from the
 row, hide).
 
+**Pinned Library lists show on the phone (2026-11-06).** A list pinned from
+Library ("Show on Home") wrote its pin and drew on the TV's Home and nowhere
+else: every pinned rail lived below `HomeScreen`'s `FormFactor.isTv` return, and
+the phone's Home is the arranged entries and nothing else - the pin's own menu
+already said "Remove from Home", so the feature read as broken from the phone.
+The rails now sit at the end of the phone's column, after the arranged entries,
+in the order they were pinned, and they come out of ONE loader
+(`ui/home/LibraryHomeRailLoader.kt`) that both screens call: no empty rail for a
+list that cannot answer, the kids ceiling on the account's list, and a row with
+no IMDb/TMDB id dropped rather than drawn dead. The phone's rail is the touch
+rail (tap opens Detail and arms the hero flight, the shared watched badges, the
+viewer's card shape) with none of the TV's focus machinery, and the pins are
+re-read on each composition, so a pin or unpin shows on the next Home frame
+with no restart.
+
 **A long-press row does what its label says (2026-10-21).** The phone's Continue
 Watching menu had the TV card's wording but not its wiring: its "Go to Details"
 row opened the episode's *play* target, so Detail auto-played the file instead of

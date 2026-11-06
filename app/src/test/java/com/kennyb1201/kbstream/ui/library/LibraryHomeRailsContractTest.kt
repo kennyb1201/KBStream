@@ -49,6 +49,12 @@ class LibraryHomeRailsContractTest {
         source("com/kennyb1201/kbstream/data/library/LibraryHomeRails.kt")
     private val home =
         source("com/kennyb1201/kbstream/ui/home/HomeScreen.kt")
+    // The rail LOADER moved out of the TV file when the phone grew the same
+    // rails: one loader for both Home screens, so what a rail is (and which
+    // lists make one) is decided in one place. The rules below are unchanged -
+    // only the file they are read from is.
+    private val railLoader =
+        source("com/kennyb1201/kbstream/ui/home/LibraryHomeRailLoader.kt")
     private val payload =
         source("com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt")
     private val sync = source("com/kennyb1201/kbstream/data/sync/SupabaseSync.kt")
@@ -97,17 +103,28 @@ class LibraryHomeRailsContractTest {
         )
         assertTrue(
             "they are loaded once per pinned set, off the main thread",
-            squash(home).contains("produceState(initialValue = emptyList(), pins)") &&
-                squash(home).contains("withContext(Dispatchers.IO)")
+            squash(railLoader).contains("produceState(initialValue = emptyList(), pins)") &&
+                squash(railLoader).contains("withContext(Dispatchers.IO)")
         )
         assertTrue(
             "an empty list draws nothing rather than an empty heading",
-            squash(home).contains("if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)")
+            squash(railLoader).contains(
+                "if (items.isEmpty()) null else LibraryHomeRailUi(pin, items)"
+            )
         )
         assertTrue(
             "and a kids profile on the account that owns the list must not see its " +
                 "adult titles, so the rail goes through the same ceiling the Library does",
-            squash(home).contains("tmdb.kidsFilterMetas(")
+            squash(railLoader).contains("tmdb.kidsFilterMetas(")
+        )
+        assertTrue(
+            "the TV column asks the shared loader - not a copy of its own",
+            squash(home).contains("val pinnedLibraryRails by rememberLibraryHomeRails()") &&
+                !squash(home).contains("private fun rememberLibraryHomeRails()")
+        )
+        assertTrue(
+            "and the rail header is the pin's name, as before",
+            squash(home).contains("SectionTitle(rail.pin.name, onHeight = onTitleHeight)")
         )
     }
 

@@ -91,6 +91,17 @@ object TraktListRefParser {
                 listId = segments[listsAt + 1]
             )
         }
+        // Trakt's OWN canonical public-list URL: `trakt.tv/lists/12345`. It
+        // names no owner - that is the whole shape of it - and the catch-all
+        // below would read the literal segment "lists" as the owner's username
+        // and ask for `users/lists/12345`, which Trakt answers with a 404 ("no
+        // record found"). An ownerless ref needs no owner when it is read
+        // either: the halves fall back to the id-only endpoint (see
+        // TraktRepository.readListHalf), so this is the whole fix for the
+        // public-list 404 - the parser, not a new read path.
+        if (listsAt == 0 && segments.size == 2) {
+            return TraktListRef(user = null, listId = segments[1])
+        }
         if (segments.size >= 2) {
             return TraktListRef(
                 user = segments[segments.size - 2],
