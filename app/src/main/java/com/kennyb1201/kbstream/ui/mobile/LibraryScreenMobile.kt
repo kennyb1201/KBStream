@@ -32,13 +32,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -331,46 +329,44 @@ fun LibraryScreenMobile(
             ) {
                 item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            Text(
-                                text = "LIBRARY",
-                                color = KBAccent,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            // The source line is the widest thing in this
-                            // header (five connected services is a long
-                            // string). It takes the leftover space and ends
-                            // there, instead of being measured at its full
-                            // intrinsic width and pushing the LIBRARY title
-                            // off the left edge of a 360dp portrait screen.
-                            //
-                            // Reading order, the same as the TV: what the
-                            // shelf always holds first, then the trackers,
-                            // then the read-only feeds. Display only - the
-                            // merge order underneath is the ViewModel's.
-                            Text(
-                                text = buildList {
-                                    add("LOCAL")
-                                    if (state.traktConnected) add("TRAKT")
-                                    if (state.simklConnected) add("SIMKL")
-                                    if (state.mdbListConfigured) add("MDBLIST")
-                                    // Connected AND mapped, matching the
-                                    // Library section's own rule: an unmapped
-                                    // BingeCat has no rows to offer.
-                                    if (state.bingecatConnected) add("BINGECAT")
-                                }.joinToString(" + "),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = KBTextLo,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                        Text(
+                            text = "LIBRARY",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        // The source line is the widest thing in this header
+                        // (five connected services is a long string), and on a
+                        // 360dp portrait screen the space left beside the title
+                        // is not enough for it: sharing the title's row meant
+                        // the last name - BINGECAT, last by reading order - went
+                        // to the ellipsis, so a connected, mapped BingeCat never
+                        // reached the screen. It gets its own full-width line
+                        // under the title instead: the title keeps the left edge
+                        // to itself, and a line too long for the screen wraps to
+                        // a second one rather than dropping a label. No maxLines
+                        // and no ellipsis here on purpose - an ellipsized source
+                        // list is a lie about what the shelf can show.
+                        //
+                        // Reading order, the same as the TV: what the shelf
+                        // always holds first, then the trackers, then the
+                        // read-only feeds. Display only - the merge order
+                        // underneath is the ViewModel's.
+                        Text(
+                            text = buildList {
+                                add("LOCAL")
+                                if (state.traktConnected) add("TRAKT")
+                                if (state.simklConnected) add("SIMKL")
+                                if (state.mdbListConfigured) add("MDBLIST")
+                                // Connected AND mapped, matching the
+                                // Library section's own rule: an unmapped
+                                // BingeCat has no rows to offer.
+                                if (state.bingecatConnected) add("BINGECAT")
+                            }.joinToString(" + "),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = KBTextLo,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                         notice?.let { text ->
                             Text(
                                 text = text,

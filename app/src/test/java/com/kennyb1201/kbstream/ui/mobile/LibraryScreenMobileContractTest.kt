@@ -280,6 +280,56 @@ class LibraryScreenMobileContractTest {
     }
 
     @Test
+    fun `the header names every connected source and never ellipsizes one away`() {
+        val mobile = mobileLibrary()
+        val header = mobile.substringAfter("item(key = \"header\"")
+            .substringBefore("item(key = \"filters\"")
+
+        // Reading order, the same as the TV. Five names on a 360dp phone is
+        // longer than the space beside the title used to be, and the ellipsis
+        // ate the last one - which is BINGECAT, the feed that was there.
+        var cursor = -1
+        listOf("LOCAL", "TRAKT", "SIMKL", "MDBLIST", "BINGECAT").forEach { name ->
+            val at = header.indexOf("add(\"$name\")")
+            assertTrue("the header must name $name", at > cursor)
+            cursor = at
+        }
+
+        // The gates are the Library section's own: connected, and for BingeCat
+        // mapped too - an unmapped profile has no rows to offer, so naming it
+        // would advertise nothing.
+        assertTrue(
+            "only a connected tracker is named",
+            header.contains("if (state.traktConnected) add(\"TRAKT\")") &&
+                header.contains("if (state.simklConnected) add(\"SIMKL\")") &&
+                header.contains("if (state.mdbListConfigured) add(\"MDBLIST\")") &&
+                header.contains("if (state.bingecatConnected) add(\"BINGECAT\")")
+        )
+
+        // The bug: the line shared the title's row, took weight(1f) and ended
+        // in an ellipsis, so the last name was rendered off-screen. It now has
+        // its own full-width line and wraps instead of clipping.
+        val line = header.substringAfter(".joinToString(\" + \"),")
+            .substringBefore("notice?.let")
+        assertTrue(
+            "the source line gets the full width under the title",
+            line.contains("modifier = Modifier.fillMaxWidth()")
+        )
+        assertFalse(
+            "a capped source line is how BINGECAT disappeared",
+            line.contains("maxLines") ||
+                line.contains("TextOverflow") ||
+                line.contains("Modifier.weight(") ||
+                line.contains("textAlign")
+        )
+        assertTrue(
+            "the LIBRARY title keeps its own line at the left edge",
+            header.contains("text = \"LIBRARY\", color = KBAccent") &&
+                header.indexOf("text = \"LIBRARY\"") < header.indexOf("add(\"LOCAL\")")
+        )
+    }
+
+    @Test
     fun `a row with no ids says so instead of swallowing the tap`() {
         val mobile = mobileLibrary()
         assertTrue(
