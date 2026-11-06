@@ -347,6 +347,75 @@ data class TraktListItem(
     @Json(name = "show") val show: TraktMediaEntry? = null
 )
 
+// ---------------------------------------------------------------------------
+// Public list browsing (Settings → Trakt → Browse public lists)
+// ---------------------------------------------------------------------------
+
+/**
+ * A list as Trakt's discovery, search and liked reads carry it.
+ *
+ * One model for all three because the list object itself is the same in each:
+ * `name`, `description`, `item_count`, `likes`, an `ids` pair (numeric id and
+ * slug) and the `user` that owns it. Only the ROW around it differs, which is
+ * what [TraktListDiscoveryRow], [TraktListSearchRow] and [TraktLikedListRow]
+ * are.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktPublicList(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "privacy") val privacy: String? = null,
+    @Json(name = "item_count") val itemCount: Int? = null,
+    @Json(name = "likes") val likes: Int? = null,
+    @Json(name = "comment_count") val commentCount: Int? = null,
+    @Json(name = "ids") val ids: TraktListIds? = null,
+    @Json(name = "user") val user: TraktPublicListUser? = null
+)
+
+/** The owner of a public list; the card names them (spec F5). */
+@JsonClass(generateAdapter = true)
+data class TraktPublicListUser(
+    @Json(name = "username") val username: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "ids") val ids: TraktUserIds? = null
+)
+
+/**
+ * One row of `GET /lists/popular` and `GET /lists/trending`.
+ *
+ * The API's own schema wraps the list here (`{like_count, comment_count,
+ * list}`) rather than returning bare list objects - confirmed against Trakt's
+ * published definition for both endpoints, not assumed from the older
+ * documentation that showed arrays of lists.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktListDiscoveryRow(
+    @Json(name = "like_count") val likeCount: Int? = null,
+    @Json(name = "comment_count") val commentCount: Int? = null,
+    @Json(name = "list") val list: TraktPublicList? = null
+)
+
+/** One row of `GET /search/list` (a text search over public list names). */
+@JsonClass(generateAdapter = true)
+data class TraktListSearchRow(
+    @Json(name = "type") val type: String? = null,
+    @Json(name = "score") val score: Double? = null,
+    @Json(name = "list") val list: TraktPublicList? = null
+)
+
+/**
+ * One row of `GET /users/{id}/likes/lists` - the save leg's read.
+ *
+ * The path is `users/{id}/likes/{type}` with `type=lists` (the liked-lists read
+ * the spec called `/users/likes/lists`); each row nests the list under `list`
+ * and stamps when it was liked.
+ */
+@JsonClass(generateAdapter = true)
+data class TraktLikedListRow(
+    @Json(name = "liked_at") val likedAt: String? = null,
+    @Json(name = "list") val list: TraktPublicList? = null
+)
+
 /** One row of `GET /search/{id_type}/{id}` (TMDB id resolution). */
 @JsonClass(generateAdapter = true)
 data class TraktSearchResult(

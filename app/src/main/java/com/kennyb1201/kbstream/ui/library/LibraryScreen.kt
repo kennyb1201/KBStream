@@ -62,8 +62,15 @@ import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.data.library.controlAttribution
+import com.kennyb1201.kbstream.data.library.controlSummary
 import com.kennyb1201.kbstream.data.library.key
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.removeActionLabel
+import com.kennyb1201.kbstream.data.library.removeConfirmAction
+import com.kennyb1201.kbstream.data.library.removeConfirmBody
+import com.kennyb1201.kbstream.data.library.removeConfirmTitle
+import com.kennyb1201.kbstream.data.library.renameUnavailableNote
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
@@ -666,7 +673,7 @@ fun LibraryScreen(
                 }
                 listMenu = null
             },
-            onRename = if (list.source.canManageList) {
+            onRename = if (list.source.canManageList && !list.liked) {
                 {
                     listMenu = null
                     listPendingRename = list
@@ -920,7 +927,10 @@ private fun LibraryListActionsDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        KBDialogPanel(title = list.name, subtitle = list.locationLabel) {
+        // The subtitle names the owner for a saved community list: the dialog's
+        // actions are about SOMEONE ELSE'S list, and the row it was opened from
+        // is a like (see ListControlWording).
+        KBDialogPanel(title = list.name, subtitle = list.controlAttribution) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 KBCard(
                     onClick = onDismiss,
@@ -959,14 +969,22 @@ private fun LibraryListActionsDialog(
                         )
                     }
                 }
+                // A saved community list has no rename row, and the dialog says
+                // why instead of leaving a gap the viewer has to guess at.
+                list.renameUnavailableNote?.let { note ->
+                    Text(
+                        text = note,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 onDelete?.let { delete ->
                     KBCard(onClick = delete) {
                         Text(
-                            text = if (list.source.isLocalList) {
-                                "REMOVE FROM THIS DEVICE"
-                            } else {
-                                "DELETE FROM ${list.source.deleteDestinationLabel.uppercase()}"
-                            },
+                            // REMOVE for a saved community list: the press drops
+                            // the like, not the list (spec F4).
+                            text = list.removeActionLabel,
                             color = KBAccent,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
@@ -1076,22 +1094,13 @@ private fun LibraryDeleteListDialog(
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         KBDialogPanel(
-            title = if (list.source.isLocalList) {
-                "Delete list?"
-            } else {
-                "Delete from ${list.source.deleteDestinationLabel}?"
-            },
+            title = list.removeConfirmTitle,
+            // The question names the action; the line under it still names the
+            // list, which is what the viewer is confirming about.
             subtitle = list.name
         ) {
             Text(
-                text = if (list.source.isLocalList) {
-                    "The list is removed from this device. Its " +
-                        "${list.itemCount} titles stay in your Library."
-                } else {
-                    "The list is deleted from " +
-                        "${list.source.deleteDestinationLabel}. Its " +
-                        "${list.itemCount} titles stay in your Library."
-                },
+                text = list.removeConfirmBody,
                 color = KBTextLo,
                 style = MaterialTheme.typography.bodyMedium
             )
@@ -1113,7 +1122,7 @@ private fun LibraryDeleteListDialog(
                 }
                 KBCard(onClick = onConfirm) {
                     Text(
-                        text = "DELETE",
+                        text = list.removeConfirmAction,
                         color = KBAccent,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
@@ -1516,7 +1525,6 @@ private fun ListsPane(
             items(lists, key = { list -> list.id }) { list ->
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
-                val sourceLabel = list.locationLabel
                 // The manage gesture: rename and delete for a list this app
                 // can actually change - a local list, or one of the accounts'
                 // own managed lists. A source with neither (Simkl) gets no
@@ -1602,7 +1610,11 @@ private fun ListsPane(
                             it.key in pinnedHomeRailKeys
                         } == true
                         Text(
-                            text = "${list.itemCount} titles · $sourceLabel" +
+                            // Count and source from the one wording module, which
+                            // names the OWNER of a saved community list as well as
+                            // its vendor (spec F5): the row sits among the viewer's
+                            // own lists, and an unowned line would read as one.
+                            text = list.controlSummary +
                                 if (onHome) " · On Home" else "",
                             style = MaterialTheme.typography.labelSmall,
                             // Brighter while the row is the one under the remote:

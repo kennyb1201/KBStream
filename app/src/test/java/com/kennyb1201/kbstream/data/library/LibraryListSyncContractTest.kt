@@ -480,9 +480,13 @@ class LibraryListSyncContractTest {
             "libraryHomeRailPinFor(list)?.let { pin -> LibraryHomeRails.setPinned(appContext, pin, false) }",
             "a remote delete must unpin here, which mirrors it to the account"
         )
+        // Scoped to the source's OWN delete path: a SAVED community list's 
+        // removal (an unlike) unpins from its own branch above, and the check 
+        // here is about the hard-delete path's ordering.
+        val ownDelete = remote.substringAfter("val deleted = when (list.source) {")
         assertTrue(
             "and only after the service agreed: a refused delete keeps its rail",
-            remote.indexOf("if (!deleted) {") in 0 until remote.indexOf("setPinned")
+            ownDelete.indexOf("if (!deleted) {") in 0 until ownDelete.indexOf("setPinned")
         )
     }
 
@@ -613,6 +617,43 @@ class LibraryListSyncContractTest {
         assertTrue(
             "the close happens before the open list is re-read",
             refresh.indexOf("selectedList = null") < refresh.indexOf("canonicalListItems = _uiState.value.selectedList")
+        )
+    }
+
+    @Test
+    fun `a list mutation's rail read cannot overwrite a newer answer`() {
+        val vm = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
+        val body = vm
+            .substringAfter("private fun refreshListsOnly() {")
+            .substringBefore("/** One account's watchlist as a row")
+        assertContains(
+            body,
+            "val version = ++requestVersion",
+            "the mutation's read is a newer request, so it supersedes a full refresh " +
+                "still in flight instead of being overwritten by it"
+        )
+        val guard = body.indexOf("if (version != requestVersion) return@launch")
+        val publish = body.indexOf("_uiState.value = _uiState.value.copy(")
+        assertTrue("the guard must exist", guard >= 0)
+        assertTrue("and it must be before the publish", publish > guard)
+    }
+
+    @Test
+    fun `a BingeCat snapshot only prunes the pins when its lists leg answered`() {
+        val vm = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
+        val reconcile = source("com/kennyb1201/kbstream/data/library/LibraryHomeRailReconcile.kt")
+        // A partial refresh re-stamps the snapshot, so the freshness test alone
+        // reads "this pass fetched" over a lists read that FAILED - and the pruned
+        // pins are persisted and enqueued to the account.
+        assertContains(
+            vm,
+            "bingecatSnapshot.listsComplete && bingecatSnapshot.refreshedAtMs >= bingecatReadAt",
+            "the Library's own pin pass requires a complete list set"
+        )
+        assertContains(
+            reconcile,
+            "snapshot != null && snapshot.listsComplete && snapshot.refreshedAtMs >= readAt",
+            "and so does the launch reconcile, which writes and syncs what it decides"
         )
     }
 

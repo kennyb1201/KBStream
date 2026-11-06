@@ -76,6 +76,38 @@ internal fun pickBest(
 }
 
 /**
+ * Adaptive AUDIO in the order it may be probed.
+ *
+ * The video and its audio are played as ONE [PlayableSource.Adaptive], which
+ * carries the VIDEO client's User-Agent - and googlevideo binds a signed URL to
+ * the UA of the client that signed it. So an audio track signed by another
+ * client can 403 mid-play even though its score is higher: the score ranks
+ * candidates, the UA decides whether the stream survives.
+ *
+ * The order is therefore the video's own client first, then the preferred
+ * client, then everyone else by score - a demotion, not a ban, exactly as the
+ * video pick is. The probe walks this list, so a class whose probe fails still
+ * falls through to the next one.
+ */
+internal fun audioProbeOrder(
+    items: List<StreamCandidate>,
+    videoClient: String?,
+    preferredClient: String
+): List<StreamCandidate> {
+    val byScore = compareByDescending<StreamCandidate> { it.score }
+        .thenBy { if (it.hasN) 1 else 0 }
+        .thenBy { it.priority }
+    val own = items.filter { it.client == videoClient }.sortedWith(byScore)
+    val preferred = items
+        .filter { it.client == preferredClient && it.client != videoClient }
+        .sortedWith(byScore)
+    val rest = items
+        .filter { it.client != videoClient && it.client != preferredClient }
+        .sortedWith(byScore)
+    return own + preferred + rest
+}
+
+/**
  * Which parsed manifest plays, in the order the pools are consulted: the
  * preferred client's manifests under the ceiling, then every manifest under the
  * ceiling, then the lowest rendition anyone offers.

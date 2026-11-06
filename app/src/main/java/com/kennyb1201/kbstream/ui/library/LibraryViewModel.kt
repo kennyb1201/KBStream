@@ -17,10 +17,14 @@ import com.kennyb1201.kbstream.data.library.TasteSignals
 import com.kennyb1201.kbstream.data.library.WATCHLIST_REMOTE_ID
 import com.kennyb1201.kbstream.data.library.libraryHomeRailId
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.likedListShelfId
 import com.kennyb1201.kbstream.data.library.placementOf
 import com.kennyb1201.kbstream.data.library.traktListShelfId
 import com.kennyb1201.kbstream.data.library.watchlistShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.publiclists.PublicListCard
+import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
+import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -455,6 +459,17 @@ class LibraryViewModel(
     fun renameList(list: LibraryList, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty() || trimmed == list.name) return
+        // A saved community list is still the owner's list, with the owner's
+        // name on it: the row is a like, and a like cannot rename it. Saying so
+        // is kinder than a rename that silently comes back with the old name
+        // (spec F4 - the copy is renameable, the like is not).
+        if (list.liked) {
+            noteListAction(
+                "\"${list.name}\" is a ${listSourceName(list.source)} community list " +
+                    "you saved by liking it, so its name belongs to its owner."
+            )
+            return
+        }
         viewModelScope.launch {
             val appContext = getApplication<Application>()
             val renamed = when (list.source) {
@@ -526,6 +541,64 @@ class LibraryViewModel(
         if (list.source.isLocalList) return
         viewModelScope.launch {
             val appContext = getApplication<Application>()
+            // A saved community list is not the account's to delete: the row was
+            // put there by a LIKE, and the honest removal is the unlike - which
+            // takes the row off this rail and off the provider's liked set while
+            // leaving the owner's list exactly as it was (spec F4). Running the
+            // hard list delete here would delete a stranger's list, or fail.
+            if (list.liked) {
+                val unliked = withContext(Dispatchers.IO) {
+                    runCatchingCancellable {
+                        val card = PublicListCard(
+                            vendor = if (list.source == LibrarySource.MDBLIST_LIST) {
+                                PublicListVendor.MDBLIST
+                            } else {
+                                PublicListVendor.TRAKT
+                            },
+                            ref = if (list.source == LibrarySource.TRAKT_LIST) {
+                                list.remoteId.orEmpty()
+                            } else {
+                                list.id.toString()
+                            },
+                            name = list.name,
+                            owner = null,
+                            description = null,
+                            itemCount = list.itemCount,
+                            likes = null
+                        )
+                        if (card.vendor == PublicListVendor.TRAKT) {
+                            traktRepository.unlikePublicList(card)
+                        } else {
+                            MdbListClient.unlikePublicList(appContext, card)
+                        }
+                    }.getOrDefault(false)
+                }
+                if (!unliked) {
+                    noteListAction(
+                        "Couldn't remove \"${list.name}\" from your " +
+                            "${listSourceName(list.source)} lists."
+                    )
+                    return@launch
+                }
+                libraryHomeRailPinFor(list)?.let { pin ->
+                    LibraryHomeRails.setPinned(appContext, pin, false)
+                }
+                val state = _uiState.value
+                val sameList = { candidate: LibraryList ->
+                    candidate.id == list.id && candidate.source == list.source
+                }
+                val openList = state.selectedList
+                _uiState.value = state.copy(
+                    lists = state.lists.filterNot { sameList(it) },
+                    selectedList = openList?.takeIf { !sameList(it) }
+                )
+                if (openList != null && sameList(openList)) {
+                    canonicalListItems = emptyList()
+                }
+                recomputeAll()
+                refreshListsOnly()
+                return@launch
+            }
             val deleted = when (list.source) {
                 LibrarySource.TRAKT_LIST -> list.remoteId?.let { id ->
                     withContext(Dispatchers.IO) {
@@ -945,6 +1018,40 @@ class LibraryViewModel(
                 emptyList()
             }
 
+            // The MDBList half of the same rule: a liked list is a row, and its
+            // removal is the unlike. MDBList sends the account's own lists and
+            // the liked ones as separate reads, and a list can be both - the id
+            // dedupe below keeps one row for it, the own-list one.
+            var mdbLikedAnswered = false
+            val mdbLiked = if (mdbListConfigured) {
+                runCatchingCancellable { MdbListClient.likedPublicLists(appContext) }
+                    .onFailure {
+                        Log.w(TAG, "MDBList liked lists fetch failed: ${it.message}")
+                    }
+                    .getOrNull()
+                    ?.also { mdbLikedAnswered = true }
+                    ?.let { answer -> (answer as? PublicListsAnswer.Loaded)?.value }
+                    .orEmpty()
+                    .filterNot { card ->
+                        val id = card.ref.toIntOrNull() ?: return@filterNot false
+                        mdbLists.any { it.id == id }
+                    }
+                    .map { card ->
+                        LibraryList(
+                            id = card.ref.toIntOrNull()
+                                ?: likedListShelfId(PublicListVendor.MDBLIST.wire, card.ref),
+                            name = card.name,
+                            itemCount = card.itemCount,
+                            source = LibrarySource.MDBLIST_LIST,
+                            remoteId = card.ref,
+                            liked = true,
+                            owner = card.owner
+                        )
+                    }
+            } else {
+                emptyList()
+            }
+
             var traktListsAnswered = false
             val traktLists = if (traktConnected) {
                 runCatchingCancellable {
@@ -966,6 +1073,41 @@ class LibraryViewModel(
                 }.onFailure {
                     Log.w(TAG, "Trakt lists fetch failed: ${it.message}")
                 }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+
+            // Public lists SAVED by liking them (Settings → Trakt → Trakt public
+            // lists) are rows on the same rail as the account's own: saving is
+            // what puts one in Library, and this read is how it stays live - the
+            // provider keeps serving it, so edits the owner makes show up on the
+            // next refresh (spec F4).
+            var traktLikedAnswered = false
+            val traktLiked = if (traktConnected) {
+                runCatchingCancellable { traktRepository.likedPublicLists() }
+                    .onFailure {
+                        Log.w(TAG, "Trakt liked lists fetch failed: ${it.message}")
+                    }
+                    .getOrNull()
+                    ?.also { traktLikedAnswered = true }
+                    ?.let { answer -> (answer as? PublicListsAnswer.Loaded)?.value }
+                    .orEmpty()
+                    // A list the account also OWNS has already been drawn from
+                    // the read above, with its hard-delete meaning; drawing it
+                    // again would offer two rows for one list with two different
+                    // promises behind their delete.
+                    .filterNot { card -> traktLists.any { it.remoteId == card.ref } }
+                    .map { card ->
+                        LibraryList(
+                            id = likedListShelfId(PublicListVendor.TRAKT.wire, card.ref),
+                            name = card.name,
+                            itemCount = card.itemCount,
+                            source = LibrarySource.TRAKT_LIST,
+                            remoteId = card.ref,
+                            liked = true,
+                            owner = card.owner
+                        )
+                    }
             } else {
                 emptyList()
             }
@@ -1049,23 +1191,29 @@ class LibraryViewModel(
 
             // Watchlists last, so the lists the viewer made stay at the top of
             // the rail in the order they always had.
-            val lists = localLists + mdbLists + traktLists + bingecatLists + watchlistLists
+            val lists = localLists + mdbLists + mdbLiked + traktLists + traktLiked +
+                bingecatLists + watchlistLists
 
             // The list sources that ANSWERED this refresh, and the ids each of
             // them still has. A source that failed, is not configured or is not
             // connected is simply absent - see withoutVanishedPins: an
             // unanswered read must never read as "the list is gone".
             val liveListIds = buildMap {
-                if (mdbListsAnswered) {
+                // Both reads behind a source must have answered before its id
+                // set is published: the liked set is part of the same row list
+                // now, so an own-lists answer with the liked read failed would
+                // otherwise read every saved community list as gone and prune
+                // its rail.
+                if (mdbListsAnswered && mdbLikedAnswered) {
                     put(
                         LibrarySource.MDBLIST_LIST.name,
-                        mdbLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        (mdbLists + mdbLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }
                     )
                 }
-                if (traktListsAnswered) {
+                if (traktListsAnswered && traktLikedAnswered) {
                     put(
                         LibrarySource.TRAKT_LIST.name,
-                        traktLists.mapTo(mutableSetOf()) { libraryHomeRailId(it) }
+                        (traktLists + traktLiked).mapTo(mutableSetOf()) { libraryHomeRailId(it) }
                     )
                 }
                 // BingeCat is stale-while-revalidate: snapshot() answers with
@@ -1073,8 +1221,11 @@ class LibraryViewModel(
                 // "non-null" does not mean "the site was asked". Only a
                 // snapshot this refresh actually fetched may prune a pin, or a
                 // 30-minute-old cache missing a list created elsewhere would
-                // delete a live rail.
+                // delete a live rail. And `listsComplete`, because a refresh
+                // stamps a snapshot whose lists leg failed too: a partial
+                // answer is not the account's whole list set.
                 if (bingecatReady && bingecatSnapshot != null &&
+                    bingecatSnapshot.listsComplete &&
                     bingecatSnapshot.refreshedAtMs >= bingecatReadAt
                 ) {
                     put(
@@ -1175,8 +1326,20 @@ class LibraryViewModel(
         }
     }
 
-    /** Re-fetches just the lists rail (after local-list mutations). */
+    /**
+     * Re-fetches just the lists rail (after local-list mutations).
+     *
+     * Version-guarded like every other read in this file: a mutation landing
+     * while a full [refresh] is in flight used to publish this path's (older)
+     * lists snapshot wholesale - resurrecting a just-deleted list or dropping a
+     * just-created one until the next refresh - and its read-modify-write on the
+     * watchlist rows was equally unguarded. Taking a version SUPERSEDES the
+     * in-flight refresh, which is what the sibling list loader does too: the
+     * mutation's answer is the newer truth, and the refresh's publish is skipped
+     * rather than allowed to overwrite it.
+     */
     private fun refreshListsOnly() {
+        val version = ++requestVersion
         viewModelScope.launch {
             val appContext = getApplication<Application>()
             val localLists = LocalLibraryStore.userLists(appContext)
@@ -1237,6 +1400,17 @@ class LibraryViewModel(
                         )
                     }
                 }
+            if (version != requestVersion) {
+                // A newer request owns the screen now, and the refresh this path
+                // superseded will never publish - so ITS "remotes are still
+                // loading" flag has to be cleared here, or it stays up with
+                // nothing behind it.
+                if (_uiState.value.remoteLoading) {
+                    _uiState.value = _uiState.value.copy(remoteLoading = false)
+                }
+                return@launch
+            }
+
             // The watchlist rows keep the counts the full refresh gave them:
             // this path is a local-list mutation, which cannot change what an
             // account's watchlist holds (and must not drop the rows, or every
@@ -1301,8 +1475,14 @@ class LibraryViewModel(
 
         if (list.source == LibrarySource.TRAKT_LIST) {
             val remoteId = list.remoteId ?: return emptyList()
+            // A SAVED community list is not this account's, so `me` does not
+            // resolve it: Trakt's route is `/users/{user}/lists/{listId}/items`
+            // and the {user} that owns a liked list is its author. The owner is
+            // read from the liked-lists row (spec F5 names it anyway), and falls
+            // back to `me` so an own list behaves exactly as before.
+            val owner = list.owner?.takeIf { it.isNotBlank() } ?: "me"
             val entries = runCatchingCancellable {
-                traktRepository.listItems(TraktListRef(user = "me", listId = remoteId))
+                traktRepository.listItems(TraktListRef(user = owner, listId = remoteId))
             }.onFailure {
                 Log.w(TAG, "Trakt list items fetch failed: ${it.message}")
             }.getOrDefault(emptyList())

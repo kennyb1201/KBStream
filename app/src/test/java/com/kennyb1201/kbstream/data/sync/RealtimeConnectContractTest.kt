@@ -92,6 +92,57 @@ class RealtimeConnectContractTest {
         )
     }
 
+    // ── Every join, and the stop, goes through the one mutex ────────────────
+
+    @Test
+    fun `the health watcher's rebuild joins under the same mutex as startRealtime`() {
+        val watcher = between("private fun watchRealtimeHealth()", "private fun onRemoteChange(")
+        val rebuildAt = watcher.indexOf("subscribeTable(c, sub.table)")
+        assertTrue("the watcher still rebuilds dead channels", rebuildAt >= 0)
+        val lockAt = watcher.lastIndexOf("realtimeMutex.withLock", rebuildAt)
+        assertTrue(
+            "a rebuild that joins outside the mutex can race a foreground force " +
+                "re-join: two channels and two collectors for one table, so every " +
+                "remote change is applied twice",
+            lockAt >= 0
+        )
+        assertTrue(
+            "and it re-checks that its snapshot entry is still tracked under that " +
+                "lock, or a forced re-join that already replaced it gets undone",
+            watcher.contains("val stillTracked =") &&
+                watcher.contains("realtimeSubscriptions.any { it === sub }")
+        )
+    }
+
+    @Test
+    fun `a stop leaves a waiting join with nothing to subscribe`() {
+        val stop = between("private fun stopRealtime() {", "Process-foreground hook")
+        assertTrue(
+            "the stop bumps the epoch synchronously, before it clears",
+            stop.contains("realtimeStopEpoch++") &&
+                stop.indexOf("realtimeStopEpoch++") <
+                stop.indexOf("realtimeSubscriptions.clear()")
+        )
+        val start = between("private fun startRealtime(force: Boolean = false)", "private suspend fun subscribeTable")
+        assertTrue(
+            "and a join that queued before it abandons instead of tracking channels " +
+                "for the session being discarded (which left the tracked set " +
+                "non-empty while the status read \"stopped\", and the next " +
+                "non-force join then bailed as already subscribed)",
+            start.contains("val epoch = realtimeStopEpoch") &&
+                start.contains("if (epoch != realtimeStopEpoch)") &&
+                start.contains("join abandoned, the session stopped while it queued")
+        )
+    }
+
+    private fun between(start: String, end: String): String {
+        val from = source.indexOf(start)
+        assertTrue("missing start: $start", from >= 0)
+        val to = source.indexOf(end, from)
+        assertTrue("missing end: $end after $start", to > from)
+        return source.substring(from, to)
+    }
+
     // ── The library floor ──────────────────────────────────────────────────
 
     @Test

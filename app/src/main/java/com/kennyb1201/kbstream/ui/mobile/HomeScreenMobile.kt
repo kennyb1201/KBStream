@@ -108,6 +108,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.youtube.deathKind
 import com.kennyb1201.kbstream.data.youtube.googlevideoBytes
 import com.kennyb1201.kbstream.data.youtube.googlevideoItag
+import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerResolveFailurePoisons
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
@@ -483,6 +484,11 @@ fun HomeScreenMobile(
         val heroTrailerMuted = remember(activeProfileId?.id, syncRevision) {
             AppPreferences.getHeroTrailerMuted(context)
         }
+        // The switch that turns hero trailers off, honoured here as it is on the
+        // TV hero and the phone's Detail header.
+        val heroTrailerAutoplay = remember(activeProfileId?.id, syncRevision) {
+            AppPreferences.getHeroTrailerAutoplay(context)
+        }
 
         // Every rail the billboard may be fed from, keyed the way the Home
         // manager keys a rail - so a chip's key and this lookup cannot
@@ -610,6 +616,7 @@ fun HomeScreenMobile(
                             trailerMode = billboardTrailerMode,
                             trailerDelayMs = heroTrailerDelayMs,
                             trailerMuted = heroTrailerMuted,
+                            trailerAutoplay = heroTrailerAutoplay,
                             // Play asks the Detail page to press its own Play:
                             // the request carries this title's id, and Detail's
                             // existing handler does the resolving (see
@@ -1953,10 +1960,16 @@ private fun MobileHero(
  * "restart" anywhere.
  *
  * The trailer is the app's one hero-trailer stack (see [HeroInlineTrailerPlayer]
- * and TrailerPlayerLauncher), honouring the existing hero-trailer delay and
- * mute prefs; this composable only decides WHEN a page may play one (its
+ * and TrailerPlayerLauncher), honouring the existing hero-trailer delay, mute
+ * AND autoplay prefs; this composable only decides WHEN a page may play one (its
  * trailer mode). Off by default, because a page that swaps itself every few
  * seconds is a bad place to start video nobody asked for.
+ *
+ * [trailerAutoplay] is the Settings switch (`hero_trailer_autoplay`), which the
+ * TV hero and the phone's Detail header both honour: a viewer who turned hero
+ * trailers off still got them here, in AUTO mode, because this surface read only
+ * the delay and the mute. Manual mode's Trailer pill is unaffected - that press
+ * is the ask.
  */
 @Composable
 private fun MobileBillboard(
@@ -1965,6 +1978,7 @@ private fun MobileBillboard(
     trailerMode: BillboardTrailerMode,
     trailerDelayMs: Long,
     trailerMuted: Boolean,
+    trailerAutoplay: Boolean = true,
     onPlay: (BillboardPage) -> Unit,
     onDetails: (BillboardPage) -> Unit
 ) {
@@ -2077,9 +2091,12 @@ private fun MobileBillboard(
                     startPositionMs = pending?.resumeAtMs ?: 0L
                 )
             }
-            result.onFailure {
-                // Silent: the page keeps its backdrop, with no banner and no
-                // retry UI - the same failure behaviour both heroes have.
+            result.onFailure { error ->
+                // Silent ON SCREEN: the page keeps its backdrop, with no banner
+                // and no retry UI. Not silent in the log - a trailer that never
+                // mounts has to be findable in a capture, which is what the
+                // fullscreen owners already do for the same failure.
+                Log.w(TAG, "Billboard trailer key=$key failed to resolve", error)
                 if (playbackPageKey == ownerKey) playbackPageKey = null
                 if (pending != null) {
                     trailerPendingRetry = null
@@ -2095,7 +2112,7 @@ private fun MobileBillboard(
                                 "mount; leaving it re-armable " +
                                 "(excluded=${pending.excludedClients.sorted()})"
                         )
-                    } else if (heroTrailerResolveFailurePoisons(pending.excludedClients)) {
+                    } else if (heroTrailerResolveFailurePoisons(pending.excludedClients, it)) {
                         TrailerPlayerLauncher.markIdentityBlocked(key)
                     }
                 }
@@ -2119,13 +2136,47 @@ private fun MobileBillboard(
      * has to keep the fact even when the request it describes never reaches a
      * resolve.
      */
-    fun requestTrailerRetry(positionMs: Long, durationMs: Long): Boolean {
+    fun requestTrailerRetry(
+        positionMs: Long,
+        durationMs: Long,
+        identity: Boolean = false
+    ): Boolean {
         val page = pages.getOrNull(pagerState.currentPage) ?: return false
         val key = page.trailerKey?.takeIf { it.isNotBlank() } ?: return false
         // The refusal path knows the duration; the ordinary one is told it by
         // the player's own clock (see onTrailerProgress).
         val length = if (durationMs > 0L) durationMs else trailerDurationMs
         val dead = TrailerPlayerLauncher.signingClient(key)
+        // An IDENTITY refusal takes the ladder's own verdict before the plan's:
+        // it is the one event whose exhaustion has to BLOCK the video, and the
+        // one whose death line names the resolve's kind rather than the dead
+        // source's (the same vocabulary the TV hero records).
+        if (identity) {
+            val refusal = heroTrailerIdentityRefusal(
+                deadClient = TrailerPlayerLauncher.cachedSigningClient(key),
+                excludedClients = trailerExcludedClients,
+                resumeAttempts = trailerResumeAttempts
+            )
+            if (refusal.exhausted) {
+                trailerPendingRetry = null
+                PoTokenTrace.recordTrailerDeath(
+                    videoId = key,
+                    client = dead,
+                    kind = PoTokenTrace.resolveKind(),
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    resume = "client " + (dead ?: "unknown") + " died"
+                )
+                TrailerPlayerLauncher.markIdentityBlocked(key)
+                Log.w(
+                    TAG,
+                    "Billboard trailer key=$key: identity ladder exhausted " +
+                        "(excluded=${refusal.excludedClients.sorted()} " +
+                        "attempts=$trailerResumeAttempts); blocked for this session"
+                )
+                return false
+            }
+        }
         val chunk = PoTokenTrace.chunkDeathFor(key)
         val source = trailerMountedSource
         val signedUrl = source?.signedUrl()
@@ -2151,7 +2202,7 @@ private fun MobileBillboard(
         PoTokenTrace.recordTrailerDeath(
             videoId = key,
             client = dead,
-            kind = source?.deathKind(),
+            kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),
             positionMs = positionMs,
             durationMs = length,
             resume = if (plan.verdict == HeroTrailerResumeVerdict.RESUME) {
@@ -2258,6 +2309,7 @@ private fun MobileBillboard(
         pagerState.isScrollInProgress,
         trailerMode,
         trailerDelayMs,
+        trailerAutoplay,
         playback,
         playbackPageKey,
         backgrounded,
@@ -2265,6 +2317,7 @@ private fun MobileBillboard(
         currentPage?.trailerKey
     ) {
         if (trailerMode != BillboardTrailerMode.AUTO) return@LaunchedEffect
+        if (!trailerAutoplay) return@LaunchedEffect
         if (backgrounded || pagerState.isScrollInProgress) return@LaunchedEffect
         if (playbackPageKey != null) return@LaunchedEffect
         val page = pages.getOrNull(pagerState.currentPage) ?: return@LaunchedEffect
@@ -2460,10 +2513,11 @@ private fun MobileBillboard(
                     },
                     // A googlevideo 403 the classifier calls a refused identity
                     // is a property of the URL class that signed it, not of the
-                    // video, so it walks the same ladder - and its answer is
-                    // whether a replacement was requested.
+                    // video, so it walks the identity ladder - the one the TV
+                    // hero uses - and its answer is whether a replacement was
+                    // requested.
                     onTrailerIdentityBlocked = { positionMs, durationMs ->
-                        requestTrailerRetry(positionMs, durationMs)
+                        requestTrailerRetry(positionMs, durationMs, identity = true)
                     },
                     onStopTrailer = { stopTrailer() },
                     // Only the page in front carries the pills: a neighbour

@@ -2947,25 +2947,26 @@ fun DetailScreen(
      * Plays ONE of the title's videos, which is what the [DetailRow.MEDIA]
      * row's cards ask for: a card plays the video it shows, and the header
      * button plays its own pick through the same call (below).
+     *
+     * Delegated, not re-implemented: this used to resolve and launch on its own,
+     * line for line the same as the shared launch, under a different log tag - so
+     * the same failure was findable only by its spelling, and a future fix to the
+     * shared path (a user-visible failure, say) would silently miss this screen.
+     * The phone's Media row has always called the shared one.
+     *
+     * Why the TV still opens the FULLSCREEN player here while the phone plays an
+     * inline hero trailer on Detail is a deliberate split, not an oversight: a
+     * leanback detail page has focus traversal over its rows and no autoplaying
+     * media region, and the fullscreen player is where a TV viewer already
+     * expects a trailer to run (the same player the TRAILERS tab uses). The
+     * phone's inline owner follows the other convention - autoplay after the
+     * hero dwell, retry in place - because its Detail header is a video surface.
+     * Converging them means porting the inline owner onto leanback focus rules;
+     * until then this is the documented shape, and a mid-stream death here is
+     * handled by the player's own single-class resume (see TrailerPlayerLauncher).
      */
     fun playTrailer(context: Context, video: TmdbVideo?) {
-        val key = video?.key?.takeIf { it.isNotBlank() } ?: return
-
-        scope.launch {
-            val source =
-                TrailerPlayerLauncher.resolvePlayableUrl(
-                    "https://www.youtube.com/watch?v=$key"
-                ).getOrElse { error ->
-                    Log.e(
-                        TAG,
-                        "Failed to resolve playable trailer URL",
-                        error
-                    )
-                    return@launch
-                }
-
-            context.startActivity(trailerPlayerIntent(context, source, key))
-        }
+        DetailTrailerLaunch.play(context, scope, video)
     }
 
     /** The header button's trailer: the one pick its label was built from. */

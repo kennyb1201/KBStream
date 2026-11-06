@@ -43,6 +43,13 @@ object InnerTubeExtractor {
     // and a resolution that drags past this is worse than falling back to the
     // backdrop quickly.
     private const val EXTRACTOR_TIMEOUT_MS = 15_000L
+
+    /**
+     * The least time worth starting the fresh-config retry with: below this the
+     * request could not finish, and the resolve is better off answering null now
+     * than holding the shared resolve mutex for a retry that cannot complete.
+     */
+    private const val EXTRACTOR_RETRY_FLOOR_MS = 3_000L
     private const val CONFIG_TTL_MS = 3 * 60 * 60 * 1000L // 3 hours
 
     /**
@@ -282,6 +289,7 @@ object InnerTubeExtractor {
             Log.d(TAG, "Starting extraction for $youtubeUrl (exclude=${excludeDescription(excludeClients)})")
 
             var resolved: ResolvedSource? = null
+            val startedAtMs = System.currentTimeMillis()
             try {
                 resolved = withTimeout(EXTRACTOR_TIMEOUT_MS) {
                     extractInternal(
@@ -296,21 +304,37 @@ object InnerTubeExtractor {
                 Log.w(TAG, "Extractor failed: ${error.message}")
             }
 
-            // Retry with a fresh watch config if the first attempt failed
+            // Retry with a fresh watch config if the first attempt failed.
+            //
+            // ONE budget, not two. This runs under the launcher's resolve mutex,
+            // which the hero's post-dwell resolve and every pre-warm queue behind
+            // - so a second full 15 s cap made one slow video hold the trailer
+            // pipeline for ~30 s. The retry gets what is LEFT of the budget, and
+            // is skipped when that is too little to finish anything.
             if (resolved == null) {
-                Log.d(TAG, "First attempt failed; retrying with fresh config")
-                try {
-                    resolved = withTimeout(EXTRACTOR_TIMEOUT_MS) {
-                        extractInternal(
-                            youtubeUrl,
-                            forceRefreshConfig = true,
-                            excludeClients = excludeClients
-                        )
+                val remainingMs =
+                    EXTRACTOR_TIMEOUT_MS - (System.currentTimeMillis() - startedAtMs)
+                if (remainingMs < EXTRACTOR_RETRY_FLOOR_MS) {
+                    Log.w(
+                        TAG,
+                        "Not retrying with a fresh config: only ${remainingMs}ms of the " +
+                            "resolve budget is left"
+                    )
+                } else {
+                    Log.d(TAG, "First attempt failed; retrying with fresh config")
+                    try {
+                        resolved = withTimeout(remainingMs) {
+                            extractInternal(
+                                youtubeUrl,
+                                forceRefreshConfig = true,
+                                excludeClients = excludeClients
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Extractor retry failed: ${error.message}")
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (error: Exception) {
-                    Log.w(TAG, "Extractor retry failed: ${error.message}")
                 }
             }
 
@@ -459,21 +483,31 @@ object InnerTubeExtractor {
         // title has no usable audio. Falling back to the video-only stream
         // here used to ship silent trailers (Adaptive video tracks carry no
         // audio) — exactly the "trailers play muted" report.
+        //
+        // The AUDIO side of the first-mount client rule, which it missed: the
+        // Adaptive source carries ONE User-Agent, the video's, and this pool was
+        // ordered by score across every client. An audio URL signed for another
+        // client then played under the video's UA is the "bound to the wrong
+        // identity" 403 the probe exists to catch - so the candidates are the
+        // video's own client first (see audioProbeOrder), and every probe runs
+        // under the UA the source will actually play them with.
         var resolvedAudio: String? = null
-        if (resolvedVideo != null) {
-            val audioCandidates = allowedAudio.sortedWith(
-                compareByDescending<StreamCandidate> { it.score }
-                    .thenBy { if (it.hasN) 1 else 0 }
-                    .thenBy { it.priority }
+        if (resolvedVideo != null && bestVideo != null) {
+            // The UA the Adaptive source plays its audio under - the VIDEO
+            // client's, which is the identity the probe must present too: a
+            // probe that passes under a different UA than playback is a false
+            // green.
+            val playUa = userAgentFor(bestVideo.client)
+            val audioCandidates = audioProbeOrder(
+                allowedAudio,
+                videoClient = bestVideo.client,
+                preferredClient = PREFERRED_SEPARATE_CLIENT
             )
             var probes = 0
             for (candidate in audioCandidates) {
                 if (probes >= MAX_AUDIO_PROBES) break
                 probes++
-                val probed = resolveReachableUrl(
-                    candidate.url,
-                    userAgentFor(candidate.client)
-                )
+                val probed = resolveReachableUrl(candidate.url, playUa)
                 if (probed != null) {
                     resolvedAudio = probed
                     break

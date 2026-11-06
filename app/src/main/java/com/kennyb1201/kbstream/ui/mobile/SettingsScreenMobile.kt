@@ -196,6 +196,8 @@ fun SettingsScreenMobile(
     onOpenSimkl: () -> Unit = {},
     onOpenTrakt: () -> Unit = {},
     onOpenBingeCat: () -> Unit = {},
+    /** Opens the public-lists browser for one vendor (`trakt` / `mdblist`). */
+    onOpenPublicLists: (String) -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenCatalogManager: () -> Unit = {},
     onOpenCatalogBuilder: () -> Unit = {},
@@ -300,6 +302,7 @@ fun SettingsScreenMobile(
                             onOpenSimkl = onOpenSimkl,
                             onOpenTrakt = onOpenTrakt,
                             onOpenBingeCat = onOpenBingeCat,
+                            onOpenPublicLists = onOpenPublicLists,
                             onOpenProfiles = onOpenProfiles
                         )
 
@@ -797,6 +800,7 @@ private fun IntegrationsPaneMobile(
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
     onOpenBingeCat: () -> Unit,
+    onOpenPublicLists: (String) -> Unit,
     onOpenProfiles: () -> Unit
 ) {
     val context = LocalContext.current
@@ -907,6 +911,16 @@ private fun IntegrationsPaneMobile(
             },
             onClick = onOpenBingeCat
         )
+        // Public lists for the tracker above (spec F1): Trakt's directories are
+        // browsed here, saved by LIKING a list, and the saved list then appears
+        // in Library beside the account's own lists - which is how it reaches
+        // Home, by pinning that row. No rail is created by browsing or saving.
+        SettingsNavRowMobile(
+            label = "Trakt public lists",
+            description = "Browse Trakt's popular and trending community lists, search " +
+                "them by name, and save one to your Library by liking it.",
+            onClick = { onOpenPublicLists("trakt") }
+        )
 
         // ── API Keys ─────────────────────────────────────────────
         // ONE contiguous block (settings reorg §3.3): the four key surfaces used
@@ -938,6 +952,14 @@ private fun IntegrationsPaneMobile(
             verify = { MdbListClient.verifyKey(context) },
             savedHint = "Connected as",
             savedDescription = "Key saved — ratings appear on the next title you open."
+        )
+        // MDBList public lists sit with the key that enables them (spec F1): the
+        // key is what the surface reads with.
+        SettingsNavRowMobile(
+            label = "MDBList public lists",
+            description = "Browse MDBList's Top, Curated and Official lists, search " +
+                "them by name, and save one to your Library by liking it.",
+            onClick = { onOpenPublicLists("mdblist") }
         )
         KeyCardMobile(
             title = "OMDb API Key",

@@ -48,7 +48,19 @@ class HomeRailColumnStatusContractTest {
         )
         assertTrue(
             "and a failed build keeps its network retry",
-            emptyBranch.contains("Couldn't reach your add-ons. Check the ")
+            emptyBranch.contains("onRetry = { viewModel.refreshRailsOnly() }")
+        )
+        assertTrue(
+            "and it shows the ViewModel's OWN message, not a second copy of the " +
+                "wording that can drift out of step with it",
+            emptyBranch.contains("message = error.orEmpty(),") &&
+                !emptyBranch.contains("Couldn't reach your add-ons")
+        )
+        assertTrue(
+            "which the ViewModel owns (the phone has always shown it verbatim)",
+            normalized(stripComments(source(HOME_VIEW_MODEL))).contains(
+                "Couldn't reach your add-ons. Check the network "
+            )
         )
     }
 
@@ -100,5 +112,6 @@ class HomeRailColumnStatusContractTest {
 
     private companion object {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val HOME_VIEW_MODEL = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
     }
 }

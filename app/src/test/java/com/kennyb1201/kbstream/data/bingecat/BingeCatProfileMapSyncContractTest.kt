@@ -305,6 +305,29 @@ class BingeCatProfileMapSyncContractTest {
     }
 
     @Test
+    fun `a mapping that could not be stored is never published`() {
+        val store = between(stores, "fun set(profile: BingeCatProfile)", "fun clear()")
+        assertContains(
+            store,
+            "val id = profile.id?.takeIf { it > 0L } ?: return false",
+            "an id-less profile is a refusal, not a no-op"
+        )
+        assertContains(
+            store,
+            "val prefs = prefs() ?: return false",
+            "and an unavailable store is one too"
+        )
+        // The caller publishes the mapping, so it may only do that on success -
+        // otherwise it re-asserts the PREVIOUS id to the account as if the new
+        // choice had landed.
+        assertContains(
+            repository,
+            "if (!mapping.set(profile)) return",
+            "setMappedProfile must stop before the stamp, cache drop and publish"
+        )
+    }
+
+    @Test
     fun `selecting, changing and disconnecting all publish immediately`() {
         val setMapped = between(
             repository,

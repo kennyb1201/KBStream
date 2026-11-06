@@ -221,11 +221,23 @@ class UnifiedListControlContractTest {
                 screen.contains("LibraryListActionsDialog(") &&
                 screen.contains("LibraryRenameListDialog(")
         )
+        // The dialog's wording moved into ListControlWording, which the phone
+        // sheet reads too: it still has to name where the removal happens (so a
+        // hide is not read as a service delete), and a SAVED community list must
+        // be told REMOVE - the like goes, the list stays.
+        val wording = source("com/kennyb1201/kbstream/data/library/ListControlWording.kt")
         assertTrue(
             "the delete names where it happens, so a hide cannot be mistaken for a " +
                 "service delete",
-            screen.contains("\"Delete from \${list.source.deleteDestinationLabel}?\"") &&
+            screen.contains("title = list.removeConfirmTitle") &&
+                wording.contains("\"Delete from \$sourceLabel?\"") &&
                 screen.contains("viewModel.deleteRemoteList(list)")
+        )
+        assertTrue(
+            "and a saved community list is REMOVED, never 'deleted from' a service it " +
+                "does not belong to",
+            wording.contains("\"Remove from \$sourceLabel?\"") &&
+                screen.contains("text = list.removeActionLabel")
         )
         assertTrue(
             "the view model's three verbs are per source, and a refusal says so",

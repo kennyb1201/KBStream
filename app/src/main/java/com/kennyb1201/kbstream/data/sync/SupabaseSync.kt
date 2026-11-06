@@ -2680,6 +2680,18 @@ object SupabaseSync {
      */
     private var realtimeHealthJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Bumped by every [stopRealtime].
+     *
+     * A join that queued on [realtimeMutex] before the stop belongs to the
+     * session being discarded, and must not track channels after it: that left
+     * `realtimeSubscriptions` non-empty while the status read "stopped", and the
+     * next non-force join then bailed on its own "already subscribed?" check -
+     * realtime silently dead until a force re-join.
+     */
+    @Volatile
+    private var realtimeStopEpoch = 0
+
     /** True while at least one tracked channel is actually joined. */
     private val realtimeLive: Boolean
         get() = realtimeSubscriptions.any {
@@ -2704,9 +2716,17 @@ object SupabaseSync {
      */
     private fun startRealtime(force: Boolean = false) {
         val c = client ?: return
+        val epoch = realtimeStopEpoch
 
         scope.launch {
             realtimeMutex.withLock {
+                if (epoch != realtimeStopEpoch) {
+                    Log.w(
+                        TAG,
+                        "realtime: join abandoned, the session stopped while it queued"
+                    )
+                    return@withLock
+                }
                 if (!force && realtimeSubscriptions.isNotEmpty()) return@withLock
                 if (force) {
                     val dead = realtimeSubscriptions.filter {
@@ -2792,9 +2812,10 @@ object SupabaseSync {
             throw t
         }
         // The subscribe above suspended; the user may have signed out during
-        // it (watcher rebuilds run outside realtimeMutex). Track nothing for
-        // a signed-out session — a zombie subscription here would make the
-        // NEXT sign-in's startRealtime bail on its not-empty check.
+        // it (the mutex serializes the joins, it does not end the session).
+        // Track nothing for a signed-out session — a zombie subscription here
+        // would make the NEXT sign-in's startRealtime bail on its not-empty
+        // check.
         if (!isSignedIn()) {
             collector.cancel()
             runCatching { ch.unsubscribe() }
@@ -2854,11 +2875,16 @@ object SupabaseSync {
                                 "giving up; add the table to the supabase_realtime " +
                                 "publication to enable live sync"
                         )
-                        realtimeSubscriptions.remove(sub)
-                        sub.collectorJob.cancel()
-                        runCatching { sub.channel.unsubscribe() }
-                        _realtimeStatus.value = "unavailable"
-                        _realtimeChannelCount.value = realtimeSubscriptions.size
+                        // Under the mutex like every other write to the tracked
+                        // set: a drop racing a force re-join is how a table ends
+                        // up with two channels.
+                        realtimeMutex.withLock {
+                            realtimeSubscriptions.remove(sub)
+                            sub.collectorJob.cancel()
+                            runCatching { sub.channel.unsubscribe() }
+                            _realtimeStatus.value = "unavailable"
+                            _realtimeChannelCount.value = realtimeSubscriptions.size
+                        }
                         continue
                     }
                     // Only rebuild genuinely DEAD channels. UNSUBSCRIBED is
@@ -2868,16 +2894,37 @@ object SupabaseSync {
                     if (sub.channel.status.value ==
                         io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED
                     ) {
-                        realtimeRebuildAttempts[sub.table] = attempts + 1
                         try {
-                            Log.w(TAG, "realtime channel ${sub.channel.topic} is UNSUBSCRIBED; rebuilding")
-                            _realtimeStatus.value = "rebuilding ${sub.table}"
-                            realtimeSubscriptions.remove(sub)
-                            sub.collectorJob.cancel()
-                            subscribeTable(c, sub.table)
-                            _realtimeStatus.value = "live"
-                            _realtimeChannelCount.value = realtimeSubscriptions.size
-                            repaired = true
+                            // The rebuild joins a channel, so it takes the SAME
+                            // mutex startRealtime does. Without it a foreground
+                            // force re-join racing this watcher subscribed the
+                            // table twice - two channels and two collectors, so
+                            // every remote change was applied twice.
+                            repaired = realtimeMutex.withLock {
+                                // Re-check under the lock: a force re-join may
+                                // have already replaced this channel, and this
+                                // snapshot's entry is then stale.
+                                val stillTracked =
+                                    realtimeSubscriptions.any { it === sub }
+                                if (!stillTracked) {
+                                    false
+                                } else {
+                                    realtimeRebuildAttempts[sub.table] = attempts + 1
+                                    Log.w(
+                                        TAG,
+                                        "realtime channel ${sub.channel.topic} is " +
+                                            "UNSUBSCRIBED; rebuilding"
+                                    )
+                                    _realtimeStatus.value = "rebuilding ${sub.table}"
+                                    realtimeSubscriptions.remove(sub)
+                                    sub.collectorJob.cancel()
+                                    subscribeTable(c, sub.table)
+                                    _realtimeStatus.value = "live"
+                                    _realtimeChannelCount.value =
+                                        realtimeSubscriptions.size
+                                    true
+                                }
+                            }
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e
                             Log.w(TAG, "rebuild ${sub.table} failed: ${Redaction.text(e.message)}")
@@ -3216,6 +3263,9 @@ object SupabaseSync {
     }
 
     private fun stopRealtime() {
+        // The epoch FIRST, so a join queued behind the mutex abandons instead of
+        // tracking channels this call is about to leave behind.
+        realtimeStopEpoch++
         val subs = realtimeSubscriptions.toList()
         realtimeSubscriptions.clear()
         realtimeHealthJob?.cancel()

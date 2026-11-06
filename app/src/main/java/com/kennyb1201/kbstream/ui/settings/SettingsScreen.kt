@@ -314,6 +314,13 @@ fun SettingsScreen(
     onOpenSimkl: () -> Unit = {},
     onOpenTrakt: () -> Unit = {},
     onOpenBingeCat: () -> Unit = {},
+    /**
+     * Opens the public-lists browser for one vendor (`trakt` / `mdblist`).
+     *
+     * A vendor string rather than two callbacks: the surface is one screen, and
+     * two callbacks would be the start of two.
+     */
+    onOpenPublicLists: (String) -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     /**
      * Opens the Home rail manager. The manager is the Add-ons screen's dialog
@@ -336,6 +343,7 @@ fun SettingsScreen(
             onOpenSimkl = onOpenSimkl,
             onOpenTrakt = onOpenTrakt,
             onOpenBingeCat = onOpenBingeCat,
+            onOpenPublicLists = onOpenPublicLists,
             onOpenProfiles = onOpenProfiles,
             onOpenCatalogManager = onOpenCatalogManager,
             onOpenCatalogBuilder = onOpenCatalogBuilder,
@@ -1104,6 +1112,19 @@ fun SettingsScreen(
                         onClick = onOpenBingeCat
                     )
 
+                    // Public lists for the tracker above it (spec F1): Trakt's
+                    // directories are browsed here, saved by LIKING a list, and
+                    // the saved list then appears in Library beside the account's
+                    // own lists - which is how it reaches Home, by pinning that
+                    // row. No rail is created by browsing or saving.
+                    NavigationRow(
+                        label = "Trakt public lists",
+                        description = "Browse Trakt's popular and trending community " +
+                            "lists, search them by name, and save one to your Library by " +
+                            "liking it. Owner is named on every card.",
+                        onClick = { onOpenPublicLists("trakt") }
+                    )
+
                 // ── API KEYS ─────────────────────────────────────────────
                 // ONE contiguous block (settings reorg §3.3, M2 + M4): the four
                 // key surfaces used to be split by the MDBList card and by the
@@ -1272,6 +1293,21 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                // MDBList public lists sit with the key that enables them: the
+                // key is what the surface reads with, and the saved list then
+                // appears in Library beside the account's own lists (spec F1).
+                NavigationRow(
+                    label = "MDBList public lists",
+                    description = if (mdbListKeySaved) {
+                        "Browse MDBList's Top, Curated and Official lists, search them by " +
+                            "name, and save one to your Library by liking it."
+                    } else {
+                        "Paste an MDBList key first: public lists are read with your own " +
+                            "account."
+                    },
+                    onClick = { onOpenPublicLists("mdblist") }
+                )
 
                 // ── OMDB KEY (awards on the detail screen) ────────────
                 // The one fact on a detail page TMDB cannot supply: it has no

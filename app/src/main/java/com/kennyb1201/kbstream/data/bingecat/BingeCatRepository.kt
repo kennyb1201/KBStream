@@ -58,7 +58,18 @@ data class BingeCatSnapshot(
     val watched: Set<String>,
     val refreshedAtMs: Long,
     val profileId: String?,
-    val mappedId: Long
+    val mappedId: Long,
+    /**
+     * Whether [lists] is the account's whole list set as of [refreshedAtMs].
+     *
+     * False when the lists leg failed - [lists] then carries the rows this
+     * device already had, or nothing at all on a cold snapshot. The freshness
+     * stamp cannot say this on its own: a partial refresh re-stamps the
+     * snapshot, so a caller that only compared [refreshedAtMs] against its own
+     * read time would treat one failed request as "the account has no lists"
+     * and prune every pinned BingeCat rail on the strength of it.
+     */
+    val listsComplete: Boolean = true
 )
 
 /**
@@ -270,12 +281,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
      *
      * False while nothing is cached, and false for a different mapping: a stale
      * account's rows must never answer for this one, the same rule the snapshot
-     * itself enforces.
+     * itself enforces. And the same profile refusal its sibling
+     * ([favoritesContains]) has always had: BingeCat's mapping is account-wide,
+     * so a snapshot read under another app profile still carries that profile's
+     * rows. No in-app caller asks today, which is exactly when a trap like that
+     * gets walked into.
      */
     fun watchlistContains(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
         val snapshot = cached ?: return false
         val mapped = mappedProfileId() ?: return false
         if (snapshot.mappedId != mapped) return false
+        val active = context?.let { ProfileStorage.activeProfileId(it) }
+        if (snapshot.profileId != active) return false
         return snapshot.watchlist.any { row -> row.matches(mediaType, imdbId, tmdbId) }
     }
 
@@ -571,7 +588,11 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * it from a stale row.
      */
     fun setMappedProfile(profile: BingeCatProfile) {
-        mapping.set(profile)
+        // Nothing landed, so nothing is published: re-asserting the PREVIOUS id
+        // as the new choice would silently undo the viewer's pick on every
+        // sibling. (A profile with no usable id cannot be stored; the picker
+        // already filters those out, and this is the one place that decides.)
+        if (!mapping.set(profile)) return
         BingeCatTrace.recordMapping(profile.id, profile.name)
         cached = null
         PrefsPayloadBuilder.recordBingeCatMappingChanged(context, cleared = false)
@@ -597,9 +618,18 @@ class BingeCatRepository private constructor(private val context: Context?) {
      * mapping with no session behind it, which is neither "connected and
      * unmapped" nor a tracker - an orphan the viewer never chose (see
      * [com.kennyb1201.kbstream.data.sync.BingeCatProfileMapRules]).
+     *
+     * Every step is pinned to the profile this call STARTED on. The revoke is a
+     * network round-trip, and both stores resolve the ACTIVE profile per call:
+     * a switch landing inside that round-trip used to tombstone the incoming
+     * profile's session and mapping - then publish those tombstones to the
+     * account, signing a sibling out of a connection nobody disconnected.
      */
     suspend fun disconnect(): Boolean {
-        val token = store.read()?.accessToken
+        val profileId = context?.let { ProfileStorage.activeProfileId(it) }
+        val pinnedStore = BingeCatTokenStore(context, profileId)
+        val pinnedMapping = BingeCatProfileMap(context, profileId)
+        val token = pinnedStore.read()?.accessToken
         var revoked = false
         if (!token.isNullOrBlank()) {
             val response = runCatchingCancellable {
@@ -609,8 +639,8 @@ class BingeCatRepository private constructor(private val context: Context?) {
             }.getOrNull()
             revoked = response?.isSuccessful == true
         }
-        val cleared = runCatching { store.markSignedOut() }.getOrDefault(false)
-        mapping.clear()
+        val cleared = runCatching { pinnedStore.markSignedOut() }.getOrDefault(false)
+        pinnedMapping.clear()
         cached = null
         BingeCatTrace.recordSession(false)
         BingeCatTrace.recordMapping(null, null)
@@ -1327,7 +1357,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
             ) {
                 return@withLock current
             }
-            val refreshed = refresh(mapped, activeProfile, nowMs)
+            val refreshed = refresh(mapped, activeProfile, nowMs, current)
             if (refreshed != null) {
                 cached = refreshed
                 BingeCatTrace.recordRefresh(
@@ -1344,7 +1374,14 @@ class BingeCatRepository private constructor(private val context: Context?) {
         }
     }
 
-    /** A list's entries, fetched on selection rather than with the snapshot. */
+    /**
+     * A list's entries, fetched on selection rather than with the snapshot.
+     *
+     * Null when the walk failed, exactly as [readSavedPages] does: the pages
+     * already fetched are not the list, and every caller draws what it gets as
+     * the whole thing (`orEmpty()` at the rail, the picker and the list pane), so
+     * a truncated answer would be served as a complete one.
+     */
     suspend fun listRows(ref: String): List<BingeCatRow>? {
         if (!isReady()) return null
         val rows = mutableListOf<BingeCatRow>()
@@ -1352,7 +1389,7 @@ class BingeCatRepository private constructor(private val context: Context?) {
         while (page <= MAX_PAGES) {
             val body = authorizedBody { auth ->
                 service.listItems(authorization = auth, ref = ref, page = page, limit = PAGE_SIZE)
-            } ?: return rows.takeIf { it.isNotEmpty() }
+            } ?: return null
             rows += body.items.mapNotNull { bingecatListRow(it) }
             if (body.items.size < PAGE_SIZE) break
             page += 1
@@ -1365,12 +1402,17 @@ class BingeCatRepository private constructor(private val context: Context?) {
 
     /**
      * One full revalidation. Partial answers are kept: a lists read that failed
-     * does not throw away a watchlist that answered.
+     * does not throw away a watchlist that answered - and it does not publish an
+     * EMPTY list set where the previous read had rows either, because "the
+     * account holds nothing" is a claim the failure never made. A leg that
+     * failed keeps what this device already had for the same mapping, and
+     * [BingeCatSnapshot.listsComplete] records which legs actually answered.
      */
     private suspend fun refresh(
         mapped: Long,
         activeProfile: String?,
-        nowMs: Long
+        nowMs: Long,
+        previous: BingeCatSnapshot?
     ): BingeCatSnapshot? {
         val watchlist = readKind(mapped, kind = "watchlist")
         val saved = readKind(mapped, kind = "favorites")
@@ -1379,29 +1421,58 @@ class BingeCatRepository private constructor(private val context: Context?) {
         if (watchlist == null && saved == null && lists == null && watched == null) {
             return null
         }
+        // The rows this device already had, but only for THIS mapping: another
+        // profile's (or another BingeCat account's) rows are not a fallback.
+        val kept = previous?.takeIf { it.mappedId == mapped && it.profileId == activeProfile }
         return BingeCatSnapshot(
-            watchlist = watchlist.orEmpty(),
-            saved = saved.orEmpty(),
-            lists = lists.orEmpty(),
-            watched = watched.orEmpty(),
+            watchlist = legRows(watchlist, kept?.watchlist),
+            saved = legRows(saved, kept?.saved),
+            lists = lists ?: kept?.lists.orEmpty(),
+            watched = watched ?: kept?.watched.orEmpty(),
             refreshedAtMs = nowMs,
             profileId = activeProfile,
-            mappedId = mapped
+            mappedId = mapped,
+            listsComplete = lists != null
         )
     }
+
+    /**
+     * A leg's rows for a snapshot: a complete answer replaces what was there, a
+     * partial one (one of its two resource types failed) only fills a gap, and
+     * a failed leg leaves the previous rows alone.
+     */
+    private fun legRows(leg: LegRead?, kept: List<BingeCatRow>?): List<BingeCatRow> =
+        when {
+            leg == null -> kept.orEmpty()
+            leg.complete || kept == null -> leg.rows
+            else -> kept
+        }
+
+    /**
+     * One leg's answer: the rows it read, and whether BOTH halves answered.
+     *
+     * A half that answered is never discarded - the shows read failing must not
+     * throw away the movies that did answer - so [rows] can be partial, and the
+     * snapshot decides what a partial leg may replace (see [legRows]).
+     */
+    private class LegRead(val rows: List<BingeCatRow>, val complete: Boolean)
 
     /**
      * One `sync/{kind}` read, movies and shows merged.
      *
      * BingeCat, like Trakt, has no all-types GET here: the two resource types
      * are separate paths, so both are walked and concatenated in that order.
-     * Null means the read failed (or this profile may not read lists at all);
-     * an empty list means it answered with nothing.
+     * Null means both halves failed (or this profile may not read lists at all);
+     * otherwise [LegRead.complete] says whether both answered.
      */
-    private suspend fun readKind(mapped: Long, kind: String): List<BingeCatRow>? {
-        val movies = readSavedPages(mapped, kind, "movies") ?: return null
-        val shows = readSavedPages(mapped, kind, "shows") ?: return null
-        return movies + shows
+    private suspend fun readKind(mapped: Long, kind: String): LegRead? {
+        val movies = readSavedPages(mapped, kind, "movies")
+        val shows = readSavedPages(mapped, kind, "shows")
+        if (movies == null && shows == null) return null
+        return LegRead(
+            rows = movies.orEmpty() + shows.orEmpty(),
+            complete = movies != null && shows != null
+        )
     }
 
     private suspend fun readSavedPages(
@@ -1429,16 +1500,37 @@ class BingeCatRepository private constructor(private val context: Context?) {
         return rows
     }
 
+    /**
+     * The account's lists, every page of them.
+     *
+     * The response models no total and no `has_more`, so a short page is the
+     * only end-of-list signal there is; one page was enough to be wrong (a
+     * hundred-list account silently lost its tail, and the tail's rails with
+     * it). Null on any failure: a partial set here is indistinguishable from a
+     * complete one, and the caller prunes Home rails with it.
+     */
     private suspend fun readLists(mapped: Long): List<BingeCatList>? {
-        val body = authorizedBody { auth ->
-            service.lists(authorization = auth, profileId = mapped, limit = PAGE_SIZE)
-        } ?: return null
-        return body.lists.mapNotNull { summary ->
-            val ref = summary.ref?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            if (summary.deletedAt != null) return@mapNotNull null
-            val name = summary.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            BingeCatList(ref = ref, name = name, itemCount = summary.itemCount ?: 0)
+        val lists = mutableListOf<BingeCatList>()
+        var page = 1
+        while (page <= MAX_PAGES) {
+            val body = authorizedBody { auth ->
+                service.lists(
+                    authorization = auth,
+                    profileId = mapped,
+                    page = page,
+                    limit = PAGE_SIZE
+                )
+            } ?: return null
+            page++
+            for (summary in body.lists) {
+                val ref = summary.ref?.takeIf { it.isNotBlank() } ?: continue
+                if (summary.deletedAt != null) continue
+                val name = summary.name?.takeIf { it.isNotBlank() } ?: continue
+                lists += BingeCatList(ref = ref, name = name, itemCount = summary.itemCount ?: 0)
+            }
+            if (body.lists.size < PAGE_SIZE) break
         }
+        return lists
     }
 
     /**

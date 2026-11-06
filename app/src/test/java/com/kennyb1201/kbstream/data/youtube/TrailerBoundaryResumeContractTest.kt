@@ -47,6 +47,27 @@ class TrailerBoundaryResumeContractTest {
     // ── the extractor can exclude a SET of clients ─────────────────────────
 
     @Test
+    fun `the extractor spends one resolve budget, not two`() {
+        val body = flat(extractor)
+        assertTrue(
+            "the first pass's start is recorded",
+            body.contains("val startedAtMs = System.currentTimeMillis()")
+        )
+        assertTrue(
+            "and the fresh-config retry gets what is LEFT of the cap",
+            body.contains(
+                "val remainingMs = EXTRACTOR_TIMEOUT_MS - " +
+                    "(System.currentTimeMillis() - startedAtMs)"
+            ) && body.contains("withTimeout(remainingMs) {")
+        )
+        assertTrue(
+            "with a floor, so a retry that cannot finish never holds the shared " +
+                "resolve mutex for nothing",
+            body.contains("if (remainingMs < EXTRACTOR_RETRY_FLOOR_MS) {")
+        )
+    }
+
+    @Test
     fun `one resolve can exclude clients from the selection`() {
         assertTrue(
             "the resolve has to accept the exclusion as a set - the ladder grows it",
@@ -76,7 +97,7 @@ class TrailerBoundaryResumeContractTest {
                 extractor.contains(
                     "pickBest(allowedVideo, PREFERRED_SEPARATE_CLIENT, excludeClients)"
                 ) &&
-                extractor.contains("allowedAudio.sortedWith(") &&
+                extractor.contains("val audioCandidates = audioProbeOrder(") &&
                 extractor.contains(
                     "pickBest(allowedProgressive, PREFERRED_SEPARATE_CLIENT, excludeClients)"
                 )
@@ -330,7 +351,7 @@ class TrailerBoundaryResumeContractTest {
                 "walked - and a tokenless HOLD is not that verdict, so it is checked " +
                 "before the rule",
             flat(home).contains(
-                "} else if ( heroTrailerResolveFailurePoisons(pending.excludedClients) ) {"
+                "} else if ( heroTrailerResolveFailurePoisons(pending.excludedClients, error) ) {"
             ) &&
                 flat(home).contains("if (error is TokenlessHoldException) {")
         )

@@ -128,6 +128,20 @@ enum class LibrarySource(val label: String) {
 fun traktListShelfId(traktId: Int): Int = Int.MIN_VALUE + traktId.coerceAtLeast(1)
 
 /**
+ * The rail id for a saved (liked) community list.
+ *
+ * Derived from the vendor and the list's own ref, so the row keeps its identity
+ * across refreshes and a Home pin keeps pointing at it. The range is a band of
+ * its own, clear of Trakt's own lists at the bottom of the Int range, MDBList's
+ * positive ids and the watching-screen ids at the top - the same partitioning
+ * [traktListShelfId] and [watchlistShelfId] describe.
+ */
+fun likedListShelfId(vendorWire: String, ref: String): Int {
+    val hash = ("$vendorWire:$ref").hashCode() and 0x3FFF_FFFF
+    return Int.MIN_VALUE / 2 + hash
+}
+
+/**
  * The rail id for one account's WATCHLIST row.
  *
  * A watchlist is not one of the account's named lists, so it has no service id
@@ -235,7 +249,27 @@ data class LibraryList(
     val itemCount: Int,
     val source: LibrarySource,
     /** Trakt's own list id/slug; null for local and MDBList lists. */
-    val remoteId: String? = null
+    val remoteId: String? = null,
+    /**
+     * True for a community list the viewer SAVED by liking it (Settings →
+     * Trakt/MDBList → Browse public lists), as opposed to a list the account
+     * owns.
+     *
+     * The difference is entirely in what its actions mean: a liked list cannot
+     * be renamed, and removing it is an UNLIKE - it takes the row off this
+     * rail without deleting the owner's list, which is not the viewer's to
+     * delete. Without the flag the rail's delete would call the account's hard
+     * list delete on a list that belongs to someone else (spec F4).
+     */
+    val liked: Boolean = false,
+    /**
+     * The public list's owner, for a [liked] row only.
+     *
+     * Attribution is mandatory on a saved community list (spec F5): without the
+     * owner, a row in this rail reads as a list the viewer or the app made,
+     * which is exactly what a public list is not.
+     */
+    val owner: String? = null
 ) {
     /** Where the list lives, for the rail's source line. */
     val locationLabel: String
@@ -247,6 +281,67 @@ data class LibraryList(
             else -> source.label
         }
 }
+
+/**
+ * The list-control dialogs' words, for this row.
+ *
+ * Every one of them delegates to [ListControlWording], so the TV dialog and the
+ * phone sheet cannot disagree about what a saved community list's removal is:
+ * one of them saying DELETE while the other says REMOVE is how a like gets
+ * explained as a delete of someone else's list.
+ */
+val LibraryList.controlSummary: String
+    get() = ListControlWording.summary(
+        itemCount = itemCount,
+        sourceLabel = source.deleteDestinationLabel,
+        liked = liked,
+        owner = owner
+    )
+
+/** The action dialog's subtitle: the source, plus the owner for a saved list. */
+val LibraryList.controlAttribution: String
+    get() = ListControlWording.attribution(
+        sourceLabel = source.deleteDestinationLabel,
+        liked = liked,
+        owner = owner
+    )
+
+/** The remove/delete row's label. */
+val LibraryList.removeActionLabel: String
+    get() = ListControlWording.removeActionLabel(
+        sourceLabel = source.deleteDestinationLabel,
+        local = source.isLocalList,
+        liked = liked
+    )
+
+/** The confirm dialog's title. */
+val LibraryList.removeConfirmTitle: String
+    get() = ListControlWording.removeConfirmTitle(
+        sourceLabel = source.deleteDestinationLabel,
+        local = source.isLocalList,
+        liked = liked
+    )
+
+/** The confirm dialog's body. */
+val LibraryList.removeConfirmBody: String
+    get() = ListControlWording.removeConfirmBody(
+        sourceLabel = source.deleteDestinationLabel,
+        local = source.isLocalList,
+        liked = liked,
+        itemCount = itemCount
+    )
+
+/** The confirm button's label. */
+val LibraryList.removeConfirmAction: String
+    get() = ListControlWording.removeConfirmAction(liked)
+
+/** Why a saved community list offers no rename, or null when renaming is ordinary. */
+val LibraryList.renameUnavailableNote: String?
+    get() = if (liked) {
+        ListControlWording.renameUnavailableNote(source.deleteDestinationLabel, owner)
+    } else {
+        null
+    }
 
 /**
  * Profile-scoped local library: the on-device "My List" (works with no

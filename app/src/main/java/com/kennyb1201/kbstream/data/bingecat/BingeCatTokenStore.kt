@@ -63,17 +63,30 @@ internal class BingeCatTokenStore(
      * A store can outlive the KeyStore entry that decrypts it (a restored
      * backup, a re-flash), and from then on every open throws. A session is
      * worth less than a usable integration: the account can hand out another
-     * one, so the second attempt discards the file. One retry, never a loop.
+     * one, so a store that is genuinely unreadable is discarded and reopened.
+     *
+     * The retry before the discard is the discriminator, not politeness. A
+     * KeyStore that is momentarily unavailable - a locked key, a provider
+     * re-keying - throws ONE open and answers the next, and this used to treat
+     * that as corruption and delete a live session during a routine read. Only
+     * an open that fails twice in a row is the corruption this exists for.
      */
     private fun open(): SharedPreferences? {
         val appContext = context?.applicationContext ?: return null
         val name = storeName(appContext)
-        return try {
-            openPrefs(appContext, name)
+        try {
+            return openPrefs(appContext, name)
         } catch (first: Exception) {
-            SecureTokenStore.discard(appContext, name)
-            openPrefs(appContext, name)
+            // Falls through to the discard below only if this second attempt
+            // throws too.
+            try {
+                return openPrefs(appContext, name)
+            } catch (second: Exception) {
+                second.addSuppressed(first)
+            }
         }
+        SecureTokenStore.discard(appContext, name)
+        return openPrefs(appContext, name)
     }
 
     private val prefs: SharedPreferences?
@@ -171,7 +184,15 @@ internal class BingeCatTokenStore(
  * "Unmapped" is a real state, not an error: a connected profile with no
  * mapping makes no data request at all (spec F2).
  */
-internal class BingeCatProfileMap(private val context: Context?) {
+internal class BingeCatProfileMap(
+    private val context: Context?,
+    /**
+     * A SPECIFIC profile's mapping. Null reads the active profile, which is what
+     * every in-app caller wants; a disconnect pins the profile it started on so
+     * a switch mid-call cannot tombstone the incoming profile's mapping.
+     */
+    private val profileId: String? = null
+) {
 
     companion object {
         const val PREFS_NAME = "bingecat_map"
@@ -181,10 +202,9 @@ internal class BingeCatProfileMap(private val context: Context?) {
 
     private fun prefs(): SharedPreferences? {
         val appContext = context?.applicationContext ?: return null
-        return appContext.getSharedPreferences(
-            ProfileStorage.prefsName(appContext, PREFS_NAME),
-            Context.MODE_PRIVATE
-        )
+        val name = profileId?.let { ProfileStorage.prefsName(it, PREFS_NAME) }
+            ?: ProfileStorage.prefsName(appContext, PREFS_NAME)
+        return appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
     }
 
     fun mappedProfileId(): Long? =
@@ -193,12 +213,22 @@ internal class BingeCatProfileMap(private val context: Context?) {
     fun mappedProfileName(): String? =
         prefs()?.getString(KEY_PROFILE_NAME, null)?.takeIf { it.isNotBlank() }
 
-    fun set(profile: BingeCatProfile) {
-        val id = profile.id?.takeIf { it > 0L } ?: return
-        prefs()?.edit()
-            ?.putLong(KEY_PROFILE_ID, id)
-            ?.putString(KEY_PROFILE_NAME, profile.name)
-            ?.apply()
+    /**
+     * Files the mapping, or answers false when nothing was written (no usable id,
+     * or no store to write to).
+     *
+     * The answer is not cosmetic: the caller publishes the mapping to the
+     * account, and doing that over a no-op re-asserts the PREVIOUS id as if the
+     * new choice had landed.
+     */
+    fun set(profile: BingeCatProfile): Boolean {
+        val id = profile.id?.takeIf { it > 0L } ?: return false
+        val prefs = prefs() ?: return false
+        prefs.edit()
+            .putLong(KEY_PROFILE_ID, id)
+            .putString(KEY_PROFILE_NAME, profile.name)
+            .apply()
+        return true
     }
 
     fun clear() {

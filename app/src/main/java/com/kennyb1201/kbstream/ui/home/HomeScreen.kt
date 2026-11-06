@@ -240,6 +240,16 @@ private val HomeRailGap = 12.dp
 private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
 
 /**
+ * This screen's log tag.
+ *
+ * Was a string literal on each of its eighteen log lines (some in HomeViewModel,
+ * which owns the same capture vocabulary), so the trailer stack's Home-side
+ * lines could only be grepped by spelling, six times over across the stack. The
+ * VALUE is the long-standing one, so existing captures and filters keep working.
+ */
+private const val TAG = "HOME_HERO"
+
+/**
  * The most frames the top bar's focus hand-off keeps asking for focus before it
  * gives up, loudly.
  *
@@ -851,7 +861,7 @@ internal fun HeroInlineTrailerPlayer(
         // Fire TV suppresses debug logs, so surface what the player actually
         // receives -- this proves which resolver produced the source.
         Log.w(
-            "HOME_HERO",
+            TAG,
             "Hero player mounting with source: " + heroSourceOrigin(source)
         )
 
@@ -981,7 +991,7 @@ internal fun HeroInlineTrailerPlayer(
                     val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                     val durationMs = exoPlayer.duration
                     Log.w(
-                        "HOME_HERO",
+                        TAG,
                         "Inline trailer stuck (state=$state playing=$playing " +
                             "startedPlaying=$startedPlaying budget=$watchdogBudget " +
                             "elapsedMs=${android.os.SystemClock.elapsedRealtime() - mountedAtMs} " +
@@ -1052,7 +1062,7 @@ internal fun HeroInlineTrailerPlayer(
                     val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                     val durationMs = exoPlayer.duration
                     Log.e(
-                        "HOME_HERO",
+                        TAG,
                         "Inline trailer playback failed: ${error.errorCodeName} " +
                             "at ${positionMs}ms of " +
                             (if (durationMs > 0L) "${durationMs}ms" else "unknown length"),
@@ -1101,7 +1111,7 @@ internal fun HeroInlineTrailerPlayer(
                         // so - a capture must not read the recovery as the old
                         // "skipped" path.
                         Log.w(
-                            "HOME_HERO",
+                            TAG,
                             if (resumeRequested) {
                                 "Trailer refused by YouTube for this identity; " +
                                     "re-resolving once with another client"
@@ -1112,7 +1122,7 @@ internal fun HeroInlineTrailerPlayer(
                         )
                     } else {
                         Log.w(
-                            "HOME_HERO",
+                            TAG,
                             "Trailer failed ${durationMs - positionMs}ms from the end; " +
                                 "letting it end instead of replaying its tail"
                         )
@@ -1547,13 +1557,13 @@ private fun HomeHero(
                     )
                     trailerPendingResume = null
                     Log.e(
-                        "HOME_HERO",
+                        TAG,
                         "Hero trailer key=$key was blocked while a resume was owed; " +
                             "dropping the resume (bug)"
                     )
                 }
                 Log.w(
-                    "HOME_HERO",
+                    TAG,
                     "Hero trailer key=$trailerKey is blocked by YouTube this " +
                         "session; keeping the backdrop"
                 )
@@ -1565,14 +1575,14 @@ private fun HomeHero(
                 // and the guard above has established there is none.
                 TrailerPlayerLauncher.invalidate(key)
                 Log.w(
-                    "HOME_HERO",
+                    TAG,
                     "Re-resolving hero trailer key=$key on another client " +
                         "(attempt=$trailerResumeAttempts/$MAX_HERO_TRAILER_RESUMES " +
                         "excluded=${pending.excludedClients.sorted()})"
                 )
             }
             Log.w(
-                "HOME_HERO",
+                TAG,
                 "Resolving hero trailer key=$trailerKey"
             )
 
@@ -1611,7 +1621,7 @@ private fun HomeHero(
                             )
                         }
                         Log.w(
-                            "HOME_HERO",
+                            TAG,
                             "Hero trailer resolved: " +
                                 heroSourceOrigin(source) +
                                 if (pending != null) {
@@ -1641,20 +1651,20 @@ private fun HomeHero(
                                 // after the mint warms, which is the opposite of
                                 // what a hold is for.
                                 Log.w(
-                                    "HOME_HERO",
+                                    TAG,
                                     "Hero trailer key=$key held without a source " +
                                         "to mount; leaving it re-armable " +
                                         "(excluded=${pending.excludedClients.sorted()})"
                                 )
                             } else if (
-                                heroTrailerResolveFailurePoisons(pending.excludedClients)
+                                heroTrailerResolveFailurePoisons(pending.excludedClients, error)
                             ) {
                                 // The ladder was actually walked and no client
                                 // left has a usable URL class: the video is done
                                 // for this session, and the log says so.
                                 TrailerPlayerLauncher.markIdentityBlocked(key)
                                 Log.w(
-                                    "HOME_HERO",
+                                    TAG,
                                     "Hero trailer key=$key: ladder exhausted " +
                                         "(excluded=${pending.excludedClients.sorted()} " +
                                         "attempts=$trailerResumeAttempts); blocked for " +
@@ -1663,7 +1673,7 @@ private fun HomeHero(
                             }
                         }
                         Log.e(
-                            "HOME_HERO",
+                            TAG,
                             "Failed to resolve hero trailer, " +
                                 "keeping backdrop",
                             error
@@ -1687,7 +1697,7 @@ private fun HomeHero(
             }
         } else {
             Log.w(
-                "HOME_HERO",
+                TAG,
                 "Hero trailer skipped (trailerPlaying=$trailerPlaying key=$trailerKey)"
             )
         }
@@ -1767,7 +1777,7 @@ private fun HomeHero(
             trailerPendingResume = null
             resolvedTrailer = null
             Log.w(
-                "HOME_HERO",
+                TAG,
                 "Hero trailer key=$key: no untried client left after " +
                     "${attempt + 1} attempt(s) (excluded=${plan.excludedClients.sorted()}); " +
                     "leaving the backdrop up"
@@ -1794,7 +1804,7 @@ private fun HomeHero(
         // just decided is worth another step.
         TrailerPlayerLauncher.invalidate(key)
         Log.w(
-            "HOME_HERO",
+            TAG,
             "Hero trailer key=$key died at ${positionMs}ms; retry ${attempt + 1} " +
                 "($change) resuming at ${plan.resumeAtMs}ms " +
                 "excluded=${plan.excludedClients.sorted()}"
@@ -2219,7 +2229,7 @@ private fun HomeHero(
                                                     (died ?: "unknown") + " died"
                                             )
                                             Log.w(
-                                                "HOME_HERO",
+                                                TAG,
                                                 "Hero trailer key=$key: identity ladder " +
                                                     "exhausted " +
                                                     "(excluded=" +
@@ -2257,7 +2267,7 @@ private fun HomeHero(
                                                 resume = "pending"
                                             )
                                             Log.w(
-                                                "HOME_HERO",
+                                                TAG,
                                                 "Hero trailer key=$key refused; " +
                                                     "re-resolving on another client " +
                                                     "(attempt=$trailerResumeAttempts/" +
@@ -3012,6 +3022,17 @@ private fun HomeHeroHost(
                     key,
                     recordFailure = false
                 )
+                    // Silent in the UI (the hero keeps its backdrop), but not in
+                    // the log: a pre-warm that never lands is why the post-dwell
+                    // resolve pays the network again, and a capture has to be
+                    // able to see that.
+                    .onFailure { error ->
+                        Log.w(
+                            TAG,
+                            "Hero trailer pre-warm for $key failed",
+                            error
+                        )
+                    }
             }
         }
     }
@@ -6236,9 +6257,13 @@ fun HomeScreen(
                                 // mentioned on this screen. It is the one of
                                 // the three a press can undo here.
                                 when {
+                                    // The ViewModel's own message, verbatim. This
+                                    // used to null-check the value and then draw
+                                    // a hardcoded copy of it, so a wording (or
+                                    // routing) change on that side would never
+                                    // reach the TV while the phone followed it.
                                     !error.isNullOrBlank() -> KBStatusMessage(
-                                        message = "Couldn't reach your add-ons. Check the " +
-                                            "network connection, then press OK to retry.",
+                                        message = error.orEmpty(),
                                         icon = KB_STATUS_ICON_EMPTY,
                                         onRetry = { viewModel.refreshRailsOnly() },
                                         modifier = Modifier.fillParentMaxSize()

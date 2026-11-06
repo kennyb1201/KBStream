@@ -69,7 +69,13 @@ import com.kennyb1201.kbstream.ui.components.touch.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.touch.TouchChoiceChip
 import com.kennyb1201.kbstream.ui.library.LIBRARY_BROWSE_SCREEN_KEY
 import com.kennyb1201.kbstream.data.library.LibraryHomeRails
+import com.kennyb1201.kbstream.data.library.controlSummary
 import com.kennyb1201.kbstream.data.library.libraryHomeRailPinFor
+import com.kennyb1201.kbstream.data.library.removeActionLabel
+import com.kennyb1201.kbstream.data.library.removeConfirmAction
+import com.kennyb1201.kbstream.data.library.removeConfirmBody
+import com.kennyb1201.kbstream.data.library.removeConfirmTitle
+import com.kennyb1201.kbstream.data.library.renameUnavailableNote
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarEntry
 import com.kennyb1201.kbstream.ui.library.LibraryCalendarPane
 import com.kennyb1201.kbstream.ui.library.LibraryFilter
@@ -693,14 +699,17 @@ fun LibraryScreenMobile(
                 Dialog(onDismissRequest = { listMenu = null }) {
                     KBDialogPanel(
                         title = list.name,
-                        subtitle = "${list.itemCount} titles · ${list.locationLabel}"
+                        // A saved community list's summary names its owner as
+                        // well as its source - the same line the TV dialog uses,
+                        // from the same wording (ListControlWording).
+                        subtitle = list.controlSummary
                     ) {
                         val pin = libraryHomeRailPinFor(list)
                         val onHome = remember(homeRailRevision, list.id, list.source) {
                             pin != null && LibraryHomeRails.isPinned(context, pin)
                         }
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (list.source.canManageList) {
+                            if (list.source.canManageList && !list.liked) {
                                 KBButton(
                                     label = "RENAME LIST",
                                     modifier = Modifier.fillMaxWidth()
@@ -736,6 +745,30 @@ fun LibraryScreenMobile(
                                     listMenu = null
                                     listPendingDelete = list
                                 }
+                            }
+                            // A saved community list leaves by UNLIKING it, which
+                            // is the only removal this device can honestly offer
+                            // for a list it does not own (spec F4): the row goes,
+                            // the author's list stays.
+                            if (list.liked) {
+                                KBButton(
+                                    label = list.removeActionLabel,
+                                    danger = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    listMenu = null
+                                    listPendingDelete = list
+                                }
+                            }
+                            // No rename for a saved community list, and the sheet
+                            // explains the gap rather than leaving the viewer to
+                            // wonder why their own list offers one.
+                            list.renameUnavailableNote?.let { note ->
+                                Text(
+                                    text = note,
+                                    color = KBTextLo,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
                             KBButton(
                                 label = "CANCEL",
@@ -794,12 +827,11 @@ fun LibraryScreenMobile(
             listPendingDelete?.let { list ->
                 Dialog(onDismissRequest = { listPendingDelete = null }) {
                     KBDialogPanel(
-                        title = "Delete list?",
+                        title = list.removeConfirmTitle,
                         subtitle = list.name
                     ) {
                         Text(
-                            text = "The list is removed from this device. Its " +
-                                "${list.itemCount} titles stay in your Library.",
+                            text = list.removeConfirmBody,
                             color = KBTextLo,
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -814,12 +846,16 @@ fun LibraryScreenMobile(
                                 listPendingDelete = null
                             }
                             KBButton(
-                                label = "DELETE",
+                                label = list.removeConfirmAction,
                                 danger = true,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 listPendingDelete = null
-                                viewModel.deleteLocalList(list.id)
+                                if (list.liked) {
+                                    viewModel.deleteRemoteList(list)
+                                } else {
+                                    viewModel.deleteLocalList(list.id)
+                                }
                             }
                         }
                     }
@@ -838,7 +874,6 @@ private fun ListRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?
 ) {
-    val sourceLabel = list.locationLabel
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -857,7 +892,10 @@ private fun ListRow(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = "${list.itemCount} titles · $sourceLabel",
+            // Count and source from the one wording module, so this row says the
+            // same thing as the TV's - a saved community list names its owner
+            // (spec F5), an ordinary list names only its service.
+            text = list.controlSummary,
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1

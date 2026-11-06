@@ -282,6 +282,60 @@ class TrailerPreferredClientFirstContractTest {
         )
     }
 
+    // ── the AUDIO half of the same rule ───────────────────────────────────
+
+    @Test
+    fun `adaptive audio prefers the client whose UA plays it, then the preferred client`() {
+        val order = audioProbeOrder(
+            listOf(
+                progressive(client = "ios", score = 1.0e13, url = "ios-audio"),
+                progressive(client = "android", score = 10.0, url = "android-audio"),
+                progressive(client = "tv", score = 50.0, url = "tv-audio")
+            ),
+            videoClient = "tv",
+            preferredClient = PREFERRED
+        )
+
+        assertEquals(
+            "the video's own client first, then the preferred one, then score - a " +
+                "higher score from a client that would play under the wrong UA " +
+                "cannot come first",
+            listOf("tv-audio", "android-audio", "ios-audio"),
+            order.map { it.url }
+        )
+    }
+
+    @Test
+    fun `with no video client the preferred client still leads`() {
+        val order = audioProbeOrder(
+            listOf(
+                progressive(client = "ios", score = 1.0e13, url = "ios-audio"),
+                progressive(client = "android", score = 10.0, url = "android-audio")
+            ),
+            videoClient = null,
+            preferredClient = PREFERRED
+        )
+
+        assertEquals(listOf("android-audio", "ios-audio"), order.map { it.url })
+    }
+
+    @Test
+    fun `the adaptive audio pool and its probe use the UA the source plays with`() {
+        val body = flat(extractor)
+        assertTrue(
+            "the audio candidates come from the shared order",
+            body.contains("val audioCandidates = audioProbeOrder(") &&
+                body.contains("videoClient = bestVideo.client,") &&
+                body.contains("preferredClient = PREFERRED_SEPARATE_CLIENT")
+        )
+        assertTrue(
+            "and every audio probe presents the Adaptive source's own UA, not " +
+                "the candidate's",
+            body.contains("val probed = resolveReachableUrl(candidate.url, playUa)") &&
+                !body.contains("userAgentFor(candidate.client)")
+        )
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private fun progressive(

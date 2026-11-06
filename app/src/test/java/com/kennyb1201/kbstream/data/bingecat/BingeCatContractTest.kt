@@ -37,6 +37,16 @@ class BingeCatContractTest {
         return file.readText()
     }
 
+    /** The text between two markers, so a test names one function's body. */
+    private fun between(text: String, start: String, end: String): String {
+        val at = text.indexOf(start)
+        assertTrue("marker not found: $start", at >= 0)
+        val rest = text.substring(at + start.length)
+        val stop = rest.indexOf(end)
+        assertTrue("end marker not found after $start: $end", stop >= 0)
+        return rest.substring(0, stop)
+    }
+
     private val api = source("com/kennyb1201/kbstream/data/bingecat/BingeCatApiService.kt")
     private val repository =
         source("com/kennyb1201/kbstream/data/bingecat/BingeCatRepository.kt")
@@ -179,18 +189,106 @@ class BingeCatContractTest {
         assertTrue(
             "then the session is dropped - through the sign-out tombstone, so the " +
                 "other devices can end it too (see BingeCatAuthRules)",
-            body.contains("store.markSignedOut()")
+            body.contains("pinnedStore.markSignedOut()")
         )
         assertTrue(
             "and the disconnect is published, since a tombstone has no token to " +
                 "trigger the ordinary push gate",
             body.contains("if (cleared) publishAuthToSync()")
         )
-        assertTrue("and the mapping with it", body.contains("mapping.clear()"))
+        assertTrue("and the mapping with it", body.contains("pinnedMapping.clear()"))
         assertFalse(
             "disconnect must never touch the viewer's own library",
             body.contains("LocalLibraryStore")
         )
+        // Every step pinned to the profile the call STARTED on: the revoke is a
+        // network round-trip, and both stores resolve the ACTIVE profile per
+        // call - so a switch landing inside it used to tombstone the INCOMING
+        // profile's session and mapping, then publish those tombstone to the
+        // account.
+        assertTrue(
+            "the profile is captured at entry",
+            body.contains("val profileId = context?.let { ProfileStorage.activeProfileId(it) }")
+        )
+        assertTrue(
+            "and both stores are built for that id",
+            body.contains("BingeCatTokenStore(context, profileId)") &&
+                body.contains("BingeCatProfileMap(context, profileId)")
+        )
+        assertFalse(
+            "no unpinned store may be used after the capture",
+            body.contains("store.read()?.accessToken") ||
+                body.contains("runCatching { store.markSignedOut() }")
+        )
+    }
+
+    @Test
+    fun `a partial refresh never publishes an empty leg or a pruning stamp`() {
+        val body = between(
+            repository,
+            "private suspend fun refresh(",
+            "private fun legRows("
+        )
+        assertTrue(
+            "a failed leg keeps the rows this device already had",
+            body.contains(
+                "val kept = previous?.takeIf { it.mappedId == mapped && " +
+                    "it.profileId == activeProfile }"
+            )
+        )
+        assertTrue(
+            "and the snapshot says which legs actually answered",
+            body.contains("listsComplete = lists != null")
+        )
+        assertTrue(
+            "a half-answered kind keeps what it read rather than nothing",
+            repository.contains("complete = movies != null && shows != null") &&
+                repository.contains("rows = movies.orEmpty() + shows.orEmpty()")
+        )
+        // The stamp alone cannot say "this pass asked", so BOTH pruners - the
+        // Home rail reconcile and the Library's own pin pass - require the flag.
+        val reconcile = source(
+            "com/kennyb1201/kbstream/data/library/LibraryHomeRailReconcile.kt"
+        )
+        assertTrue(
+            "the caller that PERSISTS and syncs a prune requires a complete list set",
+            reconcile.contains("snapshot.listsComplete &&")
+        )
+        val library = source("com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt")
+        assertTrue(
+            "and so does the Library's pin pass",
+            library.contains("bingecatSnapshot.listsComplete &&")
+        )
+    }
+
+    @Test
+    fun `no list read can pass a partial walk off as the whole set`() {
+        assertFalse(
+            "a mid-walk failure is not a short list (listRows)",
+            repository.contains("return rows.takeIf { it.isNotEmpty() }")
+        )
+        assertTrue(
+            "the lists read walks pages, like its siblings",
+            repository.contains("if (body.lists.size < PAGE_SIZE) break")
+        )
+        val lists = between(
+            repository,
+            "private suspend fun readLists(",
+            "private suspend fun readWatched("
+        )
+        assertTrue(
+            "and a failed page is a failed read, not a short one",
+            lists.contains("} ?: return null")
+        )
+    }
+
+    @Test
+    fun `a token store is discarded only after two failed opens`() {
+        val body = between(store, "private fun open(): SharedPreferences? {", "private val prefs")
+        val retry = body.indexOf("return openPrefs(appContext, name)")
+        val discard = body.indexOf("SecureTokenStore.discard(appContext, name)")
+        assertTrue("the first failure retries the same store", retry >= 0)
+        assertTrue("and only a second failure discards it", discard > retry)
     }
 
     @Test

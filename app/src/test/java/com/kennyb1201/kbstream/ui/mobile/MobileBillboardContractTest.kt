@@ -690,6 +690,63 @@ class MobileBillboardContractTest {
     }
 
     @Test
+    fun `the billboard honours the hero trailer autoplay switch`() {
+        val home = mobileHome()
+        assertTrue(
+            "the prefs read exists on this surface at all",
+            home.contains("AppPreferences.getHeroTrailerAutoplay(context)")
+        )
+        assertTrue(
+            "and is handed to the billboard",
+            home.contains("trailerAutoplay = heroTrailerAutoplay,")
+        )
+        assertTrue(
+            "the AUTO arming holds back when the viewer turned hero trailers off",
+            home.contains("if (!trailerAutoplay) return@LaunchedEffect")
+        )
+        assertTrue(
+            "and it is a key of the arming effect, so toggling it re-arms",
+            home.contains("trailerDelayMs, trailerAutoplay, playback,")
+        )
+    }
+
+    @Test
+    fun `a refused identity on the billboard walks the identity ladder`() {
+        val home = mobileHome()
+        assertTrue(
+            "the refusal is routed as an identity death",
+            home.contains(
+                "requestTrailerRetry(positionMs, durationMs, identity = true)"
+            )
+        )
+        assertTrue(
+            "the identity planner is consulted before the ordinary plan",
+            home.contains("val refusal = heroTrailerIdentityRefusal(") &&
+                home.contains("if (refusal.exhausted) {")
+        )
+        assertTrue(
+            "and an exhausted ladder blocks the video for the session",
+            home.contains("TrailerPlayerLauncher.markIdentityBlocked(key)")
+        )
+        assertTrue(
+            "its death line names the resolve kind, as the TV hero's does",
+            home.contains(
+                "kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),"
+            )
+        )
+    }
+
+    @Test
+    fun `a billboard trailer that never resolves still leaves a trace`() {
+        assertTrue(
+            "silent on screen, but findable in a capture",
+            mobileHome().contains(
+                "Log.w(TAG, \"Billboard trailer key=\$key failed to resolve\", error)"
+            )
+        )
+    }
+
+    @Test
     fun `the default feed is TMDB's day pair, not the week pair`() {
         val api = tmdbApi()
 

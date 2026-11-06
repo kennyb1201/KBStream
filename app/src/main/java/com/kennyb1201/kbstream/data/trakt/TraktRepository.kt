@@ -2,6 +2,13 @@ package com.kennyb1201.kbstream.data.trakt
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.publiclists.PublicListCard
+import com.kennyb1201.kbstream.data.publiclists.PublicListDirectory
+import com.kennyb1201.kbstream.data.publiclists.PublicListRules
+import com.kennyb1201.kbstream.data.publiclists.PublicListSaveOutcome
+import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
+import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
+import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.squareup.moshi.Moshi
@@ -202,6 +209,16 @@ class TraktRepository private constructor(private val context: Context?) {
 
         /** One Trakt read page (Trakt's own maximum page size). */
         private const val TRAKT_PAGE_SIZE = 100
+
+        /**
+         * How long a public directory stays fresh.
+         *
+         * Long on purpose: these are other people's lists, ordered by long-term
+         * (popular) or weekly (trending) activity, so a 30-minute-old directory
+         * is not meaningfully stale - and every re-read is a call the rate guard
+         * pays for.
+         */
+        private const val PUBLIC_LISTS_TTL_MS = 30 * 60 * 1000L
 
         @Volatile
         private var instance: TraktRepository? = null
@@ -1101,6 +1118,374 @@ class TraktRepository private constructor(private val context: Context?) {
             .filter { it.name?.isNotBlank() == true }
             .filter { it.ids?.trakt != null || it.ids?.slug != null }
     }
+
+    // ------------------------------------------------------------------
+    // Public list browsing (Settings → Trakt → Browse public lists)
+    //
+    // The browse half only. The list ROWS these produce become Library's
+    // `TRAKT_LIST` rows (see LibraryViewModel), which is how a saved list
+    // reaches Home - by the viewer pinning its Library row, exactly like a list
+    // they made themselves. No Home rail is created here.
+    // ------------------------------------------------------------------
+
+    /** One directory's last read, for the screen to paint while it refetches. */
+    private data class CachedPublicLists(
+        val cards: List<PublicListCard>,
+        val atMs: Long
+    )
+
+    /**
+     * Public directories, keyed by [PublicListDirectory.wire].
+     *
+     * In memory, not on disk: these are other people's lists, they change
+     * slowly, and a directory is worthless to a viewer who has signed out - so
+     * the cache lives exactly as long as the process that can use it.
+     */
+    private val publicListCache =
+        java.util.concurrent.ConcurrentHashMap<String, CachedPublicLists>()
+
+    /**
+     * The lists this account has liked, as far as this process knows.
+     *
+     * The save leg's "Already in your lists" answer without a read per save:
+     * filled by [likedPublicLists] and by a successful like, emptied by an
+     * unlike. It is a shortcut, never the authority - Trakt's 409 is still
+     * handled as "already liked" for the case where this set is behind.
+     */
+    private val likedListRefs: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * A public directory as this process last read it.
+     *
+     * @param allowStale true for the paint-before-refetch the screen does; false
+     *   (the default) for the read short-circuit, which only a still-fresh entry
+     *   may answer.
+     */
+    fun cachedPublicLists(
+        directory: PublicListDirectory,
+        allowStale: Boolean = false
+    ): List<PublicListCard>? {
+        val entry = publicListCache[directory.wire] ?: return null
+        if (!allowStale && System.currentTimeMillis() - entry.atMs > PUBLIC_LISTS_TTL_MS) {
+            return null
+        }
+        return entry.cards
+    }
+
+    /**
+     * One directory of public lists.
+     *
+     * Stale-while-revalidate: a fresh entry answers without a request, an older
+     * one is still on screen (the ViewModel paints it) while this reads again,
+     * and a failed read keeps it rather than blanking the tab - which is why a
+     * failure here is an answer, not an empty list.
+     */
+    suspend fun publicLists(
+        directory: PublicListDirectory,
+        force: Boolean = false
+    ): PublicListsAnswer<List<PublicListCard>> {
+        if (!TraktConfig.isConfigured || !hasToken()) return PublicListsAnswer.NotConnected
+        if (!force) cachedPublicLists(directory)?.let { return PublicListsAnswer.Loaded(it) }
+        val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
+
+        val answer: PublicListsAnswer<List<TraktPublicList>> = when (directory) {
+            PublicListDirectory.TRAKT_POPULAR -> readPublicPages { page ->
+                api.popularLists("Bearer $token", page = page)
+            }.mapRows { row -> row.list?.let { list -> list to row.likeCount } }
+
+            PublicListDirectory.TRAKT_TRENDING -> readPublicPages { page ->
+                api.trendingLists("Bearer $token", page = page)
+            }.mapRows { row -> row.list?.let { list -> list to row.likeCount } }
+
+            // A vendor mismatch is a wiring mistake, not a network answer: say
+            // so instead of pretending the directory was empty.
+            else -> PublicListsAnswer.Failed("vendor")
+        }
+
+        return when (answer) {
+            is PublicListsAnswer.Loaded -> {
+                val cards = answer.value
+                    .mapNotNull { (list, likes) -> list.toPublicCard(likes) }
+                publicListCache[directory.wire] = CachedPublicLists(cards, System.currentTimeMillis())
+                PublicListsAnswer.Loaded(cards)
+            }
+
+            else -> answer
+        }
+    }
+
+    /**
+     * A text search over public list NAMES.
+     *
+     * Never cached: a new query is a new question, and the screen's own session
+     * is the only lifetime a result set has (spec F3).
+     */
+    suspend fun searchPublicLists(query: String): PublicListsAnswer<List<PublicListCard>> {
+        if (!TraktConfig.isConfigured || !hasToken()) return PublicListsAnswer.NotConnected
+        val trimmed = query.trim()
+        if (!PublicListRules.searchEnabled(trimmed)) return PublicListsAnswer.Loaded(emptyList())
+        val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
+        val answer = readPublicPages { page ->
+            api.searchByType("Bearer $token", "list", trimmed, page = page)
+        }.mapRows { row -> row.list?.let { list -> list to null } }
+        return when (answer) {
+            is PublicListsAnswer.Loaded ->
+                PublicListsAnswer.Loaded(answer.value.mapNotNull { (list, _) -> list.toPublicCard(null) })
+
+            else -> answer
+        }
+    }
+
+    /**
+     * The lists this account has liked - the save leg's read, and what the
+     * Library rail draws beside the account's own lists.
+     */
+    suspend fun likedPublicLists(): PublicListsAnswer<List<PublicListCard>> {
+        if (!TraktConfig.isConfigured || !hasToken()) return PublicListsAnswer.NotConnected
+        val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
+        val answer = readPublicPages { page ->
+            api.likedLists("Bearer $token", page = page)
+        }.mapRows { row -> row.list?.let { list -> list to null } }
+        return when (answer) {
+            is PublicListsAnswer.Loaded -> {
+                // `liked = true` because this read IS the liked set: Library uses
+                // it to route a row's delete to an unlike rather than to Trakt's
+                // hard list delete.
+                val cards = answer.value.mapNotNull { (list, _) ->
+                    list.toPublicCard(null)?.copy(liked = true)
+                }
+                likedListRefs += cards.map { it.ref }
+                PublicListsAnswer.Loaded(cards)
+            }
+
+            else -> answer
+        }
+    }
+
+    /**
+     * Saves a public list by LIKING it (spec F4's primary leg, confirmed by
+     * Trakt's API definition: `POST /lists/{id}/like`, 204, one like per list
+     * per user).
+     *
+     * A like keeps the list LIVE: later edits its owner makes are read the next
+     * time Library refreshes, because Library reads the liked list rather than a
+     * snapshot of it.
+     */
+    suspend fun likePublicList(card: PublicListCard): PublicListSaveOutcome {
+        if (!TraktConfig.isConfigured || !hasToken()) return PublicListSaveOutcome.NotConnected
+        val ref = card.ref.trim()
+        if (ref.isEmpty()) return PublicListSaveOutcome.Failed("empty")
+        if (likedListRefs.contains(ref)) return PublicListSaveOutcome.AlreadySaved
+        val token = validAccessToken() ?: return PublicListSaveOutcome.NotConnected
+        if (!guard.tryAcquire()) return PublicListSaveOutcome.Failed("429")
+        val response = runCatchingCancellable {
+            api.likeList("Bearer $token", ref)
+        }.getOrNull() ?: return PublicListSaveOutcome.Failed("NETWORK")
+        noteRetryAfter(response)
+        if (!response.isSuccessful) {
+            // 409 is Trakt's "it is already liked" - the same answer the local
+            // set gives, from the side that cannot be out of date.
+            if (response.code() == 409) {
+                likedListRefs += ref
+                dropPublicListCaches()
+                return PublicListSaveOutcome.AlreadySaved
+            }
+            return PublicListSaveOutcome.Failed(response.code().toString())
+        }
+        likedListRefs += ref
+        dropPublicListCaches()
+        return PublicListSaveOutcome.Saved
+    }
+
+    /**
+     * Removes a like - the Library rail's delete for a liked list (spec F4's
+     * "unliking from Library removes the row").
+     */
+    suspend fun unlikePublicList(card: PublicListCard): Boolean {
+        if (!TraktConfig.isConfigured || !hasToken()) return false
+        val ref = card.ref.trim()
+        if (ref.isEmpty()) return false
+        val token = validAccessToken() ?: return false
+        if (!guard.tryAcquire()) return false
+        val response = runCatchingCancellable {
+            api.unlikeList("Bearer $token", ref)
+        }.getOrNull() ?: return false
+        noteRetryAfter(response)
+        if (!response.isSuccessful) return false
+        likedListRefs -= ref
+        dropPublicListCaches()
+        return true
+    }
+
+    /**
+     * One public list's titles, readable BEFORE it is saved - Trakt addresses
+     * any user's list by (owner, slug) or by the list id alone, so there is no
+     * import-first hole here.
+     */
+    suspend fun publicListTitles(card: PublicListCard): PublicListsAnswer<List<PublicListTitle>> {
+        if (!TraktConfig.isConfigured || !hasToken()) return PublicListsAnswer.NotConnected
+        val token = validAccessToken() ?: return PublicListsAnswer.NotConnected
+        val movies = readPublicListHalf(token, card.ref, "movies")
+        val shows = readPublicListHalf(token, card.ref, "shows")
+        // Both halves failed: that is a failure, not "the list is empty".
+        if (!movies.ok && !shows.ok) {
+            val code = movies.code ?: shows.code ?: "NETWORK"
+            return PublicListsAnswer.Failed(code)
+        }
+        // Rank is the owner's order; the two halves arrive as "all films, then
+        // all shows", so it is what puts them back in one list (the same merge
+        // [listItems] does).
+        val entries = (movies.rows + shows.rows).sortedWith(
+            compareBy<TraktListEntry> { it.rank == null }.thenBy { it.rank ?: 0 }
+        )
+        return PublicListsAnswer.Loaded(entries.map { it.toPublicTitle() })
+    }
+
+    /** Drops the directory and liked-list caches after a write changed them. */
+    private fun dropPublicListCaches() {
+        publicListCache.clear()
+    }
+
+    private data class TraktHalfRead(
+        val rows: List<TraktListEntry>,
+        val ok: Boolean,
+        val code: String? = null
+    )
+
+    private suspend fun readPublicListHalf(
+        token: String,
+        listRef: String,
+        type: String
+    ): TraktHalfRead {
+        val entries = mutableListOf<TraktListEntry>()
+        val seen = HashSet<String>()
+        var page = 1
+        var pageCount = 1
+        while (page <= pageCount) {
+            if (!guard.tryAcquire()) return TraktHalfRead(entries, entries.isNotEmpty(), "429")
+            val response = runCatchingCancellable {
+                api.listItemsById(listId = listRef, type = type, page = page)
+            }.getOrNull() ?: return TraktHalfRead(entries, entries.isNotEmpty(), "NETWORK")
+            noteRetryAfter(response)
+            if (!response.isSuccessful) {
+                return TraktHalfRead(entries, entries.isNotEmpty(), response.code().toString())
+            }
+            val rows = response.body().orEmpty()
+            var added = 0
+            rows.forEach { row ->
+                val media = row.movie ?: row.show ?: return@forEach
+                val isMovie = row.movie != null || row.type == "movie"
+                if (!seen.add(mediaKey(isMovie, media))) return@forEach
+                entries += TraktListEntry(media = media, isMovie = isMovie, rank = row.rank)
+                added += 1
+            }
+            pageCount = response.headers()["X-Pagination-Page-Count"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: if (rows.size >= TRAKT_PAGE_SIZE) page + 1 else page
+            if (rows.isEmpty() || added == 0) break
+            page += 1
+        }
+        return TraktHalfRead(entries, ok = true)
+    }
+
+    /**
+     * One bounded walk over a public-list read.
+     *
+     * [PublicListRules.MAX_PAGES] caps it: a directory is a browse surface, not
+     * an archive, and a server that ignored `page` would otherwise loop. A page
+     * that fails after earlier ones answered keeps them ("a shorter directory
+     * beats a blank one"); a first-page failure is the failure.
+     */
+    private suspend fun <T> readPublicPages(
+        call: suspend (page: Int) -> Response<List<T>>
+    ): PublicListsAnswer<List<T>> {
+        val out = mutableListOf<T>()
+        var page = 1
+        var pageCount = 1
+        while (page <= pageCount && page <= PublicListRules.MAX_PAGES) {
+            if (!guard.tryAcquire()) {
+                return if (out.isEmpty()) {
+                    PublicListsAnswer.Failed("429")
+                } else {
+                    PublicListsAnswer.Loaded(out)
+                }
+            }
+            val response = runCatchingCancellable { call(page) }.getOrNull()
+                ?: return if (out.isEmpty()) {
+                    PublicListsAnswer.Failed("NETWORK")
+                } else {
+                    PublicListsAnswer.Loaded(out)
+                }
+            noteRetryAfter(response)
+            if (!response.isSuccessful) {
+                return if (out.isEmpty()) {
+                    PublicListsAnswer.Failed(response.code().toString())
+                } else {
+                    PublicListsAnswer.Loaded(out)
+                }
+            }
+            val rows = response.body().orEmpty()
+            out += rows
+            pageCount = response.headers()["X-Pagination-Page-Count"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: if (rows.size >= PublicListRules.PAGE_SIZE) page + 1 else page
+            if (rows.isEmpty()) break
+            page += 1
+        }
+        return PublicListsAnswer.Loaded(out)
+    }
+
+    /**
+     * Turns a discovery/search/liked page into (list, rowLikeCount) pairs.
+     *
+     * The row shapes differ while the list does not, so the mapping is a
+     * parameter and the walk is shared - which is the whole reason the three
+     * reads above are three lambda arguments instead of three copies of a paged
+     * read.
+     */
+    private fun <T> PublicListsAnswer<List<T>>.mapRows(
+        extract: (T) -> Pair<TraktPublicList, Int?>?
+    ): PublicListsAnswer<List<Pair<TraktPublicList, Int?>>> = when (this) {
+        is PublicListsAnswer.Loaded ->
+            PublicListsAnswer.Loaded(value.mapNotNull(extract))
+
+        is PublicListsAnswer.Failed -> this
+        PublicListsAnswer.NotConnected -> PublicListsAnswer.NotConnected
+        is PublicListsAnswer.Blocked -> this
+    }
+
+    /**
+     * One wire list as the card the surface draws.
+     *
+     * A list with no addressable id is dropped: every later call (like, titles)
+     * is addressed by it, so a card that cannot be opened is worse than no card -
+     * the same rule [userLists] applies to the Library rail.
+     */
+    private fun TraktPublicList.toPublicCard(rowLikes: Int?): PublicListCard? {
+        val displayName = name?.takeIf { it.isNotBlank() } ?: return null
+        val ref = ids?.slug?.takeIf { it.isNotBlank() } ?: ids?.trakt?.toString() ?: return null
+        return PublicListCard(
+            vendor = PublicListVendor.TRAKT,
+            ref = ref,
+            name = displayName,
+            owner = user?.username?.takeIf { it.isNotBlank() }
+                ?: user?.name?.takeIf { it.isNotBlank() },
+            description = description?.takeIf { it.isNotBlank() },
+            itemCount = itemCount ?: 0,
+            likes = likes ?: rowLikes
+        )
+    }
+
+    private fun TraktListEntry.toPublicTitle(): PublicListTitle = PublicListTitle(
+        tmdbId = media.ids?.tmdb?.takeIf { it > 0 },
+        imdbId = media.ids?.imdb?.takeIf { it.startsWith("tt") },
+        isMovie = isMovie,
+        title = media.title?.takeIf { it.isNotBlank() },
+        year = media.year?.takeIf { it > 0 }
+    )
 
     /**
      * Adds one title to the account's watchlist — the mirror behind the

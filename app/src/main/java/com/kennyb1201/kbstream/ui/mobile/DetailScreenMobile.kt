@@ -139,6 +139,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.youtube.deathKind
 import com.kennyb1201.kbstream.data.youtube.googlevideoBytes
 import com.kennyb1201.kbstream.data.youtube.googlevideoItag
+import com.kennyb1201.kbstream.data.youtube.heroTrailerIdentityRefusal
 import com.kennyb1201.kbstream.data.youtube.heroTrailerRetryPlan
 import com.kennyb1201.kbstream.data.youtube.signedUrl
 import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
@@ -1022,12 +1023,47 @@ fun DetailScreenMobile(
          * capture has to keep the fact even when the request it describes never
          * reaches a resolve.
          */
-        fun requestTrailerRetry(positionMs: Long, durationMs: Long): Boolean {
+        fun requestTrailerRetry(
+            positionMs: Long,
+            durationMs: Long,
+            identity: Boolean = false
+        ): Boolean {
             val key = trailerKey ?: return false
             // The refusal path knows the duration; the ordinary one is told it
             // by the player's own clock (see onProgress).
             val length = if (durationMs > 0L) durationMs else trailerDurationMs
             val dead = TrailerPlayerLauncher.signingClient(key)
+            // The IDENTITY ladder's verdict first: a refused URL class is not an
+            // ordinary death, and its exhaustion is the one case that must BLOCK
+            // the video for the session (the TV hero's rule, which this owner
+            // did not follow - it merely stopped retrying, so a later re-arm
+            // re-signed the class that had just refused).
+            if (identity) {
+                val refusal = heroTrailerIdentityRefusal(
+                    deadClient = TrailerPlayerLauncher.cachedSigningClient(key),
+                    excludedClients = trailerExcludedClients,
+                    resumeAttempts = trailerResumeAttempts
+                )
+                if (refusal.exhausted) {
+                    trailerPendingRetry = null
+                    PoTokenTrace.recordTrailerDeath(
+                        videoId = key,
+                        client = dead,
+                        kind = PoTokenTrace.resolveKind(),
+                        positionMs = positionMs,
+                        durationMs = length,
+                        resume = "client " + (dead ?: "unknown") + " died"
+                    )
+                    TrailerPlayerLauncher.markIdentityBlocked(key)
+                    Log.w(
+                        TAG,
+                        "Trailer key=$key: identity ladder exhausted " +
+                            "(excluded=${refusal.excludedClients.sorted()} " +
+                            "attempts=$trailerResumeAttempts); blocked for this session"
+                    )
+                    return false
+                }
+            }
             val chunk = PoTokenTrace.chunkDeathFor(key)
             val source = trailerMountedSource
             val signedUrl = source?.signedUrl()
@@ -1057,7 +1093,7 @@ fun DetailScreenMobile(
             PoTokenTrace.recordTrailerDeath(
                 videoId = key,
                 client = dead,
-                kind = source?.deathKind(),
+                kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),
                 positionMs = positionMs,
                 durationMs = length,
                 resume = if (plan.verdict == HeroTrailerResumeVerdict.RESUME) {
@@ -1145,9 +1181,16 @@ fun DetailScreenMobile(
             // memory. A retry carries the exclusion set, which is also what
             // makes it bypass the cache - the cached URL may be exactly the
             // class that just died.
-            val source = TrailerPlayerLauncher
+            val resolved = TrailerPlayerLauncher
                 .resolvePlayableUrl(key, excludeClients = pending?.excludedClients ?: emptySet())
-                .getOrNull()
+            // Logged, not swallowed: a trailer that never mounts used to leave no
+            // trace on this page at all, while the fullscreen owners log the same
+            // failure (see DetailTrailerLaunch). Silent on screen, findable in a
+            // capture.
+            resolved.onFailure { error ->
+                Log.w(TAG, "Detail hero trailer key=$key failed to resolve", error)
+            }
+            val source = resolved.getOrNull()
             if (source != null) {
                 if (pending != null) {
                     // The retry's outcome, in the trace's closed vocabulary:
@@ -1486,8 +1529,11 @@ fun DetailScreenMobile(
                         // ladder - and answers whether a replacement was
                         // requested, exactly as the shared player asks its
                         // owner.
+                        // A refused identity walks the IDENTITY ladder, so its
+                        // exhaustion blocks the video and its death line names
+                        // the resolve's kind - the TV hero's rule, matched.
                         onTrailerRefused = { positionMs, durationMs ->
-                            requestTrailerRetry(positionMs, durationMs)
+                            requestTrailerRetry(positionMs, durationMs, identity = true)
                         },
                         onCloseTrailer = { stopHeroTrailer() },
                         onBack = { backDispatcher?.onBackPressed() },

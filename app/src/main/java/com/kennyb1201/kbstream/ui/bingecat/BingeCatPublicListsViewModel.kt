@@ -161,6 +161,27 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
 
     private var importJob: Job? = null
 
+    /**
+     * Which profile's screen the state describes; bumped by every switch.
+     *
+     * The session, the mapping and the kids ceiling are all per KBStream
+     * profile, so a read that started under the previous profile must not land on
+     * the new one - `probeTitles` would otherwise apply the NEW profile's ceiling
+     * to the OLD profile's rows. Cancelling is cooperative, so every read also
+     * checks this before publishing.
+     */
+    private var profileGeneration = 0
+
+    /**
+     * One counter per read surface, so a slower answer for the category the
+     * viewer just left cannot overwrite the one they opened - and a replaced
+     * search does not mark a live one as "still searching" by being dropped.
+     */
+    private var categoriesGeneration = 0
+    private var cardsGeneration = 0
+    private var searchGeneration = 0
+    private var titlesGeneration = 0
+
     init {
         observeProfileSwitches()
     }
@@ -180,6 +201,7 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
                     return@collect
                 }
                 importJob?.cancel()
+                profileGeneration++
                 val browsing = _uiState.value.browsing
                 _uiState.value = BingeCatPublicListsUiState(
                     browsing = browsing,
@@ -253,8 +275,14 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
             isLoadingCategories = cached == null,
             categoriesError = null
         )
+        val generation = ++categoriesGeneration
+        val profile = profileGeneration
         viewModelScope.launch {
-            when (val result = repository.publicCategories()) {
+            val result = repository.publicCategories()
+            if (generation != categoriesGeneration || profile != profileGeneration) {
+                return@launch
+            }
+            when (result) {
                 is BingeCatPublicBrowse.Loaded ->
                     _uiState.value = _uiState.value.copy(
                         categories = result.value,
@@ -320,8 +348,12 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
             cardsError = null,
             gate = null
         )
+        val generation = ++cardsGeneration
+        val profile = profileGeneration
         viewModelScope.launch {
-            when (val result = repository.publicListsInCategory(slug, subcategory)) {
+            val result = repository.publicListsInCategory(slug, subcategory)
+            if (generation != cardsGeneration || profile != profileGeneration) return@launch
+            when (result) {
                 is BingeCatPublicBrowse.Loaded ->
                     _uiState.value = _uiState.value.copy(
                         cards = result.value.mapNotNull { BingeCatPublicListRules.cardFromRow(it) },
@@ -378,9 +410,18 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = state.copy(gate = gate)
             return
         }
+        // The type the viewer submitted with, not whatever the field holds by
+        // the time the request is built.
+        val type = state.searchType
         _uiState.value = state.copy(isSearching = true, searchError = null)
+        val generation = ++searchGeneration
+        val profile = profileGeneration
         viewModelScope.launch {
-            when (val result = repository.searchPublicLists(query, _uiState.value.searchType)) {
+            val result = repository.searchPublicLists(query, type)
+            if (generation != searchGeneration || profile != profileGeneration) {
+                return@launch
+            }
+            when (result) {
                 is BingeCatPublicBrowse.Loaded ->
                     _uiState.value = _uiState.value.copy(
                         searchResults = result.value.mapNotNull {
@@ -420,8 +461,14 @@ class BingeCatPublicListsViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun probeTitles(card: BingeCatPublicListCard) {
         _uiState.value = _uiState.value.copy(titles = BingeCatTitlesState.Loading)
+        val generation = ++titlesGeneration
+        val profile = profileGeneration
         viewModelScope.launch {
-            when (val probe = repository.publicListTitles(card.importId)) {
+            val probe = repository.publicListTitles(card.importId)
+            if (generation != titlesGeneration || profile != profileGeneration) {
+                return@launch
+            }
+            when (probe) {
                 is BingeCatTitleProbe.Titles -> {
                     // The active profile's ceiling is the gate, exactly as it is
                     // for Library rows: a public list is BingeCat's, not a

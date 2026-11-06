@@ -246,6 +246,45 @@ internal fun heroTrailerRetryPlan(
 }
 
 /**
+ * A refusal's verdict for an inline owner, identity-shaped.
+ *
+ * The TV hero has always had its own ladder for a googlevideo 403 the classifier
+ * calls a refused identity ([heroTrailerResumeDecision]): a refusal is a property
+ * of the URL CLASS that signed the stream, so the exclusion set grows
+ * cumulatively until no class is left - and then the video is BLOCKED for the
+ * session. Both phone owners routed the same event through the ordinary retry
+ * plan instead, whose spent branch only declined to retry: the video stayed
+ * re-armable, and a later re-arm re-signed the exact class that had just refused.
+ *
+ * [exhausted] is the "call markIdentityBlocked" answer; [excludedClients] is what
+ * the replacement resolve must carry.
+ */
+internal data class HeroTrailerIdentityRefusal(
+    val exhausted: Boolean,
+    val excludedClients: Set<String>
+)
+
+internal fun heroTrailerIdentityRefusal(
+    deadClient: String?,
+    excludedClients: Set<String>,
+    resumeAttempts: Int,
+    allClientKeys: Set<String> = YouTubeClients.all.map { it.key }.toSet(),
+    cap: Int = MAX_HERO_TRAILER_RESUMES
+): HeroTrailerIdentityRefusal {
+    val decision = heroTrailerResumeDecision(
+        deadClient = deadClient,
+        excludedClients = excludedClients,
+        resumeAttempts = resumeAttempts,
+        allClientKeys = allClientKeys,
+        cap = cap
+    )
+    return HeroTrailerIdentityRefusal(
+        exhausted = decision.verdict == HeroTrailerResumeVerdict.POISON,
+        excludedClients = decision.nextExcludedClients
+    )
+}
+
+/**
  * Whether a replacement resolve that found NO source ends the video.
  *
  * Only when the ladder was actually walked: a first-attempt resolve failure with
@@ -253,6 +292,37 @@ internal fun heroTrailerRetryPlan(
  * and must leave the ordinary retry its chance, exactly as before. With a
  * non-empty exclusion, "no source from any remaining client" IS the ladder
  * running out, so the video is blocked rather than re-armable.
+ *
+ * And only when the resolve could ANSWER. "No remaining client has a usable
+ * URL" is a verdict about the clients; a transport failure (a timeout, a DNS
+ * failure, a dead socket) is a verdict about the network, and the two used to be
+ * the same answer here - so one blip during a resume resolve blocked that
+ * trailer for the rest of the session, skipped even by the foreground re-arm.
+ * [failure] is the resolve's own error, and an `IOException` anywhere in its
+ * cause chain means the network, not the clients.
  */
-internal fun heroTrailerResolveFailurePoisons(excludedClients: Set<String>): Boolean =
-    excludedClients.isNotEmpty()
+internal fun heroTrailerResolveFailurePoisons(
+    excludedClients: Set<String>,
+    failure: Throwable? = null
+): Boolean {
+    if (excludedClients.isEmpty()) return false
+    if (failure != null && failure.isTransportFailure()) return false
+    return true
+}
+
+/**
+ * Whether [this] is the network failing rather than the answer being "none".
+ *
+ * Both the resolver chain and OkHttp wrap what actually happened, so the chain
+ * is walked (bounded - a self-referencing cause must not hang a callback).
+ */
+internal fun Throwable.isTransportFailure(): Boolean {
+    var cause: Throwable? = this
+    var depth = 0
+    while (cause != null && depth < 8) {
+        if (cause is java.io.IOException) return true
+        cause = cause.cause
+        depth++
+    }
+    return false
+}

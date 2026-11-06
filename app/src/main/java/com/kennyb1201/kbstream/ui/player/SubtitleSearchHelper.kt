@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -131,16 +132,20 @@ internal object SubtitleSearchHelper {
         apiKey: String,
         base: String = BASE
     ): SubtitleDownload {
+        // Bodies are redacted before they are logged: the /download answer is a
+        // JSON object carrying a one-time DOWNLOAD LINK, and an error page can
+        // carry the same URL. Which body it was is what the line needs; its
+        // contents are not.
         val meta = request("POST", "$base/download", apiKey, """{"file_id":$fileId}""")
         if (meta.code !in 200..299) {
-            Log.w(TAG, "OpenSubtitles /download HTTP ${meta.code}: ${meta.body.take(200)}")
+            Log.w(TAG, "OpenSubtitles /download HTTP ${meta.code}: ${bodyForLog(meta.body)}")
             return SubtitleDownload.Failed("Subtitle download failed: " + failureReason(meta))
         }
         val link = runCatching { JSONObject(meta.body).optString("link") }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
         if (link == null) {
-            Log.w(TAG, "OpenSubtitles /download had no link: ${meta.body.take(200)}")
+            Log.w(TAG, "OpenSubtitles /download had no link: ${bodyForLog(meta.body)}")
             return SubtitleDownload.Failed("Subtitle download failed: no download link in the response")
         }
         val file = request("GET", link, apiKey)
@@ -149,11 +154,23 @@ internal object SubtitleSearchHelper {
             return SubtitleDownload.Failed("Subtitle download failed: " + failureReason(file))
         }
         if (!looksLikeSubtitle(file.body)) {
-            Log.w(TAG, "OpenSubtitles subtitle file was not a subtitle: ${file.body.take(200)}")
+            Log.w(
+                TAG,
+                "OpenSubtitles subtitle file was not a subtitle: ${bodyForLog(file.body)}"
+            )
             return SubtitleDownload.Failed("Subtitle download failed: the server did not return a subtitle")
         }
         return SubtitleDownload.Ready(file.body)
     }
+
+    /**
+     * A response body as a log line may carry it: bounded, and redacted.
+     *
+     * The bound keeps a page out of logcat; the redaction keeps the one-time
+     * download link (or a token fragment inside an error body) out of it too.
+     */
+    private fun bodyForLog(body: String): String =
+        Redaction.text(body.take(200))
 
     /**
      * A subtitle payload has to at least look like one. An HTML body is an error

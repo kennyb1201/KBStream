@@ -182,6 +182,14 @@ internal fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        // The public-lists browser carries its vendor as well as its return
+        // destination: both are part of what the screen was.
+        is Screen.PublicLists -> {
+            put("vendor", screen.vendor)
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
@@ -328,6 +336,13 @@ internal fun decodeScreen(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "bingecat" -> Screen.BingeCat(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            // The public-lists browser: the vendor is part of the route, so a
+            // restore reopens the surface the viewer was in. An unknown vendor
+            // string decodes to the default, which the screen then normalises.
+            "publicLists" -> Screen.PublicLists(
+                vendor = json.optString("vendor", "trakt"),
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "guide" -> Screen.Guide
@@ -524,6 +539,10 @@ internal val Screen.navDepth: Int
         is Screen.CatalogBuilder -> 2
         // Reached through Settings, so it slides forward like the builder.
         is Screen.Stats -> 2
+        // The public-lists browser is also reached through Settings (one row
+        // per vendor), so it slides in from the trailing edge for the same
+        // reason.
+        is Screen.PublicLists -> 2
         // Reached through the guide's header, one step into Live TV.
         is Screen.Sports -> 2
         is Screen.ProfileEdit,
@@ -546,6 +565,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Simkl -> "simkl"
     is Screen.Trakt -> "trakt"
     is Screen.BingeCat -> "bingecat"
+    is Screen.PublicLists -> "publicLists"
     is Screen.Guide -> "guide"
     is Screen.Sports -> "sports"
     is Screen.Library -> "library"

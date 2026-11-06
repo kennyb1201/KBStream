@@ -207,10 +207,17 @@ class LibraryScreenMobileContractTest {
     @Test
     fun `the personal-lists pane is a list, with a confirmed delete`() {
         val mobile = mobileLibrary()
+        // The count-and-source line is now built by the shared wording module,
+        // so the row
+        // and the TV's row (and the action dialogs) cannot drift apart - the
+        // saved community list's owner is added there, once.
+        val wording =
+            source("com/kennyb1201/kbstream/data/library/ListControlWording.kt")
         assertTrue(
-            "rows show their count and source",
-            mobile.contains("titles · ") &&
-                mobile.contains("val sourceLabel = list.locationLabel")
+            "rows show their count and source, from the wording both surfaces share",
+            mobile.contains("text = list.controlSummary") &&
+                wording.contains("fun summary(") &&
+                wording.contains("\"\$itemCount titles\"")
         )
         assertTrue(
             "only a list this device owns can be deleted",
@@ -220,7 +227,8 @@ class LibraryScreenMobileContractTest {
         assertTrue(
             "the press opens a confirmation, never the delete itself",
             mobile.contains("Dialog(onDismissRequest = { listPendingDelete = null })") &&
-                mobile.contains("Delete list?") &&
+                mobile.contains("title = list.removeConfirmTitle") &&
+                wording.contains("\"Delete list?\"") &&
                 mobile.contains("viewModel.deleteLocalList(list.id)")
         )
         assertTrue(

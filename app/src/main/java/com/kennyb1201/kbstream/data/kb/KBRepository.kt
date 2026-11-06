@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.kb
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -132,7 +133,10 @@ class KBRepository private constructor(context: Context) {
             runCatchingCancellable {
                 loadProfile(url, forceRefresh)
             }.onFailure { e ->
-                Log.e(TAG, "Profile load failed url=$url: ${e.message}")
+                // The URL is the USER'S: a profile/manifest URL can carry
+                // credentials in its path (Stremio-style config, Xtream
+                // user:pass), so it is logged the way every sibling logs one.
+                Log.e(TAG, "Profile load failed url=${Redaction.url(url)}: ${e.message}")
             }.getOrNull()
         }.flatten()
     }

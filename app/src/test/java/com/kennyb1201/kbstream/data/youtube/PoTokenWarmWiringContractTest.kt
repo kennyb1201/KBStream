@@ -163,6 +163,39 @@ class PoTokenWarmWiringContractTest {
     }
 
     @Test
+    fun `a cancelled mint does not leave the warm page streaming`() {
+        assertTrue(
+            "the cancellation path parks the page instead of returning it to the " +
+                "pool mid-play",
+            provider.contains("parkPage(page)")
+        )
+        val park = slice(provider, "private fun parkPage(page: WarmPage) {", "private suspend fun mintOn(")
+        assertTrue(
+            "which stops the load and tears the document down",
+            park.contains("page.view.stopLoading()") &&
+                park.contains("page.view.loadUrl(\"about:blank\")")
+        )
+        assertTrue(
+            "and the bridge's answer slot is swapped and read under a lock: report() " +
+                "runs on the WebView thread while reset()/await() run on the main one",
+            provider.contains("private val lock = Any()") &&
+                provider.contains("val slot = synchronized(lock) { result }") &&
+                provider.contains("synchronized(lock) { result = CompletableDeferred() }")
+        )
+    }
+
+    @Test
+    fun `the embed page cannot reach local files`() {
+        val page = slice(provider, "private fun createPage(): WarmPage? {", "internal fun seedVisitor")
+        assertTrue(
+            "not a behaviour fix - the page only loads the https embed - but the " +
+                "platform default allows file:// and content:// under this process",
+            page.contains("allowFileAccess = false") &&
+                page.contains("allowContentAccess = false")
+        )
+    }
+
+    @Test
     fun `the report carries the warm state without any new plumbing`() {
         assertTrue(
             "Diagnostics prints the trace's lines, which is how pot.warm reaches a capture",

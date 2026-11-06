@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.youtube
 import android.net.Uri
 import android.util.Log
 import androidx.media3.common.C
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -248,7 +249,15 @@ class YoutubeChunkedDataSourceFactory(
             }
             originalDataSpec = dataSpec
             originalUrlString = dataSpec.uri.toString()
-            Log.d(TAG, "Opening YT stream: host=$host url=${originalUrlString?.take(160)}")
+            // Redacted, not truncated: the first 160 characters of a signed
+            // googlevideo URL are `expire`, `ei`, `ip` and the start of the
+            // signature, and this codebase has a helper for exactly this line
+            // (see LiveChannelPrefetch).
+            Log.d(
+                TAG,
+                "Opening YT stream: host=$host " +
+                    "url=${Redaction.streamUrl(originalUrlString)?.take(160)}"
+            )
             currentChunkStart = dataSpec.position
             totalContentLength = dataSpec.length
             positionMode = false

@@ -271,6 +271,20 @@ sealed class Screen {
      */
     data class BingeCat(val returnTo: Screen = Home) : Screen()
 
+    /**
+     * The public-lists browser: Settings' "Trakt public lists" and "MDBList
+     * public lists" rows both land here, with [vendor] naming which one.
+     *
+     * One screen rather than two because the surface is identical and only the
+     * data leg differs (see PublicListsScreen). It carries its own return
+     * destination for the same reason [Simkl] does: Back must land on the
+     * Settings row that opened it.
+     */
+    data class PublicLists(
+        val vendor: String = "trakt",
+        val returnTo: Screen = Settings
+    ) : Screen()
+
     object Guide : Screen()
 
     /**
@@ -2588,6 +2602,14 @@ fun AppRoot(
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Settings) },
                 onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Settings) },
                 onOpenBingeCat = { screen = Screen.BingeCat(returnTo = Screen.Settings) },
+                // One browser, two vendors: the row names which account the
+                // surface reads with, and the screen takes it from the route.
+                onOpenPublicLists = { vendor ->
+                    screen = Screen.PublicLists(
+                        vendor = vendor,
+                        returnTo = Screen.Settings
+                    )
+                },
                 onOpenProfiles = {
                     // Real picker so the profile can be SWITCHED here — the
                     // old wiring jumped straight into the editor, which can
@@ -2782,6 +2804,29 @@ fun AppRoot(
         is Screen.Trakt -> {
             TraktConnectScreen(
                 onBack = { screen = stableBackDestination(current.returnTo) }
+            )
+        }
+
+        is Screen.PublicLists -> {
+            // The activity-scoped ViewModel, for the same reason the BingeCat
+            // browser's is: opening a title's Detail and coming back must
+            // return to the level the viewer left, and a save already reported
+            // must not be restarted by the trip.
+            com.kennyb1201.kbstream.ui.publiclists.PublicListsScreen(
+                vendor = com.kennyb1201.kbstream.data.publiclists.PublicListVendor
+                    .fromWire(current.vendor)
+                    ?: com.kennyb1201.kbstream.data.publiclists.PublicListVendor.TRAKT,
+                onBack = { screen = stableBackDestination(current.returnTo) },
+                onOpenTitle = { mediaType, id ->
+                    // The same Detail any Library or rail row opens, and Back
+                    // returns here (see Screen.Detail.returnTo).
+                    screen = Screen.Detail(
+                        type = mediaType,
+                        id = id,
+                        returnTo = current
+                    )
+                },
+                vm = viewModel()
             )
         }
 

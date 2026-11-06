@@ -107,4 +107,64 @@ class HeroTrailerResumeLadderTest {
             heroTrailerResolveFailurePoisons(setOf("android_vr"))
         )
     }
+
+    @Test
+    fun `a transport failure is not the ladder running out`() {
+        assertTrue(
+            "an answer is still an answer",
+            heroTrailerResolveFailurePoisons(
+                setOf("android_vr"),
+                IllegalStateException("all resolvers failed")
+            )
+        )
+        assertFalse(
+            "the network failing says nothing about the clients",
+            heroTrailerResolveFailurePoisons(
+                setOf("android_vr"),
+                java.net.SocketTimeoutException("timeout")
+            )
+        )
+        assertFalse(
+            "however deeply the chain wraps it",
+            heroTrailerResolveFailurePoisons(
+                setOf("android_vr"),
+                RuntimeException(java.io.IOException("connection reset"))
+            )
+        )
+        assertFalse(
+            "and a first attempt is ordinary whatever failed",
+            heroTrailerResolveFailurePoisons(
+                emptySet(),
+                IllegalStateException("no source")
+            )
+        )
+    }
+
+    @Test
+    fun `an identity refusal blocks only when no class is left`() {
+        val first = heroTrailerIdentityRefusal(
+            deadClient = "android_vr",
+            excludedClients = emptySet(),
+            resumeAttempts = 0,
+            allClientKeys = clients
+        )
+        assertFalse("one more class remains, so one more step", first.exhausted)
+        assertEquals(setOf("android_vr"), first.excludedClients)
+
+        val last = heroTrailerIdentityRefusal(
+            deadClient = "map",
+            excludedClients = clients - "map",
+            resumeAttempts = 0,
+            allClientKeys = clients
+        )
+        assertTrue("the set now covers every class", last.exhausted)
+
+        val capped = heroTrailerIdentityRefusal(
+            deadClient = null,
+            excludedClients = setOf("android_vr"),
+            resumeAttempts = MAX_HERO_TRAILER_RESUMES,
+            allClientKeys = clients
+        )
+        assertTrue("a null client relies on the cap, and the cap is spent", capped.exhausted)
+    }
 }

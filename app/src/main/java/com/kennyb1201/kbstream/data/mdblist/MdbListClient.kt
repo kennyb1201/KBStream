@@ -9,6 +9,13 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.publiclists.PublicListCard
+import com.kennyb1201.kbstream.data.publiclists.PublicListDirectory
+import com.kennyb1201.kbstream.data.publiclists.PublicListRules
+import com.kennyb1201.kbstream.data.publiclists.PublicListSaveOutcome
+import com.kennyb1201.kbstream.data.publiclists.PublicListTitle
+import com.kennyb1201.kbstream.data.publiclists.PublicListVendor
+import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -266,6 +273,12 @@ object MdbListClient {
     // is really back, instead of the retry storm the field log showed
     // (scrobble/start 429ing every few seconds).
     // ------------------------------------------------------------------
+    /** How long a public directory stays fresh (other people's lists change slowly). */
+    private const val PUBLIC_LISTS_TTL_MS = 30 * 60 * 1000L
+
+    /** One directory page; MDBList's own page size is what this spends on one read. */
+    private const val PUBLIC_LIST_LIMIT = 100
+
     private const val REQUEST_PREFS = "mdblist_request_budget"
     private const val KEY_REQUEST_DAY = "day"
     private const val KEY_REQUEST_COUNT = "count"
@@ -622,6 +635,24 @@ object MdbListClient {
     /** True when scrobbling/sync calls should be attempted. */
     fun isConfigured(context: Context): Boolean =
         apiKey(context).isNotBlank()
+
+    /**
+     * Whether this key's daily allowance is spent, asked BEFORE a write.
+     *
+     * The interceptor's own rule, read from the same per-key record (and the
+     * persisted counter behind it), so a surface can report the spent allowance
+     * - "no attempt, and diagnostics names the budget" (spec F4) - instead of
+     * issuing a request the budget will refuse.
+     */
+    fun isLocalBudgetSpent(context: Context): Boolean {
+        val key = apiKey(context)
+        if (key.isBlank()) return false
+        val tag = keyTag(key)
+        val budget = budgets.getOrPut(tag) { KeyBudget() }
+        ensureBudget(budget, tag)
+        if (budget.limitedUntilMs > System.currentTimeMillis()) return true
+        return budget.count.get() >= TOTAL_CEILING
+    }
 
     /**
      * Connection check for the Settings panel: GET /user answers the
@@ -2057,19 +2088,35 @@ object MdbListClient {
     ): List<MdbListEntry>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
-
-        val out = mutableListOf<MdbListEntry>()
-        var cursor: String? = null
-        var guard = 0
-        do {
-            val url = buildString {
+        return walkListItems(apiKey) { cursor ->
+            buildString {
                 append("$BASE/lists/$listId/items?apikey=$apiKey&limit=1000")
                 if (!cursor.isNullOrBlank()) {
                     append("&cursor=")
                     append(java.net.URLEncoder.encode(cursor, "UTF-8"))
                 }
             }
-            val body = getString(url) ?: return null
+        }
+    }
+
+    /**
+     * One list's items, following the cursor to the end.
+     *
+     * Shared by a personal list, a given public list and an official list,
+     * because all three answer the same body (`items` / `movies` / `shows`
+     * plus `pagination.next_cursor`) and only the URL differs. NULL means the
+     * walk did not finish - a page failed, a body did not parse, or the guard
+     * was hit with more cursor left - deliberately not "the pages so far".
+     */
+    private suspend fun walkListItems(
+        apiKey: String,
+        urlFor: (String?) -> String
+    ): List<MdbListEntry>? {
+        val out = mutableListOf<MdbListEntry>()
+        var cursor: String? = null
+        var guard = 0
+        do {
+            val body = getString(urlFor(cursor)) ?: return null
             val parsed = runCatching {
                 val root = JSONObject(body)
                 cursor = root.optJSONObject("pagination")
@@ -2391,5 +2438,354 @@ object MdbListClient {
             ?.let { into.add(it + suffix) }
         ids.optInt("tmdb", -1).takeIf { it > 0 }
             ?.let { into.add("tmdb:$it" + suffix) }
+    }
+
+    // ------------------------------------------------------------------
+    // Public list browsing (Settings → MDBList → Browse public lists)
+    //
+    // The browse half only. A saved list is a LIKED list, which Library reads
+    // beside the account's own lists, so it reaches Home only by the viewer
+    // pinning its Library row. No Home rail is created here.
+    //
+    // Quota is part of the design, not an afterthought: every one of these calls
+    // spends the account's daily allowance, so directories are cached, search
+    // fires only on a submitted query, and a spent allowance is a distinct
+    // answer ([PublicListsAnswer.Blocked]) rather than a retryable failure.
+    // ------------------------------------------------------------------
+
+    /** One directory's last read, for the screen to paint while it refetches. */
+    private data class CachedPublicLists(
+        val cards: List<PublicListCard>,
+        val atMs: Long
+    )
+
+    private val publicListCache =
+        java.util.concurrent.ConcurrentHashMap<String, CachedPublicLists>()
+
+    /** @see com.kennyb1201.kbstream.data.trakt.TraktRepository.cachedPublicLists */
+    fun cachedPublicLists(
+        context: Context,
+        directory: PublicListDirectory,
+        allowStale: Boolean = false
+    ): List<PublicListCard>? {
+        if (!isConfigured(context)) return null
+        val entry = publicListCache[publicCacheKey(context, directory.wire)] ?: return null
+        if (!allowStale && System.currentTimeMillis() - entry.atMs > PUBLIC_LISTS_TTL_MS) {
+            return null
+        }
+        return entry.cards
+    }
+
+    /** A cache key that carries the API key's tag: keys are per profile. */
+    private fun publicCacheKey(context: Context, tag: String): String =
+        "public:$tag:${keyTag(apiKey(context))}"
+
+    /**
+     * One directory: Top, Curated or Official.
+     *
+     * The three answer a bare array of list objects (official lists carry the
+     * same `id`/`name`/`items` fields plus a `slug`), so one parser serves all
+     * three. Stale-while-revalidate, like the Trakt leg: a fresh cache answers
+     * without spending a request, and a failure leaves the painted directory in
+     * place.
+     */
+    suspend fun publicLists(
+        context: Context,
+        directory: PublicListDirectory,
+        force: Boolean = false
+    ): PublicListsAnswer<List<PublicListCard>> {
+        if (!isConfigured(context)) return PublicListsAnswer.NotConnected
+        if (!force) cachedPublicLists(context, directory)?.let { return PublicListsAnswer.Loaded(it) }
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return PublicListsAnswer.NotConnected
+        val url = when (directory) {
+            PublicListDirectory.MDBLIST_TOP ->
+                "$BASE/lists/top?apikey=$apiKey&limit=$PUBLIC_LIST_LIMIT"
+
+            PublicListDirectory.MDBLIST_CURATED ->
+                "$BASE/lists/curated?apikey=$apiKey&limit=$PUBLIC_LIST_LIMIT"
+
+            PublicListDirectory.MDBLIST_OFFICIAL -> "$BASE/lists/official?apikey=$apiKey"
+
+            else -> return PublicListsAnswer.Failed("vendor")
+        }
+        val result = getBody(url)
+        failureOf(result)?.let { return it }
+        val official = directory == PublicListDirectory.MDBLIST_OFFICIAL
+        val cards = runCatching {
+            val arr = JSONArray(result.body.orEmpty())
+            (0 until arr.length()).mapNotNull { index ->
+                arr.optJSONObject(index)?.let { publicCardFromJson(it, official) }
+            }
+        }.getOrElse { return PublicListsAnswer.Failed("parse") }
+        publicListCache[publicCacheKey(context, directory.wire)] =
+            CachedPublicLists(cards, System.currentTimeMillis())
+        return PublicListsAnswer.Loaded(cards)
+    }
+
+    /**
+     * A search over public list NAMES (`GET /lists/search?query=`).
+     *
+     * Never cached: a new query is a new question, and each one is a request the
+     * allowance pays for - which is why the screen only calls this on a submit.
+     */
+    suspend fun searchPublicLists(
+        context: Context,
+        query: String
+    ): PublicListsAnswer<List<PublicListCard>> {
+        if (!isConfigured(context)) return PublicListsAnswer.NotConnected
+        val trimmed = query.trim()
+        if (!PublicListRules.searchEnabled(trimmed)) {
+            return PublicListsAnswer.Loaded(emptyList())
+        }
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return PublicListsAnswer.NotConnected
+        val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+        val result = getBody(
+            "$BASE/lists/search?apikey=$apiKey&query=$encoded&limit=$PUBLIC_LIST_LIMIT"
+        )
+        failureOf(result)?.let { return it }
+        val cards = runCatching {
+            val arr = JSONArray(result.body.orEmpty())
+            (0 until arr.length()).mapNotNull { index ->
+                arr.optJSONObject(index)?.let { publicCardFromJson(it, official = false) }
+            }
+        }.getOrElse { return PublicListsAnswer.Failed("parse") }
+        return PublicListsAnswer.Loaded(cards)
+    }
+
+    /**
+     * The account's liked lists - the save leg's read, and what Library draws
+     * beside the account's own lists.
+     *
+     * The body is `{lists: [...], pagination: {...}}` (not the bare array the
+     * directories return), so the two parsers stay separate.
+     */
+    suspend fun likedPublicLists(context: Context): PublicListsAnswer<List<PublicListCard>> {
+        if (!isConfigured(context)) return PublicListsAnswer.NotConnected
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return PublicListsAnswer.NotConnected
+        val result = getBody("$BASE/lists/liked?apikey=$apiKey&limit=$PUBLIC_LIST_LIMIT")
+        failureOf(result)?.let { return it }
+        val cards = runCatching {
+            val text = result.body.orEmpty().trim()
+            val arr = if (text.startsWith("[")) {
+                JSONArray(text)
+            } else {
+                JSONObject(text).optJSONArray("lists") ?: JSONArray()
+            }
+            (0 until arr.length()).mapNotNull { index ->
+                arr.optJSONObject(index)?.let { row ->
+                    // `liked` is MDBList's own flag, so it is set here rather than
+                    // assumed: this read IS the liked set.
+                    publicCardFromJson(row, official = false)?.copy(liked = true)
+                }
+            }
+        }.getOrElse { return PublicListsAnswer.Failed("parse") }
+        return PublicListsAnswer.Loaded(cards)
+    }
+
+    /**
+     * Saves a public list by LIKING it (spec F4's primary leg, confirmed by
+     * MDBList's API definition: `PUT /lists/{listid}/like` sets the liked state,
+     * `DELETE` clears it, and the 403 body names `liked_list_limit_reached` when
+     * the account is at its tier's cap).
+     */
+    suspend fun likePublicList(
+        context: Context,
+        card: PublicListCard
+    ): PublicListSaveOutcome {
+        if (!isConfigured(context)) return PublicListSaveOutcome.NotConnected
+        if (card.liked == true) return PublicListSaveOutcome.AlreadySaved
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return PublicListSaveOutcome.NotConnected
+        val id = card.ref.toIntOrNull() ?: return PublicListSaveOutcome.Failed("ref")
+        return writeLikeState(
+            url = "$BASE/lists/$id/like?apikey=$apiKey",
+            liked = true,
+            listId = id
+        )
+    }
+
+    /** Removes a like - the Library rail's delete for a liked list. */
+    suspend fun unlikePublicList(context: Context, card: PublicListCard): Boolean {
+        if (!isConfigured(context)) return false
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return false
+        val id = card.ref.toIntOrNull() ?: return false
+        return writeLikeState(
+            url = "$BASE/lists/$id/like?apikey=$apiKey",
+            liked = false,
+            listId = id
+        ) == PublicListSaveOutcome.Saved
+    }
+
+    /**
+     * The one write behind like and unlike.
+     *
+     * Tagged [WRITE_TAG] for the budget's sake: a save is a state change, so it
+     * must draw on the write ceiling rather than being refused because the
+     * smaller read budget is gone (the same rule the list creates follow).
+     */
+    private suspend fun writeLikeState(
+        url: String,
+        liked: Boolean,
+        listId: Int
+    ): PublicListSaveOutcome = withContext(Dispatchers.IO) {
+        runCatching {
+            val builder = Request.Builder().url(url).tag(WRITE_TAG)
+            val request = if (liked) {
+                builder.put("{}".toRequestBody("application/json".toMediaType())).build()
+            } else {
+                builder.delete().build()
+            }
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    // The liked set changed, so every cached directory's `liked`
+                    // flag is now a guess: drop them all rather than one.
+                    publicListCache.clear()
+                    PublicListSaveOutcome.Saved
+                } else {
+                    val body = response.body?.string().orEmpty()
+                    val code = runCatching {
+                        JSONObject(body).optString("code")
+                    }.getOrNull()
+                    Log.w(TAG, "lists/$listId like=$liked failed code=${response.code} ($code)")
+                    when {
+                        code == "liked_list_limit_reached" -> PublicListSaveOutcome.Refused(
+                            PublicListRules.likedLimitText(PublicListVendor.MDBLIST)
+                        )
+
+                        isLocalBudgetBlock(response.code, response.message) ->
+                            PublicListSaveOutcome.Refused(
+                                PublicListRules.allowanceText(PublicListVendor.MDBLIST)
+                            )
+
+                        response.code == 403 -> PublicListSaveOutcome.Refused(
+                            PublicListRules.failureText(PublicListVendor.MDBLIST, "403")
+                        )
+
+                        else -> PublicListSaveOutcome.Failed(response.code.toString())
+                    }
+                }
+            }
+        }.getOrElse { PublicListSaveOutcome.Failed("NETWORK") }
+    }
+
+    /**
+     * One public list's titles, readable BEFORE it is saved: `/lists/{listid}/
+     * items` reads any list id, and an official list's items are served under
+     * its slug route instead.
+     */
+    suspend fun publicListTitles(
+        context: Context,
+        card: PublicListCard
+    ): PublicListsAnswer<List<PublicListTitle>> {
+        if (!isConfigured(context)) return PublicListsAnswer.NotConnected
+        val apiKey = apiKey(context)
+        if (apiKey.isBlank()) return PublicListsAnswer.NotConnected
+        val entries: List<MdbListEntry>? = if (card.official && !card.officialSlug.isNullOrBlank()) {
+            walkListItems(apiKey) { cursor ->
+                buildString {
+                    append("$BASE/lists/official/${card.officialSlug}/items")
+                    append("?apikey=$apiKey&limit=1000")
+                    if (!cursor.isNullOrBlank()) {
+                        append("&cursor=")
+                        append(java.net.URLEncoder.encode(cursor, "UTF-8"))
+                    }
+                }
+            }
+        } else {
+            val id = card.ref.toIntOrNull() ?: return PublicListsAnswer.Failed("ref")
+            getListItems(context, id)
+        }
+        if (entries == null) return PublicListsAnswer.Failed("NETWORK")
+        return PublicListsAnswer.Loaded(
+            entries.map { entry ->
+                PublicListTitle(
+                    tmdbId = entry.tmdbId?.takeIf { it > 0 },
+                    imdbId = entry.imdbId?.takeIf { it.startsWith("tt") },
+                    isMovie = !entry.mediaType.equals("series", true),
+                    title = entry.title?.takeIf { it.isNotBlank() },
+                    year = entry.year?.takeIf { it > 0 }
+                )
+            }
+        )
+    }
+
+    /** Drops every cached directory (after this account's liked set changed). */
+    fun invalidatePublicLists() {
+        publicListCache.clear()
+    }
+
+    /**
+     * One list object as the surface's card.
+     *
+     * `ListSerializerModel` and `OfficialList` share the fields this needs
+     * (`id`, `name`, `user_name`, `description`, `items`), so one parser reads
+     * both; `likes` and `slug` are the two that differ. A row with no usable id
+     * is dropped - every later call is addressed by it.
+     */
+    private fun publicCardFromJson(obj: JSONObject, official: Boolean): PublicListCard? {
+        val id = obj.optInt("id", -1)
+        val name = obj.optString("name", "").trim()
+        if (id <= 0 || name.isEmpty()) return null
+        val owner = obj.optString("user_name", "")
+            .takeIf { it.isNotBlank() && !it.equals("null", true) }
+        val description = obj.optString("description", "")
+            .takeIf { it.isNotBlank() && !it.equals("null", true) }
+        val slug = obj.optString("slug", "").takeIf { it.isNotBlank() }
+        return PublicListCard(
+            vendor = PublicListVendor.MDBLIST,
+            ref = id.toString(),
+            name = name,
+            owner = owner,
+            description = description,
+            itemCount = obj.optInt("items", 0).coerceAtLeast(0),
+            likes = if (obj.has("likes") && !obj.isNull("likes")) {
+                obj.optInt("likes", 0)
+            } else {
+                null
+            },
+            official = official,
+            officialSlug = slug.takeIf { official },
+            liked = if (obj.has("liked") && !obj.isNull("liked")) {
+                obj.optBoolean("liked", false)
+            } else {
+                null
+            }
+        )
+    }
+
+    /** One GET with its status code, for the reads that must tell 429 from 500. */
+    private class MdbBody(val body: String?, val code: Int, val message: String)
+
+    private suspend fun getBody(url: String): MdbBody = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "GET ${url.substringBefore('?')} failed code=${response.code}")
+                    MdbBody(null, response.code, response.message)
+                } else {
+                    MdbBody(response.body?.string(), response.code, response.message)
+                }
+            }
+        }.getOrElse { error -> MdbBody(null, 0, error.message.orEmpty()) }
+    }
+
+    /**
+     * A failed read as the surface's answer, or null when the body arrived.
+     *
+     * The local budget block is singled out: it is this app refusing to spend an
+     * allowance that is gone, not a transient error, so it must not be retried
+     * and it says so in words the viewer can act on.
+     */
+    private fun failureOf(result: MdbBody): PublicListsAnswer<Nothing>? {
+        if (result.body != null) return null
+        return if (isLocalBudgetBlock(result.code, result.message)) {
+            PublicListsAnswer.Blocked(PublicListRules.allowanceText(PublicListVendor.MDBLIST))
+        } else {
+            PublicListsAnswer.Failed(if (result.code > 0) result.code.toString() else "NETWORK")
+        }
     }
 }

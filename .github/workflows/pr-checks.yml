@@ -79,8 +79,15 @@ jobs:
       - name: Fetch MPV engine AAR
         run: bash scripts/fetch_mpv_aar.sh
 
-      - name: Lint, Android Lint and unit tests
-        run: ./gradlew ktlintCheck lintDebug testDebugUnitTest --console=plain --no-daemon
+      # `lintRelease` as well as `lintDebug`: the release variant is the one that
+      # ships, and lint's findings are not identical between variants (the
+      # release-only `lintVitalRelease` that assembleRelease runs is the FATAL
+      # subset alone, so everything below fatal had no gate at all). This is the
+      # PR gate on purpose - the tagged release build keeps its current length.
+      - name: Lint, Android Lint (debug + release) and unit tests
+        run: >-
+          ./gradlew ktlintCheck lintDebug lintRelease testDebugUnitTest
+          --console=plain --no-daemon
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 

@@ -50,6 +50,45 @@ class DetailScreenMobileContractTest {
         source("com/kennyb1201/kbstream/ui/detail/DetailTrailerLaunch.kt")
 
     @Test
+    fun `a refused identity walks the identity ladder, not the ordinary retry`() {
+        val detail = mobileDetail()
+        assertTrue(
+            "the refusal asks the identity-shaped planner first",
+            detail.contains("val refusal = heroTrailerIdentityRefusal(") &&
+                detail.contains("if (refusal.exhausted) {")
+        )
+        assertTrue(
+            "and an exhausted ladder BLOCKS the video for the session, so a later " +
+                "re-arm cannot re-sign the class that just refused",
+            detail.contains("TrailerPlayerLauncher.markIdentityBlocked(key)")
+        )
+        assertTrue(
+            "the refusal is routed as an identity death, not an ordinary one",
+            detail.contains(
+                "onTrailerRefused = { positionMs, durationMs -> " +
+                    "requestTrailerRetry(positionMs, durationMs, identity = true) }"
+            )
+        )
+        assertTrue(
+            "and its death line uses the resolve kind the TV hero records, not the " +
+                "dead source's",
+            detail.contains(
+                "kind = if (identity) PoTokenTrace.resolveKind() else source?.deathKind(),"
+            )
+        )
+    }
+
+    @Test
+    fun `an inline trailer that never resolves still leaves a trace`() {
+        assertTrue(
+            "the phone's hero used to swallow the failure entirely",
+            mobileDetail().contains(
+                "Log.w(TAG, \"Detail hero trailer key=\$key failed to resolve\", error)"
+            )
+        )
+    }
+
+    @Test
     fun `detail dispatches on the form factor at its entry point`() {
         val detail = detailScreen()
         val dispatch = detail.indexOf("if (!FormFactor.isTv)")

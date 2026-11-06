@@ -128,9 +128,17 @@ object LibraryHomeRailReconcile {
                 // revalidation: only a snapshot this pass actually fetched may
                 // prune, or a half-hour-old cache missing a list created on
                 // another device would delete a live rail on this one.
+                //
+                // And only when the LISTS leg answered: a refresh stamps the
+                // snapshot even when half of it failed, and this is the caller
+                // that WRITES what it decides - `reconcilePins` persists the
+                // pruned set and enqueues it to the account, so one failed lists
+                // read here would delete every BingeCat rail on every device.
                 val readAt = System.currentTimeMillis()
                 val snapshot = runCatchingCancellable { bingecat.snapshot() }.getOrNull()
-                if (snapshot != null && snapshot.refreshedAtMs >= readAt) {
+                if (snapshot != null && snapshot.listsComplete &&
+                    snapshot.refreshedAtMs >= readAt
+                ) {
                     live[LibrarySource.BINGECAT_LIST.name] =
                         snapshot.lists.mapIndexedNotNullTo(mutableSetOf()) { index, list ->
                             list.name.takeIf { it.isNotBlank() }?.let { name ->

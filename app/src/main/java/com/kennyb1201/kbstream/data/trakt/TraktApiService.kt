@@ -273,6 +273,83 @@ interface TraktApiService {
         @Query("page") page: Int = 1
     ): Response<List<TraktListItem>>
 
+    // -------------------------------------------------------------------
+    // Public list browsing (Settings → Trakt → Browse public lists)
+    // -------------------------------------------------------------------
+
+    /**
+     * `GET /lists/popular` - the long-term popular public lists.
+     *
+     * OAuth is optional on Trakt's side but this app always sends it: the read
+     * is per-account-language and, more importantly, one token path means the
+     * browse surface's "am I connected?" gate and its requests agree.
+     *
+     * Trakt returns page-sized rows and names the page count in
+     * `X-Pagination-Page-Count`; the repository walks a bounded number of them
+     * (see [com.kennyb1201.kbstream.data.publiclists.PublicListRules.MAX_PAGES]).
+     */
+    @GET("lists/popular")
+    suspend fun popularLists(
+        @Header("Authorization") authorization: String,
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListDiscoveryRow>>
+
+    /** `GET /lists/trending` - lists by current activity (same row shape). */
+    @GET("lists/trending")
+    suspend fun trendingLists(
+        @Header("Authorization") authorization: String,
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListDiscoveryRow>>
+
+    /**
+     * `GET /search/list` - a text search over public list NAMES.
+     *
+     * `{type}` is Trakt's search type, `list` here; the query never reaches
+     * titles, which is spec F3's rule as much as the endpoint's.
+     */
+    @GET("search/{type}")
+    suspend fun searchByType(
+        @Header("Authorization") authorization: String,
+        @Path("type") type: String,
+        @Query("query") query: String,
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktListSearchRow>>
+
+    /**
+     * `GET /users/{id}/likes/{type}` with `type=lists` - the lists this account
+     * has liked, i.e. what a save puts on the Library rail.
+     */
+    @GET("users/{user}/likes/{type}")
+    suspend fun likedLists(
+        @Header("Authorization") authorization: String,
+        @Path("user") user: String = "me",
+        @Path("type") type: String = "lists",
+        @Query("limit") limit: Int = 100,
+        @Query("page") page: Int = 1
+    ): Response<List<TraktLikedListRow>>
+
+    /**
+     * `POST /lists/{id}/like` - the save leg (spec F4, confirmed by docs).
+     *
+     * Answers 204 with no body, and is idempotent: one like per list per user,
+     * so a repeated save is not an error.
+     */
+    @POST("lists/{id}/like")
+    suspend fun likeList(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String
+    ): Response<Unit>
+
+    /** `DELETE /lists/{id}/like` - the un-save leg, which removes the row. */
+    @DELETE("lists/{id}/like")
+    suspend fun unlikeList(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String
+    ): Response<Unit>
+
     /** Resolves a TMDB id to the Trakt entry (used by the comments read). */
     @GET("search/{idType}/{id}")
     suspend fun searchById(

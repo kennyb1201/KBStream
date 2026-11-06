@@ -52,6 +52,29 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var codeJob: Job? = null
 
+    /**
+     * The revoke in flight, so a profile switch can abandon it.
+     *
+     * The repository pins its own steps to the profile the call started on, and
+     * this is the other half: a disconnect for a profile the viewer has left has
+     * no outcome to report, and its answer must not land on the incoming one.
+     */
+    private var disconnectJob: Job? = null
+
+    /** The picker's fetch, cancelled on a switch for the same reason. */
+    private var profilesJob: Job? = null
+
+    /**
+     * Which profile's screen the state is describing.
+     *
+     * Bumped by every switch. A read that started under the previous profile
+     * checks it before publishing: cancelling the job is cooperative, and a
+     * fetch that has already returned must not write its rows into the screen the
+     * viewer is now looking at (a mixed picker state files a mapping against the
+     * wrong BingeCat account).
+     */
+    private var profileGeneration = 0
+
     private fun initialState(): BingeCatUiState {
         val connected = repository.hasToken()
         val mappedId = if (connected) repository.mappedProfileId() else null
@@ -106,6 +129,9 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 stopPolling()
                 codeJob?.cancel()
+                disconnectJob?.cancel()
+                profilesJob?.cancel()
+                profileGeneration++
                 _uiState.value = initialState()
             }
         }
@@ -370,8 +396,13 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
     fun loadProfiles() {
         if (!repository.hasToken()) return
         _uiState.value = _uiState.value.copy(isLoadingProfiles = true, profilesError = null)
-        viewModelScope.launch {
+        profilesJob?.cancel()
+        val generation = profileGeneration
+        profilesJob = viewModelScope.launch {
             val profiles = repository.profiles()
+            // A switch after the fetch started: the list (and the mapping read
+            // beside it) belong to the profile that is now gone.
+            if (generation != profileGeneration) return@launch
             // The fetch is also the mapping's validation (spec F3): a successful
             // listing that omits the mapped id has just unmapped this profile,
             // and the screen has to say so (F2's prompt) instead of keeping a
@@ -417,8 +448,14 @@ class BingeCatViewModel(app: Application) : AndroidViewModel(app) {
         stopPolling()
         codeJob?.cancel()
         _uiState.value = _uiState.value.copy(isDisconnecting = true, errorMessage = null)
-        viewModelScope.launch {
+        disconnectJob?.cancel()
+        val generation = profileGeneration
+        disconnectJob = viewModelScope.launch {
             val revoked = repository.disconnect()
+            // The switch this disconnect was abandoned for: its own state was
+            // reset by the observer, and a result for the profile left behind
+            // must not be announced on the incoming one.
+            if (generation != profileGeneration) return@launch
             _uiState.value = initialState().copy(
                 isDisconnecting = false,
                 statusMessage = if (revoked) {

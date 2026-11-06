@@ -544,6 +544,12 @@ internal class WebViewPoTokenMinter(
                 val minted = try {
                     mintOn(page, videoId, visitorData)
                 } catch (e: CancellationException) {
+                    // A cancelled mint (the resolve that asked gave up) used to
+                    // leave the warm page loaded on the embed: an offscreen
+                    // WebView still playing a muted video until the next mint
+                    // re-navigated it. The page is kept - the process stays
+                    // warm - but its document is torn down.
+                    parkPage(page)
                     throw e
                 } catch (error: Throwable) {
                     // A page that threw is not a page worth keeping: drop it so
@@ -615,6 +621,12 @@ internal class WebViewPoTokenMinter(
         with(webView.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
+            // Hardening, not a fix: the page only ever loads the https embed, so
+            // the platform defaults never come into play - but a page that could
+            // reach file:// or a content:// URI by navigation would be reading
+            // local storage under this process's identity.
+            allowFileAccess = false
+            allowContentAccess = false
             // Muted autoplay has to be allowed for the page's player to make the
             // media requests that carry `pot`; there is no user to tap anything.
             mediaPlaybackRequiresUserGesture = false
@@ -646,6 +658,19 @@ internal class WebViewPoTokenMinter(
             .onFailure {
                 Log.w(TAG, "PO token mint could not seed the visitor cookie")
             }
+    }
+
+    /**
+     * Stops whatever the page is doing and leaves it on a blank document.
+     *
+     * `stopLoading` alone leaves a media element that has already started
+     * playing, and `about:blank` navigation is what tears the document (and the
+     * player with it) down. Best-effort: a WebView already destroyed must not
+     * turn a cancellation into a crash.
+     */
+    private fun parkPage(page: WarmPage) {
+        runCatching { page.view.stopLoading() }
+        runCatching { page.view.loadUrl("about:blank") }
     }
 
     private suspend fun mintOn(
@@ -802,14 +827,22 @@ internal class PoTokenJsBridge {
         const val NAME = "KBTokenBridge"
     }
 
+    /**
+     * The answer slot, guarded because two threads meet on it: [report] runs on
+     * the WebView thread and [reset]/[await] on the main one. A plain `var` was
+     * a data race on the swap - a `report()` that read the field mid-assignment
+     * could see neither deferral reliably.
+     */
+    private val lock = Any()
     private var result = CompletableDeferred<String?>()
 
     @JavascriptInterface
     fun report(json: String) {
-        result.complete(json)
+        val slot = synchronized(lock) { result }
+        slot.complete(json)
     }
 
-    suspend fun await(): String? = result.await()
+    suspend fun await(): String? = synchronized(lock) { result }.await()
 
     /**
      * Ready for the next navigation. The bridge outlives one mint on a warm page
@@ -818,6 +851,6 @@ internal class PoTokenJsBridge {
      * completes a deferred nobody is awaiting.
      */
     fun reset() {
-        result = CompletableDeferred()
+        synchronized(lock) { result = CompletableDeferred() }
     }
 }
