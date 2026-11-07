@@ -57,7 +57,7 @@ class PickerAdapter(
     companion object {
         /**
          * Chip metrics lifted from the Compose StreamBadgeChip/StreamBadgeRow
-         * (16dp art, 22dp chip, 8dp corners = KBShapeSmall, 4dp gap, 11sp Oswald
+         * (16dp art, 22dp chip, 8dp corners = KBShapeSmall, 4dp gap, 11sp Inter
          * Medium label). The player strip and the streams picker show the same
          * badges one screen apart, so both rows have to measure the same.
          */
@@ -113,7 +113,7 @@ class PickerAdapter(
             val hPad = (3 * density).toInt()
             val vPad = (2 * density).toInt()
             val labelTypeface = runCatching {
-                ResourcesCompat.getFont(context, R.font.oswald_medium)
+                ResourcesCompat.getFont(context, R.font.inter_medium)
             }.getOrNull()
 
             /** Same label every Compose chip falls back to: the badge's own name. */

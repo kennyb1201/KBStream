@@ -38,7 +38,7 @@ internal class PillPanelUi(private val context: Context) {
         TextView(context).apply {
             setText(text)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-            runCatching { typeface = ResourcesCompat.getFont(context, R.font.oswald_medium) }
+            runCatching { typeface = ResourcesCompat.getFont(context, R.font.inter_medium) }
             setTextColor(ContextCompat.getColor(context, R.color.kb_text_lo))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -49,7 +49,7 @@ internal class PillPanelUi(private val context: Context) {
     fun pill(text: String): TextView = TextView(context).apply {
         setText(text)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        runCatching { typeface = ResourcesCompat.getFont(context, R.font.oswald_medium) }
+        runCatching { typeface = ResourcesCompat.getFont(context, R.font.inter_medium) }
         setPadding(dp(12), dp(6), dp(12), dp(6))
         isFocusable = true
         isFocusableInTouchMode = true
@@ -147,7 +147,7 @@ internal class PillPanelUi(private val context: Context) {
         }
         val value = TextView(context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            runCatching { typeface = ResourcesCompat.getFont(context, R.font.oswald_medium) }
+            runCatching { typeface = ResourcesCompat.getFont(context, R.font.inter_medium) }
             setTextColor(ContextCompat.getColor(context, R.color.kb_text_hi))
             gravity = android.view.Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(

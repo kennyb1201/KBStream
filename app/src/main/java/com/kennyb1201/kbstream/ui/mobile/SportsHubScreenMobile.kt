@@ -104,7 +104,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 
 /*
  * The sports hub, for a finger.
@@ -1118,7 +1118,7 @@ private fun TeamRowMobile(game: SportsGame, team: SportsTeam, favorite: Boolean)
         Text(
             text = team.score?.takeIf { it.isNotBlank() } ?: "—",
             style = MaterialTheme.typography.headlineSmall,
-            fontFamily = OswaldFamily,
+            fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             color = scoreColor(game, team),
             textAlign = TextAlign.End
@@ -1427,7 +1427,7 @@ private fun LeaderboardMobile(leaders: List<Leader>) {
                 Text(
                     text = leader.score,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     color = if (index == 0) KBAccent else KBTextLo,
                     textAlign = TextAlign.End
@@ -1677,7 +1677,7 @@ private fun StandingRowMobile(
                         else -> "${entry.wins}-${entry.losses}"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     color = KBTextHi
                 )
@@ -1918,7 +1918,7 @@ private fun DetailHeaderMobile(game: SportsGame) {
         Text(
             text = SportsDetailRules.scoreLine(game),
             style = MaterialTheme.typography.headlineMedium,
-            fontFamily = OswaldFamily,
+            fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             color = KBTextHi,
             textAlign = TextAlign.Center,

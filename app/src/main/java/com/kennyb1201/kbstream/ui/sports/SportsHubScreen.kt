@@ -139,7 +139,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 import kotlin.math.abs
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
@@ -195,7 +195,7 @@ private const val HUB_ENTRY_FOCUS_ATTEMPTS = 12
  * pressable, the theme's own surfaces and type scale, the guide's chip idiom
  * for the tab row - because the hub lives INSIDE Live TV and a screen with its
  * own visual language would read as a different app bolted on. What is new is
- * the content: team marks at a size you can see, scores set in Oswald, and a
+ * the content: team marks at a size you can see, scores set in Inter, and a
  * single line that says when it is on.
  *
  * Playback is not this screen's business. A card hands the feeds the playlist
@@ -2300,7 +2300,7 @@ private const val RESERVED_SITUATION_SAMPLE = "3rd & 7"
  *
  * Measured rather than written down as a dp constant, deliberately. The theme
  * defines every type slot and only the body styles set a lineHeight (see
- * KBStreamTypography), so the score row's height is whatever Oswald's own font
+ * KBStreamTypography), so the score row's height is whatever Inter's own font
  * metrics give 28sp at the viewer's font scale - there IS no constant to write.
  * A number written down would be right at one font scale and wrong at the next,
  * and wrong in the way that matters here: shorter than the score that lands in
@@ -2350,7 +2350,7 @@ private fun ScoreRow(game: SportsGame, reserveSlot: Boolean = false) {
     if (away == null && home == null && !reserveSlot) return
     val live = game.state == GameState.LIVE
     // The slot, at the height the score will occupy when it lands. Measured in
-    // the SAME style and weight [ScoreText] draws with below, because Oswald's
+    // the SAME style and weight [ScoreText] draws with below, because Inter's
     // Bold and SemiBold do not share metrics and the live score is the bold one.
     val slotHeight = rememberRowSlotHeight(
         style = MaterialTheme.typography.headlineLarge,
@@ -2447,7 +2447,7 @@ private fun ScoreText(
     Text(
         text = score.orEmpty(),
         style = MaterialTheme.typography.headlineLarge,
-        fontFamily = OswaldFamily,
+        fontFamily = InterFamily,
         fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold,
         // A colour flash, not a size one: the number swells in accent and
         // settles back to its own colour. Scaling text in a fixed row would
@@ -2956,7 +2956,7 @@ private fun Leaderboard(leaders: List<Leader>) {
                 Text(
                     text = leader.score,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     color = if (index == 0) KBAccent else KBTextLo,
                     textAlign = TextAlign.End
@@ -3566,7 +3566,7 @@ private fun StandingsStat(value: String) {
     Text(
         text = value,
         style = MaterialTheme.typography.bodySmall,
-        fontFamily = OswaldFamily,
+        fontFamily = InterFamily,
         color = KBTextHi,
         textAlign = TextAlign.End,
         maxLines = 1,
@@ -4075,7 +4075,7 @@ private fun GameDetailSheet(
                 Text(
                     text = SportsDetailRules.scoreLine(game),
                     style = MaterialTheme.typography.headlineMedium,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     color = KBTextHi,
                     textAlign = TextAlign.Center,

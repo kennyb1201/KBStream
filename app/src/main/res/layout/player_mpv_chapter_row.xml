@@ -20,7 +20,7 @@
         android:background="@drawable/pill_chip_bg"
         android:focusable="true"
         android:focusableInTouchMode="true"
-        android:fontFamily="@font/oswald_semibold"
+        android:fontFamily="@font/inter_semibold"
         android:paddingHorizontal="14dp"
         android:paddingVertical="6dp"
         android:text="PREV"
@@ -36,7 +36,7 @@
         android:layout_marginEnd="12dp"
         android:layout_weight="1"
         android:ellipsize="end"
-        android:fontFamily="@font/oswald_medium"
+        android:fontFamily="@font/inter_medium"
         android:maxLines="1"
         android:textColor="@color/kb_accent"
         android:textSize="12sp" />
@@ -44,7 +44,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:fontFamily="@font/oswald_medium"
+        android:fontFamily="@font/inter_medium"
         android:text="CHAPTERS &#183; MPV"
         android:textColor="@color/kb_text_lo"
         android:textSize="10sp" />
@@ -57,7 +57,7 @@
         android:background="@drawable/pill_chip_bg"
         android:focusable="true"
         android:focusableInTouchMode="true"
-        android:fontFamily="@font/oswald_semibold"
+        android:fontFamily="@font/inter_semibold"
         android:paddingHorizontal="14dp"
         android:paddingVertical="6dp"
         android:text="NEXT"

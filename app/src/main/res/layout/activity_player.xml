@@ -105,7 +105,7 @@
             android:paddingStart="64dp"
             android:paddingEnd="64dp"
             android:gravity="center"
-            android:fontFamily="@font/oswald_semibold"
+            android:fontFamily="@font/inter_semibold"
             android:textColor="@color/kb_text_hi"
             android:textSize="26sp"
             android:maxLines="2"
@@ -128,7 +128,7 @@
         android:textColor="@android:color/white"
         android:textSize="12sp"
         android:textStyle="bold"
-        android:fontFamily="@font/oswald_medium"
+        android:fontFamily="@font/inter_medium"
         android:visibility="gone" />
 
     <!-- Buffering spinner (centered) -->
@@ -160,7 +160,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_text_hi"
             android:textSize="14sp" />
     </LinearLayout>
@@ -182,7 +182,7 @@
             android:id="@+id/error_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_semibold"
+            android:fontFamily="@font/inter_semibold"
             android:textColor="@color/kb_text_hi"
             android:textSize="20sp" />
 
@@ -191,7 +191,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_text_lo"
             android:textSize="14sp"
             android:gravity="center"
@@ -211,7 +211,7 @@
                 android:background="@drawable/button_surface_bg"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="RETRY"
@@ -226,7 +226,7 @@
                 android:background="@drawable/button_accent_bg"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="CHANGE SOURCE"
@@ -250,7 +250,7 @@
                 android:background="@drawable/button_surface_bg"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="SWITCH PLAYER"
@@ -302,7 +302,7 @@
             android:id="@+id/picker_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_accent"
             android:textSize="16sp" />
 
@@ -337,7 +337,7 @@
             android:id="@+id/channel_guide_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:text="GUIDE"
             android:textColor="@color/kb_accent"
             android:textSize="16sp" />
@@ -347,7 +347,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:text="OK to watch  •  Back to close"
             android:textColor="@color/kb_text_lo"
             android:textSize="11sp" />
@@ -386,7 +386,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="PLAYBACK SETTINGS"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="16sp" />
 
@@ -397,7 +397,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="STREAM"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -406,7 +406,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -416,7 +416,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -426,7 +426,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -436,7 +436,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -447,7 +447,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="ASPECT RATIO"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -462,7 +462,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Fit"
@@ -476,7 +476,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Zoom"
@@ -490,7 +490,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Fill"
@@ -504,7 +504,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="16:9"
@@ -518,7 +518,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="4:3"
@@ -533,7 +533,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="VIDEO"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -543,7 +543,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
 
@@ -558,7 +558,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Auto"
@@ -572,7 +572,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Balanced"
@@ -586,7 +586,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Low Latency"
@@ -612,7 +612,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="@font/oswald_medium"
+                        android:fontFamily="@font/inter_medium"
                         android:text="Tunneled Playback"
                         android:textColor="@color/kb_text_hi"
                         android:textSize="12sp" />
@@ -620,7 +620,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="@font/oswald_medium"
+                        android:fontFamily="@font/inter_medium"
                         android:text="A/V sync for HDR + AVR"
                         android:textColor="@color/kb_text_lo"
                         android:textSize="11sp" />
@@ -631,7 +631,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="OFF"
@@ -646,7 +646,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="SUBTITLES"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -654,7 +654,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="Size"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
@@ -670,7 +670,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Small"
@@ -684,7 +684,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Normal"
@@ -698,7 +698,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Large"
@@ -711,7 +711,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="Background"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
@@ -727,7 +727,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="None"
@@ -741,7 +741,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Semi"
@@ -755,7 +755,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Solid"
@@ -769,7 +769,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Text"
@@ -782,7 +782,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="Offset"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
@@ -799,7 +799,7 @@
                     android:layout_width="40dp"
                     android:layout_height="32dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:gravity="center"
                     android:text="-"
                     android:textColor="@color/kb_text_hi"
@@ -812,7 +812,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:gravity="center"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:text="0ms"
                     android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
@@ -822,7 +822,7 @@
                     android:layout_width="40dp"
                     android:layout_height="32dp"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:gravity="center"
                     android:text="+"
                     android:textColor="@color/kb_text_hi"
@@ -836,7 +836,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="PLAYBACK"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -857,7 +857,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="@font/oswald_medium"
+                        android:fontFamily="@font/inter_medium"
                         android:text="Auto-play Next Episode"
                         android:textColor="@color/kb_text_hi"
                         android:textSize="12sp" />
@@ -865,7 +865,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:fontFamily="@font/oswald_medium"
+                        android:fontFamily="@font/inter_medium"
                         android:text="Continue to the next episode"
                         android:textColor="@color/kb_text_lo"
                         android:textSize="11sp" />
@@ -876,7 +876,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/pill_chip_bg"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="OFF"
@@ -926,7 +926,7 @@
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:fontFamily="@font/oswald_medium"
+                    android:fontFamily="@font/inter_medium"
                     android:text="STREAM INFO"
                     android:textColor="@color/kb_accent"
                     android:textSize="16sp" />
@@ -937,7 +937,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="13sp" />
 
@@ -946,7 +946,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp" />
 
@@ -955,7 +955,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
                 android:maxLines="2"
@@ -966,7 +966,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="VIDEO"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
@@ -976,7 +976,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:lineSpacingExtra="3dp"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
@@ -986,7 +986,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="AUDIO"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
@@ -996,7 +996,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:lineSpacingExtra="3dp"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
@@ -1011,7 +1011,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="SUBTITLES"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
@@ -1021,7 +1021,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:lineSpacingExtra="3dp"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="12sp" />
@@ -1031,7 +1031,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:text="Press OK or Back to close"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
@@ -1070,7 +1070,7 @@
                 android:id="@+id/zap_channel_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="12sp" />
 
@@ -1080,7 +1080,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="19sp" />
@@ -1091,7 +1091,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="14sp" />
@@ -1102,7 +1102,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
@@ -1126,7 +1126,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="2"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp"
@@ -1138,7 +1138,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp" />
@@ -1156,7 +1156,7 @@
         android:layout_gravity="top|center_horizontal"
         android:layout_margin="26dp"
         android:background="@drawable/panel_bg"
-        android:fontFamily="@font/oswald_semibold"
+        android:fontFamily="@font/inter_semibold"
         android:letterSpacing="0.08"
         android:paddingStart="24dp"
         android:paddingTop="12dp"
@@ -1196,7 +1196,7 @@
                 android:id="@+id/next_up_kicker"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:letterSpacing="0.18"
                 android:text="UP NEXT"
                 android:textColor="@color/kb_accent"
@@ -1208,7 +1208,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="24sp" />
@@ -1218,7 +1218,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="13sp" />
 
@@ -1228,7 +1228,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="3dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="14sp" />
@@ -1245,7 +1245,7 @@
                     android:layout_height="wrap_content"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:fontFamily="@font/oswald_semibold"
+                    android:fontFamily="@font/inter_semibold"
                     android:paddingHorizontal="20dp"
                     android:paddingVertical="9dp"
                     android:text="PLAY NEXT"
@@ -1259,7 +1259,7 @@
                     android:layout_marginStart="10dp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:fontFamily="@font/oswald_semibold"
+                    android:fontFamily="@font/inter_semibold"
                     android:paddingHorizontal="20dp"
                     android:paddingVertical="9dp"
                     android:text="EXIT"
@@ -1272,7 +1272,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
 
@@ -1315,7 +1315,7 @@
             android:id="@+id/byw_kicker"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:letterSpacing="0.18"
             android:text="BECAUSE YOU WATCHED"
             android:textColor="@color/kb_accent"
@@ -1327,7 +1327,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:ellipsize="end"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:maxLines="1"
             android:textColor="@color/kb_text_hi"
             android:textSize="22sp" />
@@ -1351,7 +1351,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:text="Pick a title · UP to rate · BACK to exit"
             android:textColor="@color/kb_text_lo"
             android:textSize="11sp" />

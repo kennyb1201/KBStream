@@ -33,7 +33,7 @@
             android:id="@+id/ext_handoff_kicker"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:letterSpacing="0.18"
             android:text="PLAYING IN"
             android:textColor="@color/kb_accent"
@@ -44,7 +44,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:fontFamily="@font/oswald_semibold"
+            android:fontFamily="@font/inter_semibold"
             android:textColor="@color/kb_text_hi"
             android:textSize="30sp" />
 
@@ -54,7 +54,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:ellipsize="end"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:gravity="center_horizontal"
             android:maxLines="2"
             android:textColor="@color/kb_text_lo"
@@ -65,7 +65,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:textColor="@color/kb_text_lo"
             android:textSize="12sp" />
     </LinearLayout>
@@ -87,7 +87,7 @@
             android:id="@+id/ext_error_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_semibold"
+            android:fontFamily="@font/inter_semibold"
             android:gravity="center_horizontal"
             android:textColor="@color/kb_text_hi"
             android:textSize="22sp" />
@@ -97,7 +97,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:gravity="center_horizontal"
             android:textColor="@color/kb_text_lo"
             android:textSize="14sp" />
@@ -115,7 +115,7 @@
                 android:background="@drawable/button_accent_bg"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="TRY AGAIN"
@@ -130,7 +130,7 @@
                 android:background="@drawable/button_surface_bg"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:fontFamily="@font/oswald_semibold"
+                android:fontFamily="@font/inter_semibold"
                 android:paddingHorizontal="20dp"
                 android:paddingVertical="10dp"
                 android:text="PLAY IN KBSTREAM"
@@ -184,7 +184,7 @@
                 android:id="@+id/ext_next_up_kicker"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:letterSpacing="0.18"
                 android:text="UP NEXT"
                 android:textColor="@color/kb_accent"
@@ -196,7 +196,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="1"
                 android:textColor="@color/kb_text_hi"
                 android:textSize="18sp" />
@@ -206,7 +206,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="3dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_accent"
                 android:textSize="11sp" />
 
@@ -216,7 +216,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:maxLines="2"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="12sp" />
@@ -234,7 +234,7 @@
                     android:background="@drawable/button_accent_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:fontFamily="@font/oswald_semibold"
+                    android:fontFamily="@font/inter_semibold"
                     android:paddingHorizontal="14dp"
                     android:paddingVertical="6dp"
                     android:text="PLAY NEXT"
@@ -250,7 +250,7 @@
                     android:background="@drawable/button_surface_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
-                    android:fontFamily="@font/oswald_semibold"
+                    android:fontFamily="@font/inter_semibold"
                     android:paddingHorizontal="14dp"
                     android:paddingVertical="6dp"
                     android:text="EXIT"
@@ -264,7 +264,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:fontFamily="@font/oswald_medium"
+                android:fontFamily="@font/inter_medium"
                 android:textColor="@color/kb_text_lo"
                 android:textSize="10sp" />
         </LinearLayout>
@@ -288,7 +288,7 @@
             android:id="@+id/ext_byw_kicker"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:letterSpacing="0.18"
             android:text="BECAUSE YOU WATCHED"
             android:textColor="@color/kb_accent"
@@ -300,7 +300,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:ellipsize="end"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:maxLines="1"
             android:textColor="@color/kb_text_hi"
             android:textSize="22sp" />
@@ -324,7 +324,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:fontFamily="@font/oswald_medium"
+            android:fontFamily="@font/inter_medium"
             android:text="Pick a title · UP to rate · BACK to exit"
             android:textColor="@color/kb_text_lo"
             android:textSize="11sp" />

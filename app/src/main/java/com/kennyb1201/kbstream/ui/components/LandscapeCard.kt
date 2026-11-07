@@ -39,7 +39,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 
 /**
  * Landscape (16:9) rail card for the Home "Landscape Cards" toggle: a
@@ -215,7 +215,7 @@ fun LandscapeCard(
                 Text(
                     text = rank.toString(),
                     color = KBTextHi,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = rankSize,
                     style = TextStyle(

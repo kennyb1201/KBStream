@@ -64,7 +64,7 @@ class SportsLiveCardStabilityContractTest {
         // The height is MEASURED from the style the row draws its value in, not
         // written down as a dp: the theme sets no lineHeight for the headline
         // styles (which is why the placeholder had to exist at all), so the
-        // score row's height is Oswald's own metrics at the viewer's font scale.
+        // score row's height is Inter's own metrics at the viewer's font scale.
         // Only the platform can produce that number, and a constant would be
         // wrong at the next font scale - shorter than the score landing in it,
         // which is the bobbing this whole mechanism exists to stop.
@@ -193,11 +193,11 @@ class SportsLiveCardStabilityContractTest {
         val theme = File(findSourceRoot(), THEME).readText().replace(Regex("\\s+"), " ")
         assertTrue(
             "headlineLarge is font/size only",
-            theme.contains("headlineLarge = androidx.compose.ui.text.TextStyle( fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = 0.5.sp )")
+            theme.contains("headlineLarge = androidx.compose.ui.text.TextStyle( fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = 0.sp )")
         )
         assertTrue(
             "while bodySmall does set one, which is why its row could be reserved either way",
-            theme.contains("bodySmall = androidx.compose.ui.text.TextStyle( fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 0.3.sp, lineHeight = 16.sp )")
+            theme.contains("bodySmall = androidx.compose.ui.text.TextStyle( fontFamily = InterFamily, fontWeight = FontWeight.Normal, fontSize = 12.sp, letterSpacing = 0.15.sp, lineHeight = 16.sp )")
         )
     }
 

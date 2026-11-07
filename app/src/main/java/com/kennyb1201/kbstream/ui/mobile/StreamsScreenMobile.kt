@@ -78,7 +78,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 import kotlinx.coroutines.launch
 
 /**
@@ -832,7 +832,7 @@ private fun MobileStreamsHeader(
                     Text(
                         text = displayName,
                         color = KBTextHi,
-                        fontFamily = OswaldFamily,
+                        fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 2,

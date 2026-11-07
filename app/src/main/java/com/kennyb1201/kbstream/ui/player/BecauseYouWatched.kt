@@ -1580,7 +1580,7 @@ internal class BecauseYouWatchedUi(
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, dp(4), 0, 0)
                 typeface = androidx.core.content.res.ResourcesCompat.getFont(
-                    host, R.font.oswald_medium
+                    host, R.font.inter_medium
                 )
             }
             card.addView(name)
@@ -1603,7 +1603,7 @@ internal class BecauseYouWatchedUi(
                     gravity = Gravity.CENTER_HORIZONTAL
                     setPadding(0, dp(3), 0, 0)
                     typeface = androidx.core.content.res.ResourcesCompat.getFont(
-                        host, R.font.oswald_medium
+                        host, R.font.inter_medium
                     )
                 }.also { card.addView(it) }
             }
@@ -1618,7 +1618,7 @@ internal class BecauseYouWatchedUi(
                 ellipsize = TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER_HORIZONTAL
                 typeface = androidx.core.content.res.ResourcesCompat.getFont(
-                    host, R.font.oswald_medium
+                    host, R.font.inter_medium
                 )
             }
             card.addView(cardMeta)
@@ -1870,7 +1870,7 @@ internal class BecauseYouWatchedUi(
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(0, dp(5), 0, 0)
                 typeface = androidx.core.content.res.ResourcesCompat.getFont(
-                    host, R.font.oswald_medium
+                    host, R.font.inter_medium
                 )
                 visibility = View.GONE
             }

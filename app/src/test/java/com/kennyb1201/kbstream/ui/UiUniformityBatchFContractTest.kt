@@ -265,7 +265,7 @@ class UiUniformityBatchFContractTest {
             picker.contains("focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)")
         )
         assertTrue(
-            "the tile's initial is Oswald through the type scale",
+            "the tile's initial is Inter through the type scale",
             picker.contains("style = MaterialTheme.typography.displayMedium")
         )
         assertTrue(
@@ -337,7 +337,7 @@ class UiUniformityBatchFContractTest {
             )
         )
         assertTrue(
-            "and its initial is Oswald too",
+            "and its initial is Inter too",
             editor.contains("style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold")
         )
     }

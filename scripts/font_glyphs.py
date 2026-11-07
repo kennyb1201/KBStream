@@ -76,7 +76,7 @@ class Font:
         else:
             self.loca = list(struct.unpack(">%dI" % count, self.data[base:base + count * 4]))
 
-    def contours(self, gid):
+    def contours(self, gid, depth=0):
         """Glyph outlines as contours of (x, y, on_curve) in font units."""
         start = self.tables["glyf"] + self.loca[gid]
         end = self.tables["glyf"] + self.loca[gid + 1]
@@ -85,7 +85,7 @@ class Font:
         raw = self.data[start:end]
         ncont = struct.unpack(">h", raw[0:2])[0]
         if ncont < 0:
-            raise ValueError("composite glyph %d is not supported" % gid)
+            return self._composite(raw, depth)
         if ncont == 0:
             return []
         ends = struct.unpack(">%dH" % ncont, raw[10:10 + ncont * 2])
@@ -125,6 +125,64 @@ class Font:
         for e in ends:
             out.append(pts[first:e + 1])
             first = e + 1
+        return out
+
+    # Composite glyph flags (OpenType 'glyf'): a glyph assembled from other
+    # glyphs, e.g. an accented letter or a centred dot.
+    _WORDS = 0x0001
+    _XY_VALUES = 0x0002
+    _SCALE = 0x0008
+    _MORE = 0x0020
+    _XY_SCALE = 0x0040
+    _TWO_BY_TWO = 0x0080
+
+    def _composite(self, raw, depth):
+        """
+        A composite glyph's contours, spliced from its components.
+
+        Inter builds several glyphs this way (the tagline's middot is one), and
+        a reader that only knew simple glyphs died on them. Components are
+        placed by their own offset - and by a scale or 2x2 transform when the
+        record carries one - then flattened into the same (x, y, on_curve)
+        contour lists the simple case returns, so callers never see the
+        difference.
+        """
+        if depth > 8:
+            raise ValueError("composite glyph nesting too deep")
+        out = []
+        p = 10
+        while True:
+            flags, index = struct.unpack(">HH", raw[p:p + 4])
+            p += 4
+            if flags & self._WORDS:
+                a1, a2 = struct.unpack(">hh", raw[p:p + 4])
+                p += 4
+            else:
+                a1, a2 = struct.unpack(">bb", raw[p:p + 2])
+                p += 2
+            # Point-matching placement (no ARGS_ARE_XY_VALUES) names anchor
+            # points rather than offsets; nothing this tool sets needs it.
+            dx, dy = (a1, a2) if flags & self._XY_VALUES else (0, 0)
+            a = d = 1.0
+            b = c = 0.0
+            if flags & self._SCALE:
+                a = d = struct.unpack(">h", raw[p:p + 2])[0] / 16384.0
+                p += 2
+            elif flags & self._XY_SCALE:
+                a = struct.unpack(">h", raw[p:p + 2])[0] / 16384.0
+                p += 2
+                d = struct.unpack(">h", raw[p:p + 2])[0] / 16384.0
+                p += 2
+            elif flags & self._TWO_BY_TWO:
+                a, b, c, d = [v / 16384.0 for v in struct.unpack(">hhhh", raw[p:p + 8])]
+                p += 8
+            for contour in self.contours(index, depth + 1):
+                out.append([
+                    (x * a + y * c + dx, x * b + y * d + dy, on)
+                    for x, y, on in contour
+                ])
+            if not flags & self._MORE:
+                break
         return out
 
 

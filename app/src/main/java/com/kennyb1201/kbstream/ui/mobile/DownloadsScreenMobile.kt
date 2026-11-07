@@ -41,7 +41,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 import kotlinx.coroutines.launch
 
 /**
@@ -184,7 +184,7 @@ private fun DownloadsHeader(totalBytes: Long, count: Int, onBack: () -> Unit) {
                 Text(
                     text = "DOWNLOADS",
                     color = KBAccent,
-                    fontFamily = OswaldFamily,
+                    fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(start = 4.dp)

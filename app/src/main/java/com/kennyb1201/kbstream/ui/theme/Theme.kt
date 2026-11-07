@@ -452,10 +452,23 @@ val KBFocusChipInset = 12.dp
 // margin measured from the wrong rect was the defect, not a margin too small.
 val KBFocusRowInset = 16.dp
 
-val OswaldFamily = FontFamily(
-    Font(R.font.oswald_medium, FontWeight.Medium),
-    Font(R.font.oswald_semibold, FontWeight.SemiBold),
-    Font(R.font.oswald_bold, FontWeight.Bold)
+/**
+ * The app's one family, in four static weights.
+ *
+ * Inter rather than a condensed display face because most of this app's text is
+ * 11-16sp: a poster face sets that small copy cramped and heavy, and it only
+ * shipped three weights (Medium and up), so body text had no regular to fall
+ * back to. Inter reads true-to-size at these sizes and has a real Regular.
+ *
+ * Static weights, not the variable file: [FontFamily] here is built from
+ * `Font(resId, weight)` entries, and a variable font would need a different
+ * loading path for no gain at four weights.
+ */
+val InterFamily = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_bold, FontWeight.Bold)
 )
 
 private val KBStreamColorScheme get() = darkColorScheme(
@@ -471,57 +484,63 @@ private val KBStreamColorScheme get() = darkColorScheme(
 // which is the platform font — so screen titles, dialog titles, section
 // labels and chips written against headlineSmall / headlineMedium /
 // titleSmall / labelMedium were rendering in Roboto while the rest of the app
-// was in Oswald. Which typeface a heading got depended on nothing but which
-// style name the call site happened to pick. Sizes stay close to the Material
-// defaults they replaced (Oswald is condensed, so the same sp reads slightly
-// smaller) and the hierarchy is strictly ordered:
+// was in the bundled face. Which typeface a heading got depended on nothing
+// but which style name the call site happened to pick.
+//
+// One family, hierarchy by weight: Bold display, SemiBold titles, Regular body,
+// Medium labels. Sizes are the Material defaults they replaced - Inter reads
+// true-to-size, so the same sp is slightly larger than a condensed face read
+// it, which is the intended correction, not a reason to shrink them. Tracking
+// is near zero because the old 1-1.5sp was compensating for condensed forms;
+// labels keep a breath of it for the eyebrow feel. The hierarchy is strictly
+// ordered:
 //   displayLarge > displayMedium > displaySmall > headlineLarge >
 //   headlineMedium > headlineSmall > titleLarge > titleMedium > titleSmall
 private val KBStreamTypography = Typography(
     displayLarge = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, letterSpacing = (-0.5).sp
     ),
     displayMedium = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, letterSpacing = (-0.5).sp
     ),
     displaySmall = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, letterSpacing = 0.sp
     ),
     headlineLarge = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = 0.sp
     ),
     headlineMedium = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, letterSpacing = 0.sp
     ),
     headlineSmall = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, letterSpacing = 0.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, letterSpacing = 0.sp
     ),
     titleLarge = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, letterSpacing = 1.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, letterSpacing = 0.sp
     ),
     titleMedium = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 1.5.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, letterSpacing = 0.sp
     ),
     titleSmall = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 1.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, letterSpacing = 0.sp
     ),
     bodyLarge = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, letterSpacing = 0.3.sp, lineHeight = 24.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Normal, fontSize = 16.sp, letterSpacing = 0.15.sp, lineHeight = 24.sp
     ),
     bodyMedium = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.3.sp, lineHeight = 20.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Normal, fontSize = 14.sp, letterSpacing = 0.15.sp, lineHeight = 20.sp
     ),
     bodySmall = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 0.3.sp, lineHeight = 16.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Normal, fontSize = 12.sp, letterSpacing = 0.15.sp, lineHeight = 16.sp
     ),
     labelLarge = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.8.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.5.sp
     ),
     labelMedium = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 1.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 0.5.sp
     ),
     labelSmall = androidx.compose.ui.text.TextStyle(
-        fontFamily = OswaldFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 1.sp
+        fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, letterSpacing = 0.5.sp
     )
 )
 

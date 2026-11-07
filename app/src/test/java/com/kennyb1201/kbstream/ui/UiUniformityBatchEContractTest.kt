@@ -184,7 +184,7 @@ class UiUniformityBatchEContractTest {
                     // no android:text, and the subtitle view is one of those
                     // on purpose (its face is the viewer's subtitle setting).
                     if (block.contains("android:text=") &&
-                        !block.contains("fontFamily=\"@font/oswald")
+                        !block.contains("fontFamily=\"@font/inter")
                     ) {
                         block.trim().take(60)
                     } else {

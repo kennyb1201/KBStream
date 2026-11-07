@@ -106,7 +106,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.MobileTheme
-import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import com.kennyb1201.kbstream.ui.theme.InterFamily
 import com.kennyb1201.kbstream.work.ReminderWorker
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -996,7 +996,7 @@ private fun MobileGuideTopBar(
             Text(
                 text = title,
                 color = KBTextHi,
-                fontFamily = OswaldFamily,
+                fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
@@ -1471,7 +1471,7 @@ private fun MobileGuideSetup(
             Text(
                 text = "LIVE TV SETUP",
                 color = KBTextHi,
-                fontFamily = OswaldFamily,
+                fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleLarge
             )

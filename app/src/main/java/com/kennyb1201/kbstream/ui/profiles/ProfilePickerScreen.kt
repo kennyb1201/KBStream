@@ -726,7 +726,7 @@ private fun ProfileAvatarTile(
                     ) {
                         Text(
                             text = name.take(1).uppercase(),
-                            // Oswald through the type scale, like every other
+                            // Inter through the type scale, like every other
                             // letter in the app (displayMedium is the 34sp Bold
                             // this literal was standing in for).
                             style = MaterialTheme.typography.displayMedium,

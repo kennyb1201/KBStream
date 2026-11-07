@@ -944,7 +944,7 @@ fun ProfileEditScreen(
                     ) {
                         Text(
                             text = name.take(1).uppercase().ifBlank { "?" },
-                            // Oswald via the type scale, not the platform font.
+                            // Inter via the type scale, not the platform font.
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color(fg)
