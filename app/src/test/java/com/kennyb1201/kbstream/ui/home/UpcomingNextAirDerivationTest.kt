@@ -332,7 +332,8 @@ class UpcomingNextAirDerivationTest {
         )
         assertTrue(
             "the schedule builder still gates on the card's air info",
-            activity.contains("val air = item.nextEpisodeAir ?: continue")
+            activity.contains("val air = item.nextEpisodeAir") &&
+                activity.contains("if (air == null) {")
         )
     }
 

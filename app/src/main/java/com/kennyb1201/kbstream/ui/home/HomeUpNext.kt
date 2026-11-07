@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.settings.ResumeAuthority
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
+import com.kennyb1201.kbstream.data.tmdb.namesNoTitle
 import kotlinx.coroutines.flow.map
 
 // The rail and up-next models, and the pure helpers that key, group and
@@ -401,13 +402,83 @@ internal const val UNKNOWN_SHOW_NAME = "Unknown Show"
  *
  * Only the CARD is dropped. The history row keeps the resume point, stays
  * resumable from search and the Library, and a fresh correct play supersedes it.
+ *
+ * The condition is three parts and stays three parts - a verdict that names no
+ * title ([namesNoTitle]), no artwork, and no name that resolved - but the SET of
+ * such verdicts is two: a 404, and an id of a shape no lookup can ask about (see
+ * [TmdbDetailLookup.Unresolvable]). The first cut of this rule knew only the
+ * 404, and three of the four id flavors the builders see never produced one -
+ * which is why the cards survived it.
  */
 internal fun dropsZombieCard(
     lookup: TmdbDetailLookup,
     hasArtwork: Boolean,
     resolvedName: String?
 ): Boolean =
-    lookup == TmdbDetailLookup.NotFound && !hasArtwork && resolvedName == null
+    lookup.namesNoTitle && !hasArtwork && resolvedName == null
+
+/**
+ * Whether the Continue Watching / Up Next builders write their drop-decision
+ * trace line.
+ *
+ * On, like [com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS] and for the
+ * same reason: a card that is missing cannot say why it is missing, and the Nov
+ * 2026 investigation had three logcat dumps that proved it. One line per card per
+ * build is cheap next to guessing - flip this off once the rail stops
+ * misbehaving.
+ */
+internal const val UP_NEXT_DIAGNOSTICS = true
+
+/**
+ * The shape of a raw id, in the words a trace needs: which lookup it takes, if
+ * any.
+ *
+ * Named rather than inlined into the trace line so the same vocabulary is used
+ * by every builder, and so "the row travelled on an unhandled shape" - the hole
+ * this whole bug class lived in - is visible as `shape=slug` in one line.
+ */
+internal fun upNextIdShape(rawId: String?): String {
+    val trimmed = rawId?.trim().orEmpty()
+    return when {
+        trimmed.isEmpty() -> "blank"
+        trimmed.startsWith("tmdb:", ignoreCase = true) -> "tmdb"
+        trimmed.startsWith("tt", ignoreCase = true) -> "imdb"
+        trimmed.startsWith("tvdb:", ignoreCase = true) -> "tvdb"
+        trimmed.all(Char::isDigit) -> "number"
+        else -> "slug"
+    }
+}
+
+/**
+ * One line naming the drop decision the builder just took, and the three facts
+ * it took it on.
+ *
+ * [source] is the builder (`local`, `local-nextup`, `simkl`, `trakt`,
+ * `mdblist`), because the same dead id can arrive on a history row and on a
+ * tracker session, and only the card family's own name says which one produced
+ * the card that survived. [dropped] is the decision itself, so a KEPT card maps
+ * to the rule that saved it (the verdict, its art, or its name).
+ */
+internal fun upNextZombieDiagLine(
+    source: String,
+    parentId: String?,
+    lookup: TmdbDetailLookup,
+    hasArtwork: Boolean,
+    resolvedName: String?,
+    dropped: Boolean
+): String =
+    "zombie source=$source id='${parentId.orEmpty()}' shape=${upNextIdShape(parentId)} " +
+        "verdict=${lookup.label} artwork=$hasArtwork name=${resolvedName ?: "-"} " +
+        "-> ${if (dropped) "drop" else "keep"}"
+
+/** A verdict's name for the trace line (the class names, not `toString()`). */
+private val TmdbDetailLookup.label: String
+    get() = when (this) {
+        is TmdbDetailLookup.Found -> "Found"
+        TmdbDetailLookup.NotFound -> "NotFound"
+        TmdbDetailLookup.Transient -> "Transient"
+        TmdbDetailLookup.Unresolvable -> "Unresolvable"
+    }
 
 /**
  * The name a Continue Watching / Up Next card hands the PLAYER, i.e. the

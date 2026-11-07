@@ -2207,6 +2207,177 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * The detail behind an IMDb id, with the MISS KIND kept.
+     *
+     * [fetchEnrichedMetaCached] answers a `tt...` id through TMDB's
+     * `/find/{external_id}` endpoint, but it collapses every outcome into a
+     * null: the add-on's own 404, a timeout and an empty result all look the
+     * same. A caller that has to DECIDE something - Continue Watching dropping
+     * a card whose row names no title - cannot decide on that, so this keeps the
+     * verdict (see [TmdbDetailLookup]).
+     *
+     * The cache rule is the same one both existing lookups follow: a real answer
+     * is remembered (memory + disk, and it answers [fetchEnrichedMetaCached]
+     * too, because the key shape is that function's own), a miss never is.
+     */
+    suspend fun lookupDetailByImdbId(imdbId: String, type: String): TmdbDetailLookup =
+        lookupDetailByExternalId(imdbId, "imdb_id", type)
+
+    /**
+     * [lookupDetailByImdbId] for any external source TMDB's `/find` accepts
+     * (`imdb_id`, `tvdb_id`).
+     *
+     * A 404 from `/find` is [TmdbDetailLookup.NotFound] - TMDB answered, and the
+     * answer was "no title". An EMPTY result is the same fact: `/find` does not
+     * 404 for an unknown external id, it answers with empty buckets, so those
+     * are flattened into the same verdict. Anything else (IO, timeout, 429, 5xx,
+     * an unparseable body, no API key) is [TmdbDetailLookup.Transient]: we could
+     * not ask, which is not a verdict about the id.
+     *
+     * A result in the WRONG bucket is not a miss: `/find` holds the id, the
+     * caller's type is what is wrong (a series request for an id that sits in
+     * `movie_results`). The detail is then fetched by that id whichever bucket it
+     * was in, which is exactly what [findAndFetchDetail] does with a fallback
+     * name and without one it does not need.
+     */
+    suspend fun lookupDetailByExternalId(
+        externalId: String,
+        externalSource: String,
+        type: String
+    ): TmdbDetailLookup {
+        val id = externalId.trim().substringBefore(':').trim()
+        if (id.isBlank()) return TmdbDetailLookup.Unresolvable
+        if (apiKey.isBlank()) return TmdbDetailLookup.Transient
+
+        val normalizedType = normalizeType(type)
+        // The same key [fetchEnrichedMetaCached] files this id under, so a
+        // detail this lookup resolves serves every later caller for free.
+        val key = "$normalizedType:$id"
+        val now = System.currentTimeMillis()
+        pruneMemoryCaches()
+
+        detailCache[key]?.let { (cachedAt, detail) ->
+            if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                return TmdbDetailLookup.Found(detail)
+            }
+        }
+        railDetailCache[key]?.let { (cachedAt, detail) ->
+            if (detail != null && now - cachedAt < detailCacheTtlMs) {
+                return TmdbDetailLookup.Found(detail)
+            }
+        }
+
+        val diskKey = detailDiskKey(key)
+        val diskCached = runCatchingCancellable {
+            tmdbJsonCacheDao.getByKey(diskKey)
+        }.getOrNull()
+        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
+            val parsed = runCatching {
+                detailJsonAdapter.fromJson(diskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                detailCache[key] = now to parsed
+                return TmdbDetailLookup.Found(parsed)
+            }
+        }
+        val railKey = railDetailKey(key)
+        val railDiskCached = runCatchingCancellable {
+            tmdbJsonCacheDao.getByKey(railKey)
+        }.getOrNull()
+        if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
+            val parsed = runCatching {
+                detailJsonAdapter.fromJson(railDiskCached.json)
+            }.getOrNull()
+            if (parsed != null) {
+                detailCache[key] = now to parsed
+                railDetailCache[key] = now to parsed
+                return TmdbDetailLookup.Found(parsed)
+            }
+        }
+
+        val found =
+            try {
+                api.find(id, apiKey, externalSource)
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                return if (isDefinitiveMiss(error)) {
+                    TmdbDetailLookup.NotFound
+                } else {
+                    TmdbDetailLookup.Transient
+                }
+            }
+
+        if (found.tvResults.isEmpty() && found.movieResults.isEmpty()) {
+            return TmdbDetailLookup.NotFound
+        }
+
+        val ordered =
+            if (normalizedType == "movie") {
+                found.movieResults + found.tvResults
+            } else {
+                found.tvResults + found.movieResults
+            }
+        val tmdbId = ordered.firstOrNull()?.id ?: return TmdbDetailLookup.NotFound
+
+        // The id exists and is the right title, but its detail did not load: that
+        // is us, not the id, so the card keeps (Transient).
+        val detail = fetchTmdbDetail(api, apiKey, tmdbId, normalizedType)
+            ?: return TmdbDetailLookup.Transient
+
+        detailCache[key] = now to detail
+        railDetailCache[key] = now to detail.railProjection()
+        cacheJson(diskKey, detailJsonAdapter.toJson(detail), now)
+        return TmdbDetailLookup.Found(detail)
+    }
+
+    /**
+     * The verdict for a card's raw parent/navigation id, whichever flavor it is.
+     *
+     * Continue Watching rows and tracker sessions do not agree on one id shape:
+     * `tmdb:<n>` (with an optional `:<season>:<episode>` tail), `tt...`, a
+     * `tvdb:<id>`, or a bare number all reach the rail, and an add-on's own key
+     * can reach it too. This is the single place that says which lookup each
+     * shape takes, so no builder can quietly skip the verdict for one of them -
+     * which is exactly how the first cut of the zombie fix left the `tt` and
+     * unknown shapes undroppable.
+     *
+     * A shape none of them names is [TmdbDetailLookup.Unresolvable], not null:
+     * the caller needs to know that no lookup will ever resolve this row, and
+     * that is a droppable fact of the same kind as a 404.
+     */
+    suspend fun lookupDetailForRawId(rawId: String, type: String): TmdbDetailLookup {
+        val trimmed = rawId.trim()
+        if (trimmed.isBlank()) return TmdbDetailLookup.Unresolvable
+
+        val lower = trimmed.lowercase()
+        return when {
+            lower.startsWith("tmdb:") || trimmed.all(Char::isDigit) -> {
+                val tmdbId = trimmed
+                    .substringAfter(':', trimmed)
+                    .substringBefore(':')
+                    .trim()
+                    .toIntOrNull()
+                    ?: return TmdbDetailLookup.Unresolvable
+                lookupDetailByTmdbId(tmdbId, type)
+            }
+
+            lower.startsWith("tt") -> lookupDetailByImdbId(trimmed.substringBefore(':'), type)
+
+            lower.startsWith("tvdb:") -> {
+                val tvdbId = trimmed.substringAfter(':').substringBefore(':').trim()
+                if (tvdbId.isBlank()) {
+                    TmdbDetailLookup.Unresolvable
+                } else {
+                    lookupDetailByExternalId(tvdbId, "tvdb_id", type)
+                }
+            }
+
+            else -> TmdbDetailLookup.Unresolvable
+        }
+    }
+
+    /**
      * Whether [error] says the id does not exist, as opposed to "we could not
      * ask": the only verdict Continue Watching may act on.
      *

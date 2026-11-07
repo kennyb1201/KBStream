@@ -18,6 +18,14 @@ package com.kennyb1201.kbstream.data.tmdb
  * including a missing API key, is [Transient]: it is not a verdict about the
  * id. Neither miss is cached, so a retry with the right id (or after the
  * outage) can still answer.
+ *
+ * [Unresolvable] is the third verdict, for the opposite failure: the card's id
+ * is not a shape any TMDB lookup accepts (`tmdb:`, `tt...`, `tvdb:`, a bare
+ * number), so there is nothing to ask about at all. It answers "no title can
+ * ever resolve from this row", which is why it is allowed to drop a card for
+ * the same reason [NotFound] is - while staying a DISTINCT verdict, so a trace
+ * can tell "TMDB said this id does not exist" from "this id names nothing we
+ * can ask TMDB" (the two need different fixes).
  */
 sealed interface TmdbDetailLookup {
 
@@ -29,4 +37,27 @@ sealed interface TmdbDetailLookup {
 
     /** No usable answer: offline, 429/5xx, timeout, no key, an unparseable body. */
     data object Transient : TmdbDetailLookup
+
+    /**
+     * The id is no flavor any lookup accepts, so nothing can be resolved from it.
+     *
+     * Distinct from [NotFound] on purpose: that one is TMDB's answer about a real
+     * id, this one is the app's answer about an id it cannot even ask about (a
+     * slug, an add-on's own key). Both mean the row cannot name its show, but a
+     * 404 is fixed by repairing the id to a real one while this one may need the
+     * id shape itself understood first.
+     */
+    data object Unresolvable : TmdbDetailLookup
 }
+
+/**
+ * Whether this verdict says the row's id names no title - the only verdicts a
+ * Continue Watching card may be dropped on (see
+ * [com.kennyb1201.kbstream.ui.home.dropsZombieCard]).
+ *
+ * [TmdbDetailLookup.Transient] is deliberately not one: "we could not ask" is
+ * not a fact about the id, and dropping on it would empty the rail during an
+ * outage.
+ */
+internal val TmdbDetailLookup.namesNoTitle: Boolean
+    get() = this == TmdbDetailLookup.NotFound || this == TmdbDetailLookup.Unresolvable

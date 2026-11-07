@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.library.isDisliked
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
+import com.kennyb1201.kbstream.data.notifications.NewEpisodeRules
 import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
@@ -626,7 +627,12 @@ class HomeViewModel(
                     // build as intended.
                     val built = runCatchingCancellable {
                         buildUpcomingSchedule(
-                            caughtUp +
+                            // Leg (a) is repaired HERE, at the one place the
+                            // date is read, not at the card builders: the
+                            // cards' field is a cached copy that can be a week
+                            // stale, while each card's season/episode is the
+                            // fresh answer (see repairCaughtUpAirDates).
+                            repairCaughtUpAirDates(caughtUp) +
                                 loadCaughtUpUpcomingItems() +
                                 loadLocalCaughtUpUpcomingItems()
                         )
@@ -3856,6 +3862,83 @@ Log.d(
     }
 
     /**
+     * Repairs the caught-up Continue Watching cards' air dates before they
+     * reach the Upcoming build.
+     *
+     * The cards are the rail's leg (a), and their `nextEpisodeAir` is the cached
+     * series detail's `next_episode_to_air` copied verbatim - a field cached 12h
+     * in memory and 30 days on disk that rolls mid-season - while the
+     * season/episode pair ON the same card is resolved by walking the fresh
+     * season list. On a week where the two disagree the card names the right
+     * episode and carries a stale-or-null date, and [buildUpcomingSchedule]
+     * drops it for having no date at all: five caught-up shows with the correct
+     * next episode sat on Continue Watching and never appeared in Upcoming,
+     * without a single log line (the symptom this repairs).
+     *
+     * The card's own pair is the seed, never the field being repaired, and the
+     * derivation is [nextAirForResolvedTarget]'s - the function the Simkl leg
+     * already calls: a captured date that names the seed and is still upcoming
+     * is returned as-is and costs no fetch, so the healthy majority of cards
+     * pay one comparison each.
+     *
+     * Nothing is fabricated. A movie has no next episode, a card with no target
+     * has nothing to seed from, an unresolvable detail or IMDb id has no season
+     * list to read, and a season list with nothing dated answers nothing - in
+     * each case the item is returned as it came in, so the builder's existing
+     * gates drop it exactly as before (now with F3's line explaining it).
+     *
+     * Called only from the Upcoming build, never from the three card builders:
+     * no Continue Watching surface reads this field, so deriving at the builders
+     * would pay the season walk on the hot rail for no reader.
+     */
+    private suspend fun repairCaughtUpAirDates(
+        items: List<UpNextItem>
+    ): List<UpNextItem> =
+        items.map { item ->
+            // Fail OPEN per card: this list feeds the whole rail, so one
+            // show's unreadable detail must not cost the others their entries.
+            // [safeSuspend] rethrows cancellation, so a superseding emission
+            // still cancels this build as intended.
+            safeSuspend { repairCaughtUpAirDate(item) } ?: item
+        }
+
+    /** One card of [repairCaughtUpAirDates]; unchanged whenever it cannot help. */
+    private suspend fun repairCaughtUpAirDate(item: UpNextItem): UpNextItem {
+        // "series" spelled the way this card's own source spells it - history
+        // rows say "series" or "tv", Simkl says "shows" - and never a film,
+        // which has no next episode to date.
+        if (!NewEpisodeRules.isSeriesType(item.parentType)) return item
+
+        // No resolved target, no seed: the derivation would be reading the
+        // field it distrusts, and this leg does not do that.
+        val season = item.season ?: return item
+        val episode = item.episode ?: return item
+
+        val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: return item
+        val detail = seriesDetailFor(parentId) ?: return item
+
+        // The season fetch is addressed by IMDb id (see getSeasonEpisodes):
+        // take it from the card when it already is one, else from the cached
+        // resolution the rest of the player uses. No id, no date - the same
+        // rule as the Stick fix.
+        val imdbId =
+            parentId
+                .takeIf { it.startsWith("tt", ignoreCase = true) }
+                ?: tmdbRepository.resolveImdbId(detail.id, "series")
+                ?: return item
+
+        return item.copy(
+            nextEpisodeAir = nextAirForResolvedTarget(
+                detail = detail,
+                imdbId = imdbId,
+                resolvedSeason = season,
+                resolvedEpisode = episode,
+                captured = item.nextEpisodeAir
+            )
+        )
+    }
+
+    /**
      * The tracker leg's next-air info: the resolved target's own episode when
      * the detail's field is past, else the season list's answer for it.
      *
@@ -4013,6 +4096,25 @@ Log.d(
             }
         } catch (_: Exception) {
             null
+        }
+
+    /**
+     * [seriesDetailFor] with the miss kind kept (see [TmdbDetailLookup]).
+     *
+     * The next-up builder has to DECIDE something about a row whose show does
+     * not resolve - drop the card, or keep a card it cannot draw - so it cannot
+     * work from a plain null: "this id names no show" and "we could not ask"
+     * are the two answers that must not be confused (see [dropsZombieCard]).
+     */
+    private suspend fun seriesDetailLookup(parentId: String): TmdbDetailLookup =
+        try {
+            tmdbLookupSemaphore.withPermit {
+                tmdbRepository.lookupDetailForRawId(parentId, "series")
+            }
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            TmdbDetailLookup.Transient
         }
 
     /**
@@ -4231,8 +4333,43 @@ Log.d(
         parentId: String,
         row: WatchHistoryEntity,
         caughtUpShowKeys: MutableSet<String>
-    ): UpNextItem? {        val detail =
-            seriesDetailFor(parentId)
+    ): UpNextItem? {
+        // The verdict, not just the detail: a completed row filed under an id
+        // that names no title builds the same black tile the resume path drops,
+        // so this family gets the same gate (F3 of the zombie spec - the first
+        // pass only covered the resume cards, and a zombie completed row could
+        // still become a "Next up" card).
+        val lookup = seriesDetailLookup(parentId)
+        val detail = (lookup as? TmdbDetailLookup.Found)?.detail
+
+        val rowArt =
+            !row.poster.isNullOrBlank() || !row.backdropUrl.isNullOrBlank()
+        val resolvedName =
+            upNextDisplayTitleOrNull(detail?.name, rowArt)
+                ?: upNextDisplayTitleOrNull(detail?.title, rowArt)
+
+        val zombie =
+            dropsZombieCard(
+                lookup = lookup,
+                hasArtwork = rowArt,
+                resolvedName = resolvedName
+            )
+
+        if (UP_NEXT_DIAGNOSTICS) {
+            Log.d(
+                "HOME_UPNEXT",
+                upNextZombieDiagLine(
+                    source = "local-nextup",
+                    parentId = parentId,
+                    lookup = lookup,
+                    hasArtwork = rowArt,
+                    resolvedName = resolvedName,
+                    dropped = zombie
+                )
+            )
+        }
+
+        if (zombie) return null
 
         val tmdbId = detail?.id ?: return null
         if (tmdbId <= 0) return null
@@ -5547,7 +5684,23 @@ Log.d(
         val sourceDatesByParent = loadSourceAirDates(items)
 
         for (item in items) {
-            val air = item.nextEpisodeAir ?: continue
+            val air = item.nextEpisodeAir
+            if (air == null) {
+                // The drop that used to be silent, and the reason three logcat
+                // dumps of a broken rail contained no UPCOMING_DIAG line about
+                // it: by the time an item reaches here the repair has already
+                // run, so a null air now means the derivation could not run or
+                // found nothing. Its PRESENCE says that; its absence, for a show
+                // the viewer expected, says the show never reached this build.
+                if (UPCOMING_DIAGNOSTICS) {
+                    Log.d(
+                        "UPCOMING_DIAG",
+                        "dropped: no next air for '${item.parentId}' " +
+                            "S${item.season}E${item.episode}"
+                    )
+                }
+                continue
+            }
             var season = air.seasonNumber ?: continue
             var episode = air.episodeNumber ?: continue
             val parentId = item.parentId?.takeIf { it.isNotBlank() } ?: continue
@@ -6031,54 +6184,29 @@ Log.d(
                         .trim()
                         .ifBlank { entry.id.trim() }
 
+                // ONE verdict-producing lookup for every id flavor, instead
+                // of a `when` where two branches could answer a detail-or-null
+                // without ever recording WHAT the lookup said.
+                //
+                // That was the hole the first zombie fix fell into: the
+                // `tmdb:` and bare-number branches kept the miss kind, the
+                // `tt...` branch called the nullable enriched lookup and the
+                // `else` branch answered null outright - so on those shapes
+                // `detailLookup` stayed at its initial Transient, the drop
+                // could never fire, and a row filed under a dead id drew a
+                // black tile forever. [lookupDetailForRawId] also marks an id
+                // of no known shape Unresolvable, which is a droppable verdict
+                // of its own: nothing can ever resolve a title from it.
                 val tmdbDetail =
-                    when {
-                        parentId.startsWith("tmdb:", ignoreCase = true) -> {
-                            parentId
-                                .substringAfter(":")
-                                .toIntOrNull()
-                                ?.let { tmdbId ->
-                                    // The miss KIND is kept: a 404 means the id
-                                    // names no show, a failure means we could
-                                    // not ask. Only the first may drop a card.
-                                    when (
-                                        val lookup = tmdbRepository.lookupDetailByTmdbId(
-                                            tmdbId,
-                                            entry.type
-                                        )
-                                    ) {
-                                        is TmdbDetailLookup.Found -> lookup.detail
-                                        else -> {
-                                            detailLookup = lookup
-                                            null
-                                        }
-                                    }
-                                }
-                        }
-
-                        parentId.startsWith("tt", ignoreCase = true) -> {
-                            tmdbRepository.fetchEnrichedMetaCached(
-                                parentId,
-                                entry.type
-                            )
-                        }
-
-                        parentId.toIntOrNull() != null -> {
-                            when (
-                                val lookup = tmdbRepository.lookupDetailByTmdbId(
-                                    parentId.toInt(),
-                                    entry.type
-                                )
-                            ) {
-                                is TmdbDetailLookup.Found -> lookup.detail
-                                else -> {
-                                    detailLookup = lookup
-                                    null
-                                }
-                            }
-                        }
-
+                    when (
+                        val lookup = tmdbRepository.lookupDetailForRawId(
+                            parentId,
+                            entry.type
+                        )
+                    ) {
+                        is TmdbDetailLookup.Found -> lookup.detail
                         else -> {
+                            detailLookup = lookup
                             null
                         }
                     }
@@ -6117,26 +6245,44 @@ Log.d(
                             !entry.poster.isNullOrBlank()
                         )
 
-                // The zombie card (F4): the row's own id names no title at all
-                // (TMDB answered 404), it carries no art, and nothing resolved
-                // a name for it - so the card could only ever print a raw id
-                // over a black tile. Drop it here.
+                // The zombie card: the row's own id names no title at all
+                // (TMDB answered 404, or the id is a shape no lookup accepts),
+                // it carries no art, and nothing resolved a name for it - so the
+                // card could only ever print a raw id over a black tile. Drop
+                // it here.
                 //
                 // The ROW is untouched: it keeps the resume point, it is still
                 // resumable from search and the Library, and a fresh correct
                 // play supersedes it. Only the card goes.
                 //
-                // 404 only: a transient failure means we could not ask, and
-                // dropping on that would make Continue Watching empty itself
-                // during an outage or a quota trip.
-                if (
+                // A verdict of Transient is NOT one of those: it means we could
+                // not ask, and dropping on it would make Continue Watching empty
+                // itself during an outage or a quota trip.
+                val rowHasArtForDrop =
+                    !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+
+                val rowIsZombie =
                     dropsZombieCard(
                         lookup = detailLookup,
-                        hasArtwork = !entry.poster.isNullOrBlank() ||
-                            !backdropUrl.isNullOrBlank(),
+                        hasArtwork = rowHasArtForDrop,
                         resolvedName = resolvedLocalName
                     )
-                ) {
+
+                if (UP_NEXT_DIAGNOSTICS) {
+                    Log.d(
+                        "HOME_UPNEXT",
+                        upNextZombieDiagLine(
+                            source = "local",
+                            parentId = parentId,
+                            lookup = detailLookup,
+                            hasArtwork = rowHasArtForDrop,
+                            resolvedName = resolvedLocalName,
+                            dropped = rowIsZombie
+                        )
+                    )
+                }
+
+                if (rowIsZombie) {
                     return@async null
                 }
 
@@ -6855,14 +7001,18 @@ Log.d(
         var resolvedEpisode = session.episode
         var resolvedStartPositionMs = 0L
 
-        val detail = runCatchingCancellable {
+        // The verdict, not just the detail: an MDBList session for an id that
+        // names no title must not become a black card (see dropsZombieCard).
+        val lookup = runCatchingCancellable {
             tmdbLookupSemaphore.withPermit {
-                tmdbRepository.fetchEnrichedMetaCached(
+                tmdbRepository.lookupDetailForRawId(
                     navigationId,
                     if (session.isMovie) "movie" else "series"
                 )
             }
-        }.getOrNull()
+        }.getOrNull() ?: TmdbDetailLookup.Transient
+
+        val detail = (lookup as? TmdbDetailLookup.Found)?.detail
 
         if (detail != null) {
             posterUrl = detail.posterPath
@@ -6877,6 +7027,35 @@ Log.d(
                     ?: runtimeMinutes
             }
         }
+
+        val mdblistHasArtwork =
+            !posterUrl.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+        val mdblistResolvedName =
+            upNextDisplayTitleOrNull(detail?.name, mdblistHasArtwork)
+                ?: upNextDisplayTitleOrNull(detail?.title, mdblistHasArtwork)
+
+        val mdblistIsZombie =
+            dropsZombieCard(
+                lookup = lookup,
+                hasArtwork = mdblistHasArtwork,
+                resolvedName = mdblistResolvedName
+            )
+
+        if (UP_NEXT_DIAGNOSTICS) {
+            Log.d(
+                "HOME_UPNEXT",
+                upNextZombieDiagLine(
+                    source = "mdblist",
+                    parentId = navigationId,
+                    lookup = lookup,
+                    hasArtwork = mdblistHasArtwork,
+                    resolvedName = mdblistResolvedName,
+                    dropped = mdblistIsZombie
+                )
+            )
+        }
+
+        if (mdblistIsZombie) return null
 
         // The card's season/episode pair is settled AFTER the resolution below,
         // not here: this is a tracker session, and a session the tracker could
@@ -7146,14 +7325,18 @@ Log.d(
             if (stale) return null
         }
 
-        val detail = runCatchingCancellable {
+        // The verdict, not just the detail: a Trakt session for an id that names
+        // no title must not become a black card (see dropsZombieCard).
+        val lookup = runCatchingCancellable {
             tmdbLookupSemaphore.withPermit {
-                tmdbRepository.fetchEnrichedMetaCached(
+                tmdbRepository.lookupDetailForRawId(
                     navigationId,
                     if (session.isMovie) "movie" else "series"
                 )
             }
-        }.getOrNull()
+        }.getOrNull() ?: TmdbDetailLookup.Transient
+
+        val detail = (lookup as? TmdbDetailLookup.Found)?.detail
 
         val posterUrl = detail?.posterPath
             ?.takeIf { it.isNotBlank() }
@@ -7177,6 +7360,35 @@ Log.d(
                 fallback = null
             )
         }
+
+        val traktHasArtwork =
+            !posterUrl.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+        val traktResolvedName =
+            upNextDisplayTitleOrNull(detail?.name, traktHasArtwork)
+                ?: upNextDisplayTitleOrNull(detail?.title, traktHasArtwork)
+
+        val traktIsZombie =
+            dropsZombieCard(
+                lookup = lookup,
+                hasArtwork = traktHasArtwork,
+                resolvedName = traktResolvedName
+            )
+
+        if (UP_NEXT_DIAGNOSTICS) {
+            Log.d(
+                "HOME_UPNEXT",
+                upNextZombieDiagLine(
+                    source = "trakt",
+                    parentId = navigationId,
+                    lookup = lookup,
+                    hasArtwork = traktHasArtwork,
+                    resolvedName = traktResolvedName,
+                    dropped = traktIsZombie
+                )
+            )
+        }
+
+        if (traktIsZombie) return null
 
         val displayTitle = upNextDisplayTitleOrNull(detail?.name, !posterUrl.isNullOrBlank())
             ?: upNextDisplayTitleOrNull(detail?.title, !posterUrl.isNullOrBlank())
@@ -7310,24 +7522,35 @@ var episodesTotal: Int? = null
         // TMDB show id resolved with the detail (Upcoming title fallback).
         var capturedTmdbId: Int? = null
 
+        // What TMDB said about the SESSION's id - kept, not collapsed into a
+        // null, so this builder can tell a dead id (drop the card) from an
+        // outage (keep it). This is the tracker half of the zombie fix: these
+        // cards passed every title gate on the tracker's own name, so a session
+        // for an id that names no title rendered as the same black tile the
+        // local path drops (see dropsZombieCard).
+        var simklLookup: TmdbDetailLookup = TmdbDetailLookup.Transient
+
         if (needsTmdbLookup) {
 
-            val detail =
+            val lookup =
                 try {
 
                     tmdbLookupSemaphore
                         .withPermit {
 
                             tmdbRepository
-                                .fetchEnrichedMetaCached(
+                                .lookupDetailForRawId(
                                     navigationId,
                                     item.mediaType
                                 )
                         }
 
                 } catch (_: Exception) {
-                    null
+                    TmdbDetailLookup.Transient
                 }
+
+            simklLookup = lookup
+            val detail = (lookup as? TmdbDetailLookup.Found)?.detail
 
             // Capture the next aired episode for the Upcoming rail — the
             // detail response is already fetched here.
@@ -7381,6 +7604,36 @@ var episodesTotal: Int? = null
                 runtimeMinutes =
                     detail.displayRuntimeMinutes()
             }
+
+            // The zombie gate: a dead id, no art on the session and nothing
+            // TMDB resolved is a card that can only print the tracker's own
+            // title over a black tile. The tracker's title does NOT save it -
+            // it is the same stored string the local zombie rows carry.
+            val simklHasArtwork =
+                !posterUrl.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+
+            val simklIsZombie =
+                dropsZombieCard(
+                    lookup = simklLookup,
+                    hasArtwork = simklHasArtwork,
+                    resolvedName = resolvedName
+                )
+
+            if (UP_NEXT_DIAGNOSTICS) {
+                Log.d(
+                    "HOME_UPNEXT",
+                    upNextZombieDiagLine(
+                        source = "simkl",
+                        parentId = navigationId,
+                        lookup = simklLookup,
+                        hasArtwork = simklHasArtwork,
+                        resolvedName = resolvedName,
+                        dropped = simklIsZombie
+                    )
+                )
+            }
+
+            if (simklIsZombie) return null
 
             if (
                 item.mediaType == "series" &&

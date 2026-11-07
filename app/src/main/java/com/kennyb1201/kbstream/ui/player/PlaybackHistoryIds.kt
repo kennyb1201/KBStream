@@ -85,6 +85,13 @@ object PlaybackHistoryIds {
      * IMDB id when it can be resolved; anything unresolvable (no TMDB key, a
      * timeout) stays as the route's own id.
      *
+     * The id that comes out of that is then VERIFIED before it is filed (see
+     * [verifiedParentId]): an `tt...` id through TMDB's `/find` and a `tmdb:<n>`
+     * one through the detail endpoint, because an id that names no title produces
+     * the nameless black card this class repairs. A route already carrying a
+     * canonical IMDb id is no longer skipped - it was the one flavor never
+     * checked.
+     *
      * Bounded on purpose: this runs on the player's exit path (and, for the MPV
      * engine, in front of the fallback write), so a slow resolve must never hold
      * a history write hostage.
@@ -97,7 +104,15 @@ object PlaybackHistoryIds {
         episodeStreamId: String? = null
     ): String {
         val raw = rawParentId.trim()
-        if (raw.isBlank() || raw.startsWith("tt")) return raw
+        if (raw.isBlank()) return raw
+        // An IMDb id used to be returned on sight - it is the canonical form -
+        // which also meant it was the ONE flavor never checked. A route can be
+        // opened with a `tt...` id that names no title (a catalog's stale key),
+        // and that row was filed as-is: the card it built was the same black,
+        // nameless tile this class already repairs for `tmdb:<n>`.
+        if (raw.startsWith("tt")) {
+            return verifiedParentId(context, raw, parentType, episodeStreamId)
+        }
 
         val tmdbId = resolvedTmdbId?.takeIf { it > 0 }
             ?: when {
@@ -125,19 +140,23 @@ object PlaybackHistoryIds {
     /**
      * The id this row will be filed under, checked before it is written.
      *
-     * `tmdb:<n>` is the one flavor the writer could not verify before: it was
-     * kept whenever [resolveImdbId] answered nothing, which is also what a
-     * number that names NO title answers. Continue Watching then filed the row
-     * under an id nothing can resolve, and the card was born a zombie - black
+     * `tmdb:<n>` and `tt...` are the two flavors the writer can be handed and
+     * could not verify before. `tmdb:<n>` was kept whenever [resolveImdbId]
+     * answered nothing, which is also what a number that names NO title answers;
+     * an IMDb id is the canonical form [canonicalParentId] aims for, so it was
+     * returned on sight with no check at all. Continue Watching then filed the
+     * row under an id nothing can resolve, and the card was born a zombie - black
      * tile, no show name, and the id printed as the title in Detail (the
-     * "tmdb:3634822" case).
+     * "tmdb:3634822" case, and the `tt...` twins of it that the first repair
+     * could not touch).
      *
-     * So the candidate is asked of TMDB's detail endpoint, the same lookup the
-     * card and Detail make. A title answers and the id stands. No title, and
-     * the playing EPISODE's own root - what the add-ons resolve that file under,
-     * and the show the row actually belongs to - takes its place. The episode
-     * id itself is never adopted, and `episodeStreamId` is not changed: the row
-     * still resumes the exact episode it was written for.
+     * So the candidate is asked of TMDB - the detail endpoint for a number, the
+     * `/find` endpoint for an IMDb id, the same lookups the card and Detail make.
+     * A title answers and the id stands. No title, and the playing EPISODE's own
+     * root - what the add-ons resolve that file under, and the show the row
+     * actually belongs to - takes its place. The episode id itself is never
+     * adopted, and `episodeStreamId` is not changed: the row still resumes the
+     * exact episode it was written for.
      *
      * A film, or an episode id with no show root to read, keeps the candidate:
      * this repairs a wrong id, it does not invent one.
@@ -148,20 +167,25 @@ object PlaybackHistoryIds {
         parentType: String,
         episodeStreamId: String?
     ): String {
-        if (!candidate.startsWith("tmdb:")) return candidate
-        val tmdbId = candidate.removePrefix("tmdb:").toIntOrNull()
-            ?: return candidate
+        val isImdb = candidate.startsWith("tt", ignoreCase = true)
+        if (!isImdb && !candidate.startsWith("tmdb:")) return candidate
 
         val verdict = withTimeoutOrNull(2500L) {
             runCatchingCancellable {
-                TmdbRepository.getInstance(context)
-                    .lookupDetailByTmdbId(tmdbId, parentType)
+                val repository = TmdbRepository.getInstance(context)
+                if (isImdb) {
+                    repository.lookupDetailByImdbId(candidate, parentType)
+                } else {
+                    candidate.removePrefix("tmdb:").toIntOrNull()?.let { tmdbId ->
+                        repository.lookupDetailByTmdbId(tmdbId, parentType)
+                    } ?: return@runCatchingCancellable null
+                }
             }.getOrNull()
         }
-        // Only a 404 is a verdict. A timeout or an outage keeps the candidate:
-        // replacing a valid id because we could not ask would file this play
-        // under a different flavor than the one before it, which is how two
-        // rows for one episode appear.
+        // Only a definitive miss is a verdict. A timeout or an outage keeps the
+        // candidate: replacing a valid id because we could not ask would file
+        // this play under a different flavor than the one before it, which is how
+        // two rows for one episode appear.
         if (verdict != TmdbDetailLookup.NotFound) return candidate
 
         val episodeRoot = episodeRootFromId(episodeStreamId)

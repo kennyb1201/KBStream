@@ -158,8 +158,8 @@ class ZombieCardsTest {
     @Test
     fun `the builder asks the lookup for the miss kind and drops through the rule`() {
         assertTrue(
-            "the row's tmdb id is resolved with the miss kind kept",
-            homeViewModel.contains("tmdbRepository.lookupDetailByTmdbId(")
+            "the row's id is resolved with the miss kind kept, for EVERY id flavor",
+            homeViewModel.contains("tmdbRepository.lookupDetailForRawId(")
         )
         assertTrue(
             "and the drop is the shared rule, not an inline predicate",
@@ -172,9 +172,10 @@ class ZombieCardsTest {
             homeViewModel.contains("var detailLookup: TmdbDetailLookup = TmdbDetailLookup.Transient")
         )
         assertTrue(
-            "404 is the only drop verdict",
+            "a verdict that names no title is the only thing that drops, and it takes " +
+                "no art and no name with it",
             source("com/kennyb1201/kbstream/ui/home/HomeUpNext.kt")
-                .contains("lookup == TmdbDetailLookup.NotFound && !hasArtwork && resolvedName == null")
+                .contains("lookup.namesNoTitle && !hasArtwork && resolvedName == null")
         )
     }
 
