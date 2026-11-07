@@ -3073,7 +3073,13 @@ Log.d(
     }
 
     /**
-     * The rail items whose title is positively owned by ANOTHER profile, by id.
+     * The items whose title is positively owned by ANOTHER profile, by id.
+     *
+     * [items] is every title the marker pass covers - catalog rails, Top Picks
+     * and the pinned Library rails - not the catalog rails alone: the ownership
+     * set must cover the same titles as the preload, or a title that exists
+     * only on a pinned list could carry a sibling's eye with nothing to strip
+     * it (see [watchedMarkerMetas]).
      *
      * The ids are what the watched-marker sets are keyed by (`type::id`), so
      * this is the shape a badge filter needs: a title this profile never
@@ -3082,7 +3088,7 @@ Log.d(
      * why an unattributed title keeps its badge (see
      * [titleOwnedByAnotherProfile]).
      */
-    private fun siblingOwnedRailItemIds(rails: List<Rail>): Set<String> {
+    private fun siblingOwnedRailItemIds(items: List<MetaPreview>): Set<String> {
 
         val activeProfileId =
             com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -3096,9 +3102,8 @@ Log.d(
 
         if (owners.isEmpty()) return emptySet()
 
-        return rails
+        return items
             .asSequence()
-            .flatMap { rail -> rail.items.asSequence() }
             .filter { meta ->
                 titleOwnedByAnotherProfile(
                     ownerByTitleKey = owners,
@@ -10462,6 +10467,56 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
+    /**
+     * The rows on the viewer's pinned Library rails, as the Home screens last
+     * reported them (see [setLibraryRailItems]).
+     *
+     * The rails themselves are loaded by the SCREENS (`rememberLibraryHomeRails`
+     * in LibraryHomeRailLoader, deliberately the one loader both Home surfaces
+     * use), so this ViewModel holds no reference to them: nothing in
+     * [refreshWatchedStatus] ever walked their items, which is why a watched
+     * title that existed only on a pinned Trakt / MDBList list wore no eye or
+     * checkmark while every catalog card did - the same hole Top Picks had.
+     *
+     * Stored rather than passed per refresh for the same reason the picks are: a
+     * later refresh (the periodic tick, a profile switch, a mark/unmark) must
+     * keep the markers without depending on the UI to re-report on every
+     * trigger. Empty is the ordinary state - most profiles pin no list - and it
+     * clears the store, so a profile without pins cannot keep the previous
+     * profile's rows in the marker pass.
+     */
+    private val _libraryRailItems =
+        MutableStateFlow<List<MetaPreview>>(emptyList())
+
+    /**
+     * Reports the rows the pinned Library rails are drawing.
+     *
+     * Called from both Home screens' `LaunchedEffect` over the loader's state,
+     * so it fires when the load lands and whenever the pinned set changes -
+     * pinning a list in Library and backing out to Home badges it without a
+     * restart.
+     *
+     * The comparison is by CONTENT (`type`, `id` pairs, see
+     * [libraryRailItemKeys]), never by list identity: a recompose re-delivers
+     * the same rows in fresh list instances, and treating that as a change
+     * would start a marker refresh per frame. The refresh is version-guarded
+     * anyway ([watchedRefreshVersion] + [watchedRefreshMutex]), so a report that
+     * lands beside a catalog refresh is safe.
+     */
+    fun setLibraryRailItems(items: List<MetaPreview>) {
+
+        if (
+            libraryRailItemKeys(items) ==
+            libraryRailItemKeys(_libraryRailItems.value)
+        ) {
+            return
+        }
+
+        _libraryRailItems.value = items
+
+        refreshWatchedStatus(_rails.value)
+    }
+
     private fun refreshWatchedStatus(
         rails: List<Rail>
     ) {
@@ -10478,61 +10533,47 @@ private suspend fun calculateEpisodesRemaining(
 
             try {
 
-                // The personalized row is not a [Rail], so nothing in the loop
-                // below ever saw its picks - which is exactly why its cards wore
-                // no watched markers while every catalog card did. Its ids are
-                // the same "tmdb:<n>" form the TMDB-built rails already use, so
-                // they ride along in the same preload.
-                val topPickItems =
-                    _topPicks.value.mapNotNull { pick ->
-                        val mediaType = normalizeMediaType(pick.type)
-                        if (pick.tmdbId <= 0 || mediaType == null) {
-                            null
-                        } else {
-                            "tmdb:${pick.tmdbId}" to mediaType
-                        }
-                    }
-
-                val railItems =
-                    rails
-                        .asSequence()
-                        .flatMap { rail ->
-                            rail.items.asSequence()
-                        }
-                        .mapNotNull { meta ->
-
-                            // Accept BOTH id forms: imdb "tt…" ids (addon
-                            // rails, Continue Watching) and "tmdb:<n>" ids
-                            // (KB/TMDB-discover rails — the hardcoded kids
-                            // rails). The old tt-only filter silently
-                            // dropped every tmdb-keyed item, which is why
-                            // the kids profile showed no watched markers:
-                            // its rails are 100% tmdb ids. The repository
-                            // stores and resolves both forms under the same
-                            // "type::id" cache key, so no conversion is
-                            // needed.
-                            val id =
-                                meta.id
-                                    .trim()
-                                    .takeIf {
-                                        it.startsWith("tt") ||
-                                            it.startsWith("tmdb:")
-                                    }
-                                    ?: return@mapNotNull null
-
-                            val mediaType =
-                                normalizeMediaType(
-                                    meta.type
-                                )
-                                    ?: return@mapNotNull null
-
-                            id to mediaType
-                        }
+                // ONE item set, from all three sources that draw a Home card.
+                // It feeds the preload AND the ownership filter below: the two
+                // must cover the same titles, or a title that exists only on a
+                // pinned Library list could carry a sibling profile's eye with
+                // no id in the ownership set to strip it.
+                //
+                // Top Picks is here because the row is not a [Rail], so nothing
+                // in the rails below ever saw its picks - which is exactly why
+                // its cards wore no watched markers while every catalog card
+                // did. The pinned Library rails are here for the same reason:
+                // the screens load them (see [setLibraryRailItems]) and this
+                // ViewModel never held them, so a title that existed only on a
+                // pinned Trakt / MDBList list was never preloaded either.
+                val markerMetas =
+                    watchedMarkerMetas(
+                        railItems =
+                            rails.flatMap { rail ->
+                                rail.items
+                            },
+                        topPickItems =
+                            _topPicks.value.mapNotNull { pick ->
+                                val mediaType = normalizeMediaType(pick.type)
+                                if (pick.tmdbId <= 0 || mediaType == null) {
+                                    null
+                                } else {
+                                    // The same "tmdb:<n>" form the
+                                    // TMDB-built rails use, so a pick and a
+                                    // catalog card of the same title are one
+                                    // row here.
+                                    MetaPreview(
+                                        id = "tmdb:${pick.tmdbId}",
+                                        type = mediaType,
+                                        name = pick.name
+                                    )
+                                }
+                            },
+                        libraryItems = _libraryRailItems.value
+                    )
 
                 val preloadItems =
-                    (railItems + topPickItems.asSequence())
-                        .distinct()
-                        .toList()
+                    watchedMarkerPreload(markerMetas)
 
                 if (
                     preloadItems.isEmpty()
@@ -10594,7 +10635,7 @@ private suspend fun calculateEpisodesRemaining(
                 // same evidence as the tracker cards above: drop only on
                 // POSITIVE ownership (see [titleOwnedByAnotherProfile]).
                 val siblingOwnedIds =
-                    siblingOwnedRailItemIds(rails)
+                    siblingOwnedRailItemIds(markerMetas)
 
                 siblingOwnedMarkerIds = siblingOwnedIds
 
@@ -10633,7 +10674,8 @@ private suspend fun calculateEpisodesRemaining(
                     "marker refresh complete: " +
                         "input=${preloadItems.size}, " +
                         "watched=${resolvedWatchedKeys.size}, " +
-                        "rails=${rails.size}"
+                        "rails=${rails.size}, " +
+                        "library=${_libraryRailItems.value.size}"
                 )
 
             } catch (

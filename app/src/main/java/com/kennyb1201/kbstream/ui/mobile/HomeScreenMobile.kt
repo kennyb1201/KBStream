@@ -446,6 +446,17 @@ fun HomeScreenMobile(
         // (see KBHomeSlots), so the merge needs its key to place it, and the
         // column below needs its rows to draw it.
         val pinnedLibraryRails by rememberLibraryHomeRails()
+        // The marker pass must see these rows as well as the catalog rails: a
+        // title that exists only on a pinned list was never preloaded, which is
+        // why pinned Trakt / MDBList cards wore no eye or checkmark here while
+        // every catalog card did. Same report as the television's - one shared
+        // HomeViewModel, and its setter ignores a re-delivery of the same rows,
+        // so both screens reporting costs one refresh at most.
+        LaunchedEffect(pinnedLibraryRails) {
+            viewModel.setLibraryRailItems(
+                pinnedLibraryRails.flatMap { rail -> rail.items }
+            )
+        }
         val homeEntries = remember(railsShown, kbState, builtinWithContent, pinnedLibraryRails) {
             KBHomeSlots.buildMergedEntries(
                 context,

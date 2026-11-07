@@ -29,8 +29,12 @@ class BadgeProfileOwnershipContractTest {
         val body = functionBody(HOME_VM, "private fun refreshWatchedStatus(")
 
         assertTrue(
-            "the marker pass must resolve the rail items another profile owns",
-            body.contains("siblingOwnedRailItemIds(rails)")
+            "the marker pass must resolve EVERY title it preloads for ownership: " +
+                "the catalog rails, Top Picks and the pinned Library rails. A " +
+                "title that exists only on a pinned list had no id in this set, " +
+                "so the filter below could not strip a sibling's eye from it",
+            body.contains("siblingOwnedRailItemIds(markerMetas)") &&
+                body.contains("libraryItems = _libraryRailItems.value")
         )
         assertTrue(
             "and the eye set - never the checkmark set - is what it filters",

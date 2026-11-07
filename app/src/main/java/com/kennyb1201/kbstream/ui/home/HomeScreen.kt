@@ -5038,6 +5038,18 @@ fun HomeScreen(
     // the merge needs their keys to place them, and the drawing needs their rows.
     val pinnedLibraryRails by rememberLibraryHomeRails()
 
+    // ...and the marker pass has to see those rows too. The rails live outside
+    // the ViewModel's own rails (the loader above is the screens'), so a title
+    // that exists only on a pinned list was never preloaded and its cards wore
+    // no eye or checkmark. Reported here, once per loaded set: the ViewModel
+    // keeps them for later refreshes (the periodic tick, a profile switch) and
+    // ignores a re-delivery of the same rows.
+    LaunchedEffect(pinnedLibraryRails) {
+        viewModel.setLibraryRailItems(
+            pinnedLibraryRails.flatMap { rail -> rail.items }
+        )
+    }
+
     val mergedEntries = remember(rails, kbState, builtinWithContent, pinnedLibraryRails) {
         com.kennyb1201.kbstream.ui.kb.KBHomeSlots
             .buildMergedEntries(

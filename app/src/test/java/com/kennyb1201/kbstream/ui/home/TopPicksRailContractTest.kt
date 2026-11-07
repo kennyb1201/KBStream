@@ -217,7 +217,8 @@ class TopPicksRailContractTest {
         // false and the row looks untouched however much of it was watched.
         assertTrue(
             "the marker preload must carry the picks, not only the add-on rails",
-            viewModel.contains("\"tmdb:\${pick.tmdbId}\" to mediaType")
+            viewModel.contains("topPickItems =") &&
+                viewModel.contains("id = \"tmdb:\${pick.tmdbId}\",")
         )
         assertTrue(
             "and a finished build must ask for their markers again",
