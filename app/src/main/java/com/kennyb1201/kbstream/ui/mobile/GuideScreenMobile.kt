@@ -30,17 +30,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -88,8 +94,14 @@ import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBSheetContent
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.iptv.GuideViewMode
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.iptv.ProgramHitPress
+import com.kennyb1201.kbstream.ui.iptv.applyGroupOrder
+import com.kennyb1201.kbstream.ui.iptv.decodeGroupOrder
+import com.kennyb1201.kbstream.ui.iptv.encodeGroupOrder
+import com.kennyb1201.kbstream.ui.iptv.moveGroupOrder
+import com.kennyb1201.kbstream.ui.iptv.reorderableGroupLabels
 import com.kennyb1201.kbstream.ui.iptv.formatCatchupWindow
 import com.kennyb1201.kbstream.ui.iptv.formatRemainingLabel
 import com.kennyb1201.kbstream.ui.iptv.formatStartsInLabel
@@ -233,6 +245,32 @@ fun GuideScreenMobile(
                     ?: GUIDE_GROUP_ALL
             )
         }
+        // The saved group order (F2k-g): the same store and the same rule as the
+        // TV guide, so a reorder made on one form shows up on the other.
+        var groupOrder by remember(activeProfileId) {
+            mutableStateOf(decodeGroupOrder(guidePrefs.getString("group_order", null)))
+        }
+        fun saveGroupOrder(next: List<String>) {
+            if (next == groupOrder) return
+            groupOrder = next
+            guidePrefs.edit().putString("group_order", encodeGroupOrder(next)).apply()
+        }
+        // Which view the guide draws (D1: the list stays the default).
+        var guideView by remember(activeProfileId) {
+            mutableStateOf(GuideViewMode.fromPref(guidePrefs.getString("guide_view", null)))
+        }
+        // The grid's group list is a slide-in drawer on a phone (F2k-e).
+        var showGroupDrawer by remember { mutableStateOf(false) }
+        val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
+        val groupDrawerState = rememberDrawerState(DrawerValue.Closed)
+        LaunchedEffect(showGroupDrawer) {
+            if (showGroupDrawer) groupDrawerState.open() else groupDrawerState.close()
+        }
+        LaunchedEffect(groupDrawerState) {
+            snapshotFlow { groupDrawerState.isOpen }.collect { open ->
+                if (!open) showGroupDrawer = false
+            }
+        }
         // Program reminders, from the store the background worker also reads.
         // Declared with the other prefs-backed state because the channel sheet's
         // toggle writes it, below.
@@ -360,8 +398,22 @@ fun GuideScreenMobile(
                 item.channel.groupTitle?.trim().orEmpty() !in hiddenGroups
             }
         }
-        val groups = remember(unhiddenChannels, favorites, recentKeys) {
-            guideGroupLabels(unhiddenChannels, favorites, recentKeys)
+        val groups = remember(unhiddenChannels, favorites, recentKeys, groupOrder) {
+            guideGroupLabels(unhiddenChannels, favorites, recentKeys, groupOrder)
+        }
+
+        // A saved label that is no longer a group is pruned on read (F2k-g).
+        LaunchedEffect(groups) {
+            val pruned = groupOrder.filter { it in groups }
+            if (pruned != groupOrder) saveGroupOrder(pruned)
+        }
+
+        fun moveGroup(label: String, direction: Int) {
+            val playlistGroups = reorderableGroupLabels(groups)
+            val ordered = applyGroupOrder(playlistGroups, groupOrder).filter { it in playlistGroups }
+            val index = ordered.indexOf(label)
+            if (index < 0) return
+            saveGroupOrder(moveGroupOrder(ordered, index, direction))
         }
         // Every group title the playlist holds, hidden ones included - the
         // groups manager needs the hidden ones to be able to restore them.
@@ -664,7 +716,18 @@ fun GuideScreenMobile(
                 nowMs = nowMs,
                 onBack = onBack,
                 onSetup = { showSetup = true },
-                onOpenSports = onOpenSports
+                onOpenSports = onOpenSports,
+                guideView = guideView,
+                onToggleView = {
+                    val next = GuideViewMode.toggled(guideView)
+                    guideView = next
+                    guidePrefs.edit().putString("guide_view", next.prefValue).apply()
+                },
+                onOpenGroups = if (guideView == GuideViewMode.GRID) {
+                    { showGroupDrawer = true }
+                } else {
+                    null
+                }
             )
 
             reminderBanner?.let { hit ->
@@ -773,6 +836,114 @@ fun GuideScreenMobile(
                 }
                 query.isBlank() && filtered.isEmpty() -> {
                     MobileGuideStatus("This playlist has no channels")
+                }
+                // The grid (F5a). Searching keeps the LIST's results: a program
+                // hit is a row, and the search overlay's promise is the rows it
+                // names - so the grid yields to it rather than hiding it.
+                guideView == GuideViewMode.GRID && query.isBlank() -> {
+                    ModalNavigationDrawer(
+                        drawerState = groupDrawerState,
+                        drawerContent = {
+                            ModalDrawerSheet {
+                                Column(modifier = Modifier.padding(vertical = 12.dp)) {
+                                    Text(
+                                        text = "GROUPS",
+                                        color = KBTextLo,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(
+                                            start = 20.dp,
+                                            bottom = 8.dp
+                                        )
+                                    )
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxHeight(),
+                                        contentPadding = PaddingValues(bottom = 16.dp)
+                                    ) {
+                                        // Same list, same counts as the TV sidebar
+                                        // (F2k-e): the side panel turned sideways.
+                                        items(groups, key = { "drawer:" + it }) { label ->
+                                            val selected = label == currentGroup
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        selectedGroup = label
+                                                        showGroupDrawer = false
+                                                    }
+                                                    .background(
+                                                        if (selected) KBSurface else KBVoid
+                                                    )
+                                                    .padding(
+                                                        horizontal = 20.dp,
+                                                        vertical = 12.dp
+                                                    ),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = label,
+                                                    color = if (selected) KBAccent else KBTextHi,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (selected) {
+                                                        FontWeight.SemiBold
+                                                    } else {
+                                                        FontWeight.Normal
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Text(
+                                                    text = guideGroupChannels(
+                                                        unhiddenChannels,
+                                                        label,
+                                                        favorites,
+                                                        recentKeys
+                                                    ).size.toString(),
+                                                    color = KBTextLo,
+                                                    style = MaterialTheme.typography.labelMedium
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ) {
+                        GuideGridMobileView(
+                            items = filtered,
+                            programsByChannel = gridPrograms,
+                            resolvedGuideIds = resolvedGuideIds,
+                            reminderKeys = reminderKeys,
+                            nowMs = nowMs,
+                            onPlay = { item ->
+                                recentKeys = nextRecentKeys(recentKeys, item.channelKey())
+                                onPlayChannel?.invoke(item)
+                            },
+                            onToggleReminder = { item, cell ->
+                                toggleProgramReminder(
+                                    channelId = item.channel.id,
+                                    channelName = item.channel.displayName,
+                                    logoUrl = item.channel.logoUrl,
+                                    programTitle = cell.title.orEmpty(),
+                                    startUtcMillis = cell.startUtcMillis,
+                                    endUtcMillis = cell.endUtcMillis
+                                )
+                            },
+                            onCatchup = if (onPlayCatchup != null) {
+                                { item, _ ->
+                                    catchupChannel = item
+                                    viewModel.loadCatchupPrograms(item.channel)
+                                }
+                            } else {
+                                null
+                            },
+                            onRequestWindow = { ids, start, end ->
+                                viewModel.requestGuideGridWindow(ids, start, end)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
                 else -> {
                     LazyColumn(
@@ -911,7 +1082,9 @@ fun GuideScreenMobile(
         if (showGroups) {
             MobileGroupsDialog(
                 groupTitles = allGroupTitles,
+                groupOrder = groupOrder,
                 hiddenGroups = hiddenGroups,
+                onMoveGroup = { group, direction -> moveGroup(group, direction) },
                 onToggle = { group ->
                     setHiddenGroups(
                         if (group in hiddenGroups) hiddenGroups - group
@@ -982,7 +1155,11 @@ private fun MobileGuideTopBar(
     nowMs: Long,
     onBack: () -> Unit,
     onSetup: () -> Unit,
-    onOpenSports: (() -> Unit)?
+    onOpenSports: (() -> Unit)?,
+    guideView: GuideViewMode = GuideViewMode.LIST,
+    onToggleView: (() -> Unit)? = null,
+    /** The grid's group drawer (F2k-e); null in list view, where the chips do it. */
+    onOpenGroups: (() -> Unit)? = null
 ) {
     val clock = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
     Row(
@@ -1012,6 +1189,27 @@ private fun MobileGuideTopBar(
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1
             )
+        }
+        if (onOpenGroups != null) {
+            IconButton(onClick = onOpenGroups) {
+                Icon(
+                    imageVector = Icons.Filled.Menu,
+                    contentDescription = "Groups",
+                    tint = KBTextHi
+                )
+            }
+        }
+        if (onToggleView != null) {
+            // The label IS the state, as on TV: a word instead of an icon is the
+            // only way a tap target can say which view is up.
+            TextButton(onClick = onToggleView) {
+                Text(
+                    text = if (guideView == GuideViewMode.GRID) "GRID" else "LIST",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
         if (onOpenSports != null) {
             IconButton(onClick = onOpenSports) {
@@ -1329,11 +1527,20 @@ private fun MobileReminderBanner(
 @Composable
 private fun MobileGroupsDialog(
     groupTitles: List<String>,
+    groupOrder: List<String>,
     hiddenGroups: Set<String>,
     onToggle: (String) -> Unit,
+    onMoveGroup: (String, Int) -> Unit,
     onShowAll: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // The playlist groups in the guide's own order (F2k-g). This dialog is the
+    // only place the order is edited on either form; the drawer and the chips
+    // just display it.
+    val ordered = remember(groupTitles, groupOrder) {
+        applyGroupOrder(groupTitles, groupOrder)
+            .filter { it in groupTitles }
+    }
     Dialog(onDismissRequest = onDismiss) {
         KBDialogPanel(
             title = "Groups",
@@ -1345,12 +1552,12 @@ private fun MobileGroupsDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                groupTitles.forEach { group ->
+                ordered.forEachIndexed { index, group ->
                     val hidden = group in hiddenGroups
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
                             text = group,
@@ -1360,6 +1567,16 @@ private fun MobileGroupsDialog(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+                        // ▲ / ▼ move the group one slot and persist at once. At
+                        // either end the press is a defined no-op.
+                        KBButton(
+                            label = "▲",
+                            enabled = index > 0
+                        ) { onMoveGroup(group, -1) }
+                        KBButton(
+                            label = "▼",
+                            enabled = index < ordered.lastIndex
+                        ) { onMoveGroup(group, 1) }
                         KBButton(label = if (hidden) "SHOW" else "HIDE") {
                             onToggle(group)
                         }

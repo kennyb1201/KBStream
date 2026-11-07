@@ -954,6 +954,122 @@ class IptvRepository(
         emit(items)
     }.flowOn(Dispatchers.Default)
 
+    /**
+     * The programs each of [playlist]'s channels holds in
+     * [windowStart]..[windowEnd] - the timeline grid's one read.
+     *
+     * This is deliberately NOT [observeLineupWithGuides]: that answers "what is
+     * on now and next" for a row, while the grid draws every program overlapping
+     * the window at its real width, so it needs the whole window per channel.
+     * The matching, the source snapshots and the per-batch reads are the same
+     * ones the list already runs - only the DAO query and the shape of the answer
+     * differ.
+     *
+     * Keyed by PLAYLIST channel id (the grid's rows and the zap lineup are), with
+     * an empty list for a channel that matched the guide but has no program in
+     * this window. A channel that matched nothing at all is absent: the grid
+     * renders that difference (D3) and must not confuse "still loading" with
+     * "nothing there".
+     *
+     * [perChannelLimit] bounds each channel's row so a music channel with
+     * 15-minute slots cannot truncate the rest of the window; the batching stays
+     * [PROGRAM_QUERY_BATCH_SIZE] channel ids per query, which is what keeps a
+     * grid open from becoming a bigger read than the list's.
+     */
+    suspend fun loadGuideGridWindow(
+        playlist: IptvPlaylist,
+        epgUrls: List<String>,
+        windowStart: Long,
+        windowEnd: Long,
+        perChannelLimit: Int
+    ): Map<String, List<EpgProgramRow>> = withContext(Dispatchers.IO) {
+        val guideUrls = epgUrls.map(String::trim).filter(String::isNotEmpty)
+        val playlistUrl = playlist.sourceUrl.orEmpty().trim()
+        if (
+            guideUrls.isEmpty() ||
+            playlistUrl.isBlank() ||
+            playlist.channels.isEmpty() ||
+            perChannelLimit <= 0 ||
+            windowEnd <= windowStart
+        ) {
+            return@withContext emptyMap()
+        }
+
+        val snapshots = guideUrls.mapNotNull { url ->
+            val snapshot = getOrCreateGuideSnapshot(url)
+            snapshot.takeIf { it.guideChannels.isNotEmpty() }
+        }
+        if (snapshots.isEmpty()) return@withContext emptyMap()
+
+        val channelIds = playlist.channels.map { it.id }
+        val cachedMatches = HashMap<String, PlaylistEpgMatchEntity>(channelIds.size)
+        for (guideUrl in guideUrls) {
+            val perSource = loadCachedMatches(
+                playlistUrl = playlistUrl,
+                epgUrl = guideUrl,
+                playlistChannelIds = channelIds.filterNot { it in cachedMatches }
+            )
+            perSource.forEach { (channelId, match) -> cachedMatches.putIfAbsent(channelId, match) }
+        }
+
+        val resolvedMatches = resolveMatchesMulti(
+            playlistUrl = playlistUrl,
+            epgUrls = guideUrls,
+            snapshots = snapshots,
+            playlistChannels = playlist.channels,
+            cachedMatches = cachedMatches
+        )
+        if (resolvedMatches.isEmpty()) return@withContext emptyMap()
+
+        // Row channel id -> playlist channel id. Programs are stored under the
+        // importer's key (epgProgramChannelKey), which is what both sides of
+        // this map are normalized to.
+        val playlistIdByProgramKey = HashMap<String, String>(resolvedMatches.size)
+        resolvedMatches.forEach { (playlistChannelId, match) ->
+            match.epgChannel?.id?.let { rawId ->
+                playlistIdByProgramKey.putIfAbsent(epgProgramChannelKey(rawId), playlistChannelId)
+            }
+        }
+        if (playlistIdByProgramKey.isEmpty()) return@withContext emptyMap()
+
+        val out = LinkedHashMap<String, MutableList<EpgProgramRow>>(playlistIdByProgramKey.size)
+        playlistIdByProgramKey.values.forEach { playlistChannelId ->
+            out.getOrPut(playlistChannelId) { ArrayList() }
+        }
+
+        val programKeys = playlistIdByProgramKey.keys.toList()
+        val rows = ArrayList<EpgProgramRow>()
+        coroutineScope {
+            snapshots.forEach { snapshot ->
+                programKeys.chunked(PROGRAM_QUERY_BATCH_SIZE)
+                    .map { batch ->
+                        async(Dispatchers.IO) {
+                            dao.getProgramsForChannelsInWindow(
+                                sourceUrl = snapshot.sourceUrl,
+                                channelIds = batch,
+                                windowStart = windowStart,
+                                windowEnd = windowEnd,
+                                perChannelLimit = perChannelLimit
+                            )
+                        }
+                    }
+                    .awaitAll()
+                    .forEach { rows.addAll(it) }
+            }
+        }
+
+        val seen = HashSet<ProgramKey>(rows.size)
+        rows.forEach { row ->
+            val playlistChannelId = playlistIdByProgramKey[normalizeLookupKey(row.channelId)]
+                ?: return@forEach
+            if (seen.add(ProgramKey(row.channelId, row.startUtcMillis, row.endUtcMillis, row.title))) {
+                out[playlistChannelId]?.add(row)
+            }
+        }
+
+        out.mapValues { (_, channelRows) -> channelRows.sortedBy { it.startUtcMillis } }
+    }
+
     private suspend fun getOrCreateGuideSnapshot(epgUrl: String): GuideSnapshot {
         val normalizedGuideUrl = epgUrl.trim()
         if (normalizedGuideUrl.isBlank()) {

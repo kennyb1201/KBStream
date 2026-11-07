@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.mobile
 
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
+import com.kennyb1201.kbstream.ui.iptv.applyGroupOrder
 
 /*
  * The phone guide's group rules, kept out of the composable so they can be
@@ -45,8 +46,14 @@ internal fun guideChannelKey(item: IptvChannelWithEpg): String =
 internal fun guideGroupLabels(
     channels: List<IptvChannelWithEpg>,
     favorites: Set<String>,
-    recentKeys: List<String>
-): List<String> = buildList {
+    recentKeys: List<String>,
+    /**
+     * The saved group order (F2k-g). Applied through the SAME rule the TV grid
+     * and the list read, so a reorder made on either form shows up on both - and
+     * All / Recent / Favorites never move.
+     */
+    savedOrder: List<String> = emptyList()
+): List<String> = applyGroupOrder(buildList {
     add(GUIDE_GROUP_ALL)
     if (recentKeys.isNotEmpty()) add(GUIDE_GROUP_RECENT)
     if (channels.any { guideChannelKey(it) in favorites }) add(GUIDE_GROUP_FAVORITES)
@@ -64,7 +71,7 @@ internal fun guideGroupLabels(
             ?.let(seen::add)
     }
     addAll(seen - this.toSet())
-}
+}, savedOrder)
 
 /**
  * The channels of [label], in the order the list should render them.

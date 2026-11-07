@@ -1078,6 +1078,124 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _guideItemsByChannelId.asStateFlow()
 
     /**
+     * The timeline grid's programs: playlist channel id -> every program of that
+     * channel the grid has read, merged across windows.
+     *
+     * Separate from [loadedGuideItems], which carries only now/next/upcoming for
+     * the list's rows. The grid draws a six-hour window at real widths, so it
+     * needs the whole span, and it keeps what it already has when the window
+     * slides (F1c): a time move reads only the newly exposed part and never
+     * flashes a row back to its loading state.
+     */
+    private val _gridPrograms =
+        MutableStateFlow<Map<String, List<GridProgram>>>(emptyMap())
+    val gridPrograms: StateFlow<Map<String, List<GridProgram>>> = _gridPrograms.asStateFlow()
+
+    /**
+     * Channels whose grid window is being read right now.
+     *
+     * A row that is in here AND has no programs yet renders as loading; a row
+     * that is in here with programs already on screen keeps drawing them (that
+     * is the slide, not a reload).
+     */
+    private val _gridLoadingChannelIds = MutableStateFlow<Set<String>>(emptySet())
+    val gridLoadingChannelIds: StateFlow<Set<String>> = _gridLoadingChannelIds.asStateFlow()
+
+    /**
+     * `(channel, windowStart, windowEnd)` triples already read. Bounded: a long
+     * session that pages the axis for hours forgets the oldest keys rather than
+     * growing an unbounded set (a re-read costs one query and is still correct).
+     */
+    private val gridWindowReads = LinkedHashSet<String>()
+
+    /**
+     * Reads the grid window for [channelIds] (the rows on screen plus a page of
+     * lookahead), skipping any (channel, window) pair already read.
+     *
+     * One call per visible page, not per channel: the repository resolves the
+     * guide matches for the batch and reads it in chunks of
+     * `PROGRAM_QUERY_BATCH_SIZE` channel ids, so the grid's parallelism is row
+     * paging and the EPG query budget is the list's own (F1a, F1d).
+     */
+    fun requestGuideGridWindow(
+        channelIds: List<String>,
+        windowStart: Long,
+        windowEnd: Long
+    ) {
+        val playlist = _playlist.value ?: return
+        if (channelIds.isEmpty() || windowEnd <= windowStart) return
+
+        val hiddenIds = _hiddenChannelIds.value
+        val wanted = channelIds.asSequence()
+            .distinct()
+            .mapNotNull { id -> playlist.channels.firstOrNull { it.id == id } }
+            .filter { it.id !in hiddenIds }
+            .take(MAX_GUIDE_CHANNELS_PER_REQUEST)
+            .toList()
+        if (wanted.isEmpty()) return
+
+        val missing = wanted.filter { channel ->
+            gridWindowKey(channel.id, windowStart, windowEnd) !in gridWindowReads
+        }
+        if (missing.isEmpty()) return
+        missing.forEach { gridWindowReads += gridWindowKey(it.id, windowStart, windowEnd) }
+        while (gridWindowReads.size > GRID_WINDOW_READ_MEMORY) {
+            val eldest = gridWindowReads.iterator()
+            eldest.next()
+            eldest.remove()
+        }
+
+        val missingIds = missing.map { it.id }.toSet()
+        _gridLoadingChannelIds.value = _gridLoadingChannelIds.value + missingIds
+
+        viewModelScope.launch {
+            val loaded = runCatching {
+                repository.loadGuideGridWindow(
+                    playlist = playlist.copy(channels = missing),
+                    epgUrls = allEpgUrls(),
+                    windowStart = windowStart,
+                    windowEnd = windowEnd,
+                    perChannelLimit = GuideGrid.PER_CHANNEL_LIMIT
+                )
+            }.getOrDefault(emptyMap())
+
+            val merged = HashMap<String, List<GridProgram>>(_gridPrograms.value)
+            loaded.forEach { (channelId, rows) ->
+                merged[channelId] = mergeWindowPrograms(
+                    existing = merged[channelId].orEmpty(),
+                    incoming = gridProgramsOf(channelId, rows)
+                )
+            }
+            _gridPrograms.value = merged
+            _gridLoadingChannelIds.value = _gridLoadingChannelIds.value - missingIds
+
+            Log.d(
+                TAG,
+                "GUIDE GRID window=$windowStart..$windowEnd channels=${missing.size} " +
+                    "answered=${loaded.size} rows=${loaded.values.sumOf { it.size }}"
+            )
+        }
+    }
+
+    private fun gridWindowKey(channelId: String, windowStart: Long, windowEnd: Long): String =
+        "$channelId|$windowStart|$windowEnd"
+
+    /**
+     * The right edge of the timeline grid: the end of the newest program the
+     * guide has imported. Null when there is none (no guide, or an empty one) -
+     * the grid then simply has no page limit to apply.
+     */
+    suspend fun guideScheduleEndUtcMillis(): Long? =
+        runCatching { repository.newestGuideProgramEndMs() }.getOrNull()
+
+    /** Drops the grid's reads, e.g. after a guide import replaced the programs. */
+    private fun clearGuideGrid() {
+        _gridPrograms.value = emptyMap()
+        _gridLoadingChannelIds.value = emptySet()
+        gridWindowReads.clear()
+    }
+
+    /**
      * Kids Mode Live TV filter (profile toggle "Kid-safe Live TV"). An
      * M3U guide can't be rated, so when the active kids profile opts in,
      * only channel groups that LOOK kid-focused survive — group titles
@@ -1185,6 +1303,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     // Drop the previous profile's in-memory content.
                     _playlist.value = null
                     _guideItemsByChannelId.value = emptyMap()
+                    clearGuideGrid()
                     _guideChannelIds.value = emptySet()
                     _pendingGuideChannelIds.value = emptySet()
                     exhaustedGuideChannelIds = emptySet()
@@ -2361,6 +2480,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private fun clearGuideMemory(sourceKey: String? = null, keepItems: Boolean = false) {
         if (!keepItems) _guideItemsByChannelId.value = emptyMap()
+        // The grid's window reads belong to the programs that just went away.
+        clearGuideGrid()
         _guideChannelIds.value = emptySet()
         _pendingGuideChannelIds.value = emptySet()
         // A new source, import or playlist can hold programs a run-out channel
@@ -2598,6 +2719,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val STOP_TIMEOUT_MS = 5_000L
         const val INITIAL_GUIDE_WINDOW_SIZE = 80
         const val MAX_GUIDE_CHANNELS_PER_REQUEST = 80
+
+        /**
+         * How many (channel, window) grid reads are remembered. A key is ~40
+         * characters, so this is a few hundred KB at worst, and a forgotten key
+         * costs one query rather than a wrong screen.
+         */
+        const val GRID_WINDOW_READ_MEMORY = 4_096
 
         // Was 240 -- too small a shared budget for a full 80-channel guide
         // load. IptvRepository targets 12 programs/channel, so a full

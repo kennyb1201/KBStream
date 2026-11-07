@@ -203,6 +203,8 @@ fun GuideScreen(
     // channel that is merely still loading from being labeled "No program
     // data" (see resolvedGuideChannelIds in the ViewModel).
     val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
+    // The timeline grid's own reads: every program of the rows it has loaded.
+    val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
     val guideImport by viewModel.guideImport.collectAsStateWithLifecycle()
@@ -251,6 +253,34 @@ fun GuideScreen(
     var hiddenGroups by remember(activeProfileId) {
         mutableStateOf(guidePreferences.getStringSet("hidden_groups", emptySet())?.toSet().orEmpty())
     }
+
+    /**
+     * The saved group order (F2k-g): a JSON array of playlist group labels,
+     * device-local and sync-excluded, applied by [applyGroupOrder] to the very
+     * `groups` list both views read. It reorders playlist groups only; All,
+     * Recent and Favorites are pinned.
+     */
+    var groupOrder by remember(activeProfileId) {
+        mutableStateOf(decodeGroupOrder(guidePreferences.getString("group_order", null)))
+    }
+
+    fun saveGroupOrder(next: List<String>) {
+        if (next == groupOrder) return
+        groupOrder = next
+        guidePreferences.edit().putString("group_order", encodeGroupOrder(next)).apply()
+    }
+
+    /**
+     * Which view the guide draws (D0/D1). Opt-in, per profile, and the list stays
+     * the default: a viewer who opens this screen every day must not have it
+     * change shape under them.
+     */
+    var guideView by remember(activeProfileId) {
+        mutableStateOf(GuideViewMode.fromPref(guidePreferences.getString("guide_view", null)))
+    }
+    // Bumped by the header's Jump to now; the grid owns what it does with it.
+    var jumpToNowSignal by remember { mutableStateOf(0) }
+    val viewToggleFocusRequester = remember { FocusRequester() }
 
     // Hidden groups and favorites are also written by the sync applier. Without
     // a listener the screen keeps the set it composed with, so a synced hide
@@ -508,17 +538,44 @@ fun GuideScreen(
     }
 }
     val hiddenChannelIds by viewModel.hiddenChannelIds.collectAsStateWithLifecycle()
-    val groups = remember(unhiddenChannels, favorites, recentChannelKeys) {
-        buildList {
-            add("All")
-            if (recentChannelKeys.isNotEmpty()) add("Recent")
-            if (unhiddenChannels.any { favoriteKey(it) in favorites }) add("Favorites")
-            val seenGroups = LinkedHashSet<String>()
-            unhiddenChannels.forEach { item ->
-                item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let(seenGroups::add)
-            }
-            addAll(seenGroups)
-        }
+    val groups = remember(unhiddenChannels, favorites, recentChannelKeys, groupOrder) {
+        applyGroupOrder(
+            buildList {
+                add("All")
+                if (recentChannelKeys.isNotEmpty()) add("Recent")
+                if (unhiddenChannels.any { favoriteKey(it) in favorites }) add("Favorites")
+                val seenGroups = LinkedHashSet<String>()
+                unhiddenChannels.forEach { item ->
+                    item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let(seenGroups::add)
+                }
+                addAll(seenGroups)
+            },
+            groupOrder
+        )
+    }
+
+    // A saved label that is no longer a group (removed from the playlist, or left
+    // by another profile) is pruned on read, never accumulated (F2k-g).
+    LaunchedEffect(groups) {
+        val pruned = pruneGroupOrder(groupOrder, groups)
+        if (pruned != groupOrder) saveGroupOrder(pruned)
+    }
+
+    /**
+     * The playlist groups in the order the dialog and the sidebar show them.
+     * Moving one writes the whole order (an explicit overlay, not a delta), so a
+     * group that is new to the playlist stays at the end until it is moved.
+     */
+    fun orderedPlaylistGroups(): List<String> {
+        val playlistGroups = groups.filterNot { it in GRID_PINNED_GROUPS }
+        return applyGroupOrder(playlistGroups, groupOrder).filter { it in playlistGroups }
+    }
+
+    fun moveGroup(label: String, direction: Int) {
+        val ordered = orderedPlaylistGroups()
+        val index = ordered.indexOf(label)
+        if (index < 0) return
+        saveGroupOrder(moveGroupOrder(ordered, index, direction))
     }
     var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
 
@@ -538,6 +595,14 @@ fun GuideScreen(
 
     val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
         groupChannels(selectedGroup)
+    }
+
+    // The grid's hard right edge: the newest program the guide has actually
+    // imported (maxProgramEndForSource). Paging stops there and the grid draws
+    // the empty state past it - it never invents a program to fill the axis
+    // (D3). Null means the guide has none, which is the same answer.
+    val guideScheduleEndMs by produceState<Long?>(null, playlist, guideImport) {
+        value = viewModel.guideScheduleEndUtcMillis()
     }
 
     // Every configured guide source, primary first (the same list the lineup
@@ -1435,7 +1500,24 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         selectedGroup = selectedGroup,
                         onSetupClick = { showSetup = !showSetup },
                         onSearchClick = { showSearch = true },
-                        onSportsClick = onOpenSports
+                        onSportsClick = onOpenSports,
+                        guideView = guideView,
+                        // The two controls the grid adds (F2k): the List/Grid
+                        // toggle and Jump to now. Nothing else in the header
+                        // moves, and the list keeps its group chips.
+                        onToggleView = {
+                            val next = GuideViewMode.toggled(guideView)
+                            guideView = next
+                            guidePreferences.edit()
+                                .putString("guide_view", next.prefValue)
+                                .apply()
+                        },
+                        onJumpToNow = if (guideView == GuideViewMode.GRID) {
+                            { jumpToNowSignal += 1 }
+                        } else {
+                            null
+                        },
+                        viewToggleRequester = viewToggleFocusRequester
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -1456,6 +1538,58 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             // Inline: no guide behind the panel to escape into,
                             // and the header has to stay reachable.
                             false
+                        )
+                    } else if (guideView == GuideViewMode.GRID) {
+                        // The timeline grid: same ViewModel reads, same callbacks,
+                        // same group state and zap lineup as the list below.
+                        GuideGridView(
+                            items = groupedChannels,
+                            programsByChannel = gridPrograms,
+                            resolvedGuideIds = resolvedGuideIds,
+                            groups = groups,
+                            groupCount = { label -> groupChannels(label).size },
+                            selectedGroup = selectedGroup,
+                            onSelectGroup = { selectedGroup = it },
+                            reminderKeys = reminderKeys,
+                            nowMs = rememberNowMillis(),
+                            scheduleEndMs = guideScheduleEndMs,
+                            jumpToNowSignal = jumpToNowSignal,
+                            headerFocusRequester = viewToggleFocusRequester,
+                            onPlay = { item ->
+                                selectedChannelId = item.channel.id
+                                recentChannelKeys =
+                                    (listOf(channelKey(item)) + recentChannelKeys)
+                                        .distinct()
+                                        .take(8)
+                                rememberGuidePosition(item)
+                                latestOnPlayChannel?.invoke(item)
+                            },
+                            onToggleReminder = { item, cell ->
+                                toggleProgramReminder(
+                                    channelId = item.channel.id,
+                                    channelName = item.channel.displayName,
+                                    logoUrl = item.channel.logoUrl,
+                                    programTitle = cell.title.orEmpty(),
+                                    startUtcMillis = cell.startUtcMillis,
+                                    endUtcMillis = cell.endUtcMillis
+                                )
+                            },
+                            // A past cell offers the SAME catch-up flow the list
+                            // offers from a channel's menu: the dialog opens on the
+                            // channel's aired programs. Nothing is built here that
+                            // the provider's DVR URL rules did not already resolve.
+                            onCatchup = if (onPlayCatchup != null) {
+                                { item, _ ->
+                                    catchupChannel = item
+                                    viewModel.loadCatchupPrograms(item.channel)
+                                }
+                            } else {
+                                null
+                            },
+                            onRequestWindow = { ids, start, end ->
+                                viewModel.requestGuideGridWindow(ids, start, end)
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
                     } else {
                         if (groups.isNotEmpty()) {
@@ -1989,6 +2123,8 @@ Spacer(modifier = Modifier.height(14.dp))
     hiddenChannels = hiddenChannelIds,
     hiddenGroups = hiddenGroups,
                         channelKey = ::channelKey,
+                        groupOrder = groupOrder,
+                        onMoveGroup = { group, direction -> moveGroup(group, direction) },
                         onDismiss = { showHiddenManager = false },
                         onHideGroup = { group ->
                             hiddenGroups = hiddenGroups + group
@@ -2742,6 +2878,19 @@ private fun GuideHeader(
     onSetupClick: () -> Unit,
     onSearchClick: (() -> Unit)? = null,
     onSportsClick: (() -> Unit)? = null,
+    /**
+     * Which view the toggle will switch AWAY from. The button's label is the
+     * view you are in, so a viewer always knows what they are looking at.
+     */
+    guideView: GuideViewMode = GuideViewMode.LIST,
+    onToggleView: (() -> Unit)? = null,
+    /**
+     * Jumps the grid's axis back to the current hour. Only supplied in grid
+     * view; a Jump to now on the list would be a control with nothing to do.
+     */
+    onJumpToNow: (() -> Unit)? = null,
+    /** Where Up out of the first grid row lands (F3g). */
+    viewToggleRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -2771,6 +2920,46 @@ private fun GuideHeader(
         }
 
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // The List / Grid toggle: the ONLY new control the grid adds besides
+            // Jump to now. A word, not an icon, because the label IS the state
+            // ("GRID" while the grid is up), and it sits first so the D-pad
+            // reaches it before anything that navigates away.
+            if (onToggleView != null) {
+                KBCard(
+                    onClick = onToggleView,
+                    modifier = if (viewToggleRequester != null) {
+                        Modifier.focusRequester(viewToggleRequester)
+                    } else {
+                        Modifier
+                    }
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (guideView == GuideViewMode.GRID) "GRID" else "LIST",
+                            color = KBAccent,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+            if (onJumpToNow != null) {
+                KBCard(onClick = onJumpToNow) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "NOW",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            }
             // The sports hub button: accent-tinted because it is the one action
             // here that leaves Live TV for a different screen, and it sits ahead
             // of search/setup so the D-pad reaches it first. The icon and its
@@ -4051,6 +4240,9 @@ private fun HiddenItemsDialog(
     hiddenChannels: Set<String>,
     hiddenGroups: Set<String>,
     channelKey: (IptvChannelWithEpg) -> String,
+    /** The saved group order (F2k-g); the dialog is where it is edited. */
+    groupOrder: List<String>,
+    onMoveGroup: (String, Int) -> Unit,
     onDismiss: () -> Unit,
     onHideGroup: (String) -> Unit,
     onUnhideGroup: (String) -> Unit,
@@ -4132,10 +4324,12 @@ private fun HiddenItemsDialog(
             when (selectedTab) {
                 HiddenItemsTab.GROUPS -> HiddenGroupsTab(
                     allGroups = allGroups,
+                    groupOrder = groupOrder,
                     hiddenGroups = hiddenGroups,
                     onHideGroup = onHideGroup,
                     onUnhideGroup = onUnhideGroup,
-                    onHideAllGroups = onHideAllGroups
+                    onHideAllGroups = onHideAllGroups,
+                    onMoveGroup = onMoveGroup
                 )
                 HiddenItemsTab.CHANNELS -> HiddenChannelsTab(
                     hiddenChannelItems = hiddenChannelItems,
@@ -4190,11 +4384,19 @@ private fun HiddenItemsTabButton(
 @Composable
 private fun HiddenGroupsTab(
     allGroups: List<String>,
+    groupOrder: List<String>,
     hiddenGroups: Set<String>,
     onHideGroup: (String) -> Unit,
     onUnhideGroup: (String) -> Unit,
-    onHideAllGroups: (Set<String>) -> Unit
+    onHideAllGroups: (Set<String>) -> Unit,
+    onMoveGroup: (String, Int) -> Unit
 ) {
+    // The playlist groups in the order the guide draws them (F2k-g). This dialog
+    // is the ONLY place the order is edited; the sidebar just displays it. All /
+    // Recent / Favorites are pinned and cannot be hidden, so they are not rows.
+    val orderedGroups = remember(allGroups, groupOrder) {
+        reorderableGroupLabels(applyGroupOrder(allGroups, groupOrder))
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             KBCard(onClick = { onHideAllGroups(allGroups.toSet()) }) {
@@ -4232,7 +4434,7 @@ private fun HiddenGroupsTab(
                 contentPadding = PaddingValues(bottom = 10.dp),
                 modifier = Modifier.weight(1f).fillMaxWidth().focusGroup()
             ) {
-                itemsIndexed(allGroups, key = { _, group -> "group-$group" }) { _, group ->
+                itemsIndexed(orderedGroups, key = { _, group -> "group-$group" }) { index, group ->
                     val isHidden = group in hiddenGroups
                     HiddenManagerRow(
                         title = group,
@@ -4240,7 +4442,14 @@ private fun HiddenGroupsTab(
                         actionLabel = if (isHidden) "SHOW" else "HIDE",
                         onAction = {
                             if (isHidden) onUnhideGroup(group) else onHideGroup(group)
-                        }
+                        },
+                        // ▲ / ▼ move the group one slot and persist at once — no
+                        // confirm, no cancel. At either end the press is a defined
+                        // no-op, never a wrap.
+                        onMoveUp = { onMoveGroup(group, -1) },
+                        onMoveDown = { onMoveGroup(group, 1) },
+                        moveUpEnabled = index > 0,
+                        moveDownEnabled = index < orderedGroups.lastIndex
                     )
                 }
             }
@@ -4292,6 +4501,11 @@ private fun HiddenManagerRow(
     subtitle: String,
     actionLabel: String,
     onAction: () -> Unit,
+    /** Reorder handles, rendered only where a row is reorderable. */
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
+    moveUpEnabled: Boolean = true,
+    moveDownEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -4319,6 +4533,14 @@ private fun HiddenManagerRow(
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
+        if (onMoveUp != null) {
+            HiddenMoveButton(label = "▲", enabled = moveUpEnabled, onClick = onMoveUp)
+            Spacer(modifier = Modifier.width(6.dp))
+        }
+        if (onMoveDown != null) {
+            HiddenMoveButton(label = "▼", enabled = moveDownEnabled, onClick = onMoveDown)
+            Spacer(modifier = Modifier.width(10.dp))
+        }
         KBCard(onClick = onAction) {
             Text(
                 text = actionLabel,
@@ -4327,5 +4549,27 @@ private fun HiddenManagerRow(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
             )
         }
+    }
+}
+
+/**
+ * One reorder handle. At the end of the list it is visibly disabled instead of
+ * silently doing nothing: the arrow keys still reach it (so LEFT/RIGHT walks the
+ * row's controls), but its press says nothing happened rather than pretending
+ * to move.
+ */
+@Composable
+private fun HiddenMoveButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    KBCard(onClick = { if (enabled) onClick() }) {
+        Text(
+            text = label,
+            color = if (enabled) KBTextHi else KBTextLo.copy(alpha = 0.45f),
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+        )
     }
 }
