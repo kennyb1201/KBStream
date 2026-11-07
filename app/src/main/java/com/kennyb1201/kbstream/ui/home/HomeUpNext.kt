@@ -530,7 +530,8 @@ internal fun upNextCardEpisodePair(
 internal fun localHistoryParentIdsForShow(
     parentId: String,
     tmdbShowId: Int?,
-    imdbId: String? = null
+    imdbId: String? = null,
+    tvdbId: Int? = null
 ): List<String> {
     if (parentId.isBlank()) return emptyList()
 
@@ -541,12 +542,27 @@ internal fun localHistoryParentIdsForShow(
         tmdbShowId?.takeIf { it > 0 }
     if (tmdbId != null) {
         ids += "tmdb:$tmdbId"
+
+        // The BARE number is a flavor of its own: catalogs emit unprefixed
+        // numeric ids (`fetchEnrichedMeta` reads one as a TMDB id) and
+        // [upNextIdentifier] already treats "4567" as the same show as
+        // "tmdb:4567" - so a row filed under "4567" was invisible here, and
+        // the read looked complete because a list missing a flavor looks
+        // exactly like one that has nothing to match.
+        ids += tmdbId.toString()
     }
 
     imdbId
         ?.trim()
         ?.takeIf { it.startsWith("tt") }
         ?.let { ids += it }
+
+    // TVDB-sourced add-ons file their rows under "tvdb:<n>". The id comes off
+    // the same `/external_ids` answer the IMDb twin does (see
+    // TmdbRepository.resolveTvdbId), so covering it costs no extra request.
+    tvdbId
+        ?.takeIf { it > 0 }
+        ?.let { ids += "tvdb:$it" }
 
     return ids.toList()
 }
@@ -593,6 +609,60 @@ internal fun isImdbTwinUnknown(
     if (parentId.trim().startsWith("tt", ignoreCase = true)) return false
     return !missRecorded
 }
+
+/**
+ * The TVDB half of [isImdbTwinUnknown], same rule and same exemptions.
+ *
+ * `localHistoryParentIdsForShow` only adds the `tvdb:<n>` flavor when the
+ * lookup answered, so a FAILED lookup narrows the read silently - the same
+ * blindness the IMDb twin had, one flavor over. A `tvdb:`-keyed row is its own
+ * twin, and a proven "TMDB has no TVDB id" answer is not blindness.
+ *
+ * @param tvdbId the resolved TVDB id; 0 or less means no usable answer.
+ * @param missRecorded whether the repository holds a proven no-mapping answer.
+ */
+internal fun isTvdbTwinUnknown(
+    tmdbId: Int,
+    tvdbId: Int?,
+    parentId: String,
+    missRecorded: Boolean
+): Boolean {
+    if (tmdbId <= 0) return false
+    if (tvdbId != null && tvdbId > 0) return false
+    if (parentId.trim().startsWith("tvdb:", ignoreCase = true)) return false
+    return !missRecorded
+}
+
+/**
+ * Whether the id list [localHistoryParentIdsForShow] built may be BLIND to a
+ * flavor - either twin failed to resolve without a proven miss.
+ *
+ * One aggregate because every consumer of the flag (the watched-state
+ * preload, its incomplete-state set, and through it the advance-card and
+ * caught-up rules) cares about the same fact: "this read may not be the whole
+ * story". Reporting the twins separately would invite a caller to handle one
+ * and forget the other, which is exactly how the TVDB hole survived the IMDb
+ * fix.
+ */
+internal fun isIdTwinReadIncomplete(
+    tmdbId: Int,
+    imdbId: String?,
+    tvdbId: Int?,
+    parentId: String,
+    imdbMissRecorded: Boolean,
+    tvdbMissRecorded: Boolean
+): Boolean =
+    isImdbTwinUnknown(
+        tmdbId = tmdbId,
+        imdbId = imdbId,
+        parentId = parentId,
+        missRecorded = imdbMissRecorded
+    ) || isTvdbTwinUnknown(
+        tmdbId = tmdbId,
+        tvdbId = tvdbId,
+        parentId = parentId,
+        missRecorded = tvdbMissRecorded
+    )
 
 /**
  * The Home hero's Continue Watching line: the card's own season/episode label
@@ -1107,6 +1177,29 @@ internal fun upNextShowKey(item: UpNextItem): String {
 
     return upNextTitleKey(item)
 }
+
+/**
+ * The keys a Continue Watching dismissal is recorded AND looked up under.
+ *
+ * [upNextShowKey] can only name the one id flavor a card happens to carry, so
+ * a dismissal recorded from a card carrying "tt10986410" never matched the
+ * card rebuilt from the kept completed-episode rows when those rows carry
+ * "tmdb:97546". The card is built again on every Home build, so Remove looked
+ * like it had not held.
+ *
+ * [upNextStrongIdentityKeys] already names every id form a card knows, and
+ * "parent:<type>:<n>" is the SAME string whichever flavor produced it (a
+ * "tmdb:97546" parent id normalizes to the bare number, which is also the
+ * key the resolved [UpNextItem.tmdbId] emits), so the two flavors meet there.
+ * The title key is the fallback for a card that has no id at all - exactly
+ * the behaviour a single-key dismissal had, and it is deliberately NOT
+ * recorded next to id keys (two shows can share a normalized title).
+ *
+ * The persisted key [upNextShowKey] builds is unchanged: this only decides
+ * how many of the card's own keys are written for one dismissal.
+ */
+internal fun upNextDismissalKeys(item: UpNextItem): Set<String> =
+    upNextStrongIdentityKeys(item).ifEmpty { setOf(upNextShowKey(item)) }
 
 /**
  * Every identity this card carries, for the duplicate-collapse pass.

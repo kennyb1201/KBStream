@@ -2499,9 +2499,18 @@ Log.d(
                 // card cannot resurface from a stale Simkl feed snapshot
                 // while the remote delete calls settle (or if one of them
                 // fails). Watching the title again later clears this.
-                dismissedContinueWatching[
-                    showDedupeKey(item)
-                ] = System.currentTimeMillis()
+                //
+                // ONE TIMESTAMP, EVERY id flavor the card knows: the card is
+                // rebuilt from the kept completed-episode rows on the next
+                // Home build, and those rows can carry the other id form, so
+                // a dismissal recorded under the flavor this card happened to
+                // carry never matched the rebuild (see [upNextDismissalKeys]).
+                val dismissedAt =
+                    System.currentTimeMillis()
+
+                upNextDismissalKeys(item).forEach { key ->
+                    dismissedContinueWatching[key] = dismissedAt
+                }
 
                 persistDismissedContinueWatching()
 
@@ -2633,9 +2642,15 @@ Log.d(
                 // Local guarantee: a mark made while a stale feed snapshot is
                 // in flight must not be re-added by it. Watching the title
                 // again later clears this.
-                dismissedContinueWatching[
-                    showDedupeKey(item)
-                ] = System.currentTimeMillis()
+                //
+                // Recorded under every id flavor for the same reason Remove
+                // is (see [upNextDismissalKeys]).
+                val dismissedAt =
+                    System.currentTimeMillis()
+
+                upNextDismissalKeys(item).forEach { key ->
+                    dismissedContinueWatching[key] = dismissedAt
+                }
 
                 persistDismissedContinueWatching()
 
@@ -3011,6 +3026,12 @@ Log.d(
      * is watch activity for the title NEWER than the dismissal time - a
      * fresh local resume row or a new Simkl pause/session - at which point
      * the marker is cleared and the card is allowed back onto the rail.
+     *
+     * A card is matched under EVERY strong id it carries
+     * ([upNextDismissalKeys]), not under the one key it happens to have: a
+     * next-up card is rebuilt from the kept completed-episode rows, which can
+     * carry the other id flavor than the card the dismissal was recorded
+     * from, and that mismatch is what let a removed show come back.
      */
     private suspend fun applyContinueWatchingDismissals(
         items: List<UpNextItem>
@@ -3041,25 +3062,30 @@ Log.d(
         val filtered =
             profileSafe.filter { item ->
 
-                val key =
-                    showDedupeKey(item)
+                // Every id flavor the card carries is checked, and a re-armed
+                // card clears all of them (see
+                // [continueWatchingDismissalOutcome]).
+                when (
+                    continueWatchingDismissalOutcome(
+                        dismissalKeys = upNextDismissalKeys(item),
+                        dismissals = dismissedContinueWatching,
+                        recencyTimestamp = item.recencyTimestamp
+                    )
+                ) {
 
-                val dismissedAt =
-                    dismissedContinueWatching[key]
-                        ?: return@filter true
+                    ContinueWatchingDismissalOutcome.HIDDEN ->
+                        false
 
-                val reAdded =
-                    item.recencyTimestamp >
-                        dismissedAt
+                    ContinueWatchingDismissalOutcome.REARMED -> {
 
-                if (reAdded) {
+                        changed = true
 
-                    dismissedContinueWatching.remove(key)
+                        true
+                    }
 
-                    changed = true
+                    ContinueWatchingDismissalOutcome.NONE ->
+                        true
                 }
-
-                reAdded
             }
 
         if (changed) {
@@ -3847,14 +3873,28 @@ Log.d(
                 .mapNotNull { item -> upNextIdentifier(item.parentId) }
                 .toSet()
 
+        // Cached details, one per raw flavor, so the candidate pass can tell
+        // that two flavors are one show. The returning pass below resolves the
+        // same ids and reads them warm from this same cache.
+        val flavorDetails =
+            HashMap<String, TmdbDetail?>()
+        completedRows
+            .map { row -> row.parentId.trim().ifBlank { row.id.trim() } }
+            .toSet()
+            .forEach { rawId -> flavorDetails[rawId] = seriesDetailFor(rawId) }
+
         // Candidate selection is pure and unit tested (see
         // selectLocalNextUpCandidates): one card per show, newest completion
-        // first, minus any show already on the rail, capped.
+        // first, minus any show already on the rail, capped. Two raw id
+        // flavors of one show collapse onto the resolved TMDB id, and the
+        // candidate row is the newest completion across them - that row is
+        // the listing fallback's floor.
         val candidates =
             selectLocalNextUpCandidates(
                 completedRows = completedRows,
                 representedIdentifiers = representedIds,
-                max = MAX_LOCAL_NEXT_UP_ITEMS
+                max = MAX_LOCAL_NEXT_UP_ITEMS,
+                tmdbIdFor = { parentId -> flavorDetails[parentId]?.id }
             )
 
         // Returning shows: completed long ago (outside the 25-cap) but with
@@ -4042,6 +4082,43 @@ Log.d(
         // (and therefore its own card); don't duplicate it.
         if (resolved.isResume) return null
 
+        // The MERGED watched state can prove the show is caught up even when
+        // the resolver cannot print that verdict as "nothing left": the
+        // resolver's pair is the furthest episode it knows, and when the read
+        // was incomplete (a tracker timed out, a twin did not resolve) it is
+        // deliberately not treated as caught-up by the rules below. But
+        // "the latest AIRED episode is watched" is POSITIVE evidence from a
+        // source that answered, not absence of evidence - and there is no
+        // later episode to print, so no card can be honest. This is the case
+        // the field report was: a finished show kept offering its final
+        // episode as "next up" because nothing had recorded it as finished.
+        //
+        // Recording it is what drops a tracker twin
+        // (see trackerCardLocallyFinished), so the local pass and the tracker
+        // feed agree about a show that is over.
+        val (mergedWatchedKeys, trackerWatchedEpisodes) =
+            watchedStateMutex.withLock {
+                watchedEpisodeKeysByShow[parentId].orEmpty() to
+                    trackerWatchedEpisodesByShow[parentId].orEmpty()
+            }
+
+        if (
+            latestAiredEpisodeWatched(
+                latestSeason = detail.lastEpisodeToAir?.seasonNumber,
+                latestEpisode = detail.lastEpisodeToAir?.episodeNumber,
+                mergedWatchedKeys = mergedWatchedKeys,
+                trackerWatchedEpisodes = trackerWatchedEpisodes
+            )
+        ) {
+            caughtUpShowKeys += upNextShowParentKeys(
+                parentId,
+                "series",
+                tmdbId
+            )
+
+            return null
+        }
+
         // The cold-entry ghost. An ADVANCE card's target is by construction a
         // DIFFERENT episode than the row it was built from, so a resolver
         // answer that cannot be one means the evidence under it was missing -
@@ -4080,11 +4157,25 @@ Log.d(
                 val rowSeason = row.season ?: return null
                 val rowEpisode = row.episode ?: return null
 
+                // Floor on the FURTHEST point the state proves, not on the
+                // candidate row: the row is the newest completed one under ONE
+                // id flavor, while the resolver's pair is the furthest the
+                // merged state knows (e.g. a tracker told us E5, the local row
+                // is E3). Flooring on the row printed E4 as "next up" while
+                // E5 was already watched.
+                val floor =
+                    fallbackEpisodeFloor(
+                        rowSeason = rowSeason,
+                        rowEpisode = rowEpisode,
+                        resolvedSeason = resolved.season,
+                        resolvedEpisode = resolved.episode
+                    )
+
                 resolveEpisodeAfterCompletedRow(
                     parentId = parentId,
                     tmdbId = tmdbId,
-                    rowSeason = rowSeason,
-                    rowEpisode = rowEpisode
+                    rowSeason = floor.first,
+                    rowEpisode = floor.second
                 ) ?: return null
             } else {
                 resolved
@@ -7324,7 +7415,7 @@ episodesTotal =
     ): List<String> = localHistoryParentIdsWithTwinState(parentId, tmdbId).first
 
     /**
-     * The same id list, plus whether the IMDb half of it is UNKNOWN.
+     * The same id list, plus whether either id twin (IMDb, TVDB) is UNKNOWN.
      *
      * The list itself is unchanged, so every caller that only reads history
      * keeps its behavior. The flag exists for the watched-state preload, which
@@ -7353,21 +7444,39 @@ episodesTotal =
                 null
             }
 
-        // Read AFTER the lookup, so a blank answer this very call recorded counts
+        // The TVDB twin, off the SAME `/external_ids` response the IMDb id came
+        // from (see TmdbRepository.resolveTvdbId): ask it second, while that
+        // answer is in memory, so the pair costs one request.
+        val tvdbId =
+            if (tmdbId > 0) {
+                runCatchingCancellable {
+                    tmdbRepository.resolveTvdbId(tmdbId, "series")
+                }.getOrNull()
+            } else {
+                null
+            }
+
+        // Read AFTER the lookups, so a blank answer this very call recorded counts
         // as proven-absent rather than unknown.
-        val missRecorded =
+        val imdbMissRecorded =
             imdbId.isNullOrBlank() &&
                 tmdbRepository.hasProvenNoImdbMapping(tmdbId, "series")
+        val tvdbMissRecorded =
+            tvdbId == null &&
+                tmdbRepository.hasProvenNoTvdbMapping(tmdbId, "series")
 
         return localHistoryParentIdsForShow(
             parentId = parentId,
             tmdbShowId = tmdbId,
-            imdbId = imdbId
-        ) to isImdbTwinUnknown(
+            imdbId = imdbId,
+            tvdbId = tvdbId
+        ) to isIdTwinReadIncomplete(
             tmdbId = tmdbId,
             imdbId = imdbId,
+            tvdbId = tvdbId,
             parentId = parentId,
-            missRecorded = missRecorded
+            imdbMissRecorded = imdbMissRecorded,
+            tvdbMissRecorded = tvdbMissRecorded
         )
     }
 

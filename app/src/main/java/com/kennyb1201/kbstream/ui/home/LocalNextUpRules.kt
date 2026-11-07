@@ -18,34 +18,75 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
  *   paused episode's resume card), which must not also get a next-up twin.
  * @param max cap on how many candidates are returned, newest completion first
  *   so an active show wins a slot when the tail is trimmed.
+ * @param tmdbIdFor resolves a raw parent id to its TMDB series id, so two raw
+ *   flavors of one show collapse into one candidate (see below). Null/absent
+ *   keeps the raw-string grouping exactly as it was.
  * @return `(parentId, row)` pairs, newest completion first, one per show.
  */
 internal fun selectLocalNextUpCandidates(
     completedRows: List<WatchHistoryEntity>,
     representedIdentifiers: Set<String>,
-    max: Int
-): List<Pair<String, WatchHistoryEntity>> =
-    completedRows
-        // One candidate per show. A blank parentId falls back to the row's own
-        // id so an unscoped row still dedupes against itself instead of
+    max: Int,
+    tmdbIdFor: (String) -> Int? = { null }
+): List<Pair<String, WatchHistoryEntity>> {
+
+    fun rawKey(row: WatchHistoryEntity): String =
+        row.parentId.trim().ifBlank { row.id.trim() }
+
+    fun showKey(parentId: String): String =
+        tmdbIdFor(parentId)?.let { tmdbId -> "tmdb:$tmdbId" } ?: "raw:$parentId"
+
+    fun newestRow(rows: List<WatchHistoryEntity>): WatchHistoryEntity? =
+        rows.maxByOrNull { row -> row.completedAt ?: row.updatedAt }
+
+    return completedRows
+        // One group per raw flavor. A blank parentId falls back to the row's
+        // own id so an unscoped row still dedupes against itself instead of
         // collapsing every such row into a single group.
-        .groupBy { row ->
-            row.parentId.trim().ifBlank { row.id.trim() }
-        }
-        .mapNotNull { (parentId, rows) ->
-            rows
-                .maxByOrNull { row -> row.completedAt ?: row.updatedAt }
-                ?.let { row -> parentId to row }
+        .groupBy(::rawKey)
+        .map { (parentId, rows) -> Triple(showKey(parentId), parentId, rows) }
+        // Then ONE candidate per SHOW: two raw flavors that resolve to the same
+        // TMDB id are the same show (see the note on the returning pass below).
+        .groupBy { (key, _, _) -> key }
+        .mapNotNull { (key, members) ->
+            val parentIds = members.map { (_, parentId, _) -> parentId }
+
+            // Shows already on the rail (an episode paused part-way) keep their
+            // resume card; a next-up twin for them is wasted work. Tested
+            // against every flavor the group was filed under AND the resolved
+            // TMDB id, so a `tt...` group also matches a `tmdb:<n>` resume card.
+            val represented =
+                parentIds.any { parentId ->
+                    val id = upNextIdentifier(parentId)
+                    id != null && id in representedIdentifiers
+                } || (
+                    key.startsWith("tmdb:") &&
+                        key.removePrefix("tmdb:") in representedIdentifiers
+                    )
+
+            if (represented) return@mapNotNull null
+
+            val rows = members.flatMap { (_, _, rows) -> rows }
+
+            // The card's row is the newest completion across the merged
+            // flavors: it is the fallback's floor when the resolver refuses to
+            // walk, so "the stale E1 row" must never be the one carried.
+            val row = newestRow(rows) ?: return@mapNotNull null
+
+            // Same preference as the returning pass: a `tt...` flavor when the
+            // show has one (it is the player's canonicalization), else the
+            // newest row's flavor, else the group's own.
+            val parentId =
+                parentIds.firstOrNull { it.startsWith("tt", ignoreCase = true) }
+                    ?: newestRow(rows)?.let(::rawKey)
+                    ?: parentIds.first()
+
+            parentId to row
         }
         // Newest completion first: an active show must win a slot.
         .sortedByDescending { (_, row) -> row.completedAt ?: row.updatedAt }
-        // Shows already on the rail (an episode paused part-way) keep their
-        // resume card; a next-up twin for them is wasted work.
-        .filterNot { (parentId, _) ->
-            val id = upNextIdentifier(parentId)
-            id != null && id in representedIdentifiers
-        }
         .take(max)
+}
 
 /**
  * One returning-show candidate after the id-flavor collapse: the row list of
@@ -67,11 +108,10 @@ internal data class ReturningShowGroup(
  * (`tt...` and `tmdb:<n>`) yields ONE candidate instead of a good card plus a
  * degraded twin.
  *
- * [selectLocalNextUpCandidates] deliberately stays on the RAW parent id: within
- * the regular 25 a show cannot twin with itself (one candidate per raw group,
- * and same-flavor rows already collapse). The twin only ever appeared through
- * the newer returning pass, whose exclusion compared raw strings -
- * `tmdb:456 != tt123` - so the other flavor slipped through to a second card.
+ * Both passes now collapse before they pick: [selectLocalNextUpCandidates] uses
+ * the same resolution for the regular 25 (it was raw-string grouped, so a show
+ * filed under two flavors produced two candidates - one of them built from an
+ * older episode), and the returning pass's exclusion is by the same key.
  *
  * Here each raw group's key is resolved through [tmdbIdFor]. Two raw groups
  * that resolve to the same TMDB id merge into one group, so the furthest
@@ -153,6 +193,86 @@ internal fun hasUnwatchedAiredEpisodes(
     if (lastAiredSeason == null || lastAiredEpisode == null) return false
     return lastAiredSeason > furthestSeason ||
         (lastAiredSeason == furthestSeason && lastAiredEpisode > furthestEpisode)
+}
+
+/**
+ * Whether the show's LATEST AIRED episode is already watched - the strongest
+ * statement the merged state can make, and the one that means "no card".
+ *
+ * Continue Watching only ever offers the next thing to watch after the furthest
+ * point watched, so once that furthest point is the last episode that has
+ * aired, there is nothing to print: a card for that episode is the finished
+ * episode wearing a "next up" badge. The rules that withhold an unresolvable
+ * ADVANCE card deliberately refuse to record caught-up (unknown evidence is
+ * not "finished"), but this is not unknown evidence - it is a positive mark on
+ * the latest aired episode, from a source that answered.
+ *
+ * A gap BEHIND the furthest watched episode cannot produce this card (the
+ * walk starts after the furthest point), so it never needs saying here: a
+ * viewer who watched E2 but not E1 is caught up in the rail's terms.
+ *
+ * @param latestSeason TMDB's `last_episode_to_air` season, null when the
+ *   detail is stale or does not say - the caller then abstains.
+ * @param mergedWatchedKeys the show's merged watched keys (see
+ *   `WatchedEpisodeState.buildMergedWatchedKeys`): the local rows re-anchored
+ *   to the card's parent id plus the trackers' pairs.
+ * @param trackerWatchedEpisodes the raw tracker pairs, as belt and braces for
+ *   any key the merge did not build.
+ * @return true only when the latest aired pair is positively watched.
+ */
+internal fun latestAiredEpisodeWatched(
+    latestSeason: Int?,
+    latestEpisode: Int?,
+    mergedWatchedKeys: Set<String>,
+    trackerWatchedEpisodes: Set<Pair<Int, Int>>
+): Boolean {
+    if (latestSeason == null || latestEpisode == null) return false
+
+    val latest =
+        latestSeason to latestEpisode
+
+    if (latest in trackerWatchedEpisodes) return true
+
+    return mergedWatchedKeys.any { key ->
+        parseEpisodeKey(key)
+            ?.let { (_, season, episode) -> season to episode } == latest
+    }
+}
+
+/**
+ * Where the listing fallback starts walking from: the FURTHEST episode the
+ * state proves, not the candidate row's own.
+ *
+ * The fallback ([HomeViewModel.resolveEpisodeAfterCompletedRow]) exists for the
+ * case where the watched state cannot be trusted enough to name the next
+ * episode. It used to start from the candidate ROW - the newest completion
+ * under ONE id flavor - so with a tracker knowing E5, a local row at E3 and E7
+ * aired, it printed E4: an episode the merged state already knew was watched.
+ * The resolver's own pair is the furthest point it knows, which is exactly the
+ * floor the answer needs. Null on either side of the resolved pair keeps the
+ * row, so a pair-less answer (the incomplete short-circuit) behaves as before.
+ *
+ * @return the season-major maximum of the two pairs.
+ */
+internal fun fallbackEpisodeFloor(
+    rowSeason: Int,
+    rowEpisode: Int,
+    resolvedSeason: Int?,
+    resolvedEpisode: Int?
+): Pair<Int, Int> {
+    if (resolvedSeason == null || resolvedEpisode == null) {
+        return rowSeason to rowEpisode
+    }
+
+    val resolvedIsAhead =
+        resolvedSeason > rowSeason ||
+            (resolvedSeason == rowSeason && resolvedEpisode > rowEpisode)
+
+    return if (resolvedIsAhead) {
+        resolvedSeason to resolvedEpisode
+    } else {
+        rowSeason to rowEpisode
+    }
 }
 
 /**

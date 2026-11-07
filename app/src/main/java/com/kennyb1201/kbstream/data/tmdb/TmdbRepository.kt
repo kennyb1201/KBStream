@@ -596,6 +596,26 @@ class TmdbRepository private constructor(context: Context) :
     private val imdbResolutionMemoryCache =
         ConcurrentHashMap<String, Pair<Long, String?>>()
 
+    /**
+     * The whole `/external_ids` answer, so ONE request serves both twins.
+     *
+     * `/external_ids` returns `imdb_id` and `tvdb_id` together, and Continue
+     * Watching now reads both (see [resolveTvdbId]): the first lookup used to
+     * throw the TVDB half away, which made a `tvdb:<n>`-filed history row
+     * invisible to the rail's watched-state read. Keeping the pair means the
+     * second twin costs no request - [resolveImdbId] and [resolveTvdbId] both
+     * fill and read this map, keyed like [imdbResolutionKey].
+     *
+     * A ConcurrentHashMap for the same reason as the caches above
+     * ([releaseCaches] drops it from a memory-pressure callback).
+     */
+    private val externalIdsMemoryCache =
+        ConcurrentHashMap<String, Pair<Long, TmdbExternalIds>>()
+
+    private val externalIdsJsonAdapter: JsonAdapter<TmdbExternalIds> by lazy {
+        moshi.adapter(TmdbExternalIds::class.java)
+    }
+
     /** Reverse of [imdbResolutionMemoryCache]: the TMDB id for an IMDB id,
      *  keyed "<type>::<imdb>". Same TTL and persistence table. */
     private val tmdbResolutionMemoryCache =
@@ -715,6 +735,7 @@ class TmdbRepository private constructor(context: Context) :
         evictOldest(seasonEpisodesCache, { it.first }, MAX_SEASON_ENTRIES)
         evictOldest(imdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(tmdbResolutionMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
+        evictOldest(externalIdsMemoryCache, { it.first }, MAX_RESOLUTION_ENTRIES)
         evictOldest(reviewsCache, { it.first }, MAX_REVIEW_ENTRIES)
     }
 
@@ -742,6 +763,7 @@ class TmdbRepository private constructor(context: Context) :
         railDetailCache.clear()
         imdbResolutionMemoryCache.clear()
         tmdbResolutionMemoryCache.clear()
+        externalIdsMemoryCache.clear()
         reviewsCache.clear()
         // Resolved brand marks are re-readable from the disk rows, so they are
         // part of what a tight heap may take back.
@@ -767,6 +789,7 @@ class TmdbRepository private constructor(context: Context) :
             " browse=${BrowseRailCache.pageCount()}/${BrowseRailCache.MAX_CACHED_PAGES}" +
             " imdbRes=${imdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " tmdbRes=${tmdbResolutionMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
+            " extIds=${externalIdsMemoryCache.size}/$MAX_RESOLUTION_ENTRIES" +
             " reviews=${reviewsCache.size}/$MAX_REVIEW_ENTRIES"
 
     private fun pruneImdbCacheOnce() {
@@ -1094,16 +1117,16 @@ class TmdbRepository private constructor(context: Context) :
         }
 
         val lookup = runCatchingCancellable {
-            val ext = if (normalizedType == "series") {
-                api.getTvExternalIds(tmdbId, apiKey)
-            } else {
-                api.getMovieExternalIds(tmdbId, apiKey)
-            }
-            ext.imdbId
+            val ext = fetchExternalIds(tmdbId, normalizedType)
+            // One response, both twins: remember the PAIR, so the TVDB lookup
+            // that runs next on the same preload costs no request.
+            rememberExternalIds(key, ext, now)
+            ext
         }
-        val imdbId = lookup.getOrNull()
+        val ext = lookup.getOrNull()
+        val imdbId = ext?.imdbId?.takeIf { it.isNotBlank() }
 
-        if (lookup.isSuccess && imdbId.isNullOrBlank()) {
+        if (lookup.isSuccess && imdbId == null) {
             // A real "no mapping", not a failure: remember it briefly.
             resolutionMisses["i:$key"] = now
         }
@@ -1150,6 +1173,113 @@ class TmdbRepository private constructor(context: Context) :
         val key = imdbResolutionKey(tmdbId, normalizeType(type))
         val missAt = resolutionMisses["i:$key"] ?: return false
         return System.currentTimeMillis() - missAt < resolutionMissTtlMs
+    }
+
+    /**
+     * The TVDB twin of a title, off the SAME `/external_ids` call as
+     * [resolveImdbId].
+     *
+     * Continue Watching's watched-state read enumerates the id flavors a show
+     * is stored under and joins local history on them. TVDB-sourced add-ons
+     * (AIOMetadata, BingeCat) file their rows under `tvdb:<n>`, and the app
+     * discarded the `tvdb_id` TMDB hands back, so those rows were invisible -
+     * a show watched entirely under that flavor read as unwatched and the rail
+     * printed its finished episode as "next up".
+     *
+     * Shares [externalIdsMemoryCache] and the JSON table with [resolveImdbId],
+     * the same 30-day TTL (external ids never change) and the same miss
+     * discipline: a successful blank `tvdb_id` records a miss under `v:` so a
+     * title TMDB has no TVDB record for is "proven absent" rather than
+     * permanently unknown, while a FAILED request records nothing and is
+     * retried. Read [hasProvenNoTvdbMapping] for the distinction.
+     *
+     * @return the TVDB id, or null when there is none or the lookup did not
+     *   answer (the caller distinguishes those with [hasProvenNoTvdbMapping]).
+     */
+    suspend fun resolveTvdbId(tmdbId: Int, type: String): Int? {
+        if (apiKey.isBlank()) return null
+
+        val normalizedType = normalizeType(type)
+        val key = imdbResolutionKey(tmdbId, normalizedType)
+        val now = System.currentTimeMillis()
+
+        resolutionMisses["v:$key"]?.let { missAt ->
+            if (now - missAt < resolutionMissTtlMs) return null
+        }
+
+        // The pair the IMDb resolver just fetched, then the disk copy, then
+        // one request. A blank answer is a real answer and is remembered.
+        val ext =
+            runCatchingCancellable { cachedExternalIds(key, now) }.getOrNull()
+                ?: runCatchingCancellable {
+                    val fetched = fetchExternalIds(tmdbId, normalizedType)
+                    rememberExternalIds(key, fetched, now)
+                    fetched
+                }.getOrNull()
+
+        // Nothing answered: unknown, and nothing is recorded. The next call
+        // tries again rather than blinding the read for a whole TTL.
+        if (ext == null) return null
+
+        val tvdbId = ext.tvdbId?.takeIf { it > 0 }
+
+        if (tvdbId == null) {
+            resolutionMisses["v:$key"] = now
+        } else {
+            resolutionMisses.remove("v:$key")
+        }
+
+        return tvdbId
+    }
+
+    /**
+     * Whether TMDB has PROVEN there is no TVDB mapping for this id - the
+     * mirror of [hasProvenNoImdbMapping], for the `tvdb:` half of the twin
+     * list (`isTvdbTwinUnknown`).
+     *
+     * Read-only, deliberately: no lookup, no cache write.
+     */
+    internal fun hasProvenNoTvdbMapping(tmdbId: Int, type: String): Boolean {
+        if (tmdbId <= 0) return false
+        val key = imdbResolutionKey(tmdbId, normalizeType(type))
+        val missAt = resolutionMisses["v:$key"] ?: return false
+        return System.currentTimeMillis() - missAt < resolutionMissTtlMs
+    }
+
+    private suspend fun fetchExternalIds(tmdbId: Int, normalizedType: String): TmdbExternalIds =
+        if (normalizedType == "series") {
+            api.getTvExternalIds(tmdbId, apiKey)
+        } else {
+            api.getMovieExternalIds(tmdbId, apiKey)
+        }
+
+    /**
+     * The remembered `/external_ids` pair for a title, from memory or the
+     * shared JSON table, or null when neither holds a live answer.
+     *
+     * The row is stored under its own `extids:` prefix so it can never be
+     * mistaken for a detail payload by the notice readers, and it is inside the
+     * one budget and one trim (see [cacheJson]).
+     */
+    private suspend fun cachedExternalIds(key: String, now: Long): TmdbExternalIds? {
+        externalIdsMemoryCache[key]?.let { (cachedAt, cached) ->
+            if (now - cachedAt < imdbResolutionTtlMs) return cached
+        }
+
+        val (json, updatedAt) = readJsonCacheRow("extids:$key") ?: return null
+        if (now - updatedAt >= imdbResolutionTtlMs) return null
+
+        val parsed = runCatching { externalIdsJsonAdapter.fromJson(json) }.getOrNull()
+            ?: return null
+
+        externalIdsMemoryCache[key] = updatedAt to parsed
+
+        return parsed
+    }
+
+    private suspend fun rememberExternalIds(key: String, ids: TmdbExternalIds, now: Long) {
+        externalIdsMemoryCache[key] = now to ids
+        writeJsonCacheRow("extids:$key", externalIdsJsonAdapter.toJson(ids), now)
     }
 
     /**

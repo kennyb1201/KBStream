@@ -26,7 +26,9 @@ class LocalHistoryParentIdsTest {
     @Test
     fun `an imdb row also reads the tmdb flavor`() {
         assertEquals(
-            listOf("tt12345", "tmdb:4567"),
+            // The bare number is a flavor of its own: a catalog that emits
+            // "4567" files its rows under a key this list has to name.
+            listOf("tt12345", "tmdb:4567", "4567"),
             localHistoryParentIdsForShow(
                 parentId = "tt12345",
                 tmdbShowId = 4567
@@ -39,7 +41,7 @@ class LocalHistoryParentIdsTest {
         // The other direction: opened from search under "tmdb:4567" while the
         // episodes were played from an add-on catalog under "tt12345".
         assertEquals(
-            listOf("tmdb:4567", "tt12345"),
+            listOf("tmdb:4567", "4567", "tt12345"),
             localHistoryParentIdsForShow(
                 parentId = "tmdb:4567",
                 tmdbShowId = 4567,
@@ -53,7 +55,7 @@ class LocalHistoryParentIdsTest {
         // getResumeForParents takes the newest row across the flavors; the
         // row's own id has to stay in the list exactly once.
         assertEquals(
-            listOf("tmdb:4567", "tt12345"),
+            listOf("tmdb:4567", "4567", "tt12345"),
             localHistoryParentIdsForShow(
                 parentId = "tmdb:4567",
                 tmdbShowId = 4567,
@@ -64,7 +66,7 @@ class LocalHistoryParentIdsTest {
         // The row is already keyed by the tmdb flavor the id resolves to, so
         // that flavor appears once - not as "tmdb:4567" twice.
         assertEquals(
-            listOf("tmdb:4567"),
+            listOf("tmdb:4567", "4567"),
             localHistoryParentIdsForShow(
                 parentId = "tmdb:4567",
                 tmdbShowId = 4567
@@ -106,7 +108,7 @@ class LocalHistoryParentIdsTest {
         // resolveImdbId surfaces whatever the network returned; only a real
         // "tt..." value may be added to the read set.
         assertEquals(
-            listOf("tmdb:4567"),
+            listOf("tmdb:4567", "4567"),
             localHistoryParentIdsForShow(
                 parentId = "tmdb:4567",
                 tmdbShowId = 4567,
@@ -115,7 +117,7 @@ class LocalHistoryParentIdsTest {
         )
 
         assertEquals(
-            listOf("tmdb:4567"),
+            listOf("tmdb:4567", "4567"),
             localHistoryParentIdsForShow(
                 parentId = "tmdb:4567",
                 tmdbShowId = 4567,

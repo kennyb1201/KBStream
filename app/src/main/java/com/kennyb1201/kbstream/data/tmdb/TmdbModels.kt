@@ -376,7 +376,17 @@ val seasons: List<TmdbSeasonSummary> = emptyList(),
 
 @JsonClass(generateAdapter = true)
 data class TmdbExternalIds(
-    @Json(name = "imdb_id") val imdbId: String? = null
+    @Json(name = "imdb_id") val imdbId: String? = null,
+    /**
+     * The TVDB id of the same title, in the SAME response as [imdbId].
+     *
+     * Read so a history read can cover the `tvdb:<n>` flavor add-ons file
+     * rows under (see `localHistoryParentIdsForShow`). TMDB sends this as a
+     * JSON NUMBER, not a string: typed as an Int deliberately, because a
+     * String field would make Moshi throw on every title and take the
+     * `imdb_id` beside it down with the parse.
+     */
+    @Json(name = "tvdb_id") val tvdbId: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
