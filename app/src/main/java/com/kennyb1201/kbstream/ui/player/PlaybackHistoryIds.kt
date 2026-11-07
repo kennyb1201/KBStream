@@ -184,7 +184,13 @@ object PlaybackHistoryIds {
      * parent id that names nothing.
      */
     internal fun episodeRootFromId(episodeStreamId: String?): String? =
-        EpisodeMatch.seriesRootFrom(episodeStreamId)?.trim()?.takeIf { it.isNotBlank() }
+        EpisodeMatch.seriesRootFrom(episodeStreamId)
+            ?.trim()
+            // A root has to name something: an id whose last two parts were not
+            // a season and an episode leaves only the service's own name behind
+            // ("kitsu" from "kitsu:12:5"), and filing a row under that would
+            // repair a wrong id into an unusable one.
+            ?.takeIf { it.startsWith("tt") || (it.contains(':') && it.substringAfter(':').isNotBlank()) }
 
     /**
      * The season/episode a Stremio episode id names, or null when the id

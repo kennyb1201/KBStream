@@ -49,8 +49,10 @@ class TmdbDetailInFlightContractTest {
     /** The body of getDetailByTmdbId, up to the next function declaration. */
     private fun detailBody(): String {
         val src = repository
-        val start = src.indexOf("suspend fun getDetailByTmdbId(")
-        assertTrue("getDetailByTmdbId must exist", start >= 0)
+        // The lookup is the one that fetches and caches; getDetailByTmdbId
+        // delegates to it and keeps nothing of its own (see TmdbDetailLookup).
+        val start = src.indexOf("suspend fun lookupDetailByTmdbId(")
+        assertTrue("lookupDetailByTmdbId must exist", start >= 0)
         val end = src.indexOf("suspend fun cachedDetailByTmdbId(", start)
         assertTrue("the body must be bounded by the next function", end > start)
         return src.substring(start, end)
@@ -154,13 +156,17 @@ class TmdbDetailInFlightContractTest {
         // metadata - with no way to retry inside the TTL. The disk write was
         // guarded all along; only the memory pin was not.
         val body = detailBody()
-        val guard = body.indexOf("if (result != null) {")
-        val pin = body.indexOf("detailCache[key] = now to result")
+        val guard = body.indexOf("if (detail != null) {")
+        val pin = body.indexOf("detailCache[key] = now to detail")
         assertTrue("the body must guard its result", guard >= 0)
         assertTrue("the memory pin must exist", pin >= 0)
         assertTrue(
             "the pin must sit behind the null guard, or a miss is cached for 12h",
             guard in 0 until pin
+        )
+        assertTrue(
+            "only a record is pinned, so a Not Found cannot outlive the fix to its id",
+            body.contains("val detail = (result as? TmdbDetailLookup.Found)?.detail")
         )
     }
 }

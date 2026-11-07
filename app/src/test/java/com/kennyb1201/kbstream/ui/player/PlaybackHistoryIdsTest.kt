@@ -280,8 +280,17 @@ class PlaybackHistoryIdsTest {
     @Test
     fun `an episode id names its show root`() {
         assertEquals("tt1534800", PlaybackHistoryIds.episodeRootFromId("tt1534800:3:26"))
-        assertEquals("kitsu:12", PlaybackHistoryIds.episodeRootFromId("kitsu:12:5"))
         assertEquals("tt1534800", PlaybackHistoryIds.episodeRootFromId(" tt1534800:3:26 "))
+        assertEquals("kitsu:12", PlaybackHistoryIds.episodeRootFromId("kitsu:12:5:3"))
+        assertEquals("tmdb:3634822", PlaybackHistoryIds.episodeRootFromId("tmdb:3634822:2:8"))
+    }
+
+    @Test
+    fun `an id whose last parts are not a season and episode names no root`() {
+        // The parse drops the last two parts, so a three-part id leaves only
+        // the service's own name ("kitsu") - not an id any lookup resolves, and
+        // repairing a wrong parent id into that would be no repair at all.
+        assertNull(PlaybackHistoryIds.episodeRootFromId("kitsu:12:5"))
     }
 
     @Test
