@@ -181,6 +181,32 @@ internal object SettingsSearchIndex {
             "bingecat tracker watchlist saved list lists watched history tracking scrobble " +
                 "record plays devices link public lists browse import community"
         ),
+        // The Public lists section follows the trackers it browses for, and its
+        // rows are in Library source order (spec F1). Three entries rather than
+        // one, because each is a different browser: Trakt and MDBList share the
+        // vendor screen, BingeCat has its own, and saving is a like for the
+        // first two and an import for the third. "public lists" finds all
+        // three, which is the query the old placement made a hunt.
+        SettingSearchEntry(
+            "integrations.trakt-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "Trakt public lists",
+            "public lists browse trakt community popular trending search save like library " +
+                "discover"
+        ),
+        SettingSearchEntry(
+            "integrations.mdblist-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "MDBList public lists",
+            "public lists browse mdblist top curated official search save like library " +
+                "discover"
+        ),
+        SettingSearchEntry(
+            "integrations.bingecat-public-lists",
+            SettingsPane.INTEGRATIONS,
+            "BingeCat public lists",
+            "public lists browse bingecat community search import library discover"
+        ),
         // Moved to the Subtitles pane (settings reorg §7.1, §14.1). The key stays
         // `integrations.*` because it is the row's identity, not its address; the
         // pane field is what a result groups under and jumps to.

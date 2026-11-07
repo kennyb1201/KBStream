@@ -2585,6 +2585,15 @@ fun AppRoot(
         }
 
         is Screen.Settings -> {
+            // The Public lists section's BingeCat row opens the SAME browser
+            // the connect page's BROWSE PUBLIC LISTS button opens. That
+            // browser lives inside the BingeCat route, driven by this
+            // activity-scoped view model, so the row opens it directly instead
+            // of dropping the viewer on the connect page ("one destination,
+            // two doors"). Same instance the route below resolves: same class,
+            // same default key, same owner.
+            val bingecatPublicListsVm: com.kennyb1201.kbstream.ui.bingecat.BingeCatPublicListsViewModel =
+                viewModel()
             SettingsScreen(
                 onBack = { screen = Screen.Home },
                 onOpenAddons = {
@@ -2602,6 +2611,10 @@ fun AppRoot(
                 onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Settings) },
                 onOpenTrakt = { screen = Screen.Trakt(returnTo = Screen.Settings) },
                 onOpenBingeCat = { screen = Screen.BingeCat(returnTo = Screen.Settings) },
+                onOpenBingeCatPublicLists = {
+                    bingecatPublicListsVm.open()
+                    screen = Screen.BingeCat(returnTo = Screen.Settings)
+                },
                 // One browser, two vendors: the row names which account the
                 // surface reads with, and the screen takes it from the route.
                 onOpenPublicLists = { vendor ->

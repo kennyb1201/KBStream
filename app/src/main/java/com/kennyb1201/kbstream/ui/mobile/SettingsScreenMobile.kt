@@ -196,6 +196,8 @@ fun SettingsScreenMobile(
     onOpenSimkl: () -> Unit = {},
     onOpenTrakt: () -> Unit = {},
     onOpenBingeCat: () -> Unit = {},
+    /** Opens BingeCat's own public-lists browser (its connect page's button). */
+    onOpenBingeCatPublicLists: () -> Unit = {},
     /** Opens the public-lists browser for one vendor (`trakt` / `mdblist`). */
     onOpenPublicLists: (String) -> Unit = {},
     onOpenProfiles: () -> Unit = {},
@@ -302,6 +304,7 @@ fun SettingsScreenMobile(
                             onOpenSimkl = onOpenSimkl,
                             onOpenTrakt = onOpenTrakt,
                             onOpenBingeCat = onOpenBingeCat,
+                            onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
                             onOpenPublicLists = onOpenPublicLists,
                             onOpenProfiles = onOpenProfiles
                         )
@@ -800,6 +803,7 @@ private fun IntegrationsPaneMobile(
     onOpenSimkl: () -> Unit,
     onOpenTrakt: () -> Unit,
     onOpenBingeCat: () -> Unit,
+    onOpenBingeCatPublicLists: () -> Unit,
     onOpenPublicLists: (String) -> Unit,
     onOpenProfiles: () -> Unit
 ) {
@@ -911,15 +915,34 @@ private fun IntegrationsPaneMobile(
             },
             onClick = onOpenBingeCat
         )
-        // Public lists for the tracker above (spec F1): Trakt's directories are
-        // browsed here, saved by LIKING a list, and the saved list then appears
-        // in Library beside the account's own lists - which is how it reaches
-        // Home, by pinning that row. No rail is created by browsing or saving.
+        // ── Public lists ──────────────────────────────────────────
+        // One section for the three browse surfaces, in Library source order -
+        // the TV pane's section, same rows (spec F1). It used to be three
+        // patterns: Trakt's row ended the Trackers section, MDBList's sat under
+        // its key card in API Keys, and BingeCat's was a button in its connect
+        // page.
+        SettingsSectionMobile("Public lists")
         SettingsNavRowMobile(
             label = "Trakt public lists",
             description = "Browse Trakt's popular and trending community lists, search " +
                 "them by name, and save one to your Library by liking it.",
             onClick = { onOpenPublicLists("trakt") }
+        )
+        // Moved out of API Keys with its description verbatim; the key card
+        // that enables it is the section below.
+        SettingsNavRowMobile(
+            label = "MDBList public lists",
+            description = "Browse MDBList's Top, Curated and Official lists, search " +
+                "them by name, and save one to your Library by liking it.",
+            onClick = { onOpenPublicLists("mdblist") }
+        )
+        // BingeCat's browser is its own screen (not a vendor in the shared
+        // one), and its save is an IMPORT into the mapped BingeCat profile.
+        SettingsNavRowMobile(
+            label = "BingeCat public lists",
+            description = "Browse BingeCat's community lists, search them by name, " +
+                "and import one into your BingeCat profile.",
+            onClick = onOpenBingeCatPublicLists
         )
 
         // ── API Keys ─────────────────────────────────────────────
@@ -953,14 +976,8 @@ private fun IntegrationsPaneMobile(
             savedHint = "Connected as",
             savedDescription = "Key saved — ratings appear on the next title you open."
         )
-        // MDBList public lists sit with the key that enables them (spec F1): the
-        // key is what the surface reads with.
-        SettingsNavRowMobile(
-            label = "MDBList public lists",
-            description = "Browse MDBList's Top, Curated and Official lists, search " +
-                "them by name, and save one to your Library by liking it.",
-            onClick = { onOpenPublicLists("mdblist") }
-        )
+        // The MDBList browse row left this block for the Public lists section
+        // above; the key CARD stays with the other key surfaces.
         KeyCardMobile(
             title = "OMDb API Key",
             description = "Free key from omdbapi.com — adds an AWARDS fact to detail " +

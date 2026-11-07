@@ -315,6 +315,15 @@ fun SettingsScreen(
     onOpenTrakt: () -> Unit = {},
     onOpenBingeCat: () -> Unit = {},
     /**
+     * Opens BingeCat's own public-lists browser - the screen the connect
+     * page's BROWSE PUBLIC LISTS button opens.
+     *
+     * Deliberately NOT a vendor in [onOpenPublicLists]: that browser is the
+     * Trakt/MDBList one, and BingeCat's is a screen of its own with its own
+     * levels, its own back stack and an import instead of a like.
+     */
+    onOpenBingeCatPublicLists: () -> Unit = {},
+    /**
      * Opens the public-lists browser for one vendor (`trakt` / `mdblist`).
      *
      * A vendor string rather than two callbacks: the surface is one screen, and
@@ -343,6 +352,7 @@ fun SettingsScreen(
             onOpenSimkl = onOpenSimkl,
             onOpenTrakt = onOpenTrakt,
             onOpenBingeCat = onOpenBingeCat,
+            onOpenBingeCatPublicLists = onOpenBingeCatPublicLists,
             onOpenPublicLists = onOpenPublicLists,
             onOpenProfiles = onOpenProfiles,
             onOpenCatalogManager = onOpenCatalogManager,
@@ -1112,18 +1122,67 @@ fun SettingsScreen(
                         onClick = onOpenBingeCat
                     )
 
-                    // Public lists for the tracker above it (spec F1): Trakt's
-                    // directories are browsed here, saved by LIKING a list, and
-                    // the saved list then appears in Library beside the account's
-                    // own lists - which is how it reaches Home, by pinning that
-                    // row. No rail is created by browsing or saving.
-                    NavigationRow(
-                        label = "Trakt public lists",
-                        description = "Browse Trakt's popular and trending community " +
-                            "lists, search them by name, and save one to your Library by " +
-                            "liking it. Owner is named on every card.",
-                        onClick = { onOpenPublicLists("trakt") }
-                    )
+                // ── PUBLIC LISTS ───────────────────────────────────────
+                // One section for the three sources that can browse and save a
+                // community list (spec F1). Before this, "where do I browse
+                // public lists" had three answers in three patterns: Trakt's
+                // row ended the Trackers section (separated from its own
+                // tracker by Resume Source and BingeCat), MDBList's sat under
+                // its key card inside API Keys, and BingeCat's was a button
+                // buried in its connect page. Rows are in Library source order
+                // - Trakt, MDBList, BingeCat - and each opens its existing
+                // browser; nothing here creates a rail, saves by itself, or
+                // changes what the browser does.
+                //
+                // Simkl has no public-list discovery in its API, so there is
+                // no row (and no placeholder row) for it.
+                SettingsSectionHeader("Public lists")
+
+                // Trakt's directories: saved by LIKING a list, and the saved
+                // list then appears in Library beside the account's own lists -
+                // which is how it reaches Home, by pinning that row.
+                NavigationRow(
+                    label = "Trakt public lists",
+                    description = "Browse Trakt's popular and trending community " +
+                        "lists, search them by name, and save one to your Library by " +
+                        "liking it. Owner is named on every card.",
+                    onClick = { onOpenPublicLists("trakt") }
+                )
+
+                // MDBList's browse row used to sit under the MDBList key card
+                // in API Keys; the key card STAYS there (the block of key
+                // surfaces is contiguous on purpose), and the gate reads
+                // naturally in this spot - the key that enables the browser is
+                // the section directly below. Moved verbatim, gate included.
+                NavigationRow(
+                    label = "MDBList public lists",
+                    description = if (mdbListKeySaved) {
+                        "Browse MDBList's Top, Curated and Official lists, search them by " +
+                            "name, and save one to your Library by liking it."
+                    } else {
+                        "Paste an MDBList key first: public lists are read with your own " +
+                            "account."
+                    },
+                    onClick = { onOpenPublicLists("mdblist") }
+                )
+
+                // BingeCat's browser is a screen of its own, not a vendor in
+                // the Trakt/MDBList one ("one browser, two vendors"), so this
+                // row opens the exact destination the connect page's BROWSE
+                // PUBLIC LISTS button opens. Saving here is an IMPORT: a
+                // BingeCat public list is copied into the mapped BingeCat
+                // profile, so it is not the other two rows' "save by liking".
+                // The connect page's button stays - it is the contextual
+                // shortcut on the page a viewer lands on right after
+                // connecting - but it is no longer the only way to find this.
+                // Visible on the same profiles the BingeCat connect row is
+                // (this pane gates key MATERIAL, not these rows).
+                NavigationRow(
+                    label = "BingeCat public lists",
+                    description = "Browse BingeCat's community lists, search them by " +
+                        "name, and import one into your BingeCat profile.",
+                    onClick = onOpenBingeCatPublicLists
+                )
 
                 // ── API KEYS ─────────────────────────────────────────────
                 // ONE contiguous block (settings reorg §3.3, M2 + M4): the four
@@ -1294,20 +1353,10 @@ fun SettingsScreen(
                     }
                 }
 
-                // MDBList public lists sit with the key that enables them: the
-                // key is what the surface reads with, and the saved list then
-                // appears in Library beside the account's own lists (spec F1).
-                NavigationRow(
-                    label = "MDBList public lists",
-                    description = if (mdbListKeySaved) {
-                        "Browse MDBList's Top, Curated and Official lists, search them by " +
-                            "name, and save one to your Library by liking it."
-                    } else {
-                        "Paste an MDBList key first: public lists are read with your own " +
-                            "account."
-                    },
-                    onClick = { onOpenPublicLists("mdblist") }
-                )
+                // The MDBList browse row left this block for the Public lists
+                // section above: a lists source belongs with the other lists
+                // sources, not with the keys. The key CARD stays here, where
+                // every key surface is.
 
                 // ── OMDB KEY (awards on the detail screen) ────────────
                 // The one fact on a detail page TMDB cannot supply: it has no
