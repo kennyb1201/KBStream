@@ -1095,7 +1095,14 @@ internal object PlayerTrackBridge {
     internal fun matchingOverride(
         tracks: Tracks,
         type: Int,
-        language: String
+        language: String,
+        /**
+         * Flat text-track positions this device has already SEEN draw bitmaps
+         * for this title (see SubtitleBitmapProofs), so this pass ranks them
+         * behind a same-kind text track exactly like [SubtitleTrackRules.choose]
+         * does. Empty for audio, and for a title with no record.
+         */
+        provenBitmapPositions: Set<Int> = emptySet()
     ): TrackSelectionOverride? {
         if (type == C.TRACK_TYPE_TEXT) {
             // Text is KIND-ranked within the language, not first-wins: this pass
@@ -1119,10 +1126,15 @@ internal object PlayerTrackBridge {
             val untaggedLocations =
                 mutableListOf<Pair<androidx.media3.common.TrackGroup, Int>>()
             val untaggedCandidates = mutableListOf<SubtitleTrackRules.Candidate>()
+            // The flat index the picker and the proven-bitmap memory use: it
+            // counts EVERY text track, including the ones skipped below, because
+            // a stored record is addressed by that same number.
+            var flatPosition = 0
             tracks.groups
                 .filter { it.type == type }
                 .forEach { group ->
                     for (i in 0 until group.length) {
+                        val position = flatPosition++
                         val format = group.getTrackFormat(i)
                         val tagged = LanguageMatch.matches(language, format.language)
                         // "States no language this app can match" - blank, or
@@ -1148,7 +1160,8 @@ internal object PlayerTrackBridge {
                             mimeType = format.sampleMimeType,
                             forced = format.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
                             supported = supported,
-                            title = format.label
+                            title = format.label,
+                            position = position
                         )
                         if (tagged) {
                             taggedLocations += group.mediaTrackGroup to i
@@ -1159,13 +1172,18 @@ internal object PlayerTrackBridge {
                         }
                     }
                 }
-            val taggedBest = SubtitleTrackRules.bestLanguageMatchIndex(taggedCandidates)
+            val taggedBest = SubtitleTrackRules.bestLanguageMatchIndex(
+                taggedCandidates,
+                provenBitmapPositions
+            )
             if (taggedBest != null) {
                 val (group, index) = taggedLocations[taggedBest]
                 return TrackSelectionOverride(group, index)
             }
-            val untaggedBest = SubtitleTrackRules.bestLanguageMatchIndex(untaggedCandidates)
-                ?: return null
+            val untaggedBest = SubtitleTrackRules.bestLanguageMatchIndex(
+                untaggedCandidates,
+                provenBitmapPositions
+            ) ?: return null
             val (group, index) = untaggedLocations[untaggedBest]
             return TrackSelectionOverride(group, index)
         }
@@ -1199,7 +1217,12 @@ internal object PlayerTrackBridge {
      * Matching goes through [LanguageMatch] because the stored preference is a
      * two-letter code and the file's tags are almost always three-letter ones.
      */
-    fun applyLanguage(player: Player?, type: Int, language: String): Boolean {
+    fun applyLanguage(
+        player: Player?,
+        type: Int,
+        language: String,
+        provenBitmapPositions: Set<Int> = emptySet()
+    ): Boolean {
         if (player == null) return false
 
         // Nothing asked for on the audio side ("Auto" with no global default):
@@ -1214,7 +1237,7 @@ internal object PlayerTrackBridge {
             return true
         }
 
-        val override = matchingOverride(player.currentTracks, type, language)
+        val override = matchingOverride(player.currentTracks, type, language, provenBitmapPositions)
         if (override == null) {
             if (type == C.TRACK_TYPE_TEXT) {
                 player.trackSelectionParameters = player.trackSelectionParameters

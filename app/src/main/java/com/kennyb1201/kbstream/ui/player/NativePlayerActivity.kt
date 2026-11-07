@@ -113,6 +113,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
+import com.kennyb1201.kbstream.data.player.SubtitleBitmapProofs
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -1073,7 +1074,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 runCatching {
                     typeface = androidx.core.content.res.ResourcesCompat.getFont(
                         this@NativePlayerActivity,
-                        R.font.oswald_semibold
+                        R.font.inter_semibold
                     )
                 }
                 setTextColor(getColor(R.color.kb_text_hi))
@@ -1349,6 +1350,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var subtitlePosition = 0
     private lateinit var subtitleText: TextView
     private var subtitleCueHandler: SubtitleCueHandler? = null
+
+    /**
+     * The flat text-track positions THIS session has seen draw bitmaps (see
+     * [SubtitleCueHandler.showBitmapCues]), i.e. proof that the track is an
+     * authored image rather than text.
+     *
+     * Session-scoped on purpose: it is cleared with the cue handler on every
+     * player rebuild and live zap (a track position belongs to one track list).
+     * Across plays the same proof comes from [SubtitleBitmapProofs] instead.
+     */
+    private val provenBitmapTrackPositions = mutableSetOf<Int>()
     // Parsed cues of the user-loaded external subtitle file. When present
     // with a negative offset, rendering switches to position-driven mode
     // (SubtitleCueHandler.updateFromPosition) so subs can appear early.
@@ -4268,7 +4280,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     /** Subtitle language chosen in the panel (blank = subtitles off). */
     private fun applyChosenSubtitleLanguage(code: String) {
         preferredSubtitleLang = code
-        PlayerTrackBridge.applyLanguage(exoPlayer, C.TRACK_TYPE_TEXT, code)
+        // The proven-bitmap set travels with the language pass for the same
+        // reason the initial selection reads it: this pass re-arms a track on
+        // every READY and rebuffer, and must not put a proven image track back
+        // in front of the text track of the same kind.
+        val textGroups = exoPlayer?.currentTracks?.groups.orEmpty()
+            .filter { it.type == C.TRACK_TYPE_TEXT }
+        PlayerTrackBridge.applyLanguage(
+            exoPlayer,
+            C.TRACK_TYPE_TEXT,
+            code,
+            provenBitmapPositionsForTextGroups(textGroups)
+        )
     }
 
     /** Subtitle offset chosen in the panel: same path as the +/- buttons. */
@@ -6594,6 +6617,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // SubtitleCueHandler.onCues).
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
+            // Track positions belong to one track list: a rebuilt player may
+            // have a different one.
+            provenBitmapTrackPositions.clear()
             subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
             // An ASS sidecar outlives the player it was loaded against - only
             // the native instance was released with the old one - so the tick
@@ -9030,6 +9056,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // offset in force. MPV's INFO panel has always carried this and Exo's
         // never did, so "what subtitle is playing and why is it 400 ms early"
         // had no answer on the engine most sessions use (audit U-F6).
+        // Proof, not mime (F2): the selected track has DRAWN an image this
+        // session, either on the group being shown or earlier for this track.
+        val drawingBitmaps = subtitleCueHandler?.hasDrawnBitmapCues == true
         val subtitleLines = mutableListOf<String>()
         exoPlayer?.currentTracks?.groups?.forEach { group ->
             if (group.type != C.TRACK_TYPE_TEXT) return@forEach
@@ -9040,8 +9069,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 format.label?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
                 format.language?.uppercase()?.takeIf { it.isNotBlank() }
                     ?.let { parts.add("Language: $it") }
-                normalizeCodec(format.sampleMimeType).takeIf { it != "—" }
-                    ?.let { parts.add("Format: $it") }
+                // "Bitmap" is a claim about what the track DID. A transcoded
+                // x-media3-cues track cannot be named from its mime (text and
+                // images share it), so an unproven track keeps the raw mime -
+                // the panel does not guess.
+                val formatValue = when {
+                    drawingBitmaps && format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES ->
+                        "Bitmap"
+                    else -> normalizeCodec(format.sampleMimeType)
+                }
+                formatValue.takeIf { it != "—" }?.let { parts.add("Format: $it") }
                 if (format.roleFlags and C.ROLE_FLAG_CAPTION != 0) parts.add("SDH/captions")
                 if (format.roleFlags and C.ROLE_FLAG_MAIN != 0) parts.add("forced")
                 subtitleLines.add(parts.joinToString(" • "))
@@ -9051,6 +9088,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // The overlay typesets its own script, so the text cues this panel
             // would otherwise describe are deliberately not drawn.
             assRenderer.active -> "Drawn by: ASS overlay (libass typesetting)"
+            drawingBitmaps -> "Drawn by: bitmap subtitles (images)"
             externalSubtitleCues.isNotEmpty() -> "Drawn by: external subtitle file"
             subtitleLines.isEmpty() -> "Off"
             else -> "Drawn by: embedded track"
@@ -9066,8 +9104,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
             )
         }
+        // Says the one thing the size/Clean SDH settings cannot do for an image:
+        // size scales the picture (F1) and there is no text to clean (H5).
+        val bitmapNote = if (drawingBitmaps) {
+            "Bitmap subtitles — images; size scales the picture, Clean SDH does not apply"
+        } else {
+            null
+        }
         infoSubtitles.text =
-            (subtitleLines + subtitleSource + subtitleStyle).joinToString("\n")
+            (subtitleLines + subtitleSource + subtitleStyle + listOfNotNull(bitmapNote))
+                .joinToString("\n")
     }
 
 
@@ -9238,6 +9284,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // track that draws nothing (a bitmap format this engine does not
             // draw), and a fallback onto the one track no renderer claims.
             // Neither raises, so neither reaches the retry ladder.
+            // Tracks this device has SEEN draw images (F3 Rule B), so the pick
+            // avoids them when a same-language, same-kind text track exists -
+            // that is what makes Clean SDH and text sizing apply on a replay.
+            val provenPositions = provenBitmapPositionsForTextGroups(textGroups)
             val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
             val locations = mutableListOf<Pair<Tracks.Group, Int>>()
             textGroups.forEach { group ->
@@ -9252,7 +9302,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         // commentary) and the language tag never does, so the
                         // rules read it to rank SDH above a forced track - see
                         // SubtitleTrackRules.choose.
-                        title = fmt.label
+                        title = fmt.label,
+                        // The flat position, which is what a proven-bitmap
+                        // record is addressed by.
+                        position = candidates.size
                     )
                     locations += group to i
                 }
@@ -9262,7 +9315,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 val choice = SubtitleTrackRules.choose(
                     candidates,
                     preferredSubtitleLang,
-                    subtitleMode
+                    subtitleMode,
+                    provenPositions
                 )
             ) {
                 is SubtitleTrackRules.Choice.Show -> {
@@ -10014,6 +10068,99 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * The flat position of the currently SELECTED text track among the file's
+     * text tracks - the numbering the picker uses (see `showPicker`) and the one
+     * a proven-bitmap record is addressed by.
+     *
+     * Null when no embedded text track is selected (subtitles off, an
+     * app-rendered sidecar, or the ASS overlay drawing its own script).
+     */
+    private fun selectedTextTrackPosition(): Int? {
+        val tracks = exoPlayer?.currentTracks ?: return null
+        val groups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        var position = 0
+        groups.forEach { group ->
+            for (i in 0 until group.length) {
+                if (group.isTrackSelected(i)) return position
+                position++
+            }
+        }
+        return null
+    }
+
+    /**
+     * Records that the selected text track just drew a BITMAP cue group.
+     *
+     * Two places, one proof: this session's [provenBitmapTrackPositions] (the
+     * picker badge and the INFO panel read it), and [SubtitleBitmapProofs],
+     * which is what lets the NEXT play auto-pick a text track instead (F3 Rule
+     * B). Neither is derived from the mime - the image in the cue group is the
+     * evidence.
+     */
+    private fun recordProvenBitmapTrack() {
+        val tracks = exoPlayer?.currentTracks ?: return
+        val groups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+        val prefixes = groups.runningFold(0) { sum, group -> sum + group.length }
+        groups.forEachIndexed { groupIdx, group ->
+            for (i in 0 until group.length) {
+                if (!group.isTrackSelected(i)) continue
+                val position = prefixes[groupIdx] + i
+                val format = group.getTrackFormat(i)
+                val kind = SubtitleTrackRules.kindOf(
+                    format.label,
+                    (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0
+                )
+                provenBitmapTrackPositions += position
+                SubtitleBitmapProofs.record(
+                    context = this,
+                    titleKey = titleKey,
+                    position = position,
+                    language = format.language,
+                    kind = kind
+                )
+                Log.i(
+                    TAG_SUB,
+                    "proven bitmap track: position=$position " +
+                        "lang=${format.language ?: "untagged"} kind=$kind " +
+                        "label=${format.label ?: "none"}"
+                )
+                return
+            }
+        }
+    }
+
+    /**
+     * The text-track positions that should read "Bitmap" for THIS file: this
+     * session's drawn tracks plus the ones a previous play proved, matched on
+     * position, language and kind by [SubtitleTrackRules.provenBitmapPositions]
+     * so a reordered rip cannot badge the wrong row.
+     *
+     * A track that has never drawn as an image is deliberately absent: the
+     * picker says nothing rather than guessing from a mime that cannot answer.
+     */
+    private fun provenBitmapPositionsForTextGroups(groups: List<Tracks.Group>): Set<Int> {
+        val prefixes = groups.runningFold(0) { sum, group -> sum + group.length }
+        val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
+        groups.forEachIndexed { groupIdx, group ->
+            for (i in 0 until group.length) {
+                val format = group.getTrackFormat(i)
+                candidates += SubtitleTrackRules.Candidate(
+                    language = format.language,
+                    mimeType = format.sampleMimeType,
+                    forced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                    supported = group.isTrackSupported(i),
+                    title = format.label,
+                    position = prefixes[groupIdx] + i
+                )
+            }
+        }
+        val stored = SubtitleBitmapProofs.proofs(this, titleKey)
+        val proven = SubtitleTrackRules.provenBitmapPositions(candidates, stored)
+            .mapTo(mutableSetOf()) { index -> candidates[index].position }
+        return proven + provenBitmapTrackPositions
+    }
+
+    /**
      * Renders text cues into [subtitleText] instead of Media3's built-in
      * SubtitleView. That view cannot take the pill background (its
      * exo_subtitle child is a SubtitleView container, not a TextView, so the
@@ -10039,6 +10186,33 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          * on every text cue group (PlayerView forwards every group to it).
          */
         private var bitmapCuesDrawn = false
+
+        /**
+         * The authored height and frame height of the bitmap frame this handler
+         * last drew, retained so [refreshStyle] can rescale the line already on
+         * screen (see [BitmapCueGeometry]): a size change mid-cue has no cue
+         * group in hand, and the scale is computed from the bitmap's own size.
+         */
+        private val bitmapGeometry = BitmapCueGeometry()
+
+        /**
+         * Whether the selected track is DRAWING AS BITMAPS right now: the
+         * current group carried `Cue.bitmap`, or this session already recorded
+         * that the selected track drew one.
+         *
+         * This is what the INFO panel and the size note read, because a mime
+         * cannot answer it (media3 transcode text and bitmap subtitles to the
+         * same `x-media3-cues`) - and a track only stops being a bitmap track
+         * when a DIFFERENT track is selected, not between two of its lines.
+         * (An empty cue group between PGS lines clears `bitmapCuesDrawn` on its
+         * way to the text path, so the session record is what keeps the answer
+         * stable between lines.)
+         */
+        val hasDrawnBitmapCues: Boolean
+            get() = bitmapCuesDrawn || selectedTextTrackPosition()?.let {
+                it in provenBitmapTrackPositions
+            } == true
+
         private val delayedShow = Runnable { renderText(currentCueText()) }
         private val positionTick = Runnable { updateFromPosition() }
 
@@ -10196,6 +10370,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private fun showBitmapCues(cueGroup: CueGroup) {
             val view = playerView.subtitleView ?: return
             view.setCues(cueGroup.cues)
+            // The authored size of the picture is what the size setting has to
+            // be scaled AGAINST, so it is captured here, where the cue is in
+            // hand, and retained for a mid-cue settings change
+            // ([refreshStyle]). The tallest bitmap of the group is the block the
+            // line count is estimated from.
+            val bitmapHeight = cueGroup.cues
+                .mapNotNull { cue -> cue.bitmap?.height }
+                .maxOrNull() ?: 0
+            // The frame the subtitle was authored against: the playing video's
+            // own height (the number INFO prints as the resolution), or the
+            // surface when the player has not reported one yet.
+            val frameHeight = exoPlayer?.videoSize?.height?.takeIf { it > 0 } ?: view.height
+            bitmapGeometry.remember(bitmapHeight, frameHeight)
             // The player's own subtitle SIZE and POSITION reach a bitmap track
             // too, as far as an authored image allows: the cue's pixels are
             // fixed, so size is the view's scale and position is its vertical
@@ -10203,6 +10390,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // because this is the only place the bitmap path is drawn (audit
             // U-F14: these settings reached text cues only).
             applyBitmapCueGeometry(view)
+            // Proof for the picker/INFO and for the next play's auto-pick: this
+            // track just drew an image, whatever its mime says.
+            recordProvenBitmapTrack()
             view.visibility = View.VISIBLE
             if (!bitmapCuesDrawn) {
                 bitmapCuesDrawn = true
@@ -10221,6 +10411,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         private fun clearBitmapCues() {
             if (!bitmapCuesDrawn) return
             bitmapCuesDrawn = false
+            // The geometry belongs to the frame being dropped: a text line must
+            // not inherit its scale, and refreshStyle must not re-apply it.
+            bitmapGeometry.clear()
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
             // Back to neutral: the text path positions itself with its own
@@ -10243,9 +10436,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
          * pushes up from the same baseline instead of sinking off screen.
          */
         private fun applyBitmapCueGeometry(view: android.view.View) {
-            // One rule for both picture paths: see [SubtitleOverlayStyle].
-            val size = SubtitleOverlayStyle.scaleForSize(
-                AppPreferences.getDefaultSubtitleSize(applicationContext)
+            // A bitmap's own rule, not the ASS overlay's: the picture is scaled
+            // so one authored line renders at the TEXT height of the same size
+            // setting, shrink-only (see [SubtitleOverlayStyle.bitmapScaleForSize]).
+            // Scale-for-size alone scaled around an authored size that was
+            // already bigger than text, which is the "subtitles got bigger"
+            // report; the ASS overlay keeps [SubtitleOverlayStyle.scaleForSize].
+            val size = bitmapGeometry.scaleFor(
+                sizeIndex = AppPreferences.getDefaultSubtitleSize(applicationContext),
+                scaledDensity = resources.displayMetrics.scaledDensity,
+                fallbackFrameHeightPx = view.height
             )
             val lift = SubtitleOverlayStyle.liftPxForPosition(
                 AppPreferences.getDefaultSubtitlePosition(applicationContext),
@@ -11197,6 +11397,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // - text groups in order, each group's tracks in order.
                 val totalTextTracks = textGroups.sumOf { it.length }
                 val textPrefixes = textGroups.runningFold(0) { sum, group -> sum + group.length }
+                // Which rows have PROVEN they are images: this session's drawn
+                // tracks plus the ones a previous play recorded. The mime cannot
+                // answer this (a factory-parsed SRT track says x-media3-cues too),
+                // so an unproven row says nothing rather than guessing.
+                val provenPositions = provenBitmapPositionsForTextGroups(textGroups)
                 subtitleItems + listOf(offItem) + textGroups.flatMapIndexed { groupIdx, group ->
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
@@ -11232,6 +11437,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                     forced = (format.selectionFlags and
                                         C.SELECTION_FLAG_FORCED) != 0
                                 ),
+                                // Named by what it DREW, not by its mime: only a
+                                // track that has actually rendered an image says
+                                // "Bitmap" (F2).
+                                if (position in provenPositions) "Bitmap" else null,
                                 cannotDraw
                             ).joinToString(" \u00b7 "),
                             isSelected = group.isTrackSelected(trackIdx),
@@ -14994,6 +15203,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             cueHandler.cancelPending()
             player.removeListener(cueHandler)
         }
+        // Same track list? Not necessarily: a live zap can land on a channel
+        // whose file numbers its tracks differently.
+        provenBitmapTrackPositions.clear()
         subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
         // The same MediaItem createPlayer() would have built for this URL,
         // handed to the running player. prepare() restarts the load; the Surface

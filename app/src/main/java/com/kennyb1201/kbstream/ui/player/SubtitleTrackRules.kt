@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
 import com.kennyb1201.kbstream.data.player.LanguageMatch
+import com.kennyb1201.kbstream.data.player.BitmapTrackProof
 
 /**
  * Which text track a session should land on, and what this engine can actually
@@ -62,7 +63,15 @@ internal object SubtitleTrackRules {
          * ordering (see [SubtitleKindRules]). The viewer's picker already reads
          * the same field (see [pickerLabel]).
          */
-        val title: String? = null
+        val title: String? = null,
+        /**
+         * The track's FLAT position among the file's text tracks - the number
+         * the picker and the proven-bitmap memory use, so a record made while
+         * playing can be matched to this candidate on a later play. -1 when the
+         * caller did not say; the list index is then used, which is the same
+         * thing for a caller that enumerates every text track in order.
+         */
+        val position: Int = -1
     )
 
     /** What the player should do about subtitles. */
@@ -157,13 +166,38 @@ internal object SubtitleTrackRules {
         isBitmapFormat(mimeType) && !bitmapRenderable(mimeType)
 
     /**
+     * Whether this mime PROVES the track is text.
+     *
+     * The counterpart of [isBitmapFormat], and load-bearing the same way: a
+     * track that still states SRT/VTT/ASS/TX3G/TTML is a text track, whatever
+     * a container that does not transcode during extraction does to it. What
+     * it is NOT is a test for `application/x-media3-cues` - media3's extractors
+     * transcode text AND bitmap subtitles to that one mime, so it proves
+     * nothing either way (that is what the proven-bitmap memory is for).
+     *
+     * Only formats `DefaultSubtitleParserFactory` claims are listed, because
+     * only those can reach this engine as a selected subtitle track at all.
+     */
+    fun isProvenTextFormat(mimeType: String?): Boolean = when (mimeType) {
+        MimeTypes.APPLICATION_SUBRIP,
+        MimeTypes.TEXT_VTT,
+        MimeTypes.APPLICATION_MP4VTT,
+        MimeTypes.TEXT_SSA,
+        MimeTypes.APPLICATION_TX3G,
+        MimeTypes.APPLICATION_TTML -> true
+
+        else -> false
+    }
+
+    /**
      * Short format badge for a picker row, or null when the format is unknown.
      *
      * The point is engine expectation: the badge names the format ("PGS",
      * "VOBSUB", "DVB") and "ASS" warns that it draws without its typesetting,
      * so the viewer learns what a track is before pressing it rather than after.
      * Whether THIS engine can draw it is a separate answer, carried by
-     * [cannotDrawNote].
+     * [cannotDrawNote]. A track whose mime proves nothing (the transcoded
+     * `x-media3-cues`) has no badge here on purpose: see [isProvenTextFormat].
      */
     fun formatLabel(mimeType: String?): String? = when (mimeType) {
         MimeTypes.APPLICATION_PGS -> "PGS"
@@ -228,6 +262,83 @@ internal object SubtitleTrackRules {
     }
 
     /**
+     * The KIND a track claims, in the form the proven-bitmap memory stores it:
+     * an SDH-named track is SDH even when the forced flag is also set (the same
+     * precedence [choose] ranks with), else forced, else regular.
+     */
+    fun kindOf(title: String?, forced: Boolean): String {
+        if (SubtitleKindRules.of(title).contains(SubtitleKindRules.SDH)) {
+            return BitmapTrackProof.KIND_SDH
+        }
+        return if (forced) BitmapTrackProof.KIND_FORCED else BitmapTrackProof.KIND_REGULAR
+    }
+
+    /**
+     * The list indices of [candidates] this device has already SEEN draw bitmaps
+     * for this title (see [BitmapTrackProof]).
+     *
+     * A stored record is matched on its position AND on the language and kind it
+     * was recorded with, so a different rip of the same show - reordered tracks,
+     * a rebuilt mux - cannot make an unrelated track look proven.
+     */
+    fun provenBitmapPositions(
+        candidates: List<Candidate>,
+        proofs: List<BitmapTrackProof>
+    ): Set<Int> {
+        if (proofs.isEmpty()) return emptySet()
+        return candidates.withIndex()
+            .filter { (index, candidate) ->
+                val position = candidate.position.takeIf { it >= 0 } ?: index
+                proofs.any { proof ->
+                    proof.position == position &&
+                        normalize(proof.language) == normalize(candidate.language) &&
+                        proof.kind == kindOf(candidate.title, candidate.forced)
+                }
+            }
+            .mapTo(mutableSetOf()) { (index, _) -> index }
+    }
+
+    /**
+     * Where a candidate sits in its step's preference order, most preferred
+     * first:
+     *
+     *  0. a mime that PROVES text ([isProvenTextFormat]) - the track that keeps
+     *     Clean SDH and the 11/14/18sp sizing;
+     *  1. an unknown mime (`application/x-media3-cues`, null) - no evidence
+     *     either way yet;
+     *  2. a mime that proves BITMAP (`application/pgs` and the two formats this
+     *     engine still cannot draw, which [choose] filters out first);
+     *  3. a track this device has SEEN draw bitmaps ([provenBitmapPositions]) -
+     *     rendered images whatever its mime says.
+     *
+     * This is the whole F3 preference: it never crosses a language or a kind, it
+     * only orders the candidates that already matched the same step, and with no
+     * proven set and no mixed mimes it reproduces the old file order exactly.
+     */
+    private fun tierOf(
+        candidate: Candidate,
+        index: Int,
+        provenBitmapPositions: Set<Int>
+    ): Int {
+        if (isProvenTextFormat(candidate.mimeType)) return 0
+        if (isBitmapFormat(candidate.mimeType)) return 2
+        val position = candidate.position.takeIf { it >= 0 } ?: index
+        return if (position in provenBitmapPositions) 3 else 1
+    }
+
+    /** [candidates] in [tierOf] order, file order inside a tier. */
+    private fun orderedForStep(
+        candidates: List<IndexedValue<Candidate>>,
+        provenBitmapPositions: Set<Int>
+    ): List<IndexedValue<Candidate>> =
+        candidates.sortedWith(
+            compareBy(
+                { tierOf(it.value, it.index, provenBitmapPositions) },
+                { it.index }
+            )
+        )
+
+    /**
      * Decide the subtitle track for [candidates], given the viewer's preferred
      * [preferredLanguage]. A blank preference means subtitles are OFF and that
      * is respected absolutely — including for a forced track, which is why this
@@ -257,14 +368,20 @@ internal object SubtitleTrackRules {
      * The whole order, most complete first, is:
      *
      *  1. the preferred language: SDH, then regular; a bitmap track whose
-     *     format this engine draws ranks here like any other track;
+     *     format this engine draws ranks here like any other track - inside a
+     *     step, proof orders the candidates ([tierOf]): a text-proven mime
+     *     first, a track this device has seen draw bitmaps last;
      *  2. a bitmap track in the preferred language whose format this engine does
      *     NOT draw — the next engine is asked (see [Choice.NeedsMpv]);
      *  3. an untagged track: SDH, then regular;
      *  4. a forced track: preferred-tagged, then untagged;
      *  5. another language: SDH, then regular, then forced.
      */
-    fun choose(candidates: List<Candidate>, preferredLanguage: String): Choice {
+    fun choose(
+        candidates: List<Candidate>,
+        preferredLanguage: String,
+        provenBitmapPositions: Set<Int> = emptySet()
+    ): Choice {
         val preferred = normalize(preferredLanguage) ?: return Choice.Off
 
         // Two filters, one answer each: a track is drawable when the build
@@ -296,13 +413,20 @@ internal object SubtitleTrackRules {
         val isRegular: (Candidate) -> Boolean = {
             !it.forced && !isSdh(it) && !isCommentaryOrMt(it)
         }
+        // One ordered view of the drawable tracks (see [tierOf]): proof beats
+        // file order inside every step below, and never across steps - a
+        // proven-bitmap track still loses to a same-language SDH text track, but
+        // it also loses to a same-language regular text track and to a track
+        // this device has seen draw images. With nothing proven and no mixed
+        // mimes this list is the candidates in file order, as before.
+        val ordered = orderedForStep(renderable, provenBitmapPositions)
 
         // 1. The preferred language, most complete kind first: SDH, then a
         //    regular full translation. The forced flag is deliberately NOT
         //    here: it is demoted below the untagged tracks (step 4).
-        renderable.firstOrNull { isPreferred(it.value) && isSdh(it.value) }
+        ordered.firstOrNull { isPreferred(it.value) && isSdh(it.value) }
             ?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
+        ordered.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
             ?.let { return Choice.Show(it.index) }
 
         // 2. The preferred language IS present, but only as a bitmap track this
@@ -318,9 +442,9 @@ internal object SubtitleTrackRules {
         //    it is the viewer's own language far more often than not, so it is
         //    preferred over a track tagged for a language they did ask for -
         //    and it is ranked by kind for the same reason.
-        renderable.firstOrNull { isUntagged(it.value) && isSdh(it.value) }
+        ordered.firstOrNull { isUntagged(it.value) && isSdh(it.value) }
             ?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isUntagged(it.value) && isRegular(it.value) }
+        ordered.firstOrNull { isUntagged(it.value) && isRegular(it.value) }
             ?.let { return Choice.Show(it.index) }
 
         // 4. Forced, demoted: a preferred-tagged forced track no longer beats an
@@ -328,9 +452,9 @@ internal object SubtitleTrackRules {
         //    on rips (see KDoc); the untagged track is the viewer's language far
         //    more often than a forced flag is honest. Language order among forced
         //    tracks is preserved: preferred-tagged before untagged.
-        renderable.firstOrNull { isPreferred(it.value) && it.value.forced }
+        ordered.firstOrNull { isPreferred(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isUntagged(it.value) && it.value.forced }
+        ordered.firstOrNull { isUntagged(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
 
         // 5. Only tagged tracks, none of them the preferred language. The
@@ -338,10 +462,10 @@ internal object SubtitleTrackRules {
         //    who asked for subtitles - but the preferred language won above, so
         //    this never overrides a real match, and a forced track in another
         //    language is still the last thing chosen before [Choice.Off].
-        renderable.firstOrNull { isSdh(it.value) }?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isRegular(it.value) }?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull()?.let { return Choice.Show(it.index) }
+        ordered.firstOrNull { isSdh(it.value) }?.let { return Choice.Show(it.index) }
+        ordered.firstOrNull { isRegular(it.value) }?.let { return Choice.Show(it.index) }
+        ordered.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
+        ordered.firstOrNull()?.let { return Choice.Show(it.index) }
 
         // 6. Nothing drawable at all, but the file does carry subtitle tracks:
         //    they are bitmaps whose format this engine cannot draw, which only
@@ -361,7 +485,10 @@ internal object SubtitleTrackRules {
      * SDH. All [candidates] are assumed drawable (supported, and not a bitmap
      * format whose flag is off).
      */
-    fun bestLanguageMatchIndex(candidates: List<Candidate>): Int? {
+    fun bestLanguageMatchIndex(
+        candidates: List<Candidate>,
+        provenBitmapPositions: Set<Int> = emptySet()
+    ): Int? {
         val isSdh: (Candidate) -> Boolean = {
             SubtitleKindRules.of(it.title).contains(SubtitleKindRules.SDH)
         }
@@ -376,14 +503,24 @@ internal object SubtitleTrackRules {
         val isRegular: (Candidate) -> Boolean = {
             !it.forced && !isSdh(it) && !isCommentaryOrMt(it)
         }
-        candidates.forEachIndexed { index, candidate ->
-            if (isSdh(candidate)) return index
+        // The same proof order as [choose]'s preferred bucket, for the same
+        // reason: this pass re-arms a track on every READY and rebuffer, so it
+        // must not walk a proven-bitmap track back in front of a text track of
+        // the same kind that the initial selection had avoided.
+        val order = candidates.indices.sortedWith(
+            compareBy(
+                { tierOf(candidates[it], it, provenBitmapPositions) },
+                { it }
+            )
+        )
+        order.forEach { index ->
+            if (isSdh(candidates[index])) return index
         }
-        candidates.forEachIndexed { index, candidate ->
-            if (isRegular(candidate)) return index
+        order.forEach { index ->
+            if (isRegular(candidates[index])) return index
         }
-        candidates.forEachIndexed { index, candidate ->
-            if (candidate.forced) return index
+        order.forEach { index ->
+            if (candidates[index].forced) return index
         }
         return null
     }
@@ -393,11 +530,16 @@ internal object SubtitleTrackRules {
      * (see [SubtitleModeRules]). [ON] is the language rules in [choose]; [OFF]
      * is always off; [FORCED] only ever shows a forced track.
      */
-    fun choose(candidates: List<Candidate>, preferredLanguage: String, mode: Int): Choice =
+    fun choose(
+        candidates: List<Candidate>,
+        preferredLanguage: String,
+        mode: Int,
+        provenBitmapPositions: Set<Int> = emptySet()
+    ): Choice =
         when (SubtitleModeRules.normalized(mode)) {
             SubtitleModeRules.FORCED -> chooseForced(candidates, preferredLanguage)
             SubtitleModeRules.OFF -> Choice.Off
-            else -> choose(candidates, preferredLanguage)
+            else -> choose(candidates, preferredLanguage, provenBitmapPositions)
         }
 
     /**

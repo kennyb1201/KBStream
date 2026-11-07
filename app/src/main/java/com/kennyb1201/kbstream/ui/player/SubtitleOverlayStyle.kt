@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
+import kotlin.math.roundToInt
+
 /**
  * The one mapping from the app's subtitle settings to what each renderer can
  * honour - and the one list of text sizes both engines answer to.
@@ -55,6 +57,69 @@ internal object SubtitleOverlayStyle {
         SIZE_LARGE -> SCALE_LARGE
         else -> 1f
     }
+
+    /**
+     * ONE authored bitmap line, as a fraction of the frame height.
+     *
+     * A bitmap subtitle is a picture: PGS authors it at a near-constant height
+     * per line for a given frame (~48px on a 1080p frame), which is why a
+     * bitmap line rendered 1:1 on a 1080p TV is already larger than the 18sp
+     * text size and reads as "subtitles got bigger".
+     *
+     * A MEASURED STARTING VALUE, not a universal truth: an author can author
+     * taller or shorter lines, and a bitmap that is not PGS has no reason to
+     * follow it. If a field check shows a one-line bitmap rendering smaller
+     * than one line of text, this is the ONE number to move - never a
+     * per-title or per-resolution table.
+     */
+    const val BITMAP_LINE_FRACTION = 0.045f
+
+    /** Never shrink a bitmap below this: unreadable is worse than oversized. */
+    const val BITMAP_SCALE_MIN = 0.2f
+
+    /**
+     * The scale for a BITMAP subtitle, sized so one authored line renders at
+     * the TEXT height of the same size setting - the parity the size setting
+     * never had on the two paths.
+     *
+     * [scaleForSize] scales the whole picture around an authored size that is
+     * already bigger than text (Small 0.85 / Large 1.2 of "too big" is still
+     * too big), and it is shared with the ASS overlay, so it cannot be
+     * re-based. This function is the bitmap path's own rule:
+     *
+     *  - the target is one line of text at [sizeIndex]: `exoTextSp * scaledDensity`
+     *    pixels, exactly what `renderText` uses;
+     *  - the authored lines in the bitmap are estimated from its height against
+     *    [BITMAP_LINE_FRACTION] (1..3 lines - a caption is never taller);
+     *  - the scale is target / authored-line height, so a two-line bitmap
+     *    renders two text lines tall rather than one;
+     *  - it is SHRINK-ONLY and floored at [BITMAP_SCALE_MIN]: upscaling an
+     *    authored image blurs it, and a bitmap already smaller than the text
+     *    size is left where its author put it.
+     *
+     * 0 or negative inputs (an unknown frame, a cue with no bitmap, a density
+     * the view has not measured) answer 1.0 - the authored size - rather than
+     * a guess. Pure arithmetic on primitives, so a JVM test can pin the
+     * numbers without a player, a surface or an Android build.
+     */
+    fun bitmapScaleForSize(
+        sizeIndex: Int,
+        bitmapHeightPx: Int,
+        frameHeightPx: Int,
+        scaledDensity: Float
+    ): Float {
+        if (bitmapHeightPx <= 0 || frameHeightPx <= 0 || scaledDensity <= 0f) return 1f
+        val targetLinePx = exoTextSp(sizeIndex) * scaledDensity
+        val lines = (bitmapHeightPx / (frameHeightPx * BITMAP_LINE_FRACTION))
+            .roundToInt()
+            .coerceIn(1, MAX_BITMAP_LINES)
+        val authoredLinePx = bitmapHeightPx.toFloat() / lines
+        if (authoredLinePx <= 0f) return 1f
+        return (targetLinePx / authoredLinePx).coerceIn(BITMAP_SCALE_MIN, 1f)
+    }
+
+    /** A caption block is at most this many authored lines (see [bitmapScaleForSize]). */
+    private const val MAX_BITMAP_LINES = 3
 
     /**
      * The text-cue steps of the MAIN player, in sp - `renderText`'s own list.
