@@ -145,7 +145,7 @@ class ScrollSmoothnessContractTest {
         val detail = read(DETAIL)
         assertTrue(
             "Detail's rows and headers must be typed too",
-            detail.contains("item(key = \"infoblock\", contentType = \"infoblock\")")
+            detail.contains("item(key = OVERVIEW_ROW_KEY, contentType = \"infoblock\")")
         )
         assertTrue(
             "Detail's section rows must share a type",

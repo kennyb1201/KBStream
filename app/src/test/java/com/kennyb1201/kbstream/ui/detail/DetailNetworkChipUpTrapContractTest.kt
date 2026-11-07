@@ -122,9 +122,15 @@ class DetailNetworkChipUpTrapContractTest {
             "and the bottom of the chain - reached only by DOWN, never by UP, " +
                 "because the header always exists - is consumed too: the press " +
                 "stays where the viewer is, on the last row the page paints",
-            source.contains("DetailFocusChain.nextRow(row, direction, presence) == null") &&
+            source.contains("DetailFocusChain.nextRow(row, direction, presence) == null")
+        )
+        assertTrue(
+            "but only once the page has settled: a section still arriving reads " +
+                "exactly like a page that ends here, so that press waits for it " +
+                "instead of dying on the chip",
+            source.contains("if (rowsStillArriving()) {") &&
                 source.contains(
-                    "DetailFocusChain.nextRow(row, direction, presence) == null) { true } else {"
+                    "startFocusMove { awaitRowsThenMove(row, direction, column, presence) }"
                 )
         )
         assertFalse(

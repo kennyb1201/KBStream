@@ -47,8 +47,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -318,6 +320,28 @@ internal fun episodeRowKey(parentId: String, season: Int?, episodeNumber: Int): 
 private const val TAG = "DETAIL"
 
 private const val GENRE_ROW_KEY = "genrerow"
+
+/**
+ * The overview/facts block: the list's FIRST item, which holds the "View more"
+ * toggle.
+ *
+ * A reveal anchor like any rail key, because the toggle is a focus target now
+ * and the scroll can have taken its item away (see [focusOverviewToggle]).
+ */
+private const val OVERVIEW_ROW_KEY = "infoblock"
+
+/**
+ * The season chips' list item: the first half of the episode section.
+ *
+ * Named like the chain rows' keys because a vertical press now REVEALS this
+ * item the way it reveals a card rail - the episode section is two list items,
+ * not one, which is why [DetailFocusChain] cannot name either of them (see
+ * [detailRowKey]).
+ */
+private const val SEASON_ROW_KEY = "seasonrow"
+
+/** The episode cards' list item: the second half of the episode section. */
+private const val EPISODES_ROW_KEY = "episodesrow"
 private const val KEYWORDS_ROW_KEY = "keywordsrow"
 private const val PEOPLE_ROW_KEY = "peoplerow"
 private const val NETWORK_ROW_KEY = "networkrow"
@@ -712,6 +736,43 @@ fun DetailScreen(
 
     // The vertical move in flight, if any (see [startFocusMove]).
     var focusMoveInFlight by remember { mutableStateOf<Job?>(null) }
+
+    /**
+     * The overview's "View more" toggle: the page's UP-only stop, and the
+     * landing a DOWN press takes when the chain can place it nowhere.
+     *
+     * Declared at screen scope, not inside the list item that draws it, for the
+     * two reasons the field report exposed. It had NO handle at all - a
+     * focusable surface nothing could ask for - so there was no D-pad route
+     * onto it ("theres no way to click the see more"); and a lazy list item's
+     * own state dies with the item, so whether the toggle EXISTS has to outlive
+     * the item's composition. It is one press away from the first list row, and
+     * a press that has to scroll the overview back in first still needs to know
+     * there is a toggle to scroll to.
+     */
+    val overviewToggleRequester = remember { FocusRequester() }
+
+    /**
+     * Whether the overview currently overflows its four collapsed lines - i.e.
+     * whether the "View more" toggle is on this page at all.
+     *
+     * Written where the toggle composes (see the overview block), read by the
+     * presses that target it. Sticky across the list item's disposal on purpose:
+     * the answer belongs to the OVERVIEW TEXT, which does not change when the
+     * item scrolls away.
+     */
+    var overviewToggleAvailable by remember { mutableStateOf(false) }
+
+    /**
+     * The row presence of the LATEST composition, for a press that has to wait
+     * for the page to finish loading before it can be told it is at the edge.
+     *
+     * A key handler's own `presence` argument is the composition that created
+     * the handler; a wait can outlive that composition, and the presence that
+     * landed a moment later is the one that knows the rows arrived (see
+     * [awaitRowsThenMove]).
+     */
+    val latestRowPresence = remember { mutableStateOf<DetailRowPresence?>(null) }
 
     /**
      * Starts [move] as the page's one in-flight D-pad move, cancelling any move
@@ -1821,6 +1882,40 @@ fun DetailScreen(
     }
 
     /**
+     * Puts the focus on the overview's "View more" toggle, revealing it when
+     * the scroll has taken its item out of composition.
+     *
+     * Answers false when this page has no toggle (the overview fits its four
+     * lines), so a caller can fall back to its own landing - and false when the
+     * toggle exists but will not take the focus, which is a real miss rather
+     * than an assumed success (see [focusChipColumn] for why the request's own
+     * report is the only answer worth trusting).
+     *
+     * The reveal is what makes the toggle reachable at all from the rows below
+     * it: it is the topmost focusable INSIDE the list, and a viewer standing on
+     * the keywords or the seasons has usually scrolled its item off screen. Its
+     * own `scrollToTopOnFocus` then snaps the list, so a focus landing here is
+     * also the scroll the viewer asked for without saying so.
+     */
+    suspend fun focusOverviewToggle(): Boolean {
+        if (!overviewToggleAvailable) return false
+        if (runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)) {
+            return true
+        }
+        detailListState.revealRail(OVERVIEW_ROW_KEY, 0)
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            if (runCatching { overviewToggleRequester.requestFocus() }.getOrDefault(false)) {
+                return true
+            }
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts++
+        }
+        Log.w(TAG, "the overview toggle exists but would not take the focus")
+        return false
+    }
+
+    /**
      * An abandoned hand-back's landing: the page's own, not the framework's.
      *
      * [deliverDetailHandBack] gives a target [DETAIL_HAND_BACK_FRAMES] frames.
@@ -1858,6 +1953,17 @@ fun DetailScreen(
                 ?: seasons.firstOrNull { !seasonUnavailable(it) }.takeIf { !isLoading }
         }
     }
+
+    /**
+     * The same season, readable from a coroutine that outlives the composition
+     * that started it.
+     *
+     * `effectiveSeason` above is a remembered VALUE: a focus move that waits for
+     * the season listing would keep seeing the null it started with. This is the
+     * one handle that answers "which season is on screen NOW", and it is what
+     * [focusSeasonOrEpisode] reads while it waits for the section to arrive.
+     */
+    val currentSeason = rememberUpdatedState(effectiveSeason)
 
     /**
      * The loaded season's AIRED episode count - the total every episode line on
@@ -2332,7 +2438,23 @@ fun DetailScreen(
      * never run because the left side was always true.
      */
     suspend fun focusSeasonOrEpisode(): Boolean {
-        val season = effectiveSeason
+        // The season list may still be landing when this press arrives: a null
+        // season here is "not yet", not "nothing to land on". The reported trap
+        // was a press consumed on a page whose seasons had not arrived - and the
+        // answer used to be an immediate false, so the walk gave up on a section
+        // that was one load away. Wait the same bounded budget every other ask
+        // in this file uses, then move on as usual if it really does not come.
+        //
+        // [currentSeason] rather than [effectiveSeason]: the latter is a value
+        // from the composition that created this call, and a wait has to see the
+        // one that landed.
+        var season = currentSeason.value
+        var waitedForSeason = 0
+        while (season == null && waitedForSeason < RETURN_FOCUS_STEPS) {
+            delay(RETURN_FOCUS_DELAY_MS)
+            season = currentSeason.value
+            waitedForSeason += 1
+        }
         val episodeNum = targetEpisodeNumber
 
         val episodeRequester =
@@ -2499,6 +2621,48 @@ fun DetailScreen(
     }
 
     /**
+     * The GENRE -> EPISODES handoff, with the episode section revealed when the
+     * scroll has put it out of composition - the treatment every card rail
+     * already gets from [revealAndFocusChipColumn].
+     *
+     * This is the reported trap. On a title with NO keywords the chain steps
+     * straight from the genre chips to the episode section, and that section is
+     * two list items (the season chips and the episode cards), not a rail with a
+     * key the chain can name (see [detailRowKey]) - so when it sat below the fold
+     * nothing was filed to take the focus, [focusSeasonOrEpisode] answered false,
+     * and the press died on the chip while UP kept working. It read as a
+     * DOWN-only bug on keyword-less titles because titles WITH keywords never
+     * take this handoff: DOWN from the genres stops on the tag rail first.
+     *
+     * So the section is revealed like a rail: ask once (the common case, where
+     * the viewer is already looking at it), then scroll the list back to it - the
+     * season chips first, since they are what a press from above lands on - and
+     * ask again. Answering false is the caller's cue to use its own fallback; the
+     * press is never left without a landing attempt.
+     */
+    suspend fun revealAndFocusEpisodes(from: DetailRow): Boolean {
+        if (focusSeasonOrEpisode()) return true
+        // The row the press came from is the nearest scroll anchor there is; the
+        // genre chips live in the fixed header, so theirs is the top of the
+        // list, which is where the section starts anyway.
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == detailRowKey(from) }?.index ?: 0
+        val revealed =
+            detailListState.revealRail(SEASON_ROW_KEY, hint) ||
+                detailListState.revealRail(EPISODES_ROW_KEY, hint)
+        if (!revealed) {
+            Log.w(
+                TAG,
+                "the episode section could not be revealed from $from:" +
+                    " visibleKeys=" +
+                    detailListState.layoutInfo.visibleItemsInfo.map { it.key }
+            )
+            return false
+        }
+        return focusSeasonOrEpisode()
+    }
+
+    /**
      * Hands the focus to the row [moveFocusVertical] picked, putting it back on
      * screen first when the scroll has disposed it, and never leaving the press
      * without a landing.
@@ -2542,7 +2706,7 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): Boolean = when (target) {
         DetailRow.HEADER -> focusTopOfPage()
-        DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()
+        DetailRow.EPISODES -> revealAndFocusEpisodes(from) || focusTopOfPage()
         DetailRow.GENRE,
         DetailRow.KEYWORDS,
         DetailRow.PEOPLE,
@@ -2681,6 +2845,21 @@ fun DetailScreen(
     }
 
     /**
+     * The FIRST row inside the list: the one directly under the genre chips.
+     *
+     * Read from the chain rather than listed here, so "first list row" cannot
+     * drift from the row order: [DetailFocusChain.nextRow] already steps over
+     * the rows this page does not have (keywords, then the episode section, then
+     * the cast, and so on).
+     */
+    fun firstListRow(presence: DetailRowPresence): DetailRow? =
+        DetailFocusChain.nextRow(
+            DetailRow.GENRE,
+            DetailFocusDirection.DOWN,
+            presence
+        )
+
+    /**
      * Moves the focus vertically out of [from] in [direction]: the page's ONE
      * vertical handoff.
      *
@@ -2710,6 +2889,29 @@ fun DetailScreen(
         fromColumn: Int,
         presence: DetailRowPresence
     ): Boolean {
+        // UP out of the FIRST row inside the list is the overview's "View more"
+        // toggle when the overview overflows (see [focusOverviewToggle]).
+        //
+        // The toggle stays OUT of the chain: it is not a [DetailRow] and no row's
+        // idea of what is above or below it moves. It is an UP-ONLY stop on the
+        // way to the header, which is why the route lives here - one place every
+        // first-list-row press passes through (keywords, seasons, cast, all of
+        // them) - and not in a per-rail handler.
+        //
+        // The reported failure this answers: there was no D-pad route onto the
+        // toggle at all. DOWN out of PLAY skips it by design, so UP from the
+        // rows below is the way it was always meant to be reached (the toggle's
+        // own comment says "walking D-pad up from the rails") - it was simply
+        // never wired. A title whose overview fits has no toggle, and UP goes to
+        // the genres as it always has.
+        if (
+            direction == DetailFocusDirection.UP &&
+            from == firstListRow(presence) &&
+            focusOverviewToggle()
+        ) {
+            return true
+        }
+
         val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
         // The press's own intent, recorded where every chain move passes: the
         // episode effects stop placing the focus once the viewer has steered to
@@ -2755,7 +2957,26 @@ fun DetailScreen(
         // other press falls through to the platform's default geometric search,
         // which is a move the viewer can see, rather than a key the page took
         // and did nothing with (see [fallThroughIfMidPage]).
-        return fallThroughIfMidPage(from, direction, presence)
+        if (fallThroughIfMidPage(from, direction, presence)) return true
+
+        // And when the platform's search finds nothing either, a mid-page DOWN
+        // still has one honest landing: the overview's toggle. It is on screen,
+        // focusable, and its own DOWN routes back to the genres, so a press that
+        // ends there is a visible move rather than a dead remote - the reported
+        // trap on a title whose episode section was not ready to be placed (see
+        // [focusOverviewToggle]).
+        //
+        // The edge rule is untouched: a press at a REAL edge - DOWN off the last
+        // row, UP off the header or the genres - is still consumed where it is,
+        // which is why the edge is asked again here rather than trusting the
+        // fall-through's false to mean "mid-page".
+        if (
+            direction == DetailFocusDirection.DOWN &&
+            !DetailFocusChain.isPageEdge(from, direction, presence)
+        ) {
+            return focusOverviewToggle()
+        }
+        return false
     }
 
     /**
@@ -2781,6 +3002,59 @@ fun DetailScreen(
      * takes only DOWN; its UP belongs to the episode card, which owns the season
      * chip (see [focusSeasonChip]).
      */
+    /**
+     * Whether this page is still waiting on the data that decides which rows it
+     * has.
+     *
+     * The two loads the row presence depends on: the title's own detail (which
+     * brings the keywords, the cast, the networks and More Like This) and the
+     * season's episode list (which brings the episode section). While either is
+     * in flight, a row that is not in [DetailRowPresence] yet may still arrive -
+     * so "no row that way" is not yet an answer (see [awaitRowsThenMove]).
+     */
+    fun rowsStillArriving(): Boolean = isLoading || episodesLoading
+
+    /**
+     * A press that reached the end of the PAINTED page while its rows are still
+     * arriving: wait for them, then ask the chain again with the presence that
+     * landed.
+     *
+     * The field report: DOWN on a genre chip did nothing at all, on a title whose
+     * sections were still coming in. The press was read as the bottom of the page
+     * - the walk found no row below it because the page had not said it had one
+     * yet - and consumed with the focus unmoved. Absence while loading is "not
+     * yet", never an edge, so the press waits instead of dying, and a page that
+     * genuinely has nothing that way still ends exactly where it did: on the row
+     * the viewer is holding.
+     */
+    suspend fun awaitRowsThenMove(
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        column: Int,
+        presence: DetailRowPresence
+    ) {
+        var waited = 0
+        while (rowsStillArriving() && waited < RETURN_FOCUS_STEPS) {
+            delay(RETURN_FOCUS_DELAY_MS)
+            waited += 1
+        }
+        // The composition that landed the rows, not the one that made the
+        // handler: this is the whole point of the wait.
+        val settled = latestRowPresence.value ?: presence
+        if (DetailFocusChain.nextRow(from, direction, settled) == null) {
+            Log.i(
+                TAG,
+                "$from $direction stayed put after waiting: the page has no row that way"
+            )
+            return
+        }
+        if (!moveFocusVertical(from, direction, column, settled)) {
+            // A row that arrived and still would not take the focus is the same
+            // mid-page answer as any other - never a press that did nothing.
+            fallThroughIfMidPage(from, direction, settled)
+        }
+    }
+
     fun detailRowVerticalFocus(
         row: DetailRow,
         column: Int,
@@ -2797,13 +3071,21 @@ fun DetailScreen(
         if (direction == null || direction !in directions) {
             false
         } else if (DetailFocusChain.nextRow(row, direction, presence) == null) {
-            // The bottom of the chain, and the press stops HERE: the Media row
-            // is the last row the page paints, so a DOWN off its cards is the
-            // end of the page and the focus stays on the card the viewer is
-            // holding. Consumed like every other press this handler owns, so
-            // the key is never handed to the default search - and not moved
-            // either: being thrown back to the header PLAY from the bottom of
-            // the page is the disorientation this arm used to cause.
+            // The bottom of the chain. On a SETTLED page the press stops HERE:
+            // the Media row is the last row the page paints, so a DOWN off its
+            // cards is the end of the page and the focus stays on the card the
+            // viewer is holding. Consumed like every other press this handler
+            // owns, so the key is never handed to the default search - and not
+            // moved either: being thrown back to the header PLAY from the bottom
+            // of the page is the disorientation this arm used to cause.
+            //
+            // While the rows are still arriving, absence is not this answer: a
+            // section below the viewer that has not landed yet reads exactly the
+            // same as a page that ends here, and consuming it is the reported
+            // dead press (see [awaitRowsThenMove]).
+            if (rowsStillArriving()) {
+                startFocusMove { awaitRowsThenMove(row, direction, column, presence) }
+            }
             true
         } else {
             startFocusMove { moveFocusVertical(row, direction, column, presence) }
@@ -3254,6 +3536,12 @@ fun DetailScreen(
                 hasMoreLikeThisRow = hasMoreLikeThisRow,
                 hasMediaRow = hasMediaRow
             )
+
+            // The rows this page has, published for the presses that outlive a
+            // composition: a wait for a still-arriving section has to re-ask the
+            // chain with the presence that LANDED, not the one the handler was
+            // made with (see [awaitRowsThenMove]).
+            SideEffect { latestRowPresence.value = detailRowPresence }
 
             // The title's art, in two shapes, because two consumers want
             // different things from it.
@@ -4700,7 +4988,7 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
-                        item(key = "infoblock", contentType = "infoblock") {
+                        item(key = OVERVIEW_ROW_KEY, contentType = "infoblock") {
                             Column(
                                 modifier = Modifier.padding(
                                     start = 24.dp,
@@ -4743,6 +5031,18 @@ fun DetailScreen(
                                         )
                                     )
                                     if (overviewOverflows) {
+                                        // Tell the page's presses that this
+                                        // toggle exists: it is the UP-only stop
+                                        // out of the first list row, and the
+                                        // landing a DOWN takes when the chain
+                                        // can place it nowhere (see
+                                        // [overviewToggleRequester]). Written
+                                        // from an effect so it lands with the
+                                        // composition that drew the toggle, and
+                                        // deliberately NOT reset when this item
+                                        // is disposed - the answer belongs to the
+                                        // overview text.
+                                        SideEffect { overviewToggleAvailable = true }
                                         Surface(
                                             onClick = { overviewExpanded = !overviewExpanded },
                                             // The overview is the list's first item
@@ -4803,6 +5103,11 @@ fun DetailScreen(
                                                 .scrollToTopOnFocus(detailListState, scope) {
                                                     handFocusBack.pending == null
                                                 }
+                                                // The handle the toggle never
+                                                // had: without it there was no
+                                                // D-pad route onto it at all (see
+                                                // [focusOverviewToggle]).
+                                                .focusRequester(overviewToggleRequester)
                                                 // UP is the header, DOWN is the
                                                 // first row this page has, in
                                                 // this toggle's borrowed
@@ -4825,6 +5130,12 @@ fun DetailScreen(
                                                 )
                                             )
                                         }
+                                    } else {
+                                        // An overview that fits has no toggle,
+                                        // so nothing may route onto one. Written
+                                        // only while this item is composed, which
+                                        // is the only time the answer can change.
+                                        SideEffect { overviewToggleAvailable = false }
                                     }
                                 }
                             }
@@ -5053,7 +5364,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "seasonrow", contentType = "section-row") {
+                            item(key = SEASON_ROW_KEY, contentType = "section-row") {
                                 SeasonRow(
                                     state = seasonRowState,
                                     seasons = seasons,
@@ -5177,7 +5488,7 @@ fun DetailScreen(
 
                                 else -> {
                                     item(
-                                        key = "episodesrow"
+                                        key = EPISODES_ROW_KEY
                                     ) {
                                         // ONE collector for the whole rail. Each
                                         // episode card used to ask the ViewModel

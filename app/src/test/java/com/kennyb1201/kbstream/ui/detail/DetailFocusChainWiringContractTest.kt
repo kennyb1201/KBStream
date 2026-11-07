@@ -168,10 +168,15 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "and the bottom of the page is consumed too - the Media row is the " +
                 "last row painted, so a DOWN off it stays where the viewer is " +
-                "rather than teleporting to the header PLAY",
+                "rather than teleporting to the header PLAY - but only on a page " +
+                "whose rows have all arrived: while one is still landing, absence " +
+                "that way is not the edge (see awaitRowsThenMove)",
             detail.contains(
-                "DetailFocusChain.nextRow(row, direction, presence) == null) { true } else {"
-            )
+                "DetailFocusChain.nextRow(row, direction, presence) == null) {"
+            ) && detail.contains("if (rowsStillArriving()) {") &&
+                detail.contains(
+                    "startFocusMove { awaitRowsThenMove(row, direction, column, presence) }"
+                )
         )
         assertFalse(
             "the teleport is what that arm used to do with the press",
@@ -453,7 +458,7 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "which is what lets the caller's fallback to the header actually run: " +
                 "with an always-true left side it never did",
-            detail.contains("DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()")
+            detail.contains("DetailRow.EPISODES -> revealAndFocusEpisodes(from) || focusTopOfPage()")
         )
     }
 
@@ -561,7 +566,7 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             "the unlanded move hands the press to the page's one fall-through " +
                 "rather than consuming it",
-            move.contains("return fallThroughIfMidPage(from, direction, presence)")
+            move.contains("if (fallThroughIfMidPage(from, direction, presence)) return true")
         )
         assertTrue(
             "the edge is decided from the row the press STARTED on, against the " +
