@@ -2194,6 +2194,7 @@ object MdbListClient {
     // shows at once and only a change made on ANOTHER device waits out the TTL.
     // ------------------------------------------------------------------
     private val listItemsCache = MdbListReadCache<List<MdbListEntry>>(LIST_ITEMS_TTL_MS)
+    private val watchlistCache = MdbListReadCache<List<MdbListEntry>>(LIST_ITEMS_TTL_MS)
     private val userListsCache = MdbListReadCache<List<MdbListUserList>>(LIST_ITEMS_TTL_MS)
 
     /**
