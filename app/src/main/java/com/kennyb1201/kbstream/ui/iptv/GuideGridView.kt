@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.iptv
 
-import android.view.KeyEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
