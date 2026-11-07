@@ -180,6 +180,7 @@ import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.kb.homeRailHeadLeftEdgeStop
+import com.kennyb1201.kbstream.ui.kb.homeRailHeadLeftTopBarHook
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
 import com.kennyb1201.kbstream.ui.kb.rememberHomeTopBarHoldUpHook
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -2865,7 +2866,10 @@ private fun UpcomingEpisodeCard(
     isHeadCard: Boolean = false,
     // Non-null only when this card's rail is the one Home draws first (see
     // [homeTopRailUpHook]).
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // Home hands this to every rail; only the head card uses it (see
+    // [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     var focused by remember {
         mutableStateOf(false)
@@ -2889,6 +2893,13 @@ private fun UpcomingEpisodeCard(
                     Modifier
                         .focusRequester(focusRequester)
                         .homeTopRailUpHook(focusRequester, onUpPressed)
+                        // Left from the head card summons the top bar (see
+                        // [homeRailHeadLeftTopBarHook]).
+                        .homeRailHeadLeftTopBarHook(
+                            isHeadCard = isHeadCard,
+                            requester = focusRequester,
+                            openTopBar = onHeadLeftPressed
+                        )
                 }
             )
             .onFocusChanged {
@@ -3346,7 +3357,10 @@ private fun LibraryListHomeRail(
      * catalog - and without this the one rail at the top of the screen would be
      * the one place Up went nowhere.
      */
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-card opener, which every rail gets (see
+    // [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     val overridePaths = rememberImageOverridePaths()
     val cardWidth = if (landscapeCards) HomeLandscapeWidth else HomePosterWidth
@@ -3446,6 +3460,13 @@ private fun LibraryListHomeRail(
                             }
                         }
                         .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
+                        // Left from the head card summons the top bar, on every
+                        // rail (see [homeRailHeadLeftTopBarHook]).
+                        .homeRailHeadLeftTopBarHook(
+                            isHeadCard = index == 0,
+                            requester = requester,
+                            openTopBar = onHeadLeftPressed
+                        )
 
                     Box(
                         modifier = Modifier
@@ -3545,7 +3566,10 @@ private fun BuiltinTopPicksRail(
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]); a personal row the viewer has moved to the top of
     // Home takes the top-bar hook like any other rail.
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-card opener, which every rail gets (see
+    // [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     // The viewer's chosen stills, resolved once for this row's cards - the same
     // call the enclosing screen makes for the catalog rails.
@@ -3603,6 +3627,13 @@ private fun BuiltinTopPicksRail(
                             }
                         }
                         .then(Modifier.homeTopRailUpHook(requester, onUpPressed))
+                        // Left from the head card summons the top bar, on every
+                        // rail (see [homeRailHeadLeftTopBarHook]).
+                        .homeRailHeadLeftTopBarHook(
+                            isHeadCard = index == 0,
+                            requester = requester,
+                            openTopBar = onHeadLeftPressed
+                        )
 
                     Box(
                         modifier = Modifier
@@ -3746,7 +3777,10 @@ private fun BuiltinContinueWatchingRail(
     railsViewportBounds: LandingBounds,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-card opener, which every rail gets (see
+    // [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     // Where this rail's scroll position lives. The LazyRow used to keep its
     // state to itself; the landing below has to be able to put the rail back on
@@ -4041,6 +4075,13 @@ private fun BuiltinContinueWatchingRail(
                             .homeRailHeadLeftEdgeStop(
                                 index == CONTINUE_WATCHING_HEAD_INDEX
                             )
+                            // Left from the head card summons the top bar (see
+                            // [homeRailHeadLeftTopBarHook]).
+                            .homeRailHeadLeftTopBarHook(
+                                isHeadCard = index == CONTINUE_WATCHING_HEAD_INDEX,
+                                requester = requester,
+                                openTopBar = onHeadLeftPressed
+                            )
                             .then(
                                 if (index == CONTINUE_WATCHING_HEAD_INDEX) {
                                     // Only the head is measured: it is the one the
@@ -4139,6 +4180,9 @@ private fun BuiltinUpcomingRail(
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-card opener, which every rail gets (see
+    // [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null,
     /**
      * The header's press: open Library's Calendar pane (see [SectionTitle]).
      * Every show's whole year lives there; this rail is one episode per show.
@@ -4266,6 +4310,7 @@ private fun BuiltinUpcomingRail(
                             // reported Left->Down jump this closes.
                             isHeadCard = index == CONTINUE_WATCHING_HEAD_INDEX,
                             onUpPressed = onUpPressed,
+                            onHeadLeftPressed = onHeadLeftPressed,
                             onFocus = {
                                 // Where the viewer actually is (see
                                 // focusedCardRequester).
@@ -6032,6 +6077,22 @@ fun HomeScreen(
         }
     }
 
+    // The Left-from-a-head-card opener, and the ONE thing every rail gets that
+    // the Up hook does not.
+    //
+    // Up is gated to the rail drawn first, because Up from a lower rail has a
+    // legitimate target: the rail above it (see [topRailUpHook]). Left from a
+    // head card has none on ANY rail - the head sits at the rail's left edge,
+    // and the focus search used to fall through to the nearest focusable that
+    // was even partly left of it, which was one rail DOWN (see
+    // [homeRailHeadLeftEdgeStop]). So the same press means the same thing on the
+    // fortieth catalog as on the first: bring up the top bar. Forty rails down,
+    // one Left instead of forty Ups.
+    //
+    // Declared here, ahead of [drawBuiltinRail], so both the built-ins and the
+    // rail column below can pass the same lambda.
+    val headLeftHook: (FocusRequester) -> Unit = { requester -> openTopBar(requester) }
+
     // One built-in row - Continue Watching or the Upcoming Schedule - wired to
     // this screen's own callbacks.
     //
@@ -6088,7 +6149,10 @@ fun HomeScreen(
                     isFreshEntry = isFreshEntry,
                     viewerMovedFocusSinceEntry = viewerMovedFocusSinceEntry,
                     railsViewportBounds = railsViewportBounds,
-                    onUpPressed = upHook
+                    onUpPressed = upHook,
+                    // Ungated, unlike Up: no head card has a Left target (see
+                    // [headLeftHook]).
+                    onHeadLeftPressed = headLeftHook
                 )
             } else if (
                 key ==
@@ -6120,6 +6184,7 @@ fun HomeScreen(
                     },
                     landOnHeadSignal = upcomingLandOnHeadSignal,
                     onUpPressed = upHook,
+                    onHeadLeftPressed = headLeftHook,
                     onOpenCalendar = onOpenCalendar
                 )
             } else if (
@@ -6156,7 +6221,8 @@ fun HomeScreen(
                         lastPosterFocusRequester = requester
                         posterMenu = PosterMenuTarget(meta)
                     },
-                    onUpPressed = upHook
+                    onUpPressed = upHook,
+                    onHeadLeftPressed = headLeftHook
                 )
             }
             // No catch-all: a built-in key this build does not know draws
@@ -6185,7 +6251,8 @@ fun HomeScreen(
     @Composable
     fun PinnedLibraryRail(
         rail: LibraryHomeRailUi,
-        onUpPressed: ((FocusRequester) -> Unit)?
+        onUpPressed: ((FocusRequester) -> Unit)?,
+        onHeadLeftPressed: ((FocusRequester) -> Unit)?
     ) {
         LibraryListHomeRail(
             rail = rail,
@@ -6205,7 +6272,8 @@ fun HomeScreen(
             isPartiallyWatched = { meta ->
                 viewModel.watchedKey(meta.id, meta.type) in partialWatchedKeys
             },
-            onUpPressed = onUpPressed
+            onUpPressed = onUpPressed,
+            onHeadLeftPressed = onHeadLeftPressed
         )
     }
 
@@ -6234,7 +6302,11 @@ fun HomeScreen(
                     val rail = pinnedLibraryRailFor(entry.pin.key)
                     if (rail != null) {
                         item(key = "librail|" + entry.pin.key) {
-                            PinnedLibraryRail(rail, topRailUpHook(index))
+                            PinnedLibraryRail(
+                                rail,
+                                topRailUpHook(index),
+                                headLeftHook
+                            )
                         }
                     }
                 }
@@ -6577,7 +6649,8 @@ fun HomeScreen(
                                         if (rail != null) {
                                             PinnedLibraryRail(
                                                 rail,
-                                                topRailUpHook(entryIndex)
+                                                topRailUpHook(entryIndex),
+                                                headLeftHook
                                             )
                                         }
                                     }
@@ -6613,7 +6686,10 @@ fun HomeScreen(
                                                 viewModel.lastFocusedRailItemKey =
                                                     cardKey
                                             },
-                                            onUpPressed = topRailUpHook(entryIndex)
+                                            onUpPressed = topRailUpHook(entryIndex),
+                                            // Every rail takes the Left hook,
+                                            // whatever its position.
+                                            onHeadLeftPressed = headLeftHook
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
                                         KBHomeCollectionRail(
@@ -6632,7 +6708,8 @@ fun HomeScreen(
                                                 viewModel.lastFocusedRailItemKey =
                                                     cardKey
                                             },
-                                            onUpPressed = topRailUpHook(entryIndex)
+                                            onUpPressed = topRailUpHook(entryIndex),
+                                            onHeadLeftPressed = headLeftHook
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail -> {
                                         val rail = e.rail
@@ -6828,6 +6905,15 @@ fun HomeScreen(
                                                             requester,
                                                             railUpHook
                                                         )
+                                                    )
+                                                    // Left from this rail's head
+                                                    // card summons the top bar
+                                                    // (see
+                                                    // [homeRailHeadLeftTopBarHook]).
+                                                    .homeRailHeadLeftTopBarHook(
+                                                        isHeadCard = index == 0,
+                                                        requester = requester,
+                                                        openTopBar = headLeftHook
                                                     )
 
                                                 Box(

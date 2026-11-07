@@ -498,6 +498,73 @@ internal fun Modifier.homeTopRailUpHook(
 }
 
 /**
+ * The D-pad Left -> top bar hook for the HEAD card of a Home rail.
+ *
+ * The bar used to be reachable only by Up, and only from the rail drawn first
+ * (see [homeTopRailUpHook]), or by holding Up for [HomeTopBarHoldMs] from
+ * anywhere. Both are still there. This adds the faster route: a rail's head
+ * card has no neighbour to its left, so Left there is a dead press today - and a
+ * dead press is the one kind that can be given a job without taking anything
+ * away from the viewer.
+ *
+ * NOT gated by rail position, unlike Up. Up from a lower rail has a legitimate
+ * target (the rail above), which is why exactly one rail may take it; Left from
+ * ANY head card has none, so every rail may take this one. That is also why the
+ * opener passed in is the plain `openTopBar`, never the position-gated rule.
+ *
+ * [isHeadCard] is a parameter rather than a caller's promise: the same
+ * condition the edge-stop takes, so a rail that applies this to its whole row
+ * gets the hook on its head and nothing else. On a non-head card, Left is a
+ * normal step along the row and must reach the focus system.
+ *
+ * KeyDown only, and consumed. KeyUp falls through (nothing here times a hold),
+ * and so does every other key. Consuming the press is what makes the summon the
+ * whole answer to that tap: the focus system never runs a Left search from the
+ * head card, so the old jump-down to the next rail's header cannot happen on a
+ * rail that has this hook (the edge-stop below keeps covering the ones that do
+ * not).
+ *
+ * A press past the head, and the platform's repeats while Left is held, both
+ * re-summon: [openTopBar] is idempotent - it re-arms the focus hand-off while
+ * the bar is already up - and a dismiss returns focus to the head card that
+ * asked. There is deliberately no double-tap window, no delay and no repeat
+ * guard: a scrub along a long row that reaches the head is the shortcut
+ * working, not a misfire.
+ */
+internal fun Modifier.homeRailHeadLeftTopBarHook(
+    isHeadCard: Boolean,
+    requester: FocusRequester,
+    openTopBar: ((FocusRequester) -> Unit)?
+): Modifier = if (openTopBar == null || !isHeadCard) {
+    this
+} else {
+    this.onPreviewKeyEvent { event ->
+        val summon = isHomeHeadLeftSummon(
+            isHeadCard = isHeadCard,
+            isKeyDown = event.type == KeyEventType.KeyDown,
+            isLeft = event.key == Key.DirectionLeft
+        )
+        if (summon) {
+            openTopBar(requester)
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/**
+ * The Left rule itself, in one place: a Left KEY-DOWN on a rail's head card
+ * summons the top bar and is consumed. KeyUp, every other key, and every card
+ * that is not the head fall through to the focus system.
+ */
+internal fun isHomeHeadLeftSummon(
+    isHeadCard: Boolean,
+    isKeyDown: Boolean,
+    isLeft: Boolean
+): Boolean = isHeadCard && isKeyDown && isLeft
+
+/**
  * The D-pad Left edge-stop for the FIRST card of a Home rail.
  *
  * Reported problem (TV, Onn): pressing Left from the Continue Watching head
@@ -510,9 +577,17 @@ internal fun Modifier.homeTopRailUpHook(
  * focusable that was even partly left of it, one rail below.
  *
  * Cancelling the LEFT search is the fix. A rail's left edge is a boundary, not
- * a doorway: the top bar is reached by Up, never by Left, so there is no
- * legitimate Left target from a head card, and cancelling the search leaves
- * focus exactly where it is without touching Up, Down, Right or Select.
+ * a doorway: there is no legitimate Left target from a head card, so cancelling
+ * the search leaves focus exactly where it is without touching Up, Down, Right
+ * or Select.
+ *
+ * That reasoning used to end "and the top bar is reached by Up, never by Left".
+ * It no longer does: Left from a head card now SUMMONS the top bar
+ * ([homeRailHeadLeftTopBarHook]), which is the faster route the viewer asked
+ * for (one press instead of one Up per rail). This stop stays as the backstop
+ * for a rail kind that does not carry that hook - there, Left still does
+ * nothing rather than falling down to the next rail's header - and it is
+ * harmless on a rail that does: a consumed Left never runs a search to cancel.
  *
  * [FocusRequester.Cancel] rather than intercepting the key, so no press is
  * consumed here: a cancelled search is the framework's own "this direction has
@@ -704,7 +779,10 @@ fun KBHomeCollectionRail(
      */
     cardFocusRequesters: MutableMap<String, FocusRequester>? = null,
     // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
-    onUpPressed: ((FocusRequester) -> Unit)? = null
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-card opener. Home passes it to EVERY rail, unlike
+    // [onUpPressed] (see [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.padding(
@@ -795,6 +873,13 @@ fun KBHomeCollectionRail(
                             .homeRailHeadLeftEdgeStop(index == 0)
                             .focusRequester(requester)
                             .homeTopRailUpHook(requester, onUpPressed)
+                            // Left from the head tile summons the top bar (see
+                            // [homeRailHeadLeftTopBarHook]).
+                            .homeRailHeadLeftTopBarHook(
+                                isHeadCard = index == 0,
+                                requester = requester,
+                                openTopBar = onHeadLeftPressed
+                            )
                     )
                 }
             }
@@ -1057,6 +1142,9 @@ fun KBHomeBrowseRail(
     chipFocusRequesters: MutableMap<String, FocusRequester>? = null,
     // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null,
+    // The Left-from-the-head-chip opener. Home passes it to EVERY rail, unlike
+    // [onUpPressed] (see [homeRailHeadLeftTopBarHook]).
+    onHeadLeftPressed: ((FocusRequester) -> Unit)? = null,
     // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
     // old shared row's word so a caller that predates the split still draws
     // something sensible.
@@ -1134,6 +1222,13 @@ fun KBHomeBrowseRail(
                         .homeRailHeadLeftEdgeStop(index == 0)
                         .focusRequester(requester)
                         .homeTopRailUpHook(requester, onUpPressed)
+                        // Left from the head chip summons the top bar (see
+                        // [homeRailHeadLeftTopBarHook]).
+                        .homeRailHeadLeftTopBarHook(
+                            isHeadCard = index == 0,
+                            requester = requester,
+                            openTopBar = onHeadLeftPressed
+                        )
                 )
             }
         }
