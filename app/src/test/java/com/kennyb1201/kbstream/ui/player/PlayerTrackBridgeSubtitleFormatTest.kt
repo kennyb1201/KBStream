@@ -310,13 +310,13 @@ class PlayerTrackBridgeSubtitleFormatTest {
      */
     @Test
     fun `applyLanguage leaves text disabled when the language matched nothing`() {
-        val body = memberBody(
-            "fun applyLanguage(player: Player?, type: Int, language: String): Boolean {"
-        )
+        val body = memberBody("fun applyLanguage(")
 
         assertTrue(
             "the language pass must decide through the one rule this file pins",
-            body.contains("matchingOverride(player.currentTracks, type, language)")
+            body.contains(
+                "matchingOverride(player.currentTracks, type, language, provenBitmapPositions)"
+            )
         )
         assertTrue(
             "a subtitle language the file does not carry still disables text",
