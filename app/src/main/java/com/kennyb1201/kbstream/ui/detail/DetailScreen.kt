@@ -1944,7 +1944,11 @@ fun DetailScreen(
             initialMeta = Meta(
                 id = id,
                 type = type,
-                name = initialTarget?.displayName?.takeIf { it.isNotBlank() } ?: id,
+                // Never the raw id: a target that could not name itself is
+                // the zombie-card case, and [UNKNOWN_SHOW_NAME] is this
+                // screen's own word for that - not "tmdb:3634822".
+                name = upNextDisplayTitleOrNull(initialTarget?.displayName)
+                    ?: UNKNOWN_SHOW_NAME,
                 poster = initialPoster,
                 background = initialBackdrop,
                 logo = initialClearLogo,
@@ -3163,7 +3167,8 @@ fun DetailScreen(
             AutoPlayLoadSplash(
                 backdropUrl = initialBackdrop,
                 clearLogoUrl = initialClearLogo,
-                title = initialTarget.displayName.ifBlank { id },
+                title = upNextDisplayTitleOrNull(initialTarget.displayName)
+                    ?: UNKNOWN_SHOW_NAME,
                 // The splash is the cover for this title's playback, so it
                 // honors the still the viewer chose for it (see ImageOverrides).
                 tmdbId = overrideTmdbId
@@ -6758,9 +6763,9 @@ fun DetailScreen(
                         ImageOverrides.TYPE_BACKDROP
                     }
                     PosterContextMenu(
-                        title = tmdbDetail?.title
-                            ?: tmdbDetail?.name
-                            ?: id,
+                        title = upNextDisplayTitleOrNull(tmdbDetail?.title)
+                            ?: upNextDisplayTitleOrNull(tmdbDetail?.name)
+                            ?: UNKNOWN_SHOW_NAME,
                         subtitle = mediaTab?.label,
                         actions = DetailMediaRow
                             .overrideRows(

@@ -4530,6 +4530,9 @@ private fun CompactUpNextCard(
         isWatched = false,
         onClick = onClick,
         onLongClick = onLongClick,
+        // The card's own overlay prints the title and the S/E line, so the
+        // tile's art-less placeholder would be the same words twice.
+        showFallbackText = false,
         modifier = modifier
             .width(224.dp)
             .height(146.dp)

@@ -60,6 +60,12 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false,
     onPosterError: ((Throwable?) -> Unit)? = null,
+    /**
+     * The touch twin's copy of the TV tile's switch: the title placeholder is
+     * the tile's identity on a rail, but a card whose overlay already prints the
+     * title (Continue Watching) passed it twice. See the TV twin's doc.
+     */
+    showFallbackText: Boolean = true,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -106,7 +112,9 @@ fun PosterCard(
                 )
             }
 
-            if (posterUrl.isNullOrBlank() || hasError || !posterPainted) {
+            if (showFallbackText &&
+                (posterUrl.isNullOrBlank() || hasError || !posterPainted)
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

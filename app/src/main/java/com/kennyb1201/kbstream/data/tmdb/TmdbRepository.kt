@@ -346,7 +346,7 @@ class TmdbRepository private constructor(context: Context) :
     // filled it yet) and fired a duplicate request. A concurrent caller now
     // awaits the pending fetch instead.
     private val detailFetchInFlight =
-        ConcurrentHashMap<String, CompletableDeferred<TmdbDetail?>>()
+        ConcurrentHashMap<String, CompletableDeferred<TmdbDetailLookup>>()
 
     /**
      * In-flight ENRICHED fetches, keyed like [detailCache] - the same map as
@@ -2108,8 +2108,21 @@ class TmdbRepository private constructor(context: Context) :
         return EpisodeSchemeStore.get(appContext, stable).encode() ?: "1:1"
     }
 
-    suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? {
-        if (apiKey.isBlank()) return null
+    suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? =
+        (lookupDetailByTmdbId(tmdbId, type) as? TmdbDetailLookup.Found)?.detail
+
+    /**
+     * [getDetailByTmdbId], with the MISS KIND kept (see [TmdbDetailLookup]).
+     *
+     * Same caches, same in-flight sharing, same "a miss is not cached" rule -
+     * the only difference is that a 404 comes back as
+     * [TmdbDetailLookup.NotFound] instead of null, so a caller that writes what
+     * it decides (Continue Watching dropping a zombie card) can tell "this id
+     * does not exist" from "we could not ask". Every other failure is
+     * [TmdbDetailLookup.Transient].
+     */
+    suspend fun lookupDetailByTmdbId(tmdbId: Int, type: String): TmdbDetailLookup {
+        if (apiKey.isBlank()) return TmdbDetailLookup.Transient
 
         val key = "${normalizeType(type)}:tmdb:$tmdbId"
         val now = System.currentTimeMillis()
@@ -2118,7 +2131,7 @@ class TmdbRepository private constructor(context: Context) :
         // In-memory TTL cache (fast path for the current session).
         val cached = detailCache[key]
         if (cached != null && now - cached.first < detailCacheTtlMs) {
-            return cached.second
+            cached.second?.let { return TmdbDetailLookup.Found(it) }
         }
 
         // Disk cache so resolved metadata survives restarts.
@@ -2132,7 +2145,7 @@ class TmdbRepository private constructor(context: Context) :
             }.getOrNull()
             if (parsed != null) {
                 detailCache[key] = now to parsed
-                return parsed
+                return TmdbDetailLookup.Found(parsed)
             }
         }
 
@@ -2142,7 +2155,7 @@ class TmdbRepository private constructor(context: Context) :
         // cache cannot both start a fetch.
         detailFetchInFlight[key]?.let { pending -> return pending.await() }
 
-        val deferred = CompletableDeferred<TmdbDetail?>()
+        val deferred = CompletableDeferred<TmdbDetailLookup>()
         detailFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
             return pending.await()
         }
@@ -2155,12 +2168,21 @@ class TmdbRepository private constructor(context: Context) :
                     } else {
                         api.getMovie(tmdbId, apiKey)
                     }
-                }.getOrNull()
+                }.fold(
+                    onSuccess = { detail -> TmdbDetailLookup.Found(detail) },
+                    onFailure = { error ->
+                        if (isDefinitiveMiss(error)) {
+                            TmdbDetailLookup.NotFound
+                        } else {
+                            TmdbDetailLookup.Transient
+                        }
+                    }
+                )
             } catch (cancellation: kotlinx.coroutines.CancellationException) {
                 detailFetchInFlight.remove(key)
-                // Unblock anyone sharing this fetch with a miss rather than a
-                // cancellation they did not ask for.
-                deferred.complete(null)
+                // Unblock anyone sharing this fetch with "no answer" rather than
+                // a cancellation they did not ask for.
+                deferred.complete(TmdbDetailLookup.Transient)
                 throw cancellation
             }
 
@@ -2169,16 +2191,38 @@ class TmdbRepository private constructor(context: Context) :
         // timeout) used to pin a null in the 12h memory cache, after which every
         // caller - Detail, Home, the watched-state preload - was told this title
         // has no metadata, with no way to retry inside the TTL. Only the disk
-        // write was guarded; the memory map was not.
-        if (result != null) {
-            detailCache[key] = now to result
-            cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
+        // write was guarded; the memory map was not. The same rule now covers
+        // the miss KIND: a cached NotFound would keep a card dropped after the
+        // id was fixed, so only a record is stored.
+        val detail = (result as? TmdbDetailLookup.Found)?.detail
+        if (detail != null) {
+            detailCache[key] = now to detail
+            cacheJson(diskKey, detailJsonAdapter.toJson(detail), now)
         }
         // Complete before dropping the in-flight marker, so a caller that
         // arrives between the two sees the cache and never double-fetches.
         deferred.complete(result)
         detailFetchInFlight.remove(key)
         return result
+    }
+
+    /**
+     * Whether [error] says the id does not exist, as opposed to "we could not
+     * ask": the only verdict Continue Watching may act on.
+     *
+     * TMDB answers 404 for an id that names no title of the requested type, and
+     * Retrofit surfaces that as an HttpException carrying the code. Anything
+     * else - IO, timeout, 429 (real or the synthetic local-budget one), 5xx, a
+     * parse failure - is a failure to ask, not an answer, and is checked by
+     * walking the cause chain because HTTP layers wrap.
+     */
+    internal fun isDefinitiveMiss(error: Throwable): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is retrofit2.HttpException) return cause.code() == 404
+            cause = cause.cause
+        }
+        return false
     }
 
     /**

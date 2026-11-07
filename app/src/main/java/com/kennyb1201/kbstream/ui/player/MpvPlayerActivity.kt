@@ -5832,7 +5832,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             context = this,
             rawParentId = parentId,
             parentType = parentType,
-            resolvedTmdbId = resolvedTmdbId
+            resolvedTmdbId = resolvedTmdbId,
+            episodeStreamId = episodeStreamId
         )
         canonicalParent = resolved
         return resolved

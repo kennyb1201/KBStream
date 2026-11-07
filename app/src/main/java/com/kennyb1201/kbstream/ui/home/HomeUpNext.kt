@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.titleIdentityName
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.settings.ResumeAuthority
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import kotlinx.coroutines.flow.map
 
@@ -379,6 +380,34 @@ internal fun upNextDisplayTitleOrNull(
 
 /** What the player falls back to when a card has no name to give it. */
 internal const val UNKNOWN_SHOW_NAME = "Unknown Show"
+
+/**
+ * Whether a Continue Watching row's card is a ZOMBIE: a row filed under an id
+ * that names no title, with nothing else to draw or say.
+ *
+ * The reported failure was a rail of black tiles whose only text was an episode
+ * title twice, and Detail opening on the raw id (`tmdb:3634822`) - rows written
+ * under an id whose title does not exist. Such a card can name neither its show
+ * nor its art, and the builder already refuses a card titled with an internal
+ * id; this extends that principle to a card that cannot name itself at all.
+ *
+ * The lookup's KIND is load-bearing, not a detail: [TmdbDetailLookup.NotFound]
+ * is TMDB saying the id names no title, and it is the only verdict that drops a
+ * card. A [TmdbDetailLookup.Transient] failure means we could not ask - an
+ * outage, a quota trip, a timeout - and dropping on that would empty Continue
+ * Watching every time TMDB hiccups. Art on the row keeps the card whatever the
+ * lookup said (a failed lookup must not blank a card that already had a
+ * backdrop), and so does any name that resolved.
+ *
+ * Only the CARD is dropped. The history row keeps the resume point, stays
+ * resumable from search and the Library, and a fresh correct play supersedes it.
+ */
+internal fun dropsZombieCard(
+    lookup: TmdbDetailLookup,
+    hasArtwork: Boolean,
+    resolvedName: String?
+): Boolean =
+    lookup == TmdbDetailLookup.NotFound && !hasArtwork && resolvedName == null
 
 /**
  * The name a Continue Watching / Up Next card hands the PLAYER, i.e. the

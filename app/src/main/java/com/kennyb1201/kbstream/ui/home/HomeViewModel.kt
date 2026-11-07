@@ -39,6 +39,7 @@ import com.kennyb1201.kbstream.data.trakt.TraktRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
@@ -6018,6 +6019,11 @@ Log.d(
         // pair a card prints when the row itself names no episode.
         var resolvedSeriesTarget: ResolvedHomeSeriesTarget? = null
 
+        // What TMDB said about the row's own id. A 404 is a DEFINITIVE miss and
+        // the only kind that may drop the card (see [dropsZombieCard]); every
+        // other failure is "we could not ask" and keeps it.
+        var detailLookup: TmdbDetailLookup = TmdbDetailLookup.Transient
+
         if (resolvesAsSeries) {
             try {
                 val parentId =
@@ -6032,10 +6038,21 @@ Log.d(
                                 .substringAfter(":")
                                 .toIntOrNull()
                                 ?.let { tmdbId ->
-                                    tmdbRepository.getDetailByTmdbId(
-                                        tmdbId,
-                                        entry.type
-                                    )
+                                    // The miss KIND is kept: a 404 means the id
+                                    // names no show, a failure means we could
+                                    // not ask. Only the first may drop a card.
+                                    when (
+                                        val lookup = tmdbRepository.lookupDetailByTmdbId(
+                                            tmdbId,
+                                            entry.type
+                                        )
+                                    ) {
+                                        is TmdbDetailLookup.Found -> lookup.detail
+                                        else -> {
+                                            detailLookup = lookup
+                                            null
+                                        }
+                                    }
                                 }
                         }
 
@@ -6047,10 +6064,18 @@ Log.d(
                         }
 
                         parentId.toIntOrNull() != null -> {
-                            tmdbRepository.getDetailByTmdbId(
-                                parentId.toInt(),
-                                entry.type
-                            )
+                            when (
+                                val lookup = tmdbRepository.lookupDetailByTmdbId(
+                                    parentId.toInt(),
+                                    entry.type
+                                )
+                            ) {
+                                is TmdbDetailLookup.Found -> lookup.detail
+                                else -> {
+                                    detailLookup = lookup
+                                    null
+                                }
+                            }
                         }
 
                         else -> {
@@ -6091,6 +6116,29 @@ Log.d(
                             tmdbDetail?.title,
                             !entry.poster.isNullOrBlank()
                         )
+
+                // The zombie card (F4): the row's own id names no title at all
+                // (TMDB answered 404), it carries no art, and nothing resolved
+                // a name for it - so the card could only ever print a raw id
+                // over a black tile. Drop it here.
+                //
+                // The ROW is untouched: it keeps the resume point, it is still
+                // resumable from search and the Library, and a fresh correct
+                // play supersedes it. Only the card goes.
+                //
+                // 404 only: a transient failure means we could not ask, and
+                // dropping on that would make Continue Watching empty itself
+                // during an outage or a quota trip.
+                if (
+                    dropsZombieCard(
+                        lookup = detailLookup,
+                        hasArtwork = !entry.poster.isNullOrBlank() ||
+                            !backdropUrl.isNullOrBlank(),
+                        resolvedName = resolvedLocalName
+                    )
+                ) {
+                    return@async null
+                }
 
                 // Capture the show's next aired episode for the Upcoming
                 // rail — the detail response is already in hand here.
@@ -6258,6 +6306,13 @@ Log.d(
             )
                 ?: resolvedSeriesTarget?.streamId
 
+        // The card's own art, as the title gate reads it: a bare-number name is
+        // an id only when the row has nothing else to identify it. Both the
+        // card title and the show line use this one value, so they cannot
+        // disagree about whether the row is identifiable.
+        val rowHasArt =
+            !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+
         UpNextItem(
             id = buildString {
                 append("history:")
@@ -6269,7 +6324,7 @@ Log.d(
             title =
                 upNextDisplayTitleOrNull(
                     entry.name,
-                    !entry.poster.isNullOrBlank() || !backdropUrl.isNullOrBlank()
+                    rowHasArt
                 )
                     ?: resolvedLocalName
                     // No name at all: skip this card. The same show's enriched
@@ -6280,8 +6335,18 @@ Log.d(
             poster = entry.poster,
             badge = UpNextBadge.CONTINUE_WATCHING,
 
+            // The show line goes through the SAME gate as the card title.
+            // It used to copy `entry.name` straight through, so a row whose
+            // name field IS an internal id printed the raw id in the big line
+            // while the gated title beside it said something else - the
+            // "tmdb:3634822" card. Null here means the card falls back to its
+            // (already gated) title.
             showTitle =
-                if (resolvesAsSeries) entry.name else null,
+                if (resolvesAsSeries) {
+                    upNextDisplayTitleOrNull(entry.name, rowHasArt)
+                } else {
+                    null
+                },
 
             episodeTitle = cardEpisodeTitle,
             episodeDescription = cardEpisodeDescription,
@@ -8175,7 +8240,12 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                 null
             }
 
-        showDetailCache[tmdbId] = detail
+        // Only a real answer is memoised: this map is a ConcurrentHashMap, and
+        // its put() throws NullPointerException on a null VALUE rather than
+        // storing it - a failed lookup here used to be able to take the pass
+        // down (the same defect as TitlePosterArt's memo). A failed fetch is
+        // simply not cached; the next call asks again.
+        if (detail != null) showDetailCache[tmdbId] = detail
         return detail
     }
 

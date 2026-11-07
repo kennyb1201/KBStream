@@ -146,6 +146,8 @@ import com.kennyb1201.kbstream.ui.detail.DetailTrailerLaunch
 import com.kennyb1201.kbstream.ui.home.BillboardPlaySelection
 import com.kennyb1201.kbstream.ui.home.HeroInlineTrailerPlayer
 import com.kennyb1201.kbstream.ui.home.HeroTrailerPlayback
+import com.kennyb1201.kbstream.ui.home.UNKNOWN_SHOW_NAME
+import com.kennyb1201.kbstream.ui.home.upNextDisplayTitleOrNull
 import com.kennyb1201.kbstream.ui.detail.DetailViewModel
 import com.kennyb1201.kbstream.ui.detail.MediaCardItem
 import com.kennyb1201.kbstream.ui.detail.MediaTab
@@ -277,7 +279,11 @@ fun DetailScreenMobile(
                 initialMeta = Meta(
                     id = id,
                     type = type,
-                    name = initialTarget?.displayName?.takeIf { it.isNotBlank() } ?: id,
+                    // Never the raw id: a target that could not name itself is
+                    // the zombie-card case, and [UNKNOWN_SHOW_NAME] is the
+                    // screen's own word for that - not "tmdb:3634822".
+                    name = upNextDisplayTitleOrNull(initialTarget?.displayName)
+                        ?: UNKNOWN_SHOW_NAME,
                     poster = initialPoster,
                     background = initialBackdrop,
                     logo = initialClearLogo,
@@ -354,11 +360,18 @@ fun DetailScreenMobile(
             else -> type.lowercase()
         }
 
-        val displayName = meta?.name
-            ?: tmdbDetail?.title
-            ?: tmdbDetail?.name
-            ?: initialTarget?.displayName?.takeIf { it.isNotBlank() }
-            ?: ""
+        // The screen's name, through the same gate the cards use: a raw
+        // internal id ("tmdb:3634822", "tt1234567") is not a title, so each
+        // rung is rejected if it is id-like. With every rung unusable the
+        // screen says [UNKNOWN_SHOW_NAME]; it never prints the id, and it never
+        // goes blank either (the blank name is what the Library row keyed on).
+        val displayName = listOf(
+            meta?.name,
+            tmdbDetail?.title,
+            tmdbDetail?.name,
+            initialTarget?.displayName
+        ).firstNotNullOfOrNull { upNextDisplayTitleOrNull(it) }
+            ?: UNKNOWN_SHOW_NAME
         val posterUrl = meta?.poster
             ?: tmdbDetail?.posterPath?.let { TmdbRepository.POSTER_BASE + it }
             ?: initialPoster
@@ -2338,7 +2351,7 @@ fun DetailScreenMobile(
             // either way the mark repaints from the store (LibraryAdds.revision).
             if (libraryMenu) {
                 PosterContextMenu(
-                    title = displayName.ifBlank { id },
+                    title = displayName.ifBlank { UNKNOWN_SHOW_NAME },
                     actions = emptyList(),
                     onDismiss = { libraryMenu = false },
                     libraryTarget = libraryTarget
@@ -2354,7 +2367,7 @@ fun DetailScreenMobile(
                     ImageOverrides.TYPE_BACKDROP
                 }
                 PosterContextMenu(
-                    title = displayName.ifBlank { id },
+                    title = displayName.ifBlank { UNKNOWN_SHOW_NAME },
                     subtitle = activeMediaTab?.label,
                     actions = DetailMediaRow
                         .overrideRows(

@@ -14188,7 +14188,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             context = this,
             rawParentId = parentId,
             parentType = parentType,
-            resolvedTmdbId = resolveParentTmdbId()
+            resolvedTmdbId = resolveParentTmdbId(),
+            // The playing episode names its own show, so a parent id that
+            // resolves to nothing can be repaired before the row is written.
+            episodeStreamId = episodeStreamId
         )
 
         historyParentIdOverride = resolved

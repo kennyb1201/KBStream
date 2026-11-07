@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.SchemeKind
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -272,5 +273,91 @@ class PlaybackHistoryIdsTest {
         )
         // Nothing usable at all: no key, which the store reads as "no entry".
         assertNull(PlaybackHistoryIds.schemeStoreKey("tmdb:57532", null))
+    }
+
+    // ── the parent id the row is filed under (zombie cards) ────────────────
+
+    @Test
+    fun `an episode id names its show root`() {
+        assertEquals("tt1534800", PlaybackHistoryIds.episodeRootFromId("tt1534800:3:26"))
+        assertEquals("kitsu:12", PlaybackHistoryIds.episodeRootFromId("kitsu:12:5"))
+        assertEquals("tt1534800", PlaybackHistoryIds.episodeRootFromId(" tt1534800:3:26 "))
+    }
+
+    @Test
+    fun `a film or a show-level id names no root to repair with`() {
+        assertNull(PlaybackHistoryIds.episodeRootFromId(null))
+        assertNull(PlaybackHistoryIds.episodeRootFromId("  "))
+        assertNull(PlaybackHistoryIds.episodeRootFromId("tt0111161"))
+        assertNull(PlaybackHistoryIds.episodeRootFromId("tmdb:3634822"))
+    }
+
+    @Test
+    fun `the writer verifies a tmdb parent id before filing under it`() {
+        // The zombie rows were filed under an id that names no title. The
+        // writer now asks TMDB's detail endpoint about the id it is about to
+        // stamp, and files the row under the playing episode's own root when
+        // the answer is "no such title". Both facts are pinned from the source
+        // because the check itself needs a live TMDB call.
+        val source = File(
+            findSourceRoot(),
+            "com/kennyb1201/kbstream/ui/player/PlaybackHistoryIds.kt"
+        ).readText()
+
+        assertTrue(
+            "the candidate is asked of TMDB",
+            source.contains("lookupDetailByTmdbId(tmdbId, parentType)")
+        )
+        assertTrue(
+            "and only a 404 counts as the answer, so an outage keeps the id",
+            source.contains("if (verdict != TmdbDetailLookup.NotFound) return candidate")
+        )
+        assertTrue(
+            "and an unanswerable id is replaced by the episode's show root",
+            source.contains("return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId)") &&
+                source.contains("val episodeRoot = episodeRootFromId(episodeStreamId)")
+        )
+        assertTrue(
+            "a film, or an id with no root to read, keeps the candidate",
+            source.contains("return candidate")
+        )
+
+        // Every engine that writes a playback row passes the played episode,
+        // so the repair has a root to fall back to on all three paths.
+        listOf(
+            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt",
+            "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
+        ).forEach { path ->
+            val player = File(findSourceRoot(), path).readText()
+                .slice("PlaybackHistoryIds.canonicalParentId(", "\n        )")
+            assertTrue(
+                "$path must hand the writer its episode id",
+                player.contains("episodeStreamId = episodeStreamId")
+            )
+        }
+    }
+
+    private fun findSourceRoot(): File {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java")
+                if (candidate.isDirectory) return candidate
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "main source root not found walking up from " + System.getProperty("user.dir")
+        )
+    }
+
+    private fun String.slice(startMarker: String, endMarker: String): String {
+        val start = indexOf(startMarker)
+        assertTrue("$startMarker is missing", start >= 0)
+        val end = indexOf(endMarker, start)
+        assertTrue("$endMarker must follow $startMarker", end > start)
+        return substring(start, end)
     }
 }

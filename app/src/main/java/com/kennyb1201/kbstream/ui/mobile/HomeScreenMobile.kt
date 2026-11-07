@@ -3102,6 +3102,9 @@ private fun ContinueWatchingCard(
         isWatched = false,
         onClick = onClick,
         onLongClick = onLongClick,
+        // The card's own overlay prints the title (and the S/E), so the tile
+        // must not print it a second time as its art-less placeholder.
+        showFallbackText = false,
         modifier = Modifier
             .width(250.dp)
             .height(141.dp)

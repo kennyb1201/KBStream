@@ -135,6 +135,19 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false,
     onPosterError: ((Throwable?) -> Unit)? = null,
+    /**
+     * Whether the tile draws the title as its own placeholder while the art is
+     * missing, failed or still loading.
+     *
+     * That placeholder is the tile's whole identity on a rail, where nothing
+     * else says which title it is. A Continue Watching card is the opposite
+     * case: it already prints the title (and the S/E) in its own overlay, so
+     * the placeholder there printed the same words twice - the dim duplicate
+     * the field reports call "the title twice". Those callers pass false; the
+     * accessibility label is untouched either way, because [contentDescription]
+     * still carries the title to a screen reader.
+     */
+    showFallbackText: Boolean = true,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null 
 ) {
     val context = LocalContext.current
@@ -206,8 +219,11 @@ fun PosterCard(
             // The fallback text, for a poster that is missing, failed, or still
             // on its way in (see posterPainted). It is the tile's designed
             // placeholder either way, so a loading tile reads as this card's
-            // own art rather than as a hole in the rail.
-            if (posterUrl.isNullOrBlank() || hasError || !posterPainted) {
+            // own art rather than as a hole in the rail. A caller whose overlay
+            // already says the title turns it off (see [showFallbackText]).
+            if (showFallbackText &&
+                (posterUrl.isNullOrBlank() || hasError || !posterPainted)
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

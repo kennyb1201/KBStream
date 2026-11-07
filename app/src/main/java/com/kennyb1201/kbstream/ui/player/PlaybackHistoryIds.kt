@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlinx.coroutines.Dispatchers
@@ -92,7 +93,8 @@ object PlaybackHistoryIds {
         context: Context,
         rawParentId: String,
         parentType: String,
-        resolvedTmdbId: Int? = null
+        resolvedTmdbId: Int? = null,
+        episodeStreamId: String? = null
     ): String {
         val raw = rawParentId.trim()
         if (raw.isBlank() || raw.startsWith("tt")) return raw
@@ -117,8 +119,72 @@ object PlaybackHistoryIds {
         if (imdb == null) {
             Log.w(TAG, "could not canonicalize $raw to an IMDB id; keeping the route's own id")
         }
-        return imdb ?: raw
+        return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId)
     }
+
+    /**
+     * The id this row will be filed under, checked before it is written.
+     *
+     * `tmdb:<n>` is the one flavor the writer could not verify before: it was
+     * kept whenever [resolveImdbId] answered nothing, which is also what a
+     * number that names NO title answers. Continue Watching then filed the row
+     * under an id nothing can resolve, and the card was born a zombie - black
+     * tile, no show name, and the id printed as the title in Detail (the
+     * "tmdb:3634822" case).
+     *
+     * So the candidate is asked of TMDB's detail endpoint, the same lookup the
+     * card and Detail make. A title answers and the id stands. No title, and
+     * the playing EPISODE's own root - what the add-ons resolve that file under,
+     * and the show the row actually belongs to - takes its place. The episode
+     * id itself is never adopted, and `episodeStreamId` is not changed: the row
+     * still resumes the exact episode it was written for.
+     *
+     * A film, or an episode id with no show root to read, keeps the candidate:
+     * this repairs a wrong id, it does not invent one.
+     */
+    private suspend fun verifiedParentId(
+        context: Context,
+        candidate: String,
+        parentType: String,
+        episodeStreamId: String?
+    ): String {
+        if (!candidate.startsWith("tmdb:")) return candidate
+        val tmdbId = candidate.removePrefix("tmdb:").toIntOrNull()
+            ?: return candidate
+
+        val verdict = withTimeoutOrNull(2500L) {
+            runCatchingCancellable {
+                TmdbRepository.getInstance(context)
+                    .lookupDetailByTmdbId(tmdbId, parentType)
+            }.getOrNull()
+        }
+        // Only a 404 is a verdict. A timeout or an outage keeps the candidate:
+        // replacing a valid id because we could not ask would file this play
+        // under a different flavor than the one before it, which is how two
+        // rows for one episode appear.
+        if (verdict != TmdbDetailLookup.NotFound) return candidate
+
+        val episodeRoot = episodeRootFromId(episodeStreamId)
+        if (!episodeRoot.isNullOrBlank() && episodeRoot != candidate) {
+            Log.w(
+                TAG,
+                "parent id $candidate names no title; filing the row under $episodeRoot"
+            )
+            return episodeRoot
+        }
+        return candidate
+    }
+
+    /**
+     * The show an episode stream id names: `tt123:2:8` -> `tt123`, or null for
+     * an id that carries no season/episode pair (a film, a show-level id).
+     *
+     * This is the root the add-ons resolve a file under, which is the id shape
+     * the rest of the app keys a show by - so it is the right repair for a
+     * parent id that names nothing.
+     */
+    internal fun episodeRootFromId(episodeStreamId: String?): String? =
+        EpisodeMatch.seriesRootFrom(episodeStreamId)?.trim()?.takeIf { it.isNotBlank() }
 
     /**
      * The season/episode a Stremio episode id names, or null when the id

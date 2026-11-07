@@ -1731,7 +1731,8 @@ class ExternalPlayerActivity : ComponentActivity() {
             context = this,
             rawParentId = parentId,
             parentType = parentType,
-            resolvedTmdbId = resolvedTmdbId
+            resolvedTmdbId = resolvedTmdbId,
+            episodeStreamId = episodeStreamId
         )
         canonicalParent = resolved
         return resolved
