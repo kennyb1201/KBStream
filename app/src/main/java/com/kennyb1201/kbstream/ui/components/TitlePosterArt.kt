@@ -41,20 +41,26 @@ internal object TitlePosterArt {
     /** Same order of magnitude as the other card memos; full means cleared. */
     private const val MAX_KEYS = 1024
 
-    /** `"<type>:<id>"` -> the poster URL, or null for "TMDB had nothing". */
+    /**
+     * `"<type>:<id>"` -> the poster URL, or [NO_POSTER] for "TMDB had nothing".
+     *
+     * Never a nullable value: a ConcurrentHashMap's `put` throws
+     * NullPointerException on a null instead of storing it, which is how the
+     * first art-less card crashed the rail (see [posterMemoValue]).
+     */
     private val memo =
-        java.util.concurrent.ConcurrentHashMap<String, String?>()
+        java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private val semaphore = Semaphore(permits = 6)
 
     suspend fun resolve(context: Context, id: String, type: String): String? {
         val key = type + ":" + id
-        if (memo.containsKey(key)) return memo[key]
+        memo[key]?.let { return posterFromMemoValue(it) }
         return semaphore.withPermit {
             // Asked again inside the permit: twelve cards composing in one frame
             // are twelve callers for six permits, and the second half must not
             // repeat a lookup the first half already filed.
-            if (memo.containsKey(key)) return@withPermit memo[key]
+            memo[key]?.let { return@withPermit posterFromMemoValue(it) }
             val repository = TmdbRepository.getInstance(context.applicationContext)
             val detail = runCatchingCancellable {
                 // The row's id IS the address, and the app's two id namespaces
@@ -77,7 +83,9 @@ internal object TitlePosterArt {
                 ?.takeIf { it.isNotBlank() }
                 ?.let { path -> TmdbRepository.POSTER_BASE + path }
             if (memo.size >= MAX_KEYS) memo.clear()
-            memo[key] = poster
+            // The one write the memo can make: never a null value (see
+            // [NO_POSTER]) - a null here is an NPE, not a cached miss.
+            memo[key] = posterMemoValue(poster)
             poster
         }
     }
