@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetailLookup
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
@@ -25,6 +26,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 object PlaybackHistoryIds {
 
     private const val TAG = "PLAYER_IDS"
+
+    /**
+     * The budget a history write may spend asking TMDB who a title is, shared by
+     * both checks in [canonicalParentId] and by the identity check behind them.
+     * This runs on the player's exit path (and, for the MPV engine, in front of
+     * the fallback write), so it covers the whole question - an existence
+     * lookup, the root's own resolution and one season fetch - not each step.
+     */
+    private const val VERIFY_TIMEOUT_MS = 2500L
 
     /**
      * Row id for the current session. An episode's own stream id wins (it names
@@ -101,7 +111,8 @@ object PlaybackHistoryIds {
         rawParentId: String,
         parentType: String,
         resolvedTmdbId: Int? = null,
-        episodeStreamId: String? = null
+        episodeStreamId: String? = null,
+        scheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
     ): String {
         val raw = rawParentId.trim()
         if (raw.isBlank()) return raw
@@ -111,7 +122,7 @@ object PlaybackHistoryIds {
         // and that row was filed as-is: the card it built was the same black,
         // nameless tile this class already repairs for `tmdb:<n>`.
         if (raw.startsWith("tt")) {
-            return verifiedParentId(context, raw, parentType, episodeStreamId)
+            return verifiedParentId(context, raw, parentType, episodeStreamId, scheme)
         }
 
         val tmdbId = resolvedTmdbId?.takeIf { it > 0 }
@@ -123,7 +134,7 @@ object PlaybackHistoryIds {
             }
         if (tmdbId == null || tmdbId <= 0) return raw
 
-        val imdb = withTimeoutOrNull(2500L) {
+        val imdb = withTimeoutOrNull(VERIFY_TIMEOUT_MS) {
             runCatchingCancellable {
                 TmdbRepository.getInstance(context)
                     .resolveImdbId(tmdbId, parentType)
@@ -134,7 +145,7 @@ object PlaybackHistoryIds {
         if (imdb == null) {
             Log.w(TAG, "could not canonicalize $raw to an IMDB id; keeping the route's own id")
         }
-        return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId)
+        return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId, scheme)
     }
 
     /**
@@ -158,45 +169,154 @@ object PlaybackHistoryIds {
      * adopted, and `episodeStreamId` is not changed: the row still resumes the
      * exact episode it was written for.
      *
-     * A film, or an episode id with no show root to read, keeps the candidate:
-     * this repairs a wrong id, it does not invent one.
+     * Naming SOME title is not the whole answer, though: it was the blind spot
+     * that produced the phantom card. A route opened with another real show's id
+     * resolves a real title, so the existence check kept it and the row was filed
+     * under a show that was never played - with the real play's position. The id
+     * has to be the id OF THE SHOW BEING PLAYED, and the file being played names
+     * its own show: its [episodeRootFromId]. So a candidate that names a title is
+     * then checked against that root, and re-filed under the root (raw, never
+     * canonicalized) when the two are different shows. The comparison is by
+     * resolved TMDB id on both sides - never by string, because a candidate may
+     * be `tt...` while the root is `tmdb:<n>` or a catalog id, and comparing the
+     * flavors would call the same show a mismatch on every such session.
+     *
+     * When the root will not resolve to a TMDB id (a catalog id with no TMDB
+     * twin), the membership fallback asks the candidate's own series whether it
+     * holds the playing season/episode - see [filingVerdict] and
+     * [playingSeasonHolds]. The season/episode asked about is the FILE's, mapped
+     * through the session's detected scheme, because on a split show the file
+     * number is not the TMDB episode it holds.
+     *
+     * Only a definitive answer acts. A timeout, an outage or a shape no lookup
+     * accepts keeps the candidate: replacing a valid id because we could not ask
+     * would file this play under a different flavor than the one before it, which
+     * is how two rows for one episode appear. A film, or an episode id with no
+     * show root to read, keeps the candidate too - this repairs a wrong id, it
+     * does not invent one.
+     *
+     * Every verdict is logged by [parentIdVerdictLine], because the phantom row
+     * in the field had no provenance at all: nothing in a capture said which id
+     * was asked about, what the file itself named, or what got filed.
      */
     private suspend fun verifiedParentId(
         context: Context,
         candidate: String,
         parentType: String,
-        episodeStreamId: String?
+        episodeStreamId: String?,
+        scheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
     ): String {
         val isImdb = candidate.startsWith("tt", ignoreCase = true)
         if (!isImdb && !candidate.startsWith("tmdb:")) return candidate
 
-        val verdict = withTimeoutOrNull(2500L) {
+        val episodeRoot = episodeRootFromId(episodeStreamId)
+        // ONE budget for the whole check - the existence lookup, the root's own
+        // resolution and (only when needed) one season fetch. This runs on the
+        // player's exit path, so a slow answer must never hold the write hostage.
+        val decision = withTimeoutOrNull(VERIFY_TIMEOUT_MS) {
             runCatchingCancellable {
                 val repository = TmdbRepository.getInstance(context)
-                if (isImdb) {
+                val existence = if (isImdb) {
                     repository.lookupDetailByImdbId(candidate, parentType)
                 } else {
                     candidate.removePrefix("tmdb:").toIntOrNull()?.let { tmdbId ->
                         repository.lookupDetailByTmdbId(tmdbId, parentType)
-                    } ?: return@runCatchingCancellable null
+                    } ?: TmdbDetailLookup.Unresolvable
                 }
+                identityDecision(
+                    context = context,
+                    repository = repository,
+                    candidate = candidate,
+                    parentType = parentType,
+                    episodeStreamId = episodeStreamId,
+                    scheme = scheme,
+                    episodeRoot = episodeRoot,
+                    existence = existence
+                )
             }.getOrNull()
-        }
-        // Only a definitive miss is a verdict. A timeout or an outage keeps the
-        // candidate: replacing a valid id because we could not ask would file
-        // this play under a different flavor than the one before it, which is how
-        // two rows for one episode appear.
-        if (verdict != TmdbDetailLookup.NotFound) return candidate
+        } ?: FilingDecision(ParentIdVerdict.UNVERIFIABLE, candidate)
 
-        val episodeRoot = episodeRootFromId(episodeStreamId)
-        if (!episodeRoot.isNullOrBlank() && episodeRoot != candidate) {
-            Log.w(
-                TAG,
-                "parent id $candidate names no title; filing the row under $episodeRoot"
-            )
-            return episodeRoot
+        Log.i(TAG, parentIdVerdictLine(candidate, episodeRoot, decision))
+        return decision.filed
+    }
+
+    /**
+     * The evidence the writer can gather for the identity check, in the one
+     * place that has to talk to TMDB: whether the candidate names a title, what
+     * the playing episode's root resolves to, and - only when that root will not
+     * resolve - whether the candidate's own series holds the playing episode.
+     *
+     * The two answers that need the network are asked in that order and the
+     * second only when the first cannot decide, so the common session costs the
+     * existence lookup plus a root resolution that the enriched-meta cache (12h,
+     * memory and disk) usually answers without a request.
+     */
+    private suspend fun identityDecision(
+        context: Context,
+        repository: TmdbRepository,
+        candidate: String,
+        parentType: String,
+        episodeStreamId: String?,
+        scheme: EpisodeScheme,
+        episodeRoot: String?,
+        existence: TmdbDetailLookup
+    ): FilingDecision {
+        val detail = (existence as? TmdbDetailLookup.Found)?.detail
+        val repairableRoot = episodeRoot?.takeIf { it.isNotBlank() && it != candidate }
+
+        // Only a title that answered can be compared with anything.
+        val rootTmdbId = if (detail != null && repairableRoot != null) {
+            resolveTmdbId(context, repairableRoot, parentType)
+        } else {
+            null
         }
-        return candidate
+
+        // The fallback, and only the fallback: a root that will not resolve to a
+        // TMDB id still has an identity proof in the candidate's own seasons.
+        val membership = if (detail != null && repairableRoot != null && rootTmdbId == null) {
+            playingSeasonHolds(repository, detail, episodeStreamId, scheme)
+        } else {
+            null
+        }
+
+        return filingVerdict(candidate, episodeRoot, existence, rootTmdbId, membership)
+    }
+
+    /**
+     * Whether [detail]'s series contains the season/episode the FILE names - the
+     * second identity proof, for a session whose episode root has no TMDB twin.
+     *
+     * The pair comes from the stream id and is mapped through the session's own
+     * scheme ([EpisodeScheme.tmdbEpisodesOfFile]), so a split show's file 16 asks
+     * about episode 8 rather than about an episode 16 the season does not have.
+     * A file that holds several episodes asks whether the series has ANY of them:
+     * the file belongs to this series if one does, and answering "lacks" on a
+     * segment the id's first number happens to miss would re-file a correct row.
+     *
+     * The detail's own `seasons` list answers when it carries the season's
+     * episode count. A season the list does not contain (while the list is
+     * populated at all) is a definitive no. Otherwise one bounded fetch of the
+     * season is made; null - we could not tell - keeps the candidate, exactly as
+     * a transient existence check does.
+     */
+    private suspend fun playingSeasonHolds(
+        repository: TmdbRepository,
+        detail: TmdbDetail,
+        episodeStreamId: String?,
+        scheme: EpisodeScheme
+    ): Boolean? {
+        val (season, fileEpisode) = episodeFromId(episodeStreamId) ?: return null
+        val episodes = scheme.tmdbEpisodesOfFile(fileEpisode)
+            .takeIf { it.isNotEmpty() } ?: return null
+
+        val summary = detail.seasons.firstOrNull { it.seasonNumber == season }
+        if (summary == null && detail.seasons.isNotEmpty()) return false
+        val count = summary?.episodeCount ?: 0
+        if (count > 0) return episodes.any { it in 1..count }
+
+        val listed = repository.lookupSeasonEpisodes(detail.id, season) ?: return null
+        if (listed.isEmpty()) return null
+        return episodes.any { episode -> listed.any { it.episodeNumber == episode } }
     }
 
     /**
@@ -388,4 +508,116 @@ object PlaybackHistoryIds {
  */
 internal fun recordsResolution(imdbId: String, tmdbId: Int?): Boolean =
     tmdbId != null && tmdbId > 0 && imdbId.trim().startsWith("tt")
+
+/**
+ * What the writer concluded about the id it was handed, and the id it filed.
+ *
+ * The verdicts are separate values rather than a boolean because they need
+ * different fixes. A [MISMATCH] is the phantom row's shape: the candidate named
+ * a REAL show, just not the one playing. [NO_TITLE] is the older zombie shape:
+ * the candidate named nothing at all. [UNVERIFIABLE], [CANDIDATE_IS_ROOT] and
+ * [NO_ROOT] are the ways of saying "the writer could not - or need not - prove
+ * anything", none of which is a reason to change the row.
+ */
+internal enum class ParentIdVerdict(val label: String) {
+
+    /** The candidate IS the show the file names. The row keeps it. */
+    MATCH("match"),
+
+    /** The candidate is another REAL show: the row is re-filed under the root. */
+    MISMATCH("mismatch→refiled"),
+
+    /** The candidate names no title at all: re-filed under the root. */
+    NO_TITLE("no-title→refiled"),
+
+    /** No usable answer (timeout, outage, an id shape no lookup accepts). */
+    UNVERIFIABLE("unverifiable→kept"),
+
+    /**
+     * The candidate IS the root the file names, so the two are one show by
+     * construction. Kept - and named separately from [NO_ROOT], because a trace
+     * that said "no root" for the commonest session of all would send a reader
+     * looking for a file id that carries none.
+     */
+    CANDIDATE_IS_ROOT("candidate-is-root→kept"),
+
+    /** A film, or an episode id with no show root to read. */
+    NO_ROOT("no-root→kept")
+}
+
+/** The verdict for one write, and the parent id it filed the row under. */
+internal data class FilingDecision(val verdict: ParentIdVerdict, val filed: String)
+
+/**
+ * The identity verdict, decided from evidence already gathered - no I/O - so the
+ * rule can be read and tested on its own.
+ *
+ * [existence] is what the candidate's lookup answered: [TmdbDetailLookup.Found]
+ * (a real title, and its TMDB id), a 404, or a failure to ask. [rootTmdbId] is
+ * what the PLAYING episode's root resolves to, null when it will not resolve.
+ * [membership] is the fallback's answer - does the candidate's series hold the
+ * playing season/episode - and is consulted only when the root gave no id; null
+ * there means "could not tell".
+ *
+ * The order matters. Existence first: an id that names nothing is repaired the
+ * same way it always was. Then identity, by TMDB id on both sides. Then - and
+ * only for a root that will not resolve - membership. Every "could not tell"
+ * keeps the candidate.
+ */
+internal fun filingVerdict(
+    candidate: String,
+    episodeRoot: String?,
+    existence: TmdbDetailLookup,
+    rootTmdbId: Int?,
+    membership: Boolean?
+): FilingDecision {
+    val candidateTmdbId = (existence as? TmdbDetailLookup.Found)?.detail?.id
+    val hasRoot = !episodeRoot.isNullOrBlank()
+    val root = episodeRoot?.takeIf { it.isNotBlank() && it != candidate }
+
+    if (candidateTmdbId == null) {
+        // A 404 is a verdict about the candidate; a timeout or an unanswerable
+        // shape is not, and keeps it.
+        return when {
+            existence != TmdbDetailLookup.NotFound ->
+                FilingDecision(ParentIdVerdict.UNVERIFIABLE, candidate)
+            root != null -> FilingDecision(ParentIdVerdict.NO_TITLE, root)
+            hasRoot -> FilingDecision(ParentIdVerdict.CANDIDATE_IS_ROOT, candidate)
+            else -> FilingDecision(ParentIdVerdict.NO_ROOT, candidate)
+        }
+    }
+
+    if (!hasRoot) return FilingDecision(ParentIdVerdict.NO_ROOT, candidate)
+    if (root == null) return FilingDecision(ParentIdVerdict.CANDIDATE_IS_ROOT, candidate)
+
+    if (rootTmdbId != null && rootTmdbId > 0) {
+        return if (rootTmdbId == candidateTmdbId) {
+            FilingDecision(ParentIdVerdict.MATCH, candidate)
+        } else {
+            FilingDecision(ParentIdVerdict.MISMATCH, root)
+        }
+    }
+
+    return when (membership) {
+        true -> FilingDecision(ParentIdVerdict.MATCH, candidate)
+        false -> FilingDecision(ParentIdVerdict.MISMATCH, root)
+        null -> FilingDecision(ParentIdVerdict.UNVERIFIABLE, candidate)
+    }
+}
+
+/**
+ * The one line that makes a history row's provenance visible: the id the writer
+ * was handed, the show its file names, the verdict, and what was actually filed.
+ *
+ * The phantom card in the field could not be traced at all - no capture said
+ * which id a row was written under, what the playing episode itself named, or
+ * whether the writer had ever compared them. If that card ever comes back, this
+ * line for its session is the first evidence.
+ */
+internal fun parentIdVerdictLine(
+    candidate: String,
+    episodeRoot: String?,
+    decision: FilingDecision
+): String = "candidate=$candidate root=${episodeRoot ?: "-"} " +
+    "verdict=${decision.verdict.label} filed=${decision.filed}"
 

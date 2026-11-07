@@ -14190,8 +14190,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             parentType = parentType,
             resolvedTmdbId = resolveParentTmdbId(),
             // The playing episode names its own show, so a parent id that
-            // resolves to nothing can be repaired before the row is written.
-            episodeStreamId = episodeStreamId
+            // resolves to nothing (or to ANOTHER show) can be repaired before
+            // the row is written.
+            episodeStreamId = episodeStreamId,
+            // The identity check asks whether this show holds the episode the
+            // file names, so it needs the mapping that says which episode a
+            // file holds (a split show's file 16 is episode 8).
+            scheme = bingeScheme
         )
 
         historyParentIdOverride = resolved

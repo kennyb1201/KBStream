@@ -5833,7 +5833,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             rawParentId = parentId,
             parentType = parentType,
             resolvedTmdbId = resolvedTmdbId,
-            episodeStreamId = episodeStreamId
+            episodeStreamId = episodeStreamId,
+            // Same identity check the Exo engine makes, with the same session
+            // mapping: the file's number is not the episode on a split show.
+            scheme = bingeScheme
         )
         canonicalParent = resolved
         return resolved

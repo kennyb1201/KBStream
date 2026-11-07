@@ -257,7 +257,7 @@ class CwZombieCoverageTest {
         )
         assertTrue(
             "only a definitive miss repairs, so an outage files under the same id as before",
-            writer.contains("if (verdict != TmdbDetailLookup.NotFound) return candidate")
+            writer.contains("?: FilingDecision(ParentIdVerdict.UNVERIFIABLE, candidate)")
         )
         assertTrue(
             "and the repair is still the playing episode's own root",
@@ -267,7 +267,7 @@ class CwZombieCoverageTest {
             "a route that already carries a canonical IMDb id is verified too - that " +
                 "flavor used to be returned on sight, which is how a stale tt id got filed",
             writer.contains("if (raw.startsWith(\"tt\")) {") &&
-                writer.contains("return verifiedParentId(context, raw, parentType, episodeStreamId)")
+                writer.contains("return verifiedParentId(context, raw, parentType, episodeStreamId, scheme)")
         )
     }
 

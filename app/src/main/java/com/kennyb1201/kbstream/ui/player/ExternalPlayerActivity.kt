@@ -1732,7 +1732,10 @@ class ExternalPlayerActivity : ComponentActivity() {
             rawParentId = parentId,
             parentType = parentType,
             resolvedTmdbId = resolvedTmdbId,
-            episodeStreamId = episodeStreamId
+            episodeStreamId = episodeStreamId,
+            // Same identity check the in-app engines make, with the same session
+            // mapping: the file's number is not the episode on a split show.
+            scheme = bingeScheme
         )
         canonicalParent = resolved
         return resolved

@@ -318,12 +318,14 @@ class PlaybackHistoryIdsTest {
             source.contains("lookupDetailByTmdbId(tmdbId, parentType)")
         )
         assertTrue(
-            "and only a 404 counts as the answer, so an outage keeps the id",
-            source.contains("if (verdict != TmdbDetailLookup.NotFound) return candidate")
+            "and only a definitive answer acts, so an outage or a timeout keeps the id",
+            source.contains("?: FilingDecision(ParentIdVerdict.UNVERIFIABLE, candidate)")
         )
         assertTrue(
             "and an unanswerable id is replaced by the episode's show root",
-            source.contains("return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId)") &&
+            source.contains(
+                "return verifiedParentId(context, imdb ?: raw, parentType, episodeStreamId, scheme)"
+            ) &&
                 source.contains("val episodeRoot = episodeRootFromId(episodeStreamId)")
         )
         assertTrue(

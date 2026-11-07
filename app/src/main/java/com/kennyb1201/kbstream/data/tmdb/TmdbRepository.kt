@@ -2378,6 +2378,25 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * The episodes one season holds, for the writer's identity check.
+     *
+     * [getSeasonEpisodes] is the app's season reader: it resolves a stream root,
+     * maps every episode under it and keeps a long-lived cache of the list. This
+     * answers a narrower question - "does this series have this season at all, and
+     * which episodes are in it" - for a playback session whose episode root has no
+     * TMDB twin, and it must never guess. So it is one plain request (the caller
+     * bounds it), nothing is cached, and null means "we could not ask": no key, an
+     * IO failure, a 404, a timeout. An empty list is a real answer - TMDB listing a
+     * season with no episodes - and the caller decides what that is worth.
+     */
+    suspend fun lookupSeasonEpisodes(tvId: Int, season: Int): List<TmdbEpisode>? {
+        if (apiKey.isBlank() || tvId <= 0 || season < 0) return null
+        return runCatchingCancellable {
+            api.getSeasonDetail(tvId, season, apiKey).episodes
+        }.getOrNull()
+    }
+
+    /**
      * Whether [error] says the id does not exist, as opposed to "we could not
      * ask": the only verdict Continue Watching may act on.
      *
