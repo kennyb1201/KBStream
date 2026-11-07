@@ -276,6 +276,18 @@ object MdbListClient {
     /** How long a public directory stays fresh (other people's lists change slowly). */
     private const val PUBLIC_LISTS_TTL_MS = 30 * 60 * 1000L
 
+    /**
+     * How long a pinned list's items stay fresh - the directories' own window.
+     *
+     * A separate name because it answers a different question: a directory page
+     * the viewer browsed, versus a list they pinned to Home and that Home
+     * re-read on every entry. A list's items change only when someone writes to
+     * it, and those writes invalidate the entry outright (see [addToList]), so
+     * the window only covers a change made on ANOTHER device - the same
+     * staleness the directories already accept.
+     */
+    private const val LIST_ITEMS_TTL_MS = 30 * 60 * 1000L
+
     /** One directory page; MDBList's own page size is what this spends on one read. */
     private const val PUBLIC_LIST_LIMIT = 100
 
@@ -283,12 +295,18 @@ object MdbListClient {
     private const val KEY_REQUEST_DAY = "day"
     private const val KEY_REQUEST_COUNT = "count"
 
-    /** Refetchable reads stop here, keeping the rest of the day for writes. */
-    private const val READ_BUDGET = 850
+    /**
+     * Refetchable reads stop here, keeping the rest of the day for writes.
+     *
+     * Declared beside the diagnostics line that prints it (see
+     * [mdbListBudgetLine] for both ceilings), so a report of "reads stop 850"
+     * cannot describe a limit the interceptor does not apply.
+     */
+    private const val READ_BUDGET = MDBLIST_READ_BUDGET
 
     /** Writes stop here — short of the API's own limit, so a 429 is never
      * what stops us. */
-    private const val TOTAL_CEILING = 980
+    private const val TOTAL_CEILING = MDBLIST_TOTAL_CEILING
 
     /**
      * Tags a request that must go out (a write) rather than a refetch.
@@ -462,7 +480,6 @@ object MdbListClient {
     internal const val BASE = "https://api.mdblist.com"
     private const val TAG = "MDBLIST"
 
-    private const val WATCHED_AT_COMPLETE_THRESHOLD = 80.0
 
     // ── Watched-snapshot cache ────────────────────────────────────────
     // /sync/watched downloads the ENTIRE watch history (paginated). Detail
@@ -628,6 +645,9 @@ object MdbListClient {
         "mdblist:ratings:${keyTag(apiKey)}:${mediaType.lowercase()}:$id"
 
     private val snapshotMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Guards the read-modify-write of one snapshot delta (see applySnapshotWrite). */
+    private val snapshotWriteLock = Any()
 
     /** Reads the user-pasted (or build-injected) key, or "" when unset. */    fun apiKey(context: Context): String =
         AppPreferences.getMdbListApiKey(context)
@@ -1005,7 +1025,15 @@ object MdbListClient {
     private suspend fun postScrobble(
         apiKey: String,
         action: String,
-        body: JSONObject
+        body: JSONObject,
+        /**
+         * What an accepted `stop` moved. Null means it moved no watched key
+         * (a partial stop), which still drops the paused-session list.
+         *
+         * `clear` does not take one: clearing genuinely makes the snapshot
+         * unknown, and that path keeps the full invalidation.
+         */
+        stopSnapshotWrite: MdbListSnapshotWrite? = null
     ): Boolean = withContext(NonCancellable + Dispatchers.IO) {
         // NonCancellable is the whole point of this function's shape. The
         // player mirrors scrobbles from the same job it scrobbles Simkl with,
@@ -1059,9 +1087,20 @@ object MdbListClient {
                         // start/pause just move the playhead. Invalidating the
                         // snapshot on every one of them re-downloaded the
                         // ENTIRE paginated history per playback event, which
-                        // was the biggest spender of the daily key.
-                        if (action == "stop" || action == "clear") {
-                            invalidateWatchedSnapshot()
+                        // was the biggest spender of the daily key - and even
+                        // the two that can change it now move only their own
+                        // keys (see [MdbListSnapshotWrite]).
+                        when (action) {
+                            // A completed stop is a history write the app knows
+                            // the ids of; a partial one leaves history alone but
+                            // still moves the title out of the paused list.
+                            "stop" -> if (stopSnapshotWrite != null) {
+                                applySnapshotWrite(apiKey, stopSnapshotWrite)
+                            } else {
+                                dropPlaybackCache()
+                            }
+                            // Clearing makes the snapshot genuinely unknown.
+                            "clear" -> invalidateWatchedSnapshot()
                         }
                     }
                     response.isSuccessful
@@ -1150,7 +1189,24 @@ object MdbListClient {
         if (apiKey.isBlank()) return false
         val body = scrobbleBody(isMovie, imdbId, tmdbId, season, episode, progress)
             ?: return false.also { Log.w(TAG, "scrobble/stop skipped: no imdb/tmdb id") }
-        val ok = postScrobble(apiKey, "stop", body)
+        val ok = postScrobble(
+            apiKey,
+            "stop",
+            body,
+            // Only a stop that COMPLETED the title moved a watched key; below
+            // the threshold the API keeps it as a paused session and the
+            // snapshot is untouched.
+            stopSnapshotWrite = if (mdbListStopCompletes(progress)) {
+                if (isMovie) {
+                    MdbListSnapshotWrite(addMovies = mdbListIdKeys(imdbId, tmdbId))
+                } else {
+                    MdbListSnapshotWrite(
+                        addShows = mdbListIdKeys(imdbId, tmdbId),
+                        addEpisodes = mdbListEpisodeKeys(imdbId, tmdbId, season, episode)
+                    )
+                }
+            } else null
+        )
         cancelStartRetry()
         return ok
     }
@@ -1222,8 +1278,19 @@ object MdbListClient {
                 ?: return false
             else -> return false
         }
+        // The write's own ids ARE the snapshot keys that move. A movie moves a
+        // movie key; a single episode proves the show is started and moves its
+        // own episode key, the same two sets the download walk fills.
+        val write = if (mediaType.lowercase() == "movie") {
+            MdbListSnapshotWrite(addMovies = mdbListIdKeys(imdbId, tmdbId))
+        } else {
+            MdbListSnapshotWrite(
+                addShows = mdbListIdKeys(imdbId, tmdbId),
+                addEpisodes = mdbListEpisodeKeys(imdbId, tmdbId, season, episode)
+            )
+        }
 
-        return withContext(Dispatchers.IO) {
+        val ok = withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
                     .url("$BASE/sync/watched?apikey=$apiKey")
@@ -1241,6 +1308,8 @@ object MdbListClient {
                 }
             }.getOrDefault(false)
         }
+        if (ok) applySnapshotWrite(apiKey, write)
+        return ok
     }
 
     /**
@@ -1268,7 +1337,11 @@ object MdbListClient {
                     .put("watched_at", java.time.Instant.now().toString())
             )
         )
-        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload)
+        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload) {
+            // One show key: the server expands the show into its episodes, and
+            // the local snapshot cannot enumerate them from an ids-only body.
+            applySnapshotWrite(apiKey, MdbListSnapshotWrite(addShows = mdbListIdKeys(imdbId, tmdbId)))
+        }
     }
 
     /**
@@ -1323,7 +1396,17 @@ object MdbListClient {
          * nothing added. Reading the status code alone is what let a rejected
          * "add to watchlist" render as a saved one.
          */
-        validateAddResult: Boolean = false
+        validateAddResult: Boolean = false,
+        /**
+         * What this write moved, applied only once the API accepted it.
+         *
+         * Required rather than defaulted: every write here knows exactly which
+         * keys it touched, and the old blanket
+         * [invalidateWatchedSnapshot] re-downloaded the whole history to learn
+         * them again (see [MdbListSnapshotWrite]). A write that genuinely
+         * cannot name its effect has to pass that call explicitly and say why.
+         */
+        onAccepted: () -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
@@ -1340,7 +1423,9 @@ object MdbListClient {
                     Log.w(TAG, "sync post failed code=${response.code} ${text.take(200)}")
                     return@use false
                 }
-                invalidateWatchedSnapshot()
+                // The write landed: move only what it moved. A failed write
+                // touches neither copy.
+                onAccepted()
                 if (!validateAddResult) return@use true
 
                 val root = runCatching { JSONObject(text) }.getOrNull() ?: return@use true
@@ -1380,7 +1465,17 @@ object MdbListClient {
             episodes,
             java.time.Instant.now().toString()
         ) ?: return false
-        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload)
+        return postSync(apiKey, "$BASE/sync/watched?apikey=$apiKey", payload) {
+            applySnapshotWrite(
+                apiKey,
+                MdbListSnapshotWrite(
+                    // The episodes prove the show is started, exactly as the
+                    // download walk reads a `shows` entry.
+                    addShows = mdbListIdKeys(imdbId, tmdbId),
+                    addEpisodes = mdbListEpisodeKeys(imdbId, tmdbId, season, episodes)
+                )
+            )
+        }
     }
 
     /**
@@ -1403,7 +1498,16 @@ object MdbListClient {
             apiKey,
             "$BASE/sync/watched/remove?apikey=$apiKey",
             payload
-        )
+        ) {
+            applySnapshotWrite(
+                apiKey,
+                MdbListSnapshotWrite(
+                    // The show key stays: removing episodes does not un-start a
+                    // show whose other episodes are still on record.
+                    removeEpisodes = mdbListEpisodeKeys(imdbId, tmdbId, season, episodes)
+                )
+            )
+        }
     }
 
     /**
@@ -1446,7 +1550,18 @@ object MdbListClient {
                 client.newCall(request).execute().use { it.isSuccessful }
             }.getOrDefault(false)
         }
-        if (ok) invalidateWatchedSnapshot()
+        if (ok) {
+            applySnapshotWrite(
+                apiKey,
+                if (mediaType.lowercase() == "movie") {
+                    MdbListSnapshotWrite(removeMovies = mdbListIdKeys(imdbId, tmdbId))
+                } else {
+                    MdbListSnapshotWrite(
+                        removeEpisodes = mdbListEpisodeKeys(imdbId, tmdbId, season, episode)
+                    )
+                }
+            )
+        }
         return ok
     }
 
@@ -1475,7 +1590,14 @@ object MdbListClient {
                 client.newCall(request).execute().use { it.isSuccessful }
             }.getOrDefault(false)
         }
-        if (ok) invalidateWatchedSnapshot()
+        if (ok) {
+            // The ids-only remove clears every episode server-side, so the
+            // episode keys under both of the show's forms go with it.
+            applySnapshotWrite(
+                apiKey,
+                MdbListSnapshotWrite(removeShows = mdbListIdKeys(imdbId, tmdbId))
+            )
+        }
         return ok
     }
 
@@ -1923,36 +2045,133 @@ object MdbListClient {
         // Retire any fetch already in flight: it holds a pre-invalidation view
         // of the account and must not cache it back (LS-P2-14).
         snapshotGeneration += 1
-        val snapshotKey = cachedSnapshotKey
-        val playbackKey = cachedPlaybackKey
-        cachedSnapshot = null
-        cachedSnapshotAt = 0L
-        cachedSnapshotKey = ""
+        dropSnapshotCache()
         // Both blobs describe the WHOLE account, so a mark/unmark can move a
         // title between them: the 99%-watched leftover that just became
         // completed has to leave the paused-session list with it, otherwise
         // the card lingers on Continue Watching for the rest of the TTL.
+        dropPlaybackCache()
+    }
+
+    /** Nulls the snapshot and deletes its disk row, for a genuinely unknown one. */
+    private fun dropSnapshotCache() {
+        val key = cachedSnapshotKey
+        cachedSnapshot = null
+        cachedSnapshotAt = 0L
+        cachedSnapshotKey = ""
+        if (key.isBlank()) return
+        val diskKey = snapshotDiskKey(key)
+        sessionScope.launch {
+            runCatchingCancellable { jsonCacheDao?.deleteByKeys(listOf(diskKey)) }
+        }
+    }
+
+    /** Same for the paused sessions; the watched snapshot keeps its copy. */
+    private fun dropPlaybackCache() {
+        val key = cachedPlaybackKey
         cachedPlayback = null
         cachedPlaybackAt = 0L
         cachedPlaybackKey = ""
-        // Drop the persisted copies too, or the next read serves the just-
-        // invalidated blob from disk for up to its (longer) disk TTL.
-        if (snapshotKey.isNotBlank() || playbackKey.isNotBlank()) {
-            val keys = buildList {
-                if (snapshotKey.isNotBlank()) add(snapshotDiskKey(snapshotKey))
-                if (playbackKey.isNotBlank()) add(playbackDiskKey(playbackKey))
-            }
+        if (key.isBlank()) return
+        val diskKey = playbackDiskKey(key)
+        sessionScope.launch {
+            runCatchingCancellable { jsonCacheDao?.deleteByKeys(listOf(diskKey)) }
+        }
+    }
+
+    /**
+     * Applies one accepted write's exact effect to the cached snapshot, in
+     * memory AND on disk, instead of deleting it and re-downloading the whole
+     * history (see [MdbListSnapshotWrite]).
+     *
+     * The write knows its ids, so the copy already in hand is edited and its
+     * TTL restarted: the keys that did NOT move keep the age they had, which is
+     * the point - only a title the viewer just touched is known to have changed.
+     *
+     * A fetch in flight started before this write holds the pre-write account,
+     * so the generation is bumped exactly as a full invalidation bumps it
+     * (LS-P2-14): the write-back gate there must refuse it.
+     *
+     * When there is no snapshot in hand for this key, there is nothing to edit -
+     * but a disk row from an earlier session would still answer with the
+     * pre-write blob for up to six hours, so it is dropped instead. The next read
+     * downloads once, which is what it would have done regardless.
+     */
+    private fun applySnapshotWrite(apiKey: String, write: MdbListSnapshotWrite) {
+        // The paused-session list describes the same account, so every one of
+        // these writes drops it whole - it is ONE request on a 15-minute TTL,
+        // not a paginated history, and a completion genuinely moves the title
+        // out of it.
+        dropPlaybackCache()
+        if (write.isEmpty) return
+        snapshotGeneration += 1
+        // Read-modify-write under a short lock so two writes landing together
+        // cannot lose one of the deltas. No suspension inside it.
+        val patched = synchronized(snapshotWriteLock) {
+            val base = cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
+            if (base == null) return@synchronized null
+            val updated = write.applyTo(base)
+            val at = System.currentTimeMillis()
+            // A NEW object, not a mutated one: the watched-episode index is
+            // built per snapshot instance and must rebuild (see
+            // watchedEpisodeIndexFor).
+            cachedSnapshot = updated
+            cachedSnapshotAt = at
+            cachedSnapshotKey = apiKey
+            updated to at
+        }
+        if (patched == null) {
+            val diskKey = snapshotDiskKey(apiKey)
             sessionScope.launch {
-                runCatchingCancellable { jsonCacheDao?.deleteByKeys(keys) }
+                runCatchingCancellable { jsonCacheDao?.deleteByKeys(listOf(diskKey)) }
+            }
+            return
+        }
+        val (updated, at) = patched
+        val diskKey = snapshotDiskKey(apiKey)
+        val json = snapshotJsonAdapter.toJson(updated)
+        sessionScope.launch {
+            runCatchingCancellable {
+                jsonCacheDao?.upsert(
+                    TmdbJsonCacheEntity(key = diskKey, json = json, updatedAt = at)
+                )
             }
         }
     }
 
     /**
-     * Profile-switch isolation: MDBList auth is per-PROFILE (scoped prefs),
-     * so every process-wide snapshot here can belong to a different account
-     * once the user switches. [invalidateWatchedSnapshot] is the single drop
-     * point for both blobs, so this is an alias with the switch-time name.
+     * The profile switch's own drop: MEMORY ONLY.
+     *
+     * A switch used to delete the outgoing profile's disk rows with
+     * [clearTransientCaches], so switching back inside the six-hour disk window
+     * re-downloaded the whole watched history even though the row was still
+     * valid for that profile. The isolation the switch needs does not come from
+     * the delete: the memory cache is key-stamped ([cachedSnapshotKey],
+     * [cachedPlaybackKey]) and the disk rows are per-key
+     * ([snapshotDiskKey], [playbackDiskKey]), so the incoming profile can never
+     * be served the outgoing one's data. What is left is staleness on return,
+     * bounded by the same six-hour window a cold start already accepts.
+     */
+    fun clearTransientMemory() {
+        snapshotGeneration += 1
+        cachedSnapshot = null
+        cachedSnapshotAt = 0L
+        cachedSnapshotKey = ""
+        cachedPlayback = null
+        cachedPlaybackAt = 0L
+        cachedPlaybackKey = ""
+    }
+
+    /**
+     * Profile-switch isolation, the FULL drop: MDBList auth is per-PROFILE
+     * (scoped prefs), so every process-wide snapshot here can belong to a
+     * different account once the user switches. [invalidateWatchedSnapshot] is
+     * the single drop point for both blobs, so this is an alias with the
+     * switch-time name.
+     *
+     * A routine switch calls [clearTransientMemory] instead, which keeps the
+     * per-key disk rows; this one is for a caller that must not leave anything
+     * behind for the profile being left.
      */
     fun clearTransientCaches() {
         invalidateWatchedSnapshot()
@@ -1961,6 +2180,53 @@ object MdbListClient {
     // ------------------------------------------------------------------
     // Lists + Watchlist section — Library tab reads and writes.
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // List reads, cached
+    //
+    // A pinned rail re-reads its list on EVERY Home entry, and the client had
+    // no cache for the account's own lists at all: the public directories have
+    // had one for a while, the lists a viewer pins to Home did not. A list under
+    // 1,000 items is one request per load, a larger one is one per page
+    // ([walkListItems], limit 1000) - daily, per device, out of a 1,000/day key
+    // three devices share. The entries are invalidated by the writes that move
+    // them (add/remove/create/rename/delete), so a change the viewer just made
+    // shows at once and only a change made on ANOTHER device waits out the TTL.
+    // ------------------------------------------------------------------
+    private val listItemsCache = MdbListReadCache<List<MdbListEntry>>(LIST_ITEMS_TTL_MS)
+    private val userListsCache = MdbListReadCache<List<MdbListUserList>>(LIST_ITEMS_TTL_MS)
+
+    /**
+     * A cache key carrying the KEY's TAG, never the key: this object is
+     * process-wide and its entries would otherwise be a place the secret lives.
+     */
+    private fun listItemsCacheKey(apiKey: String, listId: Int) =
+        "${keyTag(apiKey)}:list:$listId"
+
+    private fun watchlistCacheKey(apiKey: String) = "${keyTag(apiKey)}:watchlist"
+
+    private fun userListsCacheKey(apiKey: String) = "${keyTag(apiKey)}:lists"
+
+    /**
+     * The day's spend in one line for COPY DIAGNOSTICS (see
+     * [mdbListBudgetLine] for the format and why no key material appears).
+     *
+     * Reads the SAME per-key record the interceptor enforces - the in-memory
+     * bucket, rolled over against the persisted counter by [ensureBudget] - so
+     * the line cannot describe a spend the interceptor does not see.
+     */
+    fun localBudgetLine(context: Context): String {
+        val key = apiKey(context)
+        if (key.isBlank()) return "mdblist: not configured"
+        val tag = keyTag(key)
+        val budget = budgets.getOrPut(tag) { KeyBudget() }
+        ensureBudget(budget, tag)
+        return mdbListBudgetLine(
+            count = budget.count.get(),
+            limitedUntilMs = budget.limitedUntilMs,
+            nowMs = System.currentTimeMillis()
+        )
+    }
 
     /** Shared GET returning a parsed body string, or null when not 2xx. */
     private suspend fun getString(url: String): String? =
@@ -2055,8 +2321,10 @@ object MdbListClient {
     suspend fun getUserListsOrNull(context: Context): List<MdbListUserList>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
+        val cacheKey = userListsCacheKey(apiKey)
+        userListsCache.get(cacheKey)?.let { return it }
         val body = getString("$BASE/lists/user?apikey=$apiKey") ?: return null
-        return runCatching {
+        val lists = runCatching {
             val arr = JSONArray(body)
             (0 until arr.length()).mapNotNull { i ->
                 val obj = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -2070,6 +2338,10 @@ object MdbListClient {
             }
         // An unparseable body is not an answer about which lists exist.
         }.getOrNull()
+        // Same rule as [getListItems]: only an ANSWER is cached. A failure here
+        // must stay a null, or the reconcile reads it as "every list is gone".
+        if (lists != null) userListsCache.put(cacheKey, lists)
+        return lists
     }
 
     /**
@@ -2088,7 +2360,9 @@ object MdbListClient {
     ): List<MdbListEntry>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
-        return walkListItems(apiKey) { cursor ->
+        val cacheKey = listItemsCacheKey(apiKey, listId)
+        listItemsCache.get(cacheKey)?.let { return it }
+        val walked = walkListItems(apiKey) { cursor ->
             buildString {
                 append("$BASE/lists/$listId/items?apikey=$apiKey&limit=1000")
                 if (!cursor.isNullOrBlank()) {
@@ -2097,6 +2371,10 @@ object MdbListClient {
                 }
             }
         }
+        // An UNFINISHED walk is not cached: null has to keep reaching the
+        // reconcile as "no answer", never as an empty list.
+        if (walked != null) listItemsCache.put(cacheKey, walked)
+        return walked
     }
 
     /**
@@ -2177,7 +2455,11 @@ object MdbListClient {
             "$BASE/lists/$listId/items/add?apikey=$apiKey",
             payload,
             validateAddResult = true
-        )
+        ) {
+            // The change the viewer just made shows at once: this list's read
+            // is dropped, every other list keeps its cached one.
+            listItemsCache.invalidate(listItemsCacheKey(apiKey, listId))
+        }
     }
 
     /** POST /lists/{id}/items/remove — remove entries from a list. */
@@ -2197,7 +2479,9 @@ object MdbListClient {
             apiKey,
             "$BASE/lists/$listId/items/remove?apikey=$apiKey",
             payload
-        )
+        ) {
+            listItemsCache.invalidate(listItemsCacheKey(apiKey, listId))
+        }
     }
 
     /** POST /lists/user/add — create a new personal list. */
@@ -2226,12 +2510,16 @@ object MdbListClient {
                     }
                     val root = JSONObject(response.body?.string().orEmpty())
                     val id = root.optInt("id", -1)
-                    if (id <= 0) null
+                    val created = if (id <= 0) null
                     else MdbListUserList(
                         id = id,
                         name = root.optString("name", name),
                         itemCount = 0
                     )
+                    // The account's list SET moved. The new list has no items
+                    // entry to drop - nothing could have read it yet.
+                    if (created != null) userListsCache.invalidate(userListsCacheKey(apiKey))
+                    created
                 }
             }.getOrNull()
         }
@@ -2277,7 +2565,10 @@ object MdbListClient {
                         JSONObject(response.body?.string().orEmpty())
                     }.getOrNull()
                     // An unreadable body is taken at the status code's word.
-                    root?.optBoolean("success", true) ?: true
+                    val ok = root?.optBoolean("success", true) ?: true
+                    // The name lives in the list SET, not in that list's items.
+                    if (ok) userListsCache.invalidate(userListsCacheKey(apiKey))
+                    ok
                 }
             }.getOrDefault(false)
         }
@@ -2312,7 +2603,15 @@ object MdbListClient {
                     val root = runCatching {
                         JSONObject(response.body?.string().orEmpty())
                     }.getOrNull()
-                    root?.optBoolean("success", true) ?: true
+                    val ok = root?.optBoolean("success", true) ?: true
+                    // Both entries name a list that no longer exists: the SET
+                    // loses its row, and its items read (pinned as a Home rail)
+                    // is dropped rather than served for another TTL.
+                    if (ok) {
+                        userListsCache.invalidate(userListsCacheKey(apiKey))
+                        listItemsCache.invalidate(listItemsCacheKey(apiKey, listId))
+                    }
+                    ok
                 }
             }.getOrDefault(false)
         }
@@ -2329,6 +2628,8 @@ object MdbListClient {
     suspend fun getWatchlist(context: Context): List<MdbListEntry>? {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
+        val cacheKey = watchlistCacheKey(apiKey)
+        watchlistCache.get(cacheKey)?.let { return it }
 
         val out = mutableListOf<MdbListEntry>()
         var cursor: String? = null
@@ -2366,7 +2667,10 @@ object MdbListClient {
             guard += 1
         } while (!cursor.isNullOrBlank() && guard < 30)
         if (!cursor.isNullOrBlank()) return null
-        return out.distinctBy { entryIdentity(it) }
+        val entries = out.distinctBy { entryIdentity(it) }
+        // Only a finished walk is an answer (see [getListItems]).
+        watchlistCache.put(cacheKey, entries)
+        return entries
     }
 
     /** POST /watchlist/items/add — add to the MDBList watchlist. */
@@ -2386,7 +2690,9 @@ object MdbListClient {
             "$BASE/watchlist/items/add?apikey=$apiKey",
             payload,
             validateAddResult = true
-        )
+        ) {
+            watchlistCache.invalidate(watchlistCacheKey(apiKey))
+        }
     }
 
     /** POST /watchlist/items/remove — remove from the watchlist. */
@@ -2405,7 +2711,9 @@ object MdbListClient {
             apiKey,
             "$BASE/watchlist/items/remove?apikey=$apiKey",
             payload
-        )
+        ) {
+            watchlistCache.invalidate(watchlistCacheKey(apiKey))
+        }
     }
 
     /** Builds {movies:[{ids:{...}}],shows:[...]} from library entries. */

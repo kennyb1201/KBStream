@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideMatchSectionLines
 import com.kennyb1201.kbstream.data.library.TasteRatingSubmission
+import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -82,6 +83,11 @@ object Diagnostics {
         report.appendLine(profileLine())
         report.appendLine(cleanupLine(app))
         report.appendLine(syncLine())
+        // The MDBList key's day, as the interceptor sees it. The spend was
+        // previously invisible: it lived in SharedPreferences and only the
+        // budget guard read it, so "the key ran out again" could not be
+        // answered from a capture. Counts only - never key material.
+        report.appendLine(MdbListClient.localBudgetLine(app))
         report.appendLine(localLine(app))
         report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }

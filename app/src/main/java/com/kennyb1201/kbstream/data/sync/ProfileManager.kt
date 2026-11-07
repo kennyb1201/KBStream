@@ -284,7 +284,12 @@ object ProfileManager {
         // snapshot and paused-session (Continue Watching) caches otherwise
         // answered the incoming profile with the profile just left's
         // /sync/playback list for the rest of each TTL.
-        runCatching { com.kennyb1201.kbstream.data.mdblist.MdbListClient.clearTransientCaches() }
+        //
+        // MEMORY only: the disk rows are already per-key, so the incoming
+        // profile can never be served the outgoing one's, and deleting them
+        // made a switch-back inside the six-hour window re-download the whole
+        // watched history for nothing.
+        runCatching { com.kennyb1201.kbstream.data.mdblist.MdbListClient.clearTransientMemory() }
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             SupabaseSync.onProfileSwitched(appContext)
             // The TV-launcher Watch Next channel is a GLOBAL OS surface but
