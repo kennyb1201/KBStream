@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.trakt.TraktWatchedSnapshot
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import java.time.LocalDate
@@ -133,15 +134,69 @@ internal fun nextAirStillUpcoming(
         return false
     }
 
+    if (airDateIsPast(airDate, today)) return false
+
+    return true
+}
+
+/**
+ * Whether an episode's air date is already behind [today].
+ *
+ * A missing or unparseable date is NOT past: the rail's rule is that an
+ * unknown date is never on its own a reason to hide an episode (see
+ * [nextAirStillUpcoming] and the schedule builder's second-source correction).
+ * Shared with [firstUnairedEpisode] so the two cannot disagree about what
+ * "past" means.
+ */
+private fun airDateIsPast(airDate: String?, today: LocalDate): Boolean {
     val date =
         airDate?.let { raw ->
             runCatching { LocalDate.parse(raw) }.getOrNull()
         }
 
-    if (date != null && date.isBefore(today)) return false
-
-    return true
+    return date != null && date.isBefore(today)
 }
+
+/**
+ * The first episode in a season list that is still worth advertising: not
+ * already watched, and not already aired.
+ *
+ * This is the derivation the Upcoming rail needs when TMDB's
+ * `next_episode_to_air` is stale. That field is read out of a series detail
+ * cached for up to 30 days on disk, and it rolls every week for a show
+ * mid-season - so a cached detail can still name the episode the viewer just
+ * watched, or one that aired days ago, and both Upcoming legs would drop the
+ * card instead of showing the real next episode. The season episode list is a
+ * different, fresher fetch (the one Detail already shows), so the card can be
+ * re-derived from it.
+ *
+ * The three filters, in the order the rail's own rules apply them:
+ *  - a row with no real episode number is not an episode (unnamed/`E00` rows
+ *    survive in some season lists - see `namedEpisodesOnly`);
+ *  - [startEpisode] walks past everything before it, for the tracker leg whose
+ *    target is Simkl's own next episode (an unwatched episode BEFORE that
+ *    target is not what the rail should advertise);
+ *  - the watched set comes from the candidate's own evidence, and a past air
+ *    date is the evidence the watched set cannot see.
+ *
+ * [episodes] is sorted by episode number first, so the answer does not depend
+ * on the order a cache happened to store the list in. [today] is injectable so
+ * the boundary can be tested without a clock.
+ */
+internal fun firstUnairedEpisode(
+    episodes: List<ResolvedEpisode>,
+    watchedEpisodes: Set<Pair<Int, Int>>,
+    seasonNumber: Int,
+    startEpisode: Int? = null,
+    today: LocalDate = LocalDate.now()
+): ResolvedEpisode? =
+    episodes
+        .asSequence()
+        .filter { episode -> namedEpisodeNumber(episode.episodeNumber) != null }
+        .filter { episode -> startEpisode == null || episode.episodeNumber >= startEpisode }
+        .sortedBy { episode -> episode.episodeNumber }
+        .filter { episode -> (seasonNumber to episode.episodeNumber) !in watchedEpisodes }
+        .firstOrNull { episode -> !airDateIsPast(episode.airDate, today) }
 
 /**
  * One candidate per show with completed episodes, most recently completed

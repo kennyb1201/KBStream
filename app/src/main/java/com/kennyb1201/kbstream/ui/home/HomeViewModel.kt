@@ -3688,15 +3688,21 @@ Log.d(
             seriesDetailFor(candidate.parentId)
                 ?: return null
 
-        val air =
-            detail.nextEpisodeToAir
-                ?: return null
-
         // TMDB's next_episode_to_air goes stale: the cached detail can still
         // name an episode that has since aired (and that this viewer has since
-        // watched). A "next" episode that is already watched - or whose air
-        // date is already behind us - is not next; emitting it builds the
-        // phantom "Next up: S04E01" card for a finished show. An air date of
+        // watched). Refusing the card on that evidence hid every mid-season
+        // next episode from the rail, because the field rolls every week while
+        // the detail it comes from is cached for up to 30 days. So the stale
+        // field is no longer the end of the card: when it is unusable the next
+        // unaired episode is re-derived from the season episode list, which is
+        // the fresher fetch Detail already shows (see
+        // [upcomingAirForCaughtUp] and [deriveNextUpcomingAir]).
+        val air =
+            upcomingAirForCaughtUp(detail, candidate)
+                ?: return null
+
+        // Re-checked rather than trusted: the happy path answered with TMDB's
+        // field, and the derived answer passes by construction. An air date of
         // TODAY is deliberately kept, matching the schedule builder.
         if (
             !nextAirStillUpcoming(
@@ -3783,6 +3789,188 @@ Log.d(
             nextEpisodeAir = air,
             tmdbId = detail.id
         )
+    }
+
+    /**
+     * The next episode a caught-up card should advertise: TMDB's own field when
+     * it is still usable, else one re-derived from the season episode list.
+     *
+     * "Usable" is exactly [nextAirStillUpcoming]'s answer - not already watched
+     * and not past-dated - because that is the rule the card is built on. A
+     * healthy card therefore takes NO extra fetch and its path is identical to
+     * before this function existed; only a stale or null field pays for the
+     * derivation, and only for the candidates that reach this builder (the
+     * capped caught-up set).
+     *
+     * The starting season is the stale field's own season when there is one
+     * (the show is where TMDB last thought it was), else the last AIRED season,
+     * which is where a null field leaves the show. Two seasons are tried at
+     * most: a season finale exhausted today is a premiere in the next season
+     * (the common season-boundary case), and a show with nothing dated in two
+     * seasons has nothing this rail can advertise.
+     *
+     * Returns null exactly where the builder used to return null - no next
+     * episode to name, no resolvable IMDb id for the season fetch, or nothing
+     * future found - so a finished show still gets no phantom card.
+     */
+    private suspend fun upcomingAirForCaughtUp(
+        detail: TmdbDetail,
+        candidate: CaughtUpShowCandidate
+    ): TmdbEpisodeAirInfo? {
+
+        val detailAir = detail.nextEpisodeToAir
+
+        if (
+            detailAir != null &&
+            nextAirStillUpcoming(
+                seasonNumber = detailAir.seasonNumber,
+                episodeNumber = detailAir.episodeNumber,
+                airDate = detailAir.airDate,
+                watchedEpisodes = candidate.watchedEpisodes
+            )
+        ) {
+            return detailAir
+        }
+
+        val startSeason =
+            detailAir?.seasonNumber
+                ?: detail.lastEpisodeToAir?.seasonNumber
+                ?: return null
+
+        // The season fetch is addressed by IMDb id (see getSeasonEpisodes):
+        // take it from the card when it is already an IMDb id, else from the
+        // cached resolution the rest of the player uses.
+        val imdbId =
+            candidate.parentId
+                .takeIf { it.startsWith("tt", ignoreCase = true) }
+                ?: tmdbRepository.resolveImdbId(detail.id, "series")
+                ?: return null
+
+        return deriveNextUpcomingAir(
+            detail = detail,
+            startSeason = startSeason,
+            imdbId = imdbId,
+            watchedEpisodes = candidate.watchedEpisodes
+        )
+    }
+
+    /**
+     * The tracker leg's next-air info: the resolved target's own episode when
+     * the detail's field is past, else the season list's answer for it.
+     *
+     * The difference from [upcomingAirForCaughtUp] is what the card already
+     * knows: Simkl tells us WHICH episode is next ([resolvedSeason],
+     * [resolvedEpisode]) while the detail's `next_episode_to_air` may be a week
+     * old. The two are compared, and only when they agree AND the episode still
+     * passes [nextAirStillUpcoming] is the field taken as-is - otherwise the
+     * season list is asked for the first episode at or after the target that is
+     * not already past. The watched set is empty here on purpose: this leg's
+     * "next" is the tracker's own target, not a function of local history.
+     *
+     * When the derivation finds nothing the detail's field is captured exactly
+     * as before, so the schedule builder's existing gates (and its TVmaze
+     * backstop) decide - this leg never invents an episode.
+     */
+    private suspend fun nextAirForResolvedTarget(
+        detail: TmdbDetail,
+        imdbId: String?,
+        resolvedSeason: Int?,
+        resolvedEpisode: Int?,
+        captured: TmdbEpisodeAirInfo?
+    ): TmdbEpisodeAirInfo? {
+
+        // No resolved target, no seed: this leg would then be deriving from
+        // the stale field it distrusts, which is not what the rail asks for.
+        val targetSeason = resolvedSeason ?: return captured
+        val targetEpisode = resolvedEpisode ?: return captured
+
+        if (
+            captured != null &&
+            captured.seasonNumber == targetSeason &&
+            captured.episodeNumber == targetEpisode &&
+            nextAirStillUpcoming(
+                seasonNumber = captured.seasonNumber,
+                episodeNumber = captured.episodeNumber,
+                airDate = captured.airDate,
+                watchedEpisodes = emptySet()
+            )
+        ) {
+            return captured
+        }
+
+        val resolvedImdbId =
+            imdbId
+                ?.takeIf { it.startsWith("tt", ignoreCase = true) }
+                ?: tmdbRepository.resolveImdbId(detail.id, "series")
+                ?: return captured
+
+        return deriveNextUpcomingAir(
+            detail = detail,
+            startSeason = targetSeason,
+            imdbId = resolvedImdbId,
+            watchedEpisodes = emptySet(),
+            startEpisode = targetEpisode
+        ) ?: captured
+    }
+
+    /**
+     * Fetches at most two season episode lists ([startSeason], then the next
+     * season only when the detail says it exists) and returns the first episode
+     * [firstUnairedEpisode] accepts. Null when neither season has one.
+     *
+     * The fetch is gated by [tmdbLookupSemaphore] like every other TMDB lookup
+     * on this path, so a cold derivation cannot burst the API, and it is served
+     * from the season cache in the common case (Detail and the season browser
+     * already warm it).
+     */
+    private suspend fun deriveNextUpcomingAir(
+        detail: TmdbDetail,
+        startSeason: Int,
+        imdbId: String,
+        watchedEpisodes: Set<Pair<Int, Int>>,
+        startEpisode: Int? = null
+    ): TmdbEpisodeAirInfo? {
+
+        val nextSeason =
+            (startSeason + 1)
+                .takeIf { number -> detail.seasons.any { it.seasonNumber == number } }
+
+        listOfNotNull(startSeason, nextSeason).forEach { season ->
+
+            val episodes =
+                try {
+                    tmdbLookupSemaphore.withPermit {
+                        tmdbRepository.getSeasonEpisodes(
+                            tvId = detail.id,
+                            season = season,
+                            imdbId = imdbId
+                        )
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+
+            val picked =
+                firstUnairedEpisode(
+                    episodes = episodes,
+                    watchedEpisodes = watchedEpisodes,
+                    seasonNumber = season,
+                    // The tracker leg walks from ITS target in the target
+                    // season only; a later season starts at its first episode.
+                    startEpisode = startEpisode?.takeIf { season == startSeason }
+                )
+
+            if (picked != null) {
+                return TmdbEpisodeAirInfo(
+                    seasonNumber = season,
+                    episodeNumber = picked.episodeNumber,
+                    airDate = picked.airDate,
+                    name = picked.name
+                )
+            }
+        }
+
+        return null
     }
 
     /**
@@ -7048,6 +7236,12 @@ var episodesTotal: Int? = null
         // below; threaded onto the built UpNextItem for the Upcoming rail.
         var capturedNextAirInfo: TmdbEpisodeAirInfo? = null
 
+        // The detail itself, kept for the Upcoming rail's stale-field repair
+        // (see [nextAirForResolvedTarget]): the capture above happens before
+        // the tracker's target pair is resolved, and the repair needs the
+        // season list and the show id from the same response.
+        var upcomingDetail: TmdbDetail? = null
+
         // TMDB show id resolved with the detail (Upcoming title fallback).
         var capturedTmdbId: Int? = null
 
@@ -7074,6 +7268,7 @@ var episodesTotal: Int? = null
             // detail response is already fetched here.
             capturedNextAirInfo = detail?.nextEpisodeToAir
             capturedTmdbId = detail?.id
+            upcomingDetail = detail
 
             if (
                 posterUrl.isNullOrBlank()
@@ -7237,6 +7432,25 @@ episodesTotal =
                         )
                 }
             }
+        }
+
+        // The tracker leg keys its card's AIR INFO off this capture while its
+        // card's PAIR is Simkl's own resolved target - two answers to one
+        // question, and the detail's answer can be a week stale (see
+        // [nextAirForResolvedTarget]). Repair it here, after the target pair is
+        // final and before the card is assembled, so the schedule builder is
+        // not asked to hide a card whose only "next" claim is an episode that
+        // already aired.
+        val capturedDetail = upcomingDetail
+        if (capturedDetail != null && item.mediaType == "series") {
+            capturedNextAirInfo =
+                nextAirForResolvedTarget(
+                    detail = capturedDetail,
+                    imdbId = item.imdbId,
+                    resolvedSeason = resolvedSeason,
+                    resolvedEpisode = resolvedEpisode,
+                    captured = capturedNextAirInfo
+                )
         }
 
         if (
