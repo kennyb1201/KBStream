@@ -4,6 +4,8 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.bingecat.BingeCatRepository
 import com.kennyb1201.kbstream.data.bingecat.bingecatShelfId
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.mdblist.MdbListUserList
+import com.kennyb1201.kbstream.data.publiclists.PublicListCard
 import com.kennyb1201.kbstream.data.publiclists.PublicListsAnswer
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.trakt.TraktRepository
@@ -79,7 +81,7 @@ object LibraryHomeRailReconcile {
      * the pin itself use, so a list cannot be known by one name here and
      * another there.
      *
-     * A Trakt source answers with BOTH of its reads or with neither: a saved
+     * A remote source answers with BOTH of its reads or with neither: a saved
      * community list is a Library row on the same rail as an own list (the
      * Library's full refresh reads them together for the same reason), so an
      * own-lists answer with the liked read failed would read every pinned saved
@@ -130,19 +132,15 @@ object LibraryHomeRailReconcile {
         if (LibrarySource.MDBLIST_LIST.name in wanted && MdbListClient.isConfigured(context)) {
             // OrNull: a failed MDBList read answers empty from the plain call,
             // and an empty answer here would be read as "every list is gone".
-            runCatchingCancellable { MdbListClient.getUserListsOrNull(context) }.getOrNull()
-                ?.let { lists ->
-                    live[LibrarySource.MDBLIST_LIST.name] = lists.mapNotNullTo(mutableSetOf()) { list ->
-                        libraryHomeRailId(
-                            LibraryList(
-                                id = list.id,
-                                name = list.name,
-                                itemCount = list.itemCount,
-                                source = LibrarySource.MDBLIST_LIST
-                            )
-                        )
-                    }
-                }
+            val own = runCatchingCancellable { MdbListClient.getUserListsOrNull(context) }.getOrNull()
+            // Only a Loaded answer is a statement about which lists exist:
+            // NotConnected / Failed / Blocked mean this source did not answer,
+            // and the map then leaves its pins alone. Same rule as the Trakt leg.
+            val liked = runCatchingCancellable { MdbListClient.likedPublicLists(context) }.getOrNull()
+                ?.let { answer -> (answer as? PublicListsAnswer.Loaded)?.value }
+            mdbListLiveListIds(own, liked)?.let { ids ->
+                live[LibrarySource.MDBLIST_LIST.name] = ids
+            }
         }
 
         if (LibrarySource.BINGECAT_LIST.name in wanted) {
@@ -186,5 +184,41 @@ object LibraryHomeRailReconcile {
         }
 
         return live
+    }
+
+    /**
+     * The MDBList source's live ids, or null when that source did not answer.
+     *
+     * Both reads behind the source must have answered before either
+     * contributes: an own-lists answer with the liked read failed would
+     * otherwise read every pinned saved list as gone (same rule as the Library
+     * refresh's live-set build). A successful read with a genuinely empty set
+     * is a real answer, so it still publishes.
+     *
+     * Own lists map through [libraryHomeRailId] on the row, exactly as they are
+     * drawn, which for an MDBList list is `"id:<n>"`. A LIKED (saved public)
+     * list is a row on the same rail whose `remoteId` is the card's ref, so its
+     * pin carries the bare ref - that ref is added verbatim here, because
+     * running it through [libraryHomeRailId] on a synthesized row would answer
+     * `"id:<n>"` and never match the pin. Missing that mapping is what pruned
+     * every liked MDBList pin at launch.
+     */
+    internal fun mdbListLiveListIds(
+        own: List<MdbListUserList>?,
+        liked: List<PublicListCard>?
+    ): Set<String>? {
+        if (own == null || liked == null) return null
+        val ids = own.mapTo(mutableSetOf()) { list ->
+            libraryHomeRailId(
+                LibraryList(
+                    id = list.id,
+                    name = list.name,
+                    itemCount = list.itemCount,
+                    source = LibrarySource.MDBLIST_LIST
+                )
+            )
+        }
+        liked.mapTo(ids) { card -> card.ref }
+        return ids
     }
 }
