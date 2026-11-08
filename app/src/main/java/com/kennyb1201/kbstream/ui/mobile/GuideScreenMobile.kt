@@ -30,6 +30,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -45,7 +47,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -1200,14 +1201,23 @@ private fun MobileGuideTopBar(
             }
         }
         if (onToggleView != null) {
-            // The label IS the state, as on TV: a word instead of an icon is the
-            // only way a tap target can say which view is up.
-            TextButton(onClick = onToggleView) {
-                Text(
-                    text = if (guideView == GuideViewMode.GRID) "GRID" else "LIST",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
+            // The glyph IS the state, the way the word was (F1): a grid icon while
+            // the grid is up, a list icon while the list is, accent-tinted so the
+            // active view still reads against the row's KBTextHi icons. A TalkBack
+            // name because an icon-only button is silent otherwise.
+            IconButton(onClick = onToggleView) {
+                Icon(
+                    imageVector = if (guideView == GuideViewMode.GRID) {
+                        Icons.Filled.GridView
+                    } else {
+                        Icons.AutoMirrored.Filled.List
+                    },
+                    contentDescription = if (guideView == GuideViewMode.GRID) {
+                        "Grid view"
+                    } else {
+                        "List view"
+                    },
+                    tint = KBAccent
                 )
             }
         }

@@ -278,6 +278,56 @@ class GuideScreenMobileContractTest {
     }
 
     @Test
+    fun `the mobile header's view toggle is an icon that names the view it is in`() {
+        val mobile = mobileGuide()
+        val header = mobile
+            .substringAfter("private fun MobileGuideTopBar(")
+            .substringBefore("private fun MobileGuideChannelRow(")
+        val toggle = header
+            .substringAfter("IconButton(onClick = onToggleView)")
+            .substringBefore("if (onOpenSports != null)")
+        assertTrue(
+            "the toggle must be an IconButton holding an Icon",
+            header.contains("IconButton(onClick = onToggleView)") &&
+                toggle.contains("tint = KBAccent")
+        )
+        assertTrue(
+            "the glyph must show the current view - grid while the grid is up, " +
+                "list while the list is, as on TV",
+            toggle.contains("imageVector = if (guideView == GuideViewMode.GRID)") &&
+                toggle.contains("Icons.Filled.GridView") &&
+                toggle.contains("Icons.AutoMirrored.Filled.List") &&
+                toggle.indexOf("Icons.Filled.GridView") <
+                toggle.indexOf("Icons.AutoMirrored.Filled.List")
+        )
+        assertTrue(
+            "an icon-only button is silent, so it must be named for TalkBack",
+            toggle.contains("contentDescription = if (guideView == GuideViewMode.GRID)") &&
+                toggle.contains("\"Grid view\"") &&
+                toggle.contains("\"List view\"")
+        )
+        assertTrue(
+            "no word button may survive in the header, and the old reasoning with it",
+            !header.contains("TextButton(") &&
+                !header.contains("\"GRID\"") &&
+                !header.contains("\"LIST\"") &&
+                !mobile.contains("a word instead of an icon")
+        )
+        assertTrue(
+            "the toggle must stay in the row's own order: after the groups button, " +
+                "before sports",
+            header.indexOf("contentDescription = \"Groups\"") <
+                header.indexOf("IconButton(onClick = onToggleView)") &&
+                header.indexOf("IconButton(onClick = onToggleView)") <
+                header.indexOf("contentDescription = \"Sports hub\"")
+        )
+        assertTrue(
+            "mobile has no D-pad here, so the toggle takes no focus requester",
+            !header.contains("focusRequester")
+        )
+    }
+
+    @Test
     fun `the mobile guide offers the tv group chips`() {
         val mobile = mobileGuide()
         assertTrue(
