@@ -1,7 +1,15 @@
 package com.kennyb1201.kbstream.ui.iptv
 
+import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -116,6 +124,17 @@ internal fun GuideGridView(
     scheduleEndMs: Long?,
     /** Bumped by the header's Jump to now; 0 on first composition. */
     jumpToNowSignal: Int,
+    /**
+     * Bumped by the header's Down, so focus comes back to where it left (F1e).
+     * The screen owns the header, this grid owns the focus homes.
+     */
+    returnFocusSignal: Int,
+    /**
+     * Whether the groups sidebar is showing. Owned by the screen because the
+     * header names the current group while it is hidden (F1f).
+     */
+    sidebarVisible: Boolean,
+    onSidebarVisibleChange: (Boolean) -> Unit,
     /** The header control Up out of the first row lands on. */
     headerFocusRequester: FocusRequester,
     onPlay: (IptvChannelWithEpg) -> Unit,
@@ -131,7 +150,9 @@ internal fun GuideGridView(
     var focusedRow by remember { mutableStateOf(0) }
     var focusedCellId by remember { mutableStateOf<String?>(null) }
     var pendingFocus by remember { mutableStateOf<GridPendingFocus?>(null) }
+    var pendingSidebarFocus by remember { mutableStateOf(false) }
     var focusLiveOnNextWindow by remember { mutableStateOf(false) }
+    var focusHome by remember { mutableStateOf(GridFocusHome.CHANNEL) }
 
     val rowListState = rememberLazyListState()
     val timeScroll = rememberScrollState()
@@ -243,12 +264,89 @@ internal fun GuideGridView(
         }
     }
 
+    // F1b: the sidebar has to be composed before its requester can take focus,
+    // so LEFT from a channel posts a target and this effect lands it - the same
+    // retry shape as the grid's own pendingFocus, and it says so when it gives
+    // up (F2c: a handoff that dies silently is the whole bug).
+    LaunchedEffect(pendingSidebarFocus, sidebarVisible, groups, selectedGroup) {
+        if (!pendingSidebarFocus || !sidebarVisible) return@LaunchedEffect
+        val label = groups.getOrNull(groups.indexOf(selectedGroup).coerceAtLeast(0))
+        var landed = false
+        var attempts = 0
+        while (attempts < 8) {
+            val requester = label?.let { sidebarRequesters[it] }
+            if (requester != null && runCatching { requester.requestFocus() }.getOrDefault(false)) {
+                landed = true
+                break
+            }
+            withFrameNanos { }
+            attempts++
+        }
+        pendingSidebarFocus = false
+        if (landed) focusHome = GridFocusHome.SIDEBAR
+        Log.i(
+            "GUIDE",
+            "grid handoff channel->sidebar group=$label landed=$landed attempts=$attempts"
+        )
+    }
+
+    // F1e: Down out of the header returns to the last focus home - the sidebar
+    // row while it is showing, otherwise the channel or cell the viewer was on
+    // (a hidden sidebar stays hidden). The handoff remembers which of the two
+    // grid homes it was, instead of always assuming the sidebar.
+    LaunchedEffect(returnFocusSignal, sidebarVisible) {
+        if (returnFocusSignal <= 0) return@LaunchedEffect
+        if (sidebarVisible) {
+            pendingSidebarFocus = true
+            return@LaunchedEffect
+        }
+        val rowIndex = focusedRow.coerceIn(0, rows.lastIndex.coerceAtLeast(0))
+        val cell = if (focusHome == GridFocusHome.CELL) {
+            rows.getOrNull(rowIndex)?.cells?.firstOrNull { it.id == focusedCellId }
+        } else {
+            null
+        }
+        pendingFocus = GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)
+    }
+
     fun focusCell(rowIndex: Int, cell: GridCell) {
         pendingFocus = GridPendingFocus(rowIndex, cell.id, channelFocus = false)
     }
 
     fun focusChannel(rowIndex: Int) {
         pendingFocus = GridPendingFocus(rowIndex, cellId = null, channelFocus = true)
+    }
+
+    /**
+     * F1a, F2a-F2c: RIGHT out of a group enters the grid on the row the viewer
+     * was on, and the sidebar goes away with it (F-E: TiviMate hides it while
+     * focus is in the grid).
+     *
+     * The DIRECT request is the one that has to work - the target row is on
+     * screen in the reported case, so a handoff that only ever posts an async
+     * target is the silent stay that was reported. The pending path stays as
+     * the fallback for rows that still need scrolling into place, and one GUIDE
+     * line records which path ran and what it returned.
+     */
+    fun enterGrid(rowIndex: Int) {
+        val row = rows.getOrNull(rowIndex) ?: return
+        val requester = channelRequesters[row.channelKey]
+        val direct = requester != null &&
+            runCatching { requester.requestFocus() }.getOrDefault(false)
+        if (direct) {
+            focusedRow = rowIndex
+            focusedCellId = null
+            focusHome = GridFocusHome.CHANNEL
+        }
+        // F2b: the hide rides with the request, never after it - the channel
+        // column lives outside the sidebar, so focus has a home either way.
+        onSidebarVisibleChange(false)
+        if (!direct) focusChannel(rowIndex)
+        Log.i(
+            "GUIDE",
+            "grid handoff sidebar->channel row=$rowIndex channel=${row.channelKey} " +
+                "requester=${requester != null} direct=$direct fallback=${!direct}"
+        )
     }
 
     fun activateCell(item: IptvChannelWithEpg, cell: GridCell) {
@@ -312,10 +410,24 @@ internal fun GuideGridView(
 
     fun onChannelKey(rowIndex: Int, key: Key): Boolean = when (key) {
         Key.DirectionLeft -> {
+            // F1b: the sidebar comes back and takes focus, on the current group.
+            // Direct first (it is composed the moment the state flips), pending
+            // as the fallback for the frames before it is.
+            onSidebarVisibleChange(true)
             val index = groups.indexOf(selectedGroup).coerceAtLeast(0)
-            sidebarRequesters[groups.getOrNull(index)]?.let { requester ->
-                runCatching { requester.requestFocus() }
+            val requester = sidebarRequesters[groups.getOrNull(index)]
+            val direct = requester != null &&
+                runCatching { requester.requestFocus() }.getOrDefault(false)
+            if (direct) {
+                focusHome = GridFocusHome.SIDEBAR
+            } else {
+                pendingSidebarFocus = true
             }
+            Log.i(
+                "GUIDE",
+                "grid handoff channel->sidebar row=$rowIndex group=$selectedGroup " +
+                    "requester=${requester != null} direct=$direct fallback=${!direct}"
+            )
             true
         }
         Key.DirectionRight -> {
@@ -361,8 +473,9 @@ internal fun GuideGridView(
             true
         }
         Key.DirectionRight -> {
-            // Back into the grid on the row the viewer was on (F3i).
-            if (rows.isNotEmpty()) focusChannel(focusedRow.coerceIn(0, rows.lastIndex))
+            // Into the grid on the row the viewer was on, and the sidebar
+            // leaves the way (F1a, F-E).
+            if (rows.isNotEmpty()) enterGrid(focusedRow.coerceIn(0, rows.lastIndex))
             true
         }
         Key.DirectionLeft -> true
@@ -378,15 +491,34 @@ internal fun GuideGridView(
     }
     val focusedItem = rows.getOrNull(focusedRow)?.item
 
-    Row(modifier = modifier.fillMaxSize()) {
-        GroupsSidebar(
-            groups = groups,
-            selectedGroup = selectedGroup,
-            groupCount = groupCount,
-            state = sidebarState,
-            requesters = sidebarRequesters,
-            onKey = ::onSidebarKey,
-        )
+    // F5b: 12dp under the detail strip, so no part of the grid sits flush to
+    // the bottom edge on a panel that crops (the reported cut-off row).
+    Row(modifier = modifier.fillMaxSize().padding(bottom = 12.dp)) {
+        // F1d: the sidebar slides away when focus enters the grid and slides
+        // back on LEFT. Reduced motion is the grid's existing hard cut.
+        AnimatedVisibility(
+            visible = sidebarVisible,
+            enter = if (reducedMotion) {
+                EnterTransition.None
+            } else {
+                slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+            },
+            exit = if (reducedMotion) {
+                ExitTransition.None
+            } else {
+                slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+            },
+        ) {
+            GroupsSidebar(
+                groups = groups,
+                selectedGroup = selectedGroup,
+                groupCount = groupCount,
+                state = sidebarState,
+                requesters = sidebarRequesters,
+                onKey = ::onSidebarKey,
+                onRowFocus = { focusHome = GridFocusHome.SIDEBAR },
+            )
+        }
 
         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
             // The sticky time header: the same shared scroll state as every row,
@@ -446,6 +578,7 @@ internal fun GuideGridView(
                             onFocus = {
                                 focusedRow = index
                                 focusedCellId = null
+                                focusHome = GridFocusHome.CHANNEL
                             },
                             onPlay = { onPlay(row.item) },
                         )
@@ -463,6 +596,7 @@ internal fun GuideGridView(
                             onCellFocus = { cell ->
                                 focusedRow = index
                                 focusedCellId = cell.id
+                                focusHome = GridFocusHome.CELL
                             },
                             onKey = { cell, key -> onCellKey(index, cell, key) },
                         )
@@ -495,13 +629,24 @@ private data class GridPendingFocus(
     val channelFocus: Boolean,
 )
 
+/**
+ * Where focus was last: what the header's Down returns to (F1e). The sidebar
+ * and the grid are different homes because a hidden sidebar must stay hidden
+ * while the viewer is in the grid.
+ */
+private enum class GridFocusHome { SIDEBAR, CHANNEL, CELL }
+
 /** The grid keys rows and cells by the playlist channel key the guide uses. */
 private fun gridChannelKey(item: IptvChannelWithEpg): String =
     item.channel.id.ifBlank { item.channel.streamUrl }
 
 /**
- * The groups sidebar (F2k): always visible in grid view, 220dp, name + visible
- * count, selected row highlighted, chain program -> channel -> sidebar -> channel.
+ * The groups sidebar (F2k): 220dp, name + visible count, selected row
+ * highlighted, chain program -> channel -> sidebar -> channel.
+ *
+ * It shows while the viewer is choosing a group and slides away once focus
+ * enters the grid (F1), the way TiviMate does it, so the channels get the full
+ * width. LEFT from a channel column brings it back.
  *
  * It only DISPLAYS the order; reordering lives in the guide's Manage hidden
  * dialog (F2k-g), the one place that already lists every group.
@@ -514,6 +659,7 @@ private fun GroupsSidebar(
     state: LazyListState,
     requesters: MutableMap<String, FocusRequester>,
     onKey: (Int, Key) -> Boolean,
+    onRowFocus: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -544,7 +690,10 @@ private fun GroupsSidebar(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(requester)
-                        .onFocusChanged { focused = it.isFocused }
+                        .onFocusChanged {
+                            focused = it.isFocused
+                            if (it.isFocused) onRowFocus()
+                        }
                         .onPreviewKeyEvent { event ->
                             event.type == KeyEventType.KeyDown && onKey(index, event.key)
                         }

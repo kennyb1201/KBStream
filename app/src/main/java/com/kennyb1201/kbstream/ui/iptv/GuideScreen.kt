@@ -33,6 +33,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
@@ -280,6 +282,14 @@ fun GuideScreen(
     }
     // Bumped by the header's Jump to now; the grid owns what it does with it.
     var jumpToNowSignal by remember { mutableStateOf(0) }
+    // F1a/F1f: the grid's groups sidebar hides while focus is in the grid, and
+    // the header names the current group while it is hidden. Owned here (not
+    // inside the grid) so the header can read it and so switching to the list
+    // and back does not leave it hidden with no way to see the title.
+    var gridSidebarVisible by remember(activeProfileId) { mutableStateOf(true) }
+    // Bumped by the header's Down, so the grid can return focus to the home it
+    // left (F1e).
+    var gridReturnFocusSignal by remember { mutableStateOf(0) }
     val viewToggleFocusRequester = remember { FocusRequester() }
 
     // Hidden groups and favorites are also written by the sync applier. Without
@@ -1495,9 +1505,24 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         .padding(horizontal = 24.dp, vertical = 18.dp)
                 ) {
                     GuideHeader(
-                        title = playlist?.name?.ifBlank { "IPTV" } ?: "IPTV",
+                        // F1f: with the sidebar away the title is the group the
+                        // viewer is in - the count line is gone on grid (F3),
+                        // so without this the group would be invisible until
+                        // LEFT. The list keeps the playlist's name.
+                        title = if (
+                            guideView == GuideViewMode.GRID &&
+                            !gridSidebarVisible &&
+                            selectedGroup.isNotBlank()
+                        ) {
+                            selectedGroup
+                        } else {
+                            playlist?.name?.ifBlank { "IPTV" } ?: "IPTV"
+                        },
                         channelCount = groupedChannels.size,
                         selectedGroup = selectedGroup,
+                        // F3: no "49 in MLB.tv" on grid - every sidebar row
+                        // already carries its own count.
+                        showMeta = guideView != GuideViewMode.GRID,
                         onSetupClick = { showSetup = !showSetup },
                         onSearchClick = { showSearch = true },
                         onSportsClick = onOpenSports,
@@ -1508,6 +1533,9 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         onToggleView = {
                             val next = GuideViewMode.toggled(guideView)
                             guideView = next
+                            // Entering the list shows the chips again; the next
+                            // grid visit starts with the sidebar in place.
+                            if (next == GuideViewMode.LIST) gridSidebarVisible = true
                             guidePreferences.edit()
                                 .putString("guide_view", next.prefValue)
                                 .apply()
@@ -1517,7 +1545,22 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         } else {
                             null
                         },
-                        viewToggleRequester = viewToggleFocusRequester
+                        viewToggleRequester = viewToggleFocusRequester,
+                        // F1e: Down from the header goes back into the grid, to
+                        // the home focus left (sidebar row or the channel/cell).
+                        // Grid only: on the list the header is above the chips.
+                        modifier = Modifier.onPreviewKeyEvent { event ->
+                            if (
+                                guideView == GuideViewMode.GRID &&
+                                event.type == KeyEventType.KeyDown &&
+                                event.key == Key.DirectionDown
+                            ) {
+                                gridReturnFocusSignal += 1
+                                true
+                            } else {
+                                false
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -1554,6 +1597,9 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             nowMs = rememberNowMillis(),
                             scheduleEndMs = guideScheduleEndMs,
                             jumpToNowSignal = jumpToNowSignal,
+                            returnFocusSignal = gridReturnFocusSignal,
+                            sidebarVisible = gridSidebarVisible,
+                            onSidebarVisibleChange = { gridSidebarVisible = it },
                             headerFocusRequester = viewToggleFocusRequester,
                             onPlay = { item ->
                                 selectedChannelId = item.channel.id
@@ -2875,6 +2921,12 @@ private fun GuideHeader(
     title: String,
     channelCount: Int,
     selectedGroup: String,
+    /**
+     * Whether the count line under the title is drawn (F3). The grid drops it:
+     * every sidebar row already shows its own group's count, and on grid the
+     * title itself becomes the group name once the sidebar is away (F1f).
+     */
+    showMeta: Boolean = true,
     onSetupClick: () -> Unit,
     onSearchClick: (() -> Unit)? = null,
     onSportsClick: (() -> Unit)? = null,
@@ -2911,19 +2963,24 @@ private fun GuideHeader(
                 else -> "$channelCount in $selectedGroup"
             }
 
-            Text(
-                text = meta,
-                style = MaterialTheme.typography.bodyMedium,
-                color = KBTextLo,
-                modifier = Modifier.padding(top = 2.dp)
-            )
+            if (showMeta) {
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = KBTextLo,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
         }
 
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            // The List / Grid toggle: the ONLY new control the grid adds besides
-            // Jump to now. A word, not an icon, because the label IS the state
-            // ("GRID" while the grid is up), and it sits first so the D-pad
-            // reaches it before anything that navigates away.
+            // The List / Grid toggle (F4): the glyph IS the state, the way the
+            // word was - a grid icon while the grid is up, a list icon while the
+            // list is, accent-tinted so the active view still reads. Same KBCard
+            // and 12/9 padding as the icons beside it, so the header row's
+            // footprint does not move, and a TalkBack name because an icon-only
+            // button is silent otherwise. It sits first so the D-pad reaches it
+            // before anything that navigates away.
             if (onToggleView != null) {
                 KBCard(
                     onClick = onToggleView,
@@ -2937,11 +2994,19 @@ private fun GuideHeader(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = if (guideView == GuideViewMode.GRID) "GRID" else "LIST",
-                            color = KBAccent,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
+                        Icon(
+                            imageVector = if (guideView == GuideViewMode.GRID) {
+                                Icons.Filled.GridView
+                            } else {
+                                Icons.AutoMirrored.Filled.List
+                            },
+                            contentDescription = if (guideView == GuideViewMode.GRID) {
+                                "Grid view"
+                            } else {
+                                "List view"
+                            },
+                            tint = KBAccent,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
