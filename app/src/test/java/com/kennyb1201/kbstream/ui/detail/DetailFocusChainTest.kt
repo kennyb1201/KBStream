@@ -550,4 +550,97 @@ class DetailFocusChainTest {
             )
         )
     }
+
+    // ── The overview toggle's DOWN (the reported trap) ────────────────────
+
+    @Test
+    fun `down out of the header reaches the first row the page has now`() {
+        assertEquals(
+            "The " +
+                "toggle borrows the header's position, so this IS its DOWN: the " +
+                "reported press was Dark Marvels' episodes, one press below it",
+            DetailRow.EPISODES,
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence(episodes = true)
+            )
+        )
+        assertEquals(
+            "a title with keywords goes through them first - the fix does not " +
+                "narrow the toggle's DOWN to episodes",
+            DetailRow.KEYWORDS,
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence(keywords = true, episodes = true)
+            )
+        )
+        assertEquals(
+            "and the genre chips are the row under the header when the page has " +
+                "them",
+            DetailRow.GENRE,
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence(genre = true, episodes = true)
+            )
+        )
+        assertEquals(
+            "a movie's cast is the first row below the toggle when there are no " +
+                "chips, tags or episodes to step to",
+            DetailRow.PEOPLE,
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence(people = true)
+            )
+        )
+        assertNull(
+            "and the list the toggle was COMPOSED with - the overview item before " +
+                "the seasons streamed in - has nothing below it, which is what the " +
+                "down press used to be answered with",
+            DetailFocusChain.nextRow(
+                DetailRow.HEADER,
+                DetailFocusDirection.DOWN,
+                presence()
+            )
+        )
+    }
+
+    @Test
+    fun `the toggle keeps a DOWN only when the page has somewhere to put it`() {
+        assertTrue(
+            "a page with a row below keeps the press",
+            DetailFocusChain.toggleDownIsConsumed(
+                presence(episodes = true),
+                rowsStillArriving = false
+            )
+        )
+        assertTrue(
+            "a movie's cast counts too",
+            DetailFocusChain.toggleDownIsConsumed(
+                presence(people = true),
+                rowsStillArriving = false
+            )
+        )
+        assertTrue(
+            "and absence while the rows are STILL ARRIVING is \"not yet\", never " +
+                "an edge - the move waits for them rather than the press going " +
+                "to a search that has nothing to find either",
+            DetailFocusChain.toggleDownIsConsumed(
+                presence(),
+                rowsStillArriving = true
+            )
+        )
+        assertFalse(
+            "but a page with no row below it and nothing on the way is a real " +
+                "edge: the press is handed back, not kept - the \"consumed but " +
+                "unmoved\" outcome is the trap itself",
+            DetailFocusChain.toggleDownIsConsumed(
+                presence(),
+                rowsStillArriving = false
+            )
+        )
+    }
 }

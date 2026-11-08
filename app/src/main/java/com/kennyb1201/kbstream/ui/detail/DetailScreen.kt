@@ -741,7 +741,9 @@ fun DetailScreen(
 
     /**
      * The overview's "View more" toggle: the page's UP-only stop, and the
-     * landing a DOWN press takes when the chain can place it nowhere.
+     * landing a DOWN press takes when the chain can place it nowhere - while the
+     * DOWN out of the toggle itself is the return to the first row the page has,
+     * answered with the rows it has NOW (see [overviewToggleVerticalFocus]).
      *
      * Declared at screen scope, not inside the list item that draws it, for the
      * two reasons the field report exposed. It had NO handle at all - a
@@ -3107,8 +3109,12 @@ fun DetailScreen(
      * here, in one place, and [onUp] / [onDown] say what this surface's press
      * means. Consuming it is the point: left to the default search, each of the
      * three could be a press into empty space - a genre-less title has nothing
-     * under the header to find, and the toggle has nothing under it on a
-     * keyword-less page - which the field reads as a dead remote.
+     * under the header to find - which the field reads as a dead remote.
+     *
+     * The toggle is the one user of this that has since moved to
+     * [nonRailVerticalFocusWithDownOutcome]: keeping a DOWN it cannot place was
+     * the other half of the reported trap there. The two others keep this
+     * wrapper, and its contract is unchanged.
      */
     fun nonRailVerticalFocus(
         onUp: () -> Unit,
@@ -3127,6 +3133,45 @@ fun DetailScreen(
                     onDown()
                     true
                 }
+
+                else -> false
+            }
+        }
+    }
+
+    /**
+     * [nonRailVerticalFocus] for the one surface whose DOWN can be answered or
+     * NOT: the overview's "View more" toggle.
+     *
+     * Every other user of the wrapper above has a landing it can always ask for
+     * (the header's PLAY, the season chips' own section), so keeping the key is
+     * right for them and their contract is unchanged. The toggle borrows
+     * [DetailRow.HEADER]'s position instead, and the page it is on may have no
+     * row at all below it - which is exactly the state the reported trap was
+     * made of: the key consumed, the focus unmoved, nothing asked.
+     *
+     * So this variant asks [onDown] whether the press was the page's to keep. It
+     * answers synchronously, at press time, because the move itself is
+     * asynchronous: what it decides is whether the page HAS somewhere to put the
+     * press (see [DetailFocusChain.toggleDownIsConsumed]). Once the move starts,
+     * [moveFocusVertical] already hands an unlandable press to the platform's
+     * search, so a kept press can never end unmoved without the platform having
+     * been asked - which is the rule the whole chain is built on.
+     */
+    fun nonRailVerticalFocusWithDownOutcome(
+        onUp: () -> Unit,
+        onDown: () -> Boolean
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyDown) {
+            false
+        } else {
+            when (keyEvent.key) {
+                Key.DirectionUp -> {
+                    onUp()
+                    true
+                }
+
+                Key.DirectionDown -> onDown()
 
                 else -> false
             }
@@ -3233,22 +3278,63 @@ fun DetailScreen(
      * common press - DOWN out of Play - would land on a text button instead of
      * the genres, and every row's idea of what is above it would move with it.
      *
-     * Both are consumed: on a title with no keywords (the common movie, where the
-     * toggle is also the only focusable thing in the info block) the default
-     * search under this toggle found nothing at all, and the press read as dead
-     * with the whole list one press below it.
+     * UP is consumed always (it is the header, above the list). DOWN is
+     * consumed only when this page has a row to put it on: on a title with no
+     * keywords (the common movie, where the toggle is also the only focusable
+     * thing in the info block) the default search under this toggle found
+     * nothing at all, and the press read as dead with the whole list one press
+     * below it - so the page routes that press through the chain instead. What
+     * it does NOT do is keep a press it cannot place (see the reported trap
+     * below).
+     *
+     * The reported trap: "DOWN does nothing after going up" (Dark Marvels).
+     * Two things made it. The handler asked the chain with the [presence] it was
+     * COMPOSED with - the overview item draws before the seasons stream in, so
+     * that list said the page had no rows below, the chain answered null, and
+     * the fall-through called HEADER+DOWN a page edge, since a page with no row
+     * below really is one. And the press was consumed regardless. So the press
+     * is answered with the rows the page has NOW ([latestRowPresence], the
+     * captured presence being only the fallback for a press that arrives before
+     * anything has landed), and it is kept only when that answer has somewhere
+     * to go ([DetailFocusChain.toggleDownIsConsumed]).
      */
     fun overviewToggleVerticalFocus(presence: DetailRowPresence): (KeyEvent) -> Boolean =
-        nonRailVerticalFocus(
+        nonRailVerticalFocusWithDownOutcome(
             onUp = { startFocusMove { focusTopOfPage() } },
             onDown = {
-                startFocusMove {
-                    moveFocusVertical(
-                        DetailRow.HEADER,
-                        DetailFocusDirection.DOWN,
-                        0,
-                        presence
+                // The rows that LANDED, not the ones this handler was made
+                // with: the same shape as [awaitRowsThenMove]'s, for the same
+                // reason.
+                val settled =
+                    latestRowPresence.value
+                        ?: presence
+
+                if (
+                    !DetailFocusChain.toggleDownIsConsumed(
+                        presence = settled,
+                        rowsStillArriving = rowsStillArriving()
                     )
+                ) {
+                    // The page has nowhere to put this press, so it is not the
+                    // page's key to keep: it goes back to the platform's default
+                    // search, which is a visible no-op at a real edge rather than
+                    // a press taken and nothing done with it.
+                    Log.i(
+                        TAG,
+                        "toggle DOWN not kept: no row below and nothing arriving"
+                    )
+                    false
+                } else {
+                    startFocusMove {
+                        moveFocusVertical(
+                            DetailRow.HEADER,
+                            DetailFocusDirection.DOWN,
+                            0,
+                            latestRowPresence.value
+                                ?: settled
+                        )
+                    }
+                    true
                 }
             }
         )

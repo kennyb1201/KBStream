@@ -294,9 +294,12 @@ class DetailGenreTrapAndSeeMoreTest {
             toggleHandler.contains("onUp = { startFocusMove { focusTopOfPage() } }")
         )
         assertTrue(
-            "and DOWN is the genres, through HEADER's chain position",
+            "and DOWN is the genres, through HEADER's chain position - asked with " +
+                "the presence that landed, the captured one being only the " +
+                "fallback for a press that arrives before anything has",
             toggleHandler.contains(
-                "moveFocusVertical( DetailRow.HEADER, DetailFocusDirection.DOWN, 0, presence )"
+                "moveFocusVertical( DetailRow.HEADER, DetailFocusDirection.DOWN, 0, " +
+                    "latestRowPresence.value ?: settled )"
             )
         )
         assertTrue(

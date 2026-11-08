@@ -138,10 +138,11 @@ class DetailFocusGraphContractTest {
         assertTrue(
             "DOWN is HEADER's chain position: the first row this page has, on a " +
                 "keyword-less title included, where the default search found " +
-                "nothing at all",
+                "nothing at all - and it is asked with the presence that LANDED, " +
+                "not the one this handler was composed with, which is the trap",
             toggleHandler.contains(
                 "moveFocusVertical( DetailRow.HEADER, DetailFocusDirection.DOWN, " +
-                    "0, presence )"
+                    "0, latestRowPresence.value ?: settled )"
             )
         )
         assertFalse(

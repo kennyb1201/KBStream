@@ -230,4 +230,34 @@ internal object DetailFocusChain {
         DetailFocusDirection.UP -> row == DetailRow.HEADER || row == DetailRow.GENRE
         DetailFocusDirection.DOWN -> nextRow(row, DetailFocusDirection.DOWN, presence) == null
     }
+
+    /**
+     * Whether the overview's "View more" toggle may KEEP a DOWN press.
+     *
+     * The toggle borrows [DetailRow.HEADER]'s chain position, so its DOWN is the
+     * first row this page has. The reported trap - "DOWN does nothing after
+     * going up", Dark Marvels - was that press being kept unconditionally: the
+     * toggle's handler was composed before the seasons landed, its captured
+     * [presence] said the page had no rows below, the chain answered null, the
+     * fall-through read HEADER+DOWN as a page edge, and the key had already been
+     * consumed. Focus stayed on the toggle with the episodes one press away.
+     *
+     * So the press is kept only when the page has somewhere to put it: a row
+     * below ([nextRow]), or rows still arriving - absence while loading is "not
+     * yet", never an edge, and the move waits for them (see the screen's
+     * `awaitRowsThenMove`). Otherwise the press is handed BACK to the platform's
+     * default search, which is what [focusByGeometry] would have done with it and
+     * what [isPageEdge] says a real edge may refuse. A press that moves nothing
+     * must not be a press the page took.
+     *
+     * Note what this is not: it is not the page edge rule. A page whose only rows
+     * are above the toggle keeps nothing either way; the difference is that the
+     * edge rule swallows the press, and this hands it over.
+     */
+    fun toggleDownIsConsumed(
+        presence: DetailRowPresence,
+        rowsStillArriving: Boolean
+    ): Boolean =
+        rowsStillArriving ||
+            nextRow(DetailRow.HEADER, DetailFocusDirection.DOWN, presence) != null
 }
