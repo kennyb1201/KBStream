@@ -1415,13 +1415,17 @@ private fun ActorCreditRail(
         ) {
         itemsIndexed(
             items = credits,
-            // One row per (title, character): TMDB's person credits carry a
-            // row per role, so a performer with two roles in one production
-            // (routine for animation voice casts) repeats the id and LazyRow
-            // would throw on the duplicate key - the same defect the Detail
-            // cast rail has. The return target still names the bare id
-            // (returnIndex matches on it), so back-to-card keeps working.
-            key = { _, credit -> "credit:${credit.id}:${credit.character.orEmpty()}" }
+            // One row per (title, role): TMDB's person credits carry a row per
+            // role, so a performer with two roles in one production (routine
+            // for animation voice casts) repeats the id and LazyRow would throw
+            // on the duplicate key - the same defect the Detail cast rail has.
+            // The role is the character for cast and the JOB for crew: a person
+            // who directed and wrote one title is two crew credits with the
+            // same id and an empty character, which keyed as one row and threw
+            // `Key "credit:<id>:" was already used` on a Smart TV (Sentry
+            // ANDROID-1D, 0.9.192). [actorCreditItemId] is the same string the
+            // return target records, so back-to-card keeps matching.
+            key = { _, credit -> "credit:${actorCreditItemId(credit)}" }
         ) { index, credit ->
             val requester = remember(credit.id) { FocusRequester() }
             // The item id carries the ROLE as well as the id, so a dual-role

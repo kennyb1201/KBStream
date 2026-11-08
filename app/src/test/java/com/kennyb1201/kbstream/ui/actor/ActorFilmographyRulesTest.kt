@@ -161,6 +161,33 @@ class ActorFilmographyRulesTest {
         )
     }
 
+    // ── C6: the rail key a dual-role row needs ───────────────────────────
+
+    @Test
+    fun `a crew credit is named by its job, not by its empty character`() {
+        val director = credit(id = 593329, title = "Dune", mediaType = "movie", department = "Directing", job = "Director")
+        val writer = credit(id = 593329, title = "Dune", mediaType = "movie", department = "Writing", job = "Writer")
+
+        assertEquals(
+            "the key of a crew row is id plus job",
+            "593329:Director",
+            actorCreditItemId(director)
+        )
+        assertNotEquals(
+            "one person who directed and wrote one title is two rows, and keyed " +
+                "by character alone they were one key - the duplicate key that " +
+                "closed the app (Sentry ANDROID-1D, Key \"credit:593329:\")",
+            actorCreditItemId(director),
+            actorCreditItemId(writer)
+        )
+    }
+
+    @Test
+    fun `a cast credit is still named by its character`() {
+        val role = credit(id = 1, title = "Arrival", mediaType = "movie", character = "Louise Banks")
+        assertEquals("1:Louise Banks", actorCreditItemId(role))
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private fun talk(mediaType: String, title: String, character: String): Boolean =

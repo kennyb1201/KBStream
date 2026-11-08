@@ -121,8 +121,11 @@ class Sweep5ReleaseReadinessContractTest {
         val tvActor = read("ui/actor/ActorScreen.kt")
         val mobileActor = read("ui/mobile/ActorScreenMobile.kt")
         assertTrue(
-            "TV filmography rows must not collide on a dual role",
-            tvActor.contains("\"credit:\${credit.id}:\${credit.character.orEmpty()}\"")
+            "TV filmography rows must not collide on a dual role, and a crew " +
+                "row's role is its JOB - two crew credits with one id and an " +
+                "empty character keyed alike and crashed (Sentry ANDROID-1D, " +
+                "Key \"credit:593329:\" was already used, 0.9.192)",
+            tvActor.contains("\"credit:\${actorCreditItemId(credit)}\"")
         )
         assertTrue(
             "and neither may the phone's",
