@@ -45,6 +45,8 @@ import com.kennyb1201.kbstream.ui.iptv.GridCell
 import com.kennyb1201.kbstream.ui.iptv.GridProgram
 import com.kennyb1201.kbstream.ui.iptv.GridWindow
 import com.kennyb1201.kbstream.ui.iptv.GuideGrid
+import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
+import com.kennyb1201.kbstream.ui.iptv.guideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.cellWidthDp
 import com.kennyb1201.kbstream.ui.iptv.gridCellHeadline
 import com.kennyb1201.kbstream.ui.iptv.hourMarks
@@ -74,6 +76,7 @@ internal fun GuideGridMobileView(
     items: List<IptvChannelWithEpg>,
     programsByChannel: Map<String, List<GridProgram>>,
     resolvedGuideIds: Set<String>,
+    loadingGuideIds: Set<String>,
     reminderKeys: Set<String>,
     nowMs: Long,
     onPlay: (IptvChannelWithEpg) -> Unit,
@@ -97,8 +100,18 @@ internal fun GuideGridMobileView(
         }
     }
 
-    LaunchedEffect(rows, window) {
-        val ids = items.take(GuideGrid.LOOKAHEAD_ROWS * 2).map { it.channel.id }
+    // The rows this view keeps loaded: what is on screen plus a page of lookahead,
+    // re-asked every time a new row reaches the top (F1a). A phone viewport is a
+    // handful of rows tall, so a fixed slice of the group meant the rows past it
+    // were never requested at all - the group scrolled into empty cells and stayed
+    // there. Keying on the first visible index is the TV grid's shape; the
+    // ViewModel's already-read set makes a scroll-back free (F1b).
+    LaunchedEffect(rows, window, listState.firstVisibleItemIndex) {
+        if (rows.isEmpty()) return@LaunchedEffect
+        val first = listState.firstVisibleItemIndex
+        val visible = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+        val end = (first + visible + GuideGrid.LOOKAHEAD_ROWS).coerceAtMost(rows.size)
+        val ids = rows.subList(first, end).map { it.first.channel.id }
         if (ids.isNotEmpty()) onRequestWindow(ids, window.startUtcMillis, window.endUtcMillis)
     }
 
@@ -137,8 +150,12 @@ internal fun GuideGridMobileView(
                 Row(modifier = Modifier.fillMaxWidth().height(MOBILE_ROW_HEIGHT)) {
                     MobileChannelCell(
                         item = item,
-                        guidePending = item.channel.id !in resolvedGuideIds &&
-                            programsByChannel[item.channel.id].isNullOrEmpty(),
+                        guideState = guideRowGuideState(
+                            channelId = item.channel.id,
+                            resolvedGuideIds = resolvedGuideIds,
+                            programsByChannel = programsByChannel,
+                            loadingIds = loadingGuideIds,
+                        ),
                     )
                     Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                         Row(
@@ -212,7 +229,7 @@ private val CONTENT_WIDTH =
 @Composable
 private fun MobileChannelCell(
     item: IptvChannelWithEpg,
-    guidePending: Boolean,
+    guideState: GuideRowGuideState,
 ) {
     Row(
         modifier = Modifier
@@ -261,11 +278,16 @@ private fun MobileChannelCell(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            // The number is the channel's own, so it wins; the guide line under it
+            // is only ever about the guide (F3b). "No guide data" is a result, and
+            // only a finished read may print it (F3c) - that is
+            // [GuideRowGuideState]'s job, not the cell's.
             val number = item.channel.tvgChno?.trim()?.takeIf { it.isNotBlank() }
             Text(
                 text = when {
                     number != null -> number
-                    guidePending -> "Loading guide…"
+                    guideState == GuideRowGuideState.LOADING -> "Loading guide…"
+                    guideState == GuideRowGuideState.NO_GUIDE_DATA -> "No guide data"
                     else -> " "
                 },
                 color = KBTextLo,

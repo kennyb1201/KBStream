@@ -263,6 +263,7 @@ fun GuideScreenMobile(
         // The grid's group list is a slide-in drawer on a phone (F2k-e).
         var showGroupDrawer by remember { mutableStateOf(false) }
         val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
+        val gridLoadingIds by viewModel.gridLoadingChannelIds.collectAsStateWithLifecycle()
         val groupDrawerState = rememberDrawerState(DrawerValue.Closed)
         LaunchedEffect(showGroupDrawer) {
             if (showGroupDrawer) groupDrawerState.open() else groupDrawerState.close()
@@ -927,6 +928,7 @@ fun GuideScreenMobile(
                             items = filtered,
                             programsByChannel = gridPrograms,
                             resolvedGuideIds = resolvedGuideIds,
+                            loadingGuideIds = gridLoadingIds,
                             reminderKeys = reminderKeys,
                             nowMs = nowMs,
                             onPlay = { item ->

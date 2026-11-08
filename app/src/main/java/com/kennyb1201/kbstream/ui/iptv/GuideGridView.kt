@@ -635,6 +635,9 @@ internal fun GuideGridView(
                             ChannelCell(
                                 row = row,
                                 isFocusedRow = index == focusedRow,
+                                // An empty entry now means "read, and empty" on the
+                                // shared map (F2a). TV reads it exactly as it read an
+                                // absent one, so its rendering does not change (S5).
                                 guidePending = row.item.channel.id !in resolvedGuideIds &&
                                     programsByChannel[row.item.channel.id].isNullOrEmpty(),
                                 requester = remember(row.channelKey) {

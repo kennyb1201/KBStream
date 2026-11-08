@@ -1086,6 +1086,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * needs the whole span, and it keeps what it already has when the window
      * slides (F1c): a time move reads only the newly exposed part and never
      * flashes a row back to its loading state.
+     *
+     * Every channel a window read asked for gets an entry, even an empty one
+     * (F2a), so a missing key means "never read" and an empty list means "read,
+     * and this window holds nothing". The rows read that difference to stop
+     * calling a finished-empty channel loading forever.
      */
     private val _gridPrograms =
         MutableStateFlow<Map<String, List<GridProgram>>>(emptyMap())
@@ -1161,13 +1166,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             }.getOrDefault(emptyMap())
 
-            val merged = HashMap<String, List<GridProgram>>(_gridPrograms.value)
-            loaded.forEach { (channelId, rows) ->
-                merged[channelId] = mergeWindowPrograms(
-                    existing = merged[channelId].orEmpty(),
-                    incoming = gridProgramsOf(channelId, rows)
-                )
-            }
+            val merged = mergeWindowAnswer(
+                existing = _gridPrograms.value,
+                requestedIds = missingIds,
+                loaded = loaded,
+            )
             _gridPrograms.value = merged
             _gridLoadingChannelIds.value = _gridLoadingChannelIds.value - missingIds
 

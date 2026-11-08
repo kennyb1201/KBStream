@@ -642,6 +642,57 @@ internal fun gridCellHeadline(cell: GridCell, nowUtcMillis: Long): String = when
     else -> "On now · ${formatRemainingLabel(cell.endUtcMillis - nowUtcMillis) ?: "ending"}"
 }
 
+/**
+ * What a grid row says about its guide data (F3a-c).
+ *
+ * Three states, not two, because "no answer yet" and "answered, and there is
+ * nothing" are different facts and only the second one may be reported as a
+ * result. The per-game channels are the case that forces it: the guide has no
+ * match for them, their read finishes empty, and nothing will ever change - so
+ * a row that only knows "no programs on screen" calls them loading forever.
+ */
+internal enum class GuideRowGuideState {
+    /** Nothing has answered yet for this channel: the read is out or still to come. */
+    LOADING,
+
+    /** The read finished and this channel has no guide data at all. */
+    NO_GUIDE_DATA,
+
+    /** An answer is in: the channel is matched, or its read found programs. */
+    ANSWERED,
+}
+
+/**
+ * Which of [GuideRowGuideState] a row is in (F3a, F3c).
+ *
+ * A matched channel is always answered - its guide rows exist, so the grid has
+ * said everything it can about it, and an empty window on it is a feed gap, not
+ * a missing guide (F3d). A row that already holds programs is answered too: the
+ * next window is a slide, and flipping it back to "Loading guide…" over the data
+ * it is still drawing would be a lie (F1c, F2b).
+ *
+ * What is left is a row with nothing to show. Its entry decides: absent means
+ * nothing has answered, so it is still loading; while it is in [loadingIds] an
+ * empty entry is stale for the window being read and it is loading too - never a
+ * result the read is about to replace (F3c). Only an empty entry with no read out
+ * is a finished answer.
+ */
+internal fun guideRowGuideState(
+    channelId: String,
+    resolvedGuideIds: Set<String>,
+    programsByChannel: Map<String, List<GridProgram>>,
+    loadingIds: Set<String>,
+): GuideRowGuideState {
+    if (channelId in resolvedGuideIds) return GuideRowGuideState.ANSWERED
+    val programs = programsByChannel[channelId]
+    return when {
+        programs == null -> GuideRowGuideState.LOADING
+        programs.isNotEmpty() -> GuideRowGuideState.ANSWERED
+        channelId in loadingIds -> GuideRowGuideState.LOADING
+        else -> GuideRowGuideState.NO_GUIDE_DATA
+    }
+}
+
 /** Fraction of the cell already aired, 0..1 - the live cell's fill (F2h). */
 internal fun liveFillFraction(cell: GridCell, nowUtcMillis: Long): Float {
     if (cell.isGap || cell.durationMs <= 0L) return 0f
@@ -662,6 +713,35 @@ internal fun liveFillFraction(cell: GridCell, nowUtcMillis: Long): Float {
  */
 internal fun keepForWindow(program: GridProgram, window: GridWindow): Boolean =
     program.endUtcMillis > window.startUtcMillis && program.startUtcMillis < window.endUtcMillis
+
+/**
+ * The grid's programs after a window read answered [loaded] for [requestedIds].
+ *
+ * Every requested channel gets an entry, even when the read held nothing for it
+ * (F2a): an explicit empty list means "this window was read and it is empty for
+ * this channel", so absence can mean exactly one thing - never read. Without
+ * that, a channel whose read finishes empty is indistinguishable from one that
+ * was never asked for, and a row that can never be answered waits forever.
+ *
+ * The entries are merged like any other ([mergeWindowPrograms]), so a channel
+ * read for one window keeps what it already has when the next window is read.
+ */
+internal fun mergeWindowAnswer(
+    existing: Map<String, List<GridProgram>>,
+    requestedIds: Set<String>,
+    loaded: Map<String, List<EpgProgramRow>>,
+): Map<String, List<GridProgram>> {
+    val ids = requestedIds + loaded.keys
+    if (ids.isEmpty()) return existing
+    val merged = HashMap<String, List<GridProgram>>(existing)
+    ids.forEach { channelId ->
+        merged[channelId] = mergeWindowPrograms(
+            existing = merged[channelId].orEmpty(),
+            incoming = gridProgramsOf(channelId, loaded[channelId].orEmpty()),
+        )
+    }
+    return merged
+}
 
 /** Deduplicates rows read for overlapping windows: same channel, same start. */
 internal fun mergeWindowPrograms(
