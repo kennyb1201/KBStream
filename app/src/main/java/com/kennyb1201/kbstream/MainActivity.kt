@@ -60,6 +60,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
@@ -4669,23 +4670,39 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                     // uses, so a long changelog cannot push the buttons off a
                     // phone screen.
                     UpdateDialogNotes(offer.notes)
+                    // F2a: the two plates split the dialog width evenly rather
+                    // than each sizing to its own label. Sizing to content made
+                    // the row ask for more width than a narrow phone dialog has,
+                    // and the surplus came out of the labels - LATER broke after
+                    // "Late". Equal weights mean neither button can squeeze the
+                    // other.
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.padding(top = 18.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp)
                     ) {
-                        DialogPlate(mobile = mobile, onClick = {
-                            // No dismissPopup here: if the download/install
-                            // fails the popup must re-offer this version on
-                            // the next launch.
-                            hidden = true
-                            AppUpdater.downloadAndInstall(context, offer)
-                        }) {
+                        DialogPlate(
+                            mobile = mobile,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                // No dismissPopup here: if the download/install
+                                // fails the popup must re-offer this version on
+                                // the next launch.
+                                hidden = true
+                                AppUpdater.downloadAndInstall(context, offer)
+                            }
+                        ) {
                             UpdateDialogButton("INSTALL NOW", KBAccent, bold = true)
                         }
-                        DialogPlate(mobile = mobile, onClick = {
-                            hidden = true
-                            AppUpdater.dismissPopup(context, offer)
-                        }) {
+                        DialogPlate(
+                            mobile = mobile,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                hidden = true
+                                AppUpdater.dismissPopup(context, offer)
+                            }
+                        ) {
                             UpdateDialogButton("LATER", KBTextHi)
                         }
                     }
@@ -4900,22 +4917,29 @@ private fun UpdateDialogNotes(notes: String) {
 private fun DialogPlate(
     mobile: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
     if (mobile) {
-        TouchKBCard(onClick = onClick) { content() }
+        TouchKBCard(onClick = onClick, modifier = modifier) { content() }
     } else {
-        KBCard(onClick = onClick) { content() }
+        KBCard(onClick = onClick, modifier = modifier) { content() }
     }
 }
 
 @Composable
 private fun UpdateDialogButton(text: String, color: Color, bold: Boolean = false) {
+    // F1a: one line, always. Both plates' labels come through here, so this is
+    // the single guard for INSTALL NOW and LATER alike. No ellipsis (F1b): the
+    // labels are short and the plates are weighted (F2a), so the wrap this
+    // fixes was the row sizing to content, not a label too long to fit.
     Text(
         text = text,
         color = color,
         style = MaterialTheme.typography.labelLarge,
         fontWeight = if (bold) FontWeight.Bold else null,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
     )
 }

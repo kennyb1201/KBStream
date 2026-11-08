@@ -59,7 +59,10 @@ class UpdatePopupMobileInputContractTest {
                 "TRY AGAIN / CLOSE) has to go through the plate, or the one left " +
                 "behind is the one a finger cannot press",
             6,
-            Regex("DialogPlate\\(mobile = mobile,").findAll(popup).count()
+            // Counted by substring rather than by regex so the paren needs no
+            // escaping: a call site that wraps its arguments across lines still
+            // reads "DialogPlate(" once the whitespace is collapsed.
+            popup.split("DialogPlate(").size - 1
         )
         assertFalse(
             "and none may still be built straight from the TV card",
@@ -67,11 +70,11 @@ class UpdatePopupMobileInputContractTest {
         )
         assertTrue(
             "the plate is the touch twin on a phone: $plate",
-            plate.contains("if (mobile) { TouchKBCard(onClick = onClick)")
+            plate.contains("if (mobile) { TouchKBCard(onClick = onClick, modifier = modifier)")
         )
         assertTrue(
             "and the TV card everywhere else, unchanged",
-            plate.contains("} else { KBCard(onClick = onClick)")
+            plate.contains("} else { KBCard(onClick = onClick, modifier = modifier)")
         )
     }
 
