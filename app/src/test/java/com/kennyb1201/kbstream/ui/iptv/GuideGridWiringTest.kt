@@ -142,16 +142,17 @@ class GuideGridWiringTest {
         assertTrue(
             "the sidebar is 220dp and the window/cell geometry is unchanged",
             rules.contains("const val SIDEBAR_WIDTH_DP = 220") &&
-                rules.contains("const val PX_PER_MIN = 4") &&
-                rules.contains("const val WINDOW_HOURS = 6")
+                rules.contains("internal const val GRID_SCALE_DP_PER_MIN = 8") &&
+                rules.contains("internal const val GRID_SPAN_HOURS = 6")
         )
         // F2k-d: a group change keeps the window, so the axis does not jump.
-        // Round 3 (F12e) made the window's WIDTH the zoom level; the key is
-        // still neither the group nor anything else that moves under focus.
+        // The span is fixed now, so the window's only key is the clock it
+        // opened on - not the group, and not anything else that moves under
+        // focus.
         assertTrue(
             "the time window is not keyed by the group",
             grid.contains(
-                "var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }"
+                "var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }"
             )
         )
     }
@@ -244,7 +245,7 @@ class GuideGridWiringTest {
     fun `the phone grid shares the geometry but none of the focus machinery`() {
         assertTrue(
             "same window rule, same cell-width rule, same detail strip",
-            mobileGrid.contains("GridWindow.opening(nowMs, windowHours)") &&
+            mobileGrid.contains("var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }") &&
                 mobileGrid.contains(
                     "cellWidthDp(cell.startUtcMillis, cell.endUtcMillis, pxPerMin = pxPerMin)"
                 ) &&
@@ -266,10 +267,15 @@ class GuideGridWiringTest {
     }
 
     @Test
-    fun `the list stays the default`() {
+    fun `a missing preference reads as the surface's default`() {
         assertTrue(
-            "an unknown or missing preference reads as the list",
-            rules.contains("entries.firstOrNull { it.prefValue == value } ?: LIST")
+            "an unknown or missing preference reads as the default the caller names",
+            rules.contains("entries.firstOrNull { it.prefValue == value } ?: default")
+        )
+        assertTrue(
+            "and the enum's own fallback is still the list, so no surface inherits " +
+                "another's choice",
+            rules.contains("default: GuideViewMode = LIST,")
         )
     }
 

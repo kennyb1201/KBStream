@@ -200,11 +200,6 @@ internal fun GuideGridView(
     sidebarVisible: Boolean,
     onSidebarVisibleChange: (Boolean) -> Unit,
     /**
-     * The zoom level: how many hours of air time the window draws (F12e). The
-     * screen owns it because the header's zoom button sets it and persists it.
-     */
-    windowHours: Int,
-    /**
      * The corner preview's on/off (F13d). The screen owns it because the header
      * toggle sets it and persists it; the grid only draws it.
      */
@@ -229,7 +224,7 @@ internal fun GuideGridView(
     // suspend: the scroll is a frame's work posted ahead of the focus request.
     val scope = rememberCoroutineScope()
 
-    var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }
+    var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }
     var focusedRow by remember { mutableStateOf(0) }
     var focusedCellId by remember { mutableStateOf<String?>(null) }
     var pendingFocus by remember { mutableStateOf<GridPendingFocus?>(null) }
@@ -294,13 +289,6 @@ internal fun GuideGridView(
         if (ids.isNotEmpty()) onRequestWindow(ids, window.startUtcMillis, window.endUtcMillis)
     }
 
-    // F12e: a zoom change keeps the axis where the viewer left it and only
-    // changes how much of it is drawn.
-    LaunchedEffect(windowHours) {
-        val next = window.withHours(windowHours)
-        if (next != window) window = next
-    }
-
     // F2a: the grid follows now on its own - the NOW button is gone (F2b) and
     // this is what replaced it. On the tick that carries the clock past a
     // window's right edge the axis slides one page and focus re-anchors on the
@@ -314,7 +302,7 @@ internal fun GuideGridView(
         val next = autoFollowWindow(
             window = window,
             nowUtcMillis = nowMs,
-            windowHours = windowHours,
+            windowHours = GRID_SPAN_HOURS,
             scheduleEndMs = scheduleEndMs,
         ) ?: return@LaunchedEffect
         autoFollowedEdgeMs = window.endUtcMillis
@@ -337,7 +325,7 @@ internal fun GuideGridView(
     LaunchedEffect(scheduleEndMs, window.startUtcMillis) {
         val end = scheduleEndMs ?: return@LaunchedEffect
         if (window.startUtcMillis >= end) {
-            window = GridWindow.opening(System.currentTimeMillis(), windowHours)
+            window = GridWindow.opening(System.currentTimeMillis())
         }
     }
 
@@ -718,7 +706,7 @@ internal fun GuideGridView(
                 // program of the new one in this row (F3d).
                 val next = window.paged(
                     direction = 1,
-                    floorStartUtcMillis = GridWindow.opening(nowMs, windowHours).startUtcMillis,
+                    floorStartUtcMillis = GridWindow.opening(nowMs).startUtcMillis,
                     maxEndUtcMillis = scheduleEndMs,
                 )
                 if (next == window) return true
@@ -901,7 +889,7 @@ internal fun GuideGridView(
                             hourMarks(window).forEach { mark ->
                                 Box(
                                     modifier = Modifier.width(
-                                        (GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
+                                        (GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN).dp
                                     )
                                 ) {
                                     // Header-clip F1a: the day rides on the hour's
@@ -1254,14 +1242,14 @@ private fun ProgramRow(
     onCellFocus: (GridCell) -> Unit,
     onKey: (GridCell, Key) -> Boolean,
 ) {
-    val nowOffsetDp = ((nowMs - window.startUtcMillis) / 60_000L * GuideGrid.PX_PER_MIN).toInt()
+    val nowOffsetDp = ((nowMs - window.startUtcMillis) / 60_000L * GRID_SCALE_DP_PER_MIN).toInt()
     val nowInWindow = nowMs in window.startUtcMillis until window.endUtcMillis
 
     Box(modifier = modifier.clipToBounds()) {
         Row(modifier = Modifier.horizontalScroll(timeScroll).height(GRID_ROW_HEIGHT)) {
-            // The scrolled content is the WINDOW's width (F12e): a 3-hour
-            // window is 720dp, a 12-hour one 2880dp, and the cells are laid
-            // out at their real widths inside it either way.
+            // The scrolled content is the WINDOW's width (F1b): 2880dp for the
+            // six-hour span, and the cells are laid out at their real widths
+            // inside it.
             Box(
                 modifier = Modifier
                     .width(gridContentWidthDp(window).dp)

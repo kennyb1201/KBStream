@@ -14,7 +14,8 @@ import org.junit.Test
  * What must hold now is the shape, not the wording:
  *
  *  - a row is 48dp and a cell's content still fits inside it (T1),
- *  - the window opens at three hours and the zoom walks 3/6/12 (T2),
+ *  - the window opens on the fixed six-hour span at the 3h scale, with no
+ *    zoom control left anywhere (T2),
  *  - the preview is the last channel played, toggled from the header and never
  *    driven by focus (T3-T5),
  *  - the D-pad chain is untouched and the preview is not a focus stop (T6),
@@ -85,49 +86,46 @@ class GuideGridRound3ContractTest {
         )
     }
 
-    // ── T2: the zoom, and its 3h default ───────────────────────────────────
+    // ── T2: the fixed six-hour span, and the zoom that is gone ─────────────
 
     @Test
-    fun `the window opens at three hours and the cycle is three six twelve`() {
+    fun `the span is fixed at six hours and nothing can change it`() {
         assertTrue(
-            "F12e: three hours is the default, not six",
-            rules.contains("const val DEFAULT_WINDOW_HOURS = 3")
+            "F2a: one span for both grids",
+            rules.contains("internal const val GRID_SPAN_HOURS = 6")
         )
         assertTrue(
-            "and the levels are the spec's three, in cycle order",
-            rules.contains("val ZOOM_WINDOW_HOURS: List<Int> = listOf(3, 6, 12)")
+            "F1a: and one scale - the 3h scale - that does not depend on the span",
+            rules.contains("internal const val GRID_SCALE_DP_PER_MIN = 8")
+        )
+        assertFalse(
+            "F2b: the zoom's default, its levels, its cycle and the width it " +
+                "rewrote are gone rather than left dead: $rules",
+            rules.contains("DEFAULT_WINDOW_HOURS") ||
+                rules.contains("ZOOM_WINDOW_HOURS") ||
+                rules.contains("nextZoomHours") ||
+                rules.contains("withHours")
         )
         assertTrue(
-            "the cycle wraps 12 back to 3",
-            rules.contains("ZOOM_WINDOW_HOURS[(index + 1) % ZOOM_WINDOW_HOURS.size]")
+            "the grid opens on the fixed span, with no level handed to it",
+            grid.contains("var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }")
         )
         assertTrue(
-            "an unknown level opens the cycle at its first level instead of sticking",
-            rules.contains("if (index < 0) {") && rules.contains("ZOOM_WINDOW_HOURS.first()")
-        )
-        assertTrue(
-            "the grid opens on the level the screen hands it",
-            grid.contains("GridWindow.opening(nowMs, windowHours)")
-        )
-        assertTrue(
-            "a zoom change keeps the axis where the viewer left it",
-            grid.contains("window.withHours(windowHours)")
-        )
-        assertTrue(
-            "a page keeps the window's OWN span, so a zoomed window stays zoomed",
+            "a page keeps the window's OWN span",
             rules.contains("val span = durationMs")
         )
         assertTrue(
-            "the scrolled content is the window's width, not a fixed 6h one",
+            "the scrolled content is the window's width - 2880dp at six hours",
             grid.contains("gridContentWidthDp(window).dp")
         )
-        assertTrue(
-            "the header writes the level per profile",
-            screen.contains("guidePreferences.edit()\n                                    .putInt(\"grid_window_hours\", next)")
+        assertFalse(
+            "F3a: no zoom button in the header, and nothing writes the level",
+            header.contains("onCycleWindow") ||
+                screen.contains("putInt(\"grid_window_hours\"")
         )
         assertTrue(
-            "and reads it back, defaulting to the spec's three hours",
-            screen.contains("guidePreferences.getInt(\"grid_window_hours\", GuideGrid.DEFAULT_WINDOW_HOURS)")
+            "F4a: the stored level is cleared on open instead of being read",
+            screen.contains("guidePreferences.edit().remove(\"grid_window_hours\").apply()")
         )
     }
 

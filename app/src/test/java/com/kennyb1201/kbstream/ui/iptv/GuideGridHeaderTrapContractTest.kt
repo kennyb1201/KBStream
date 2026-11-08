@@ -44,7 +44,7 @@ class GuideGridHeaderTrapContractTest {
     // ── T1: every button drives the return itself ──────────────────────────
 
     @Test
-    fun `each of the six header buttons carries the DOWN return`() {
+    fun `each of the five header buttons carries the DOWN return`() {
         assertTrue(
             "F1a: one handler, built once, GRID-gated",
             header.contains(
@@ -56,7 +56,6 @@ class GuideGridHeaderTrapContractTest {
             header.contains("}.then(downReturn)")
         )
         listOf(
-            "onCycleWindow" to "zoom",
             "onTogglePreview" to "preview",
             "onSportsClick" to "sports",
             "onSearchClick" to "search",

@@ -35,7 +35,8 @@ class GuideGridEntryFocusContractTest {
     /** The screen's arming: the flag and the one effect that sets it. */
     private val arming = screen.slice(
         "var gridEntryFocusArmed by remember",
-        "The grid's zoom, in hours"
+        // F4a's span comment follows the arming, and is where this slice stops.
+        "// F4a: nothing reads the grid's span any more"
     )
 
     /** The grid's grab effect and its retry loop. */

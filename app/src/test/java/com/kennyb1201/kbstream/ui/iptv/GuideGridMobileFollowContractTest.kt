@@ -30,15 +30,15 @@ class GuideGridMobileFollowContractTest {
     private fun opening(hours: Int, now: Long = 1_700_000_000_000L) =
         GridWindow.opening(now, windowHours = hours)
 
-    // ── T1 / T5: a just-left window pages one page at its own zoom ─────────
+    // ── T1 / T5: a just-left window pages one page at its own span ─────────
 
     @Test
-    fun `a tick just past the right edge pages one page at the current zoom`() {
-        val window = opening(hours = GuideGrid.DEFAULT_WINDOW_HOURS)
+    fun `a tick just past the right edge pages one page at the fixed span`() {
+        val window = opening(hours = GRID_SPAN_HOURS)
         val next = autoFollowWindow(
             window = window,
             nowUtcMillis = window.endUtcMillis + 30_000L,
-            windowHours = GuideGrid.DEFAULT_WINDOW_HOURS,
+            windowHours = GRID_SPAN_HOURS,
             scheduleEndMs = null,
         )
 
@@ -61,61 +61,59 @@ class GuideGridMobileFollowContractTest {
     }
 
     @Test
-    fun `every zoom level follows at its own width`() {
-        listOf(6, 12).forEach { hours ->
-            val window = opening(hours = hours)
-            val next = autoFollowWindow(
-                window = window,
-                nowUtcMillis = window.endUtcMillis + 30_000L,
-                windowHours = hours,
-                scheduleEndMs = null,
-            )
+    fun `the follow pages three hours inside the six-hour span`() {
+        val window = opening(hours = GRID_SPAN_HOURS)
+        val next = autoFollowWindow(
+            window = window,
+            nowUtcMillis = window.endUtcMillis + 30_000L,
+            windowHours = GRID_SPAN_HOURS,
+            scheduleEndMs = null,
+        )
 
-            assertNotNull("$hours h must follow too", next)
-            assertEquals(
-                "$hours h pages the shared page length",
-                window.startUtcMillis + GuideGrid.PAGE_MS,
-                next!!.startUtcMillis
-            )
-            assertEquals(
-                "$hours h keeps its own span - the zoom does not snap back",
-                hours * hour,
-                next.durationMs
-            )
-        }
+        assertNotNull("the fixed span follows at its edge", next)
+        assertEquals(
+            "one 3h page - the shared page length, not the span",
+            window.startUtcMillis + GuideGrid.PAGE_MS,
+            next!!.startUtcMillis
+        )
+        assertEquals(
+            "and the window keeps its six hours, so the page is a scroll not a resize",
+            GRID_SPAN_HOURS * hour,
+            next.durationMs
+        )
     }
 
     // ── T2 / T3: the yanks that are gone ───────────────────────────────────
 
     @Test
     fun `a tick ten minutes past the edge does not move the window`() {
-        val window = opening(hours = GuideGrid.DEFAULT_WINDOW_HOURS)
+        val window = opening(hours = GRID_SPAN_HOURS)
 
         assertNull(
             "a viewer away for a while is not dragged forward",
-            autoFollowWindow(window, window.endUtcMillis + 10 * minute, 3, null)
+            autoFollowWindow(window, window.endUtcMillis + 10 * minute, GRID_SPAN_HOURS, null)
         )
     }
 
     @Test
     fun `a window that still holds now does not move, however far the viewer scrolled`() {
-        val window = opening(hours = GuideGrid.DEFAULT_WINDOW_HOURS)
+        val window = opening(hours = GRID_SPAN_HOURS)
 
         assertNull(
             "the tick is inside the window, so there is nothing to follow",
-            autoFollowWindow(window, window.startUtcMillis + hour, 3, null)
+            autoFollowWindow(window, window.startUtcMillis + hour, GRID_SPAN_HOURS, null)
         )
     }
 
     @Test
     fun `a viewer paged into later programs is never yanked back or forward`() {
         val now = 1_700_000_000_000L
-        val paged = GridWindow.opening(now, windowHours = 3)
+        val paged = GridWindow.opening(now)
             .paged(direction = 1, floorStartUtcMillis = now, maxEndUtcMillis = null)
 
         assertNull(
             "the window does not contain now, and no tick may move it",
-            autoFollowWindow(paged, now + 30_000L, 3, null)
+            autoFollowWindow(paged, now + 30_000L, GRID_SPAN_HOURS, null)
         )
     }
 
@@ -123,11 +121,20 @@ class GuideGridMobileFollowContractTest {
 
     @Test
     fun `a schedule that has ended before the next page does not move`() {
-        val window = opening(hours = GuideGrid.DEFAULT_WINDOW_HOURS)
+        val window = opening(hours = GRID_SPAN_HOURS)
+        // The page is 3h, so the guide has to end where that page would start:
+        // a six-hour window whose schedule still has three hours left may of
+        // course page forward into them.
+        val endedBeforeThePage = window.startUtcMillis + GuideGrid.PAGE_MS
 
         assertNull(
             "there is no time past the guide's last program to follow to",
-            autoFollowWindow(window, window.endUtcMillis + 30_000L, 3, window.endUtcMillis)
+            autoFollowWindow(
+                window,
+                window.endUtcMillis + 30_000L,
+                GRID_SPAN_HOURS,
+                endedBeforeThePage
+            )
         )
     }
 

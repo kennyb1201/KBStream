@@ -41,7 +41,6 @@ import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
@@ -280,12 +279,22 @@ fun GuideScreen(
     }
 
     /**
-     * Which view the guide draws (D0/D1). Opt-in, per profile, and the list stays
-     * the default: a viewer who opens this screen every day must not have it
-     * change shape under them.
+     * Which view the guide draws (D0/D1). Per profile, and the television opens
+     * on the grid when this profile has never picked one - the D-pad guide is
+     * the timeline here. A stored choice always wins, so a viewer who opens this
+     * screen every day keeps the shape they left it in.
      */
     var guideView by remember(activeProfileId) {
-        mutableStateOf(GuideViewMode.fromPref(guidePreferences.getString("guide_view", null)))
+        mutableStateOf(
+            GuideViewMode.fromPref(
+                guidePreferences.getString("guide_view", null),
+                // F1b: the television opens on the grid - a D-pad guide with a
+                // timeline is what the whole screen is built around, and the
+                // list is the fallback a viewer picks from the toggle. A stored
+                // choice, either way, still wins (F1c).
+                default = GuideViewMode.GRID,
+            )
+        )
     }
     // F3a: the shared ESPN score poll runs while - and only while - the grid is
     // the body on screen. Leaving it, or toggling back to the list, stops it: the
@@ -326,19 +335,12 @@ fun GuideScreen(
         // lands through the header return, exactly as it does today.
         if (guideView == GuideViewMode.GRID && !fromPlayback) gridEntryFocusArmed = true
     }
-    /**
-     * The grid's zoom, in hours (F12e): three by default, then six and twelve
-     * as the header's zoom button walks the cycle. Per profile, device-local,
-     * in the same store as the view toggle. A level this build does not know
-     * (a pref left by a build that had another one) opens the cycle at three
-     * instead of leaving the grid with no level it can draw.
-     */
-    var gridWindowHours by remember(activeProfileId) {
-        mutableStateOf(
-            guidePreferences.getInt("grid_window_hours", GuideGrid.DEFAULT_WINDOW_HOURS)
-                .takeIf { it in GuideGrid.ZOOM_WINDOW_HOURS }
-                ?: GuideGrid.DEFAULT_WINDOW_HOURS
-        )
+    // F4a: nothing reads the grid's span any more - it is fixed at
+    // [GRID_SPAN_HOURS] - so the old per-profile zoom key is cleared once on
+    // open, per profile, rather than left in the store for a future read to
+    // find and misread.
+    LaunchedEffect(activeProfileId) {
+        guidePreferences.edit().remove("grid_window_hours").apply()
     }
     /**
      * The grid's corner preview (F13d): on by default, per profile and
@@ -1599,19 +1601,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         // F3: no "49 in MLB.tv" on grid - every sidebar row
                         // already carries its own count.
                         showMeta = guideView != GuideViewMode.GRID,
-                        windowHours = gridWindowHours,
                         previewEnabled = gridPreviewEnabled,
-                        onCycleWindow = if (guideView == GuideViewMode.GRID) {
-                            {
-                                val next = GuideGrid.nextZoomHours(gridWindowHours)
-                                gridWindowHours = next
-                                guidePreferences.edit()
-                                    .putInt("grid_window_hours", next)
-                                    .apply()
-                            }
-                        } else {
-                            null
-                        },
                         onTogglePreview = if (guideView == GuideViewMode.GRID) {
                             {
                                 val next = !gridPreviewEnabled
@@ -1627,10 +1617,11 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         onSearchClick = { showSearch = true },
                         onSportsClick = onOpenSports,
                         guideView = guideView,
-                        // The List/Grid toggle, and the grid's zoom and preview
-                        // toggles beside it (F12e, F13d). Jump to now is gone
-                        // (round-2 F7 / F2b): the grid follows now on its own,
-                        // so the header has nothing left to press for it.
+                        // The List/Grid toggle, and the grid's preview toggle
+                        // beside it (F13d). Jump to now is gone (round-2 F7 /
+                        // F2b) and so is the zoom (F3a): the grid follows now on
+                        // its own and draws one fixed span, so the header has
+                        // nothing left to press for either.
                         onToggleView = {
                             val next = GuideViewMode.toggled(guideView)
                             guideView = next
@@ -1710,7 +1701,6 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             onEntryFocusDone = { gridEntryFocusArmed = false },
                             sidebarVisible = gridSidebarVisible,
                             onSidebarVisibleChange = { gridSidebarVisible = it },
-                            windowHours = gridWindowHours,
                             previewEnabled = gridPreviewEnabled,
                             previewChannel = gridPreviewChannel,
                             headerFocusRequester = viewToggleFocusRequester,
@@ -1746,12 +1736,12 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                                 null
                             },
                             onRequestWindow = { ids, start, end ->
-                                // F3c: the cap follows the zoom (4 an hour).
+                                // F3c: the cap follows the span (4 an hour).
                                 viewModel.requestGuideGridWindow(
                                     ids,
                                     start,
                                     end,
-                                    GuideGrid.programsPerWindow(gridWindowHours)
+                                    GuideGrid.programsPerWindow(GRID_SPAN_HOURS)
                                 )
                             },
                             modifier = Modifier.fillMaxSize()
@@ -3051,12 +3041,6 @@ private fun GuideHeader(
      */
     showMeta: Boolean = true,
     /**
-     * The grid's zoom level in hours, and the button that walks it (F12e).
-     * Grid view only: a zoom on the list would be a control with nothing to do.
-     */
-    windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
-    onCycleWindow: (() -> Unit)? = null,
-    /**
      * The corner preview's state and its header toggle (F13d). Grid view only -
      * the list has no preview to show or hide.
      */
@@ -3163,34 +3147,6 @@ private fun GuideHeader(
                             },
                             tint = KBAccent,
                             modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
-            // F12e: the window's zoom, 3h -> 6h -> 12h -> 3h. The glyph says
-            // what it does and the level beside it says which window is on
-            // screen - a D-pad press that silently changed the zoom would leave
-            // the viewer guessing. Same card, 24dp glyph and 12/9 padding as the
-            // rest of the row.
-            if (onCycleWindow != null) {
-                KBCard(onClick = onCycleWindow, modifier = downReturn) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ZoomIn,
-                            contentDescription =
-                                "Window: $windowHours hours. Switch to " +
-                                    "${GuideGrid.nextZoomHours(windowHours)} hours",
-                            tint = KBTextHi,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Text(
-                            text = "${windowHours}H",
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(start = 6.dp)
                         )
                     }
                 }

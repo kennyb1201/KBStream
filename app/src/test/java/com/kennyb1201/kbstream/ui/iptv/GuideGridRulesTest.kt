@@ -45,15 +45,15 @@ class GuideGridRulesTest {
     // ── T1: cell width ────────────────────────────────────────────────────
 
     @Test
-    fun `a 30 minute program is 120dp wide at 4dp per minute`() {
+    fun `a 30 minute program is 240dp wide at 8dp per minute`() {
         val start = at(18)
-        assertEquals(120, cellWidthDp(start, start + 30 * minute))
+        assertEquals(240, cellWidthDp(start, start + 30 * minute))
     }
 
     @Test
-    fun `a two hour film is 480dp wide`() {
+    fun `a two hour film is 960dp wide`() {
         val start = at(18)
-        assertEquals(480, cellWidthDp(start, start + 120 * minute))
+        assertEquals(960, cellWidthDp(start, start + 120 * minute))
     }
 
     @Test
@@ -74,7 +74,7 @@ class GuideGridRulesTest {
     // ── Window geometry ───────────────────────────────────────────────────
 
     private fun windowFrom(start: Long) =
-        GridWindow(start, start + GuideGrid.WINDOW_HOURS * hour)
+        GridWindow(start, start + GRID_SPAN_HOURS * hour)
 
     @Test
     fun `the grid opens at the top of the hour, six hours wide`() {
@@ -444,95 +444,49 @@ class GuideGridRulesTest {
         )
     }
 
-    // ── Round 3: the zoom ─────────────────────────────────────────────────
+    // ── The fixed span and the fixed scale ────────────────────────────────
 
     @Test
-    fun `the tv grid opens on three hours and the zoom walks three six twelve`() {
-        val window = GridWindow.opening(at(18), windowHours = GuideGrid.DEFAULT_WINDOW_HOURS)
-        assertEquals(3 * hour, window.durationMs)
-        assertEquals(3, GuideGrid.DEFAULT_WINDOW_HOURS)
-        assertEquals(listOf(3, 6, 12), GuideGrid.ZOOM_WINDOW_HOURS)
-        assertEquals(6, GuideGrid.nextZoomHours(3))
-        assertEquals(12, GuideGrid.nextZoomHours(6))
-        assertEquals(3, GuideGrid.nextZoomHours(12))
+    fun `both grids open on the fixed six-hour span`() {
+        val window = GridWindow.opening(at(18))
+        assertEquals(6, GRID_SPAN_HOURS)
+        assertEquals(6 * hour, window.durationMs)
     }
 
     @Test
-    fun `an unknown zoom level opens the cycle at three hours`() {
-        assertEquals(3, GuideGrid.nextZoomHours(9))
-        assertEquals(3, GuideGrid.nextZoomHours(0))
-    }
-
-    @Test
-    fun `a page keeps the window's own span, so a zoomed window stays zoomed`() {
-        val window = GridWindow.opening(at(18), windowHours = 3)
+    fun `a page keeps the window's own span`() {
+        val window = GridWindow.opening(at(18))
         val page = window.paged(
             direction = 1,
             floorStartUtcMillis = window.startUtcMillis,
             maxEndUtcMillis = null,
         )
-        assertEquals(3 * hour, page.durationMs)
+        assertEquals(6 * hour, page.durationMs)
         assertEquals(window.startUtcMillis + GuideGrid.PAGE_MS, page.startUtcMillis)
     }
 
     @Test
-    fun `a zoom change keeps the axis where it was and only changes its width`() {
-        val window = GridWindow.opening(at(18), windowHours = 3)
-        val wide = window.withHours(12)
-        assertEquals(window.startUtcMillis, wide.startUtcMillis)
-        assertEquals(12 * hour, wide.durationMs)
-    }
-
-    // ── Round 4: the phone's zoom (spec T2) ───────────────────────────────
-
-    @Test
-    fun `the zoom's scale is eight four two dp a minute`() {
-        assertEquals(8, GuideGrid.pxPerMin(3))
-        assertEquals(4, GuideGrid.pxPerMin(6))
-        assertEquals(2, GuideGrid.pxPerMin(12))
-    }
-
-    @Test
-    fun `an unknown zoom level draws at the six-hour scale`() {
-        assertEquals(GuideGrid.PX_PER_MIN, GuideGrid.pxPerMin(9))
-        assertEquals(GuideGrid.PX_PER_MIN, GuideGrid.pxPerMin(0))
-    }
-
-    @Test
-    fun `the zoomed content is 1440dp wide at every level`() {
-        GuideGrid.ZOOM_WINDOW_HOURS.forEach { hours ->
-            val minutes = hours * GuideGrid.MINUTES_PER_HOUR
-            assertEquals(
-                "a ${hours}h window at its scale",
-                GuideGrid.CONTENT_WIDTH_DP,
-                minutes * GuideGrid.pxPerMin(hours)
-            )
-        }
-    }
-
-    @Test
-    fun `a zoomed cell is its air time at that level's scale`() {
+    fun `the scale is eight dp a minute, at any span`() {
+        assertEquals(8, GRID_SCALE_DP_PER_MIN)
         val start = at(18)
-        val end = start + 120 * minute
-        assertEquals(960, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(3)))
-        assertEquals(480, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(6)))
-        assertEquals(240, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(12)))
+        assertEquals(240, cellWidthDp(start, start + 30 * minute))
+        assertEquals(480, cellWidthDp(start, start + 60 * minute))
+        assertEquals(960, cellWidthDp(start, start + 120 * minute))
     }
 
     @Test
-    fun `the per-channel cap follows the zoom at four an hour`() {
-        assertEquals(12, GuideGrid.programsPerWindow(3))
-        assertEquals(24, GuideGrid.programsPerWindow(6))
-        assertEquals(48, GuideGrid.programsPerWindow(12))
-        // The six-hour level is the read path's own default.
-        assertEquals(GuideGrid.PER_CHANNEL_LIMIT, GuideGrid.programsPerWindow(6))
+    fun `the canvas is the span's width, 2880dp at six hours`() {
+        assertEquals(2880, contentWidthDp(GRID_SPAN_HOURS))
+        assertEquals(2880, gridContentWidthDp(GridWindow.opening(at(18))))
+        // An hour mark is the same 480dp the three-hour window's was.
+        assertEquals(480, GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN)
     }
 
     @Test
-    fun `the scrolled content is the window's own width`() {
-        assertEquals(720, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 3)))
-        assertEquals(1440, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 6)))
-        assertEquals(2880, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 12)))
+    fun `the per-channel cap is 24 at the fixed span`() {
+        assertEquals(24, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
+        // The six-hour span is the read path's own default.
+        assertEquals(GuideGrid.PER_CHANNEL_LIMIT, GuideGrid.programsPerWindow(GRID_SPAN_HOURS))
     }
 
     // ── Round 3: the top block's meta line ────────────────────────────────

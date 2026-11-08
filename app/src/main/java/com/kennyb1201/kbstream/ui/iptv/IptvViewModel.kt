@@ -1140,8 +1140,8 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         windowEnd: Long,
         /**
          * Programs a channel may contribute, at most (F3c). The grids pass
-         * `GuideGrid.programsPerWindow` so a zoomed window asks for what its
-         * span holds; the default is the six-hour level.
+         * `GuideGrid.programsPerWindow` so a wider window asks for what its
+         * span holds; the default is the fixed six-hour span's own cap.
          */
         perChannelLimit: Int = GuideGrid.PER_CHANNEL_LIMIT
     ) {

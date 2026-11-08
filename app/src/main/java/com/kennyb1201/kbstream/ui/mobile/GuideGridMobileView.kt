@@ -49,10 +49,13 @@ import com.kennyb1201.kbstream.ui.iptv.GridWindow
 import com.kennyb1201.kbstream.ui.iptv.GuideGrid
 import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.GuideScore
+import com.kennyb1201.kbstream.ui.iptv.GRID_SCALE_DP_PER_MIN
+import com.kennyb1201.kbstream.ui.iptv.GRID_SPAN_HOURS
 import com.kennyb1201.kbstream.ui.iptv.autoFollowWindow
 import com.kennyb1201.kbstream.ui.iptv.guideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.cellWidthDp
 import com.kennyb1201.kbstream.ui.iptv.gridCellHeadline
+import com.kennyb1201.kbstream.ui.iptv.gridContentWidthDp
 import com.kennyb1201.kbstream.ui.iptv.hourMarks
 import com.kennyb1201.kbstream.ui.iptv.scoreFor
 import com.kennyb1201.kbstream.ui.iptv.liveFillFraction
@@ -69,7 +72,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 /**
  * The phone's timeline grid (spec F5a).
  *
- * The same data, the same zoomable window, the same cell widths and the same
+ * The same data, the same six-hour window, the same cell widths and the same
  * detail strip as the TV grid - and none of the TV focus machinery: on a phone
  * the axis is dragged with a finger and a cell is tapped, so every D-pad rule in
  * §3 is replaced by "the row scrolls sideways". Keeping it in its own tv-free
@@ -89,14 +92,6 @@ internal fun GuideGridMobileView(
      * matcher. Empty is the ordinary case and draws the reminder line as before.
      */
     scores: List<GuideScore> = emptyList(),
-    /**
-     * The zoom level: how many hours of air time the window draws (F3a).
-     *
-     * The screen owns it, because the header's zoom button sets it and persists
-     * it, and this view only draws whatever level it is handed - the TV's shape
-     * (`GuideGridView`'s `windowHours`).
-     */
-    windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
     nowMs: Long,
     /**
      * The guide's hard right edge (F1a): the end of the newest program it has
@@ -111,23 +106,17 @@ internal fun GuideGridMobileView(
     onRequestWindow: (List<String>, Long, Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // F3b: the zoom is a scale - the content stays the same width and more or
-    // less air time sits on it. Every width below reads THIS value, so the hour
-    // marks, the cells and the now-line cannot drift apart at a level.
-    val pxPerMin = GuideGrid.pxPerMin(windowHours)
+    // F1a: one fixed scale, the same 8dp a minute the three-hour window drew at
+    // - the span grew, the cells did not shrink. Every width below reads THIS
+    // value, so the hour marks, the cells and the now-line cannot drift apart.
+    val pxPerMin = GRID_SCALE_DP_PER_MIN
 
     // The window opens at now and then stays put until the clock leaves it
     // (F1b). It used to re-open on the hour, which moved the axis whether the
     // viewer had browsed away or not - a viewer scrolled right to tonight's games
     // was yanked forward at the top of the hour. Nothing moves the axis now
     // except the auto-follow below.
-    var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }
-    // F3a: a zoom change keeps the window's START - the viewer stays on the air
-    // time they were looking at and only the scale changes (the TV's F12e rule).
-    LaunchedEffect(windowHours) {
-        val next = window.withHours(windowHours)
-        if (next != window) window = next
-    }
+    var window by remember { mutableStateOf(GridWindow.opening(nowMs)) }
 
     val timeScroll = rememberScrollState()
     val listState = rememberLazyListState()
@@ -137,7 +126,7 @@ internal fun GuideGridMobileView(
     // [autoFollowWindow] rule, not a mobile fork of it. Only a window the clock
     // has just left follows, so a viewer paged forward is never yanked back and
     // one who has been away for an hour is not dragged forward; the move is one
-    // page at the current zoom, and the guide's schedule end still stops the
+    // page at the fixed span, and the guide's schedule end still stops the
     // axis (F1c/F1d).
     //
     // F2a: the scroll reset is this file's half of the TV's focus re-anchor
@@ -151,7 +140,7 @@ internal fun GuideGridMobileView(
         val next = autoFollowWindow(
             window = window,
             nowUtcMillis = nowMs,
-            windowHours = windowHours,
+            windowHours = GRID_SPAN_HOURS,
             scheduleEndMs = scheduleEndMs,
         ) ?: return@LaunchedEffect
         autoFollowedEdgeMs = window.endUtcMillis
@@ -170,7 +159,7 @@ internal fun GuideGridMobileView(
         }
     }
 
-    // F3d: a zoom re-clips every cell, so the strip's copy of the tapped program
+    // F3d: a window change re-clips every cell, so the strip's copy of the tapped program
     // is re-resolved in the new window by the air time it covered - kept while
     // that time is still on the axis, dropped when it is not.
     LaunchedEffect(rows) {
@@ -247,7 +236,7 @@ internal fun GuideGridMobileView(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .width(GuideGrid.CONTENT_WIDTH_DP.dp)
+                                    .width(gridContentWidthDp(window).dp)
                                     .height(MOBILE_ROW_HEIGHT)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize()) {
@@ -407,7 +396,7 @@ private fun MobileChannelCell(
 @Composable
 private fun MobileProgramCell(
     cell: GridCell,
-    /** The zoom's scale (F3b); the cell is as wide as its air time at it. */
+    /** The grid's fixed scale (F1a); the cell is as wide as its air time at it. */
     pxPerMin: Int,
     isLive: Boolean,
     nowMs: Long,

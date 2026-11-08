@@ -19,11 +19,11 @@ import java.util.Locale
  * `internal`, Compose-free, and takes primitives or [GridCell]s, so
  * `GuideGridRulesTest` runs it on the JVM.
  *
- * The geometry constants are the spec's, not tunables invented here: 4dp per
- * minute (a 30-minute program is 120dp), a 56dp floor so a 5-minute short is
- * still a target, a window paged 3 hours at a time (6 hours on the phone,
- * 3/6/12 on the TV grid's zoom), 24 programs per channel per window read, and
- * the 80-row page the ViewModel already caps a guide request at.
+ * The geometry constants are the spec's, not tunables invented here: 8dp per
+ * minute (a 30-minute program is 240dp), a 56dp floor so a 5-minute short is
+ * still a target, one fixed 6-hour span on both grids paged 3 hours at a time,
+ * 24 programs per channel per window read, and the 80-row page the ViewModel
+ * already caps a guide request at.
  */
 
 // The three pinned group labels. The phone guide has its own spellings
@@ -46,72 +46,66 @@ private val GRID_DAY_LABEL: DateTimeFormatter =
  *
  * The stored value is the pref's own spelling, so a build that ships the grid
  * and one that predates it read the same store without a migration: anything
- * unrecognised (including a missing key) is the list, which is what D1 requires -
- * the grid is opt-in and the default must not move under a daily viewer.
+ * unrecognised (including a missing key) falls back to the default its caller
+ * names.
+ *
+ * The default belongs to the surface, not to the mode: the television has a
+ * D-pad and room for the timeline, so a guide that has never been set there
+ * opens on the grid, while the phone keeps the list. [fromPref] therefore takes
+ * the default as a parameter and the enum itself stays neutral - a stored
+ * choice always wins over it.
  */
 internal enum class GuideViewMode(val prefValue: String) {
     LIST("list"),
     GRID("grid");
 
     companion object {
-        fun fromPref(value: String?): GuideViewMode =
-            entries.firstOrNull { it.prefValue == value } ?: LIST
+        fun fromPref(
+            value: String?,
+            default: GuideViewMode = LIST,
+        ): GuideViewMode =
+            entries.firstOrNull { it.prefValue == value } ?: default
 
         fun toggled(current: GuideViewMode): GuideViewMode =
             if (current == LIST) GRID else LIST
     }
 }
 
+/**
+ * The scale both grids draw at, in dp per minute of air time: a half-hour
+ * program is 240dp wide and an hour mark 480dp - the same cells the three-hour
+ * window used to have, now with an evening's worth of them on the canvas.
+ *
+ * Fixed, not a function of the span: a wider span scrolls further, it does not
+ * squeeze the cells.
+ */
+internal const val GRID_SCALE_DP_PER_MIN = 8
+
+/**
+ * The span both grids draw, in hours: an evening at a glance at full cell size.
+ *
+ * Fixed, not a pref - three hours paged to the next program too often and
+ * twelve squeezed the cells, so there is one span and no zoom control to leave
+ * it. The window still pages in [GuideGrid.PAGE_HOURS] pages.
+ */
+internal const val GRID_SPAN_HOURS = 6
+
 internal object GuideGrid {
-
-    /**
-     * The window the phone grid drew before it had a zoom, in hours.
-     *
-     * Both grids now open on [DEFAULT_WINDOW_HOURS] and walk
-     * [ZOOM_WINDOW_HOURS] (F12e on the TV, F1-F3 on the phone); this is left as
-     * the span a caller that passes no level still gets.
-     */
-    const val WINDOW_HOURS = 6
-
-    /**
-     * The window the TV grid opens on, in hours (F12e, amending the earlier
-     * six-hour default).
-     *
-     * Three hours is the TiviMate-like view: a two-hour film is 960dp wide, so
-     * its title reads instead of truncating the way it did at six. It is the
-     * default only - the zoom button still reaches every level.
-     */
-    const val DEFAULT_WINDOW_HOURS = 3
-
-    /**
-     * The zoom's levels, in hours, in the order the header button walks them:
-     * 3h -> 6h -> 12h -> 3h. Six and twelve are unchanged; three is new, and is
-     * where a fresh install opens.
-     */
-    val ZOOM_WINDOW_HOURS: List<Int> = listOf(3, 6, 12)
 
     /** How far one page of the time axis moves, in hours. */
     const val PAGE_HOURS = 3
 
-    /** Width of one minute of air time at the six-hour window. */
-    const val PX_PER_MIN = 4
-
     /**
-     * Width of the scrolled content at every zoom level (F3b): the zoom is a
-     * scale, not a wider canvas - 3h x 8, 6h x 4 and 12h x 2 all land on 1440.
-     */
-    const val CONTENT_WIDTH_DP = 1440
-
-    /**
-     * Programs per channel per hour of window (F3c): 4, so a 3h window asks for
-     * 12, six for 24 and twelve for 48.
+     * Programs per channel per hour of window (F3c): 4, so the fixed six-hour
+     * window asks for 24.
      */
     const val PROGRAMS_PER_HOUR = 4
 
     /**
-     * The narrowest a cell may render. A 5-minute program is 20dp at
-     * [PX_PER_MIN] - too small to read, focus or hit - so it renders here and
-     * clips its title; its real start/end still drive focus and the top block.
+     * The narrowest a cell may render. A 5-minute program is 40dp at
+     * [GRID_SCALE_DP_PER_MIN] - too small to read, focus or hit - so it renders
+     * here and clips its title; its real start/end still drive focus and the
+     * top block.
      */
     const val MIN_CELL_WIDTH_DP = 56
 
@@ -122,12 +116,12 @@ internal object GuideGrid {
     const val CHANNEL_COLUMN_WIDTH_DP = 200
 
     /**
-     * Programs per channel per window read when the caller names no zoom.
+     * Programs per channel per window read when the caller names no span.
      *
      * A 6-hour window of 30-minute programs is 12; 24 leaves room for the
      * short-form channels (news, music) whose schedules run 10-15 minutes
-     * without letting the read grow. A zoomed grid asks
-     * [programsPerWindow] instead, so the cap follows the span (F3c).
+     * without letting the read grow. The grids ask [programsPerWindow] instead,
+     * so the cap follows the span (F3c).
      */
     const val PER_CHANNEL_LIMIT = 24
 
@@ -147,35 +141,8 @@ internal object GuideGrid {
     val PAGE_MS: Long = PAGE_HOURS * HOUR_MS
 
     /**
-     * The window the zoom reaches after [currentHours]: 3 -> 6 -> 12 -> 3.
-     *
-     * An unknown level (a pref written by a build that had another one) opens
-     * the cycle at its first level rather than throwing or sticking.
-     */
-    fun nextZoomHours(currentHours: Int): Int {
-        val index = ZOOM_WINDOW_HOURS.indexOf(currentHours)
-        return if (index < 0) {
-            ZOOM_WINDOW_HOURS.first()
-        } else {
-            ZOOM_WINDOW_HOURS[(index + 1) % ZOOM_WINDOW_HOURS.size]
-        }
-    }
-
-    /**
-     * The scale a [windowHours] window draws at (F3b): [CONTENT_WIDTH_DP] spent
-     * over the window's minutes, i.e. 8 / 4 / 2 dp a minute for 3h / 6h / 12h.
-     *
-     * An unknown level falls back to [PX_PER_MIN] rather than zooming a grid
-     * that has no level it can draw.
-     */
-    fun pxPerMin(windowHours: Int): Int {
-        if (windowHours !in ZOOM_WINDOW_HOURS) return PX_PER_MIN
-        return CONTENT_WIDTH_DP / (windowHours * MINUTES_PER_HOUR)
-    }
-
-    /**
      * How many programs a channel may contribute to a [windowHours] window
-     * (F3c), at [PROGRAMS_PER_HOUR]: 12 / 24 / 48 for 3h / 6h / 12h.
+     * (F3c), at [PROGRAMS_PER_HOUR]: 24 for the fixed six-hour span.
      */
     fun programsPerWindow(windowHours: Int): Int =
         windowHours.coerceAtLeast(1) * PROGRAMS_PER_HOUR
@@ -218,8 +185,8 @@ internal data class GridWindow(
         maxEndUtcMillis: Long?,
     ): GridWindow {
         if (direction == 0) return this
-        // The page keeps the window's OWN span, so a zoomed window pages at
-        // the zoom's width instead of snapping back to six hours (F12e).
+        // The page keeps the window's OWN span, so a page is the same six hours
+        // it was showing, moved (F2c).
         val span = durationMs
         val nextStart = startUtcMillis + direction * GuideGrid.PAGE_MS
         if (direction < 0 && nextStart < floorStartUtcMillis) {
@@ -233,25 +200,16 @@ internal data class GridWindow(
         return GridWindow(nextStart, nextStart + span)
     }
 
-    /**
-     * The same start, [windowHours] wide - what a zoom change does to the
-     * window (F12e): the axis stays where the viewer left it, only more or less
-     * of it is drawn.
-     */
-    fun withHours(windowHours: Int): GridWindow {
-        val span = windowHours.coerceAtLeast(1) * GuideGrid.HOUR_MS
-        return GridWindow(startUtcMillis, startUtcMillis + span)
-    }
-
     companion object {
         /**
          * The window the grid opens on: the current hour, [windowHours] wide.
          *
-         * Both grids pass their zoom level (F1a, F3a).
+         * Both grids open on [GRID_SPAN_HOURS]; the parameter is what lets a
+         * rule (and its test) build a narrower window without a zoom control.
          */
         fun opening(
             nowUtcMillis: Long,
-            windowHours: Int = GuideGrid.WINDOW_HOURS,
+            windowHours: Int = GRID_SPAN_HOURS,
         ): GridWindow {
             val start = floorToHour(nowUtcMillis)
             val span = windowHours.coerceAtLeast(1) * GuideGrid.HOUR_MS
@@ -260,9 +218,20 @@ internal data class GridWindow(
     }
 }
 
-/** The width of [window]'s scrolled content in dp - one dp width per minute. */
+/**
+ * The width of [window]'s scrolled content in dp: [GRID_SCALE_DP_PER_MIN] per
+ * minute of it, so the fixed six-hour window is 2880dp and a page of the axis
+ * never changes the scale under the cells.
+ */
 internal fun gridContentWidthDp(window: GridWindow): Int =
-    ((window.durationMs / 60_000L) * GuideGrid.PX_PER_MIN).toInt()
+    ((window.durationMs / 60_000L) * GRID_SCALE_DP_PER_MIN).toInt()
+
+/**
+ * The width [spanHours] of air time is drawn at (F1b): the canvas is the span's
+ * width, not a fixed 1440dp the cells get squeezed into.
+ */
+internal fun contentWidthDp(spanHours: Int): Int =
+    spanHours.coerceAtLeast(1) * GuideGrid.MINUTES_PER_HOUR * GRID_SCALE_DP_PER_MIN
 
 /** The top of the hour [millis] falls in, in the device's zone. */
 internal fun floorToHour(millis: Long): Long {
@@ -395,7 +364,8 @@ internal fun rowCells(
 }
 
 /**
- * Width of a cell in dp: 4dp a minute, floored at [GuideGrid.MIN_CELL_WIDTH_DP].
+ * Width of a cell in dp: [GRID_SCALE_DP_PER_MIN] a minute, floored at
+ * [GuideGrid.MIN_CELL_WIDTH_DP] - 240dp for half an hour.
  *
  * [startUtcMillis] and [endUtcMillis] are the cell's CLIPPED span, i.e. the part
  * on screen, because the width has to match the geometry of the axis; the
@@ -404,7 +374,7 @@ internal fun rowCells(
 internal fun cellWidthDp(
     startUtcMillis: Long,
     endUtcMillis: Long,
-    pxPerMin: Int = GuideGrid.PX_PER_MIN,
+    pxPerMin: Int = GRID_SCALE_DP_PER_MIN,
     minWidthDp: Int = GuideGrid.MIN_CELL_WIDTH_DP,
 ): Int {
     val minutes = ((endUtcMillis - startUtcMillis) / 60_000L).toInt()
@@ -829,9 +799,10 @@ internal const val GRID_AUTO_FOLLOW_SLACK_MS = 120_000L
  *    never yanked back to now, and one who has been away for an hour is not
  *    dragged forward - [nowUtcMillis] may sit past the edge by at most
  *    [GRID_AUTO_FOLLOW_SLACK_MS];
- *  - the move is one page, at the window's own zoom, through [GridWindow.paged]
- *    - so the floor (never before the current hour) and the guide's schedule
- *    end still apply, and a window pinned at the end answers itself;
+ *  - the move is one page, keeping the window's own span, through
+ *    [GridWindow.paged] - so the floor (never before the current hour) and the
+ *    guide's schedule end still apply, and a window pinned at the end answers
+ *    itself;
  *  - a schedule that has ended before the next page answers null, i.e. no move.
  */
 internal fun autoFollowWindow(
