@@ -9245,19 +9245,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         // ── Subtitle ──────────────────────────────────────────
-        // Live TV does nothing with subtitles here: a channel is a stream, not
-        // an episode, so there is no title to search and no meaningful track to
-        // arm. Left in, an IPTV channel whose stream carried no text track fell
-        // through SubtitleTrackRules to Off, which pulled a subtitle from
-        // OpenSubtitles, rebuilt the player to attach it (the ~1s rebuffer) and
-        // raised the "Subtitles: ..." toast - none of it asked for, on live TV.
-        // The mode is consulted before the language. Off means no subtitle is
-        // ever armed on its own: the old blank preference only told media3
-        // "no preference", and media3's own default selection would arm a
-        // track anyway - the "it keeps turning subtitles back on" report.
+        // Live TV never arms a subtitle on its own, in any mode. A channel is a
+        // stream, not an episode: there is no title to search and no track the
+        // viewer asked for. Doing nothing here was not neutral - media3's own
+        // DefaultTrackSelector arms the stream's default-flagged caption track
+        // (CEA-608/708, DVB, HLS WebVTT) when nothing disables text, so every
+        // live start came up with subtitles the viewer never asked for, and the
+        // latch resets per player build, so every zap armed them again. The
+        // mode is a VOD preference; on live the track is disabled outright,
+        // exactly as the VOD Off branch does it, and the viewer picks captions
+        // by hand for the session (the remembered restore is already off for
+        // live) when they want them.
+        // For VOD the mode is consulted before the language. Off means no
+        // subtitle is ever armed on its own: the old blank preference only told
+        // media3 "no preference", and media3's own default selection would arm
+        // a track anyway - the "it keeps turning subtitles back on" report.
         // Forced needs no language to run; On is the old language rules.
         val subtitleMode = SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this))
-        if (!isLiveChannel && subtitleMode == SubtitleModeRules.OFF) {
+        if (isLiveChannel) {
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                .build()
+            // LATCHED like the VOD Off branch: this is a decision, not a
+            // pre-pass. Without it a rebuffer's READY re-runs the pass and
+            // takes down a caption the viewer had just picked by hand for the
+            // session (audit E-F1, 2026-10-27). The latch resets per player
+            // build and on switchToSource(), so every channel start - including
+            // a zap to the next one - disables again.
+            changed = true
+            Log.i(
+                "PLAYER_LANG",
+                "Live channel: text track disabled at start " +
+                    "(mode=${SubtitleModeRules.label(subtitleMode)})"
+            )
+        } else if (!isLiveChannel && subtitleMode == SubtitleModeRules.OFF) {
             // Explicit Off: the text track is disabled outright, so neither
             // media3's own selection nor a re-selection after a stream rebuild
             // can arm one.
