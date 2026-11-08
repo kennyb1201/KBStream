@@ -73,7 +73,8 @@ class GuideGridRulesTest {
 
     // ── Window geometry ───────────────────────────────────────────────────
 
-    private fun windowFrom(start: Long) = GridWindow(start, start + GuideGrid.WINDOW_MS)
+    private fun windowFrom(start: Long) =
+        GridWindow(start, start + GuideGrid.WINDOW_HOURS * hour)
 
     @Test
     fun `the grid opens at the top of the hour, six hours wide`() {
