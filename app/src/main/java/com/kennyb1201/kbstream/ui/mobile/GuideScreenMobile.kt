@@ -825,27 +825,14 @@ fun GuideScreenMobile(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
                 )
             }
-            // Which source last landed here, and whether the background
-            // refresh has given up: the two facts that say a guide is going
-            // stale BEFORE it reads blank, beside the button that fixes it.
-            if (guideStatus.lastGoodLabel().isNotBlank()) {
-                Text(
-                    text = guideStatus.lastGoodLabel(),
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
-                )
-            }
-            if (guideStatus.failing) {
-                Text(
-                    text = GuideRefreshStatus.FAILING_LABEL,
-                    color = KBDanger,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
-                )
-            }
+            // Which source last landed and whether the background refresh gave
+            // up used to sit here, on the screen the viewer browses. They are
+            // the facts that say a guide is going stale BEFORE it reads blank,
+            // so they move rather than being deleted - into the setup panel,
+            // beside the Import guide button that fixes them (F1a). What stays
+            // here is what is about THIS moment: the import's own progress
+            // label above, and an active error below (F1b). The freed rows go
+            // to the guide - no placeholder takes their place (F1c).
             guideError?.takeIf { it.isNotBlank() }?.let { message ->
                 MobileGuideErrorLine(message)
             }
@@ -1921,6 +1908,32 @@ private fun MobileGuideSetup(
                     label = "CANCEL IMPORT",
                     modifier = Modifier.fillMaxWidth()
                 ) { onCancelGuideImport() }
+            }
+
+            // F1a: the two PERSISTENT status lines live beside the button that
+            // fixes them - which source last landed, and whether the background
+            // refresh has given up. They were on the guide's main column, under
+            // the chips, taking rows from the grid every time the viewer opened
+            // it; the reason they exist is unchanged (a guide goes stale before
+            // it reads blank), so they moved here instead of going away. The
+            // TRANSIENT import label stays on the main screen (F1b).
+            if (guideStatus.lastGoodLabel().isNotBlank()) {
+                Text(
+                    text = guideStatus.lastGoodLabel(),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
+            if (guideStatus.failing) {
+                Text(
+                    text = GuideRefreshStatus.FAILING_LABEL,
+                    color = KBDanger,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
             }
 
             if (guideImportLabel.isNotBlank()) {

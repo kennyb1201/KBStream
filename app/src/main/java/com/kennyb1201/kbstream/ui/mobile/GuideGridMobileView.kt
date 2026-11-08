@@ -242,7 +242,14 @@ internal fun GuideGridMobileView(
             }
         }
 
-        MobileGridDetailStrip(selected = selected, nowMs = nowMs)
+        // F2a: the strip is the TAPPED program's detail, so nothing selected
+        // means no strip at all - no hint text, no placeholder, and the row
+        // list keeps the height. The TV removed its bottom strip entirely in
+        // round-2 F10; the phone kept one because it is the only place a tapped
+        // program's description shows, which is still true when one IS tapped.
+        selected?.let { picked ->
+            MobileGridDetailStrip(selected = picked, nowMs = nowMs)
+        }
     }
 }
 
@@ -384,7 +391,8 @@ private fun MobileProgramCell(
 
 @Composable
 private fun MobileGridDetailStrip(
-    selected: Pair<IptvChannelWithEpg, GridCell>?,
+    /** The tapped program; non-null by construction - see the call site (F2a). */
+    selected: Pair<IptvChannelWithEpg, GridCell>,
     nowMs: Long,
 ) {
     Box(
@@ -396,22 +404,17 @@ private fun MobileGridDetailStrip(
             .border(1.dp, KBSurfaceRaised, KBShapeCard)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        val item = selected?.first
-        val cell = selected?.second
+        val item = selected.first
+        val cell = selected.second
         Column {
             Text(
-                text = when {
-                    item == null -> "Tap a program to watch, remind or catch up."
-                    cell == null -> ""
-                    cell.isGap -> "No program data"
-                    else -> cell.title.orEmpty()
-                },
-                color = if (item == null || cell?.isGap != false) KBTextLo else KBTextHi,
+                text = if (cell.isGap) "No program data" else cell.title.orEmpty(),
+                color = if (cell.isGap) KBTextLo else KBTextHi,
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (item != null && cell != null && !cell.isGap) {
+            if (!cell.isGap) {
                 Text(
                     text = "${item.channel.displayName} · ${gridCellHeadline(cell, nowMs)}",
                     color = KBAccent,

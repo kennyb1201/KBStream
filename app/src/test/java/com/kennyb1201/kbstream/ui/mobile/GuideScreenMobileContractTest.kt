@@ -388,12 +388,14 @@ class GuideScreenMobileContractTest {
         )
 
         // T3: the lines under the chips are not group chips and are not gated -
-        // they render in both views, unchanged.
+        // they render in both views. The two PERSISTENT ones (which source last
+        // landed, whether the refresh gave up) moved into the setup panel
+        // beside IMPORT GUIDE - see MobileGuideChromeContractTest - so what is
+        // left here is what belongs to the moment: the import label and an
+        // active error.
         val gateAt = mobile.indexOf("if (guideShowsGroupChips(guideView, query)) {")
         listOf(
             "if (guideImportLabel.isNotBlank()) {",
-            "if (guideStatus.lastGoodLabel().isNotBlank()) {",
-            "if (guideStatus.failing) {",
             "MobileGuideErrorLine(message)"
         ).forEach { line ->
             val at = mobile.indexOf(line)
