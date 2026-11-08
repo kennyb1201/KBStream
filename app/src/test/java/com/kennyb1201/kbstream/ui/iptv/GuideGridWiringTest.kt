@@ -243,9 +243,11 @@ class GuideGridWiringTest {
     @Test
     fun `the phone grid shares the geometry but none of the focus machinery`() {
         assertTrue(
-            "same window, same cell widths, same detail strip",
-            mobileGrid.contains("GridWindow.opening(nowMs)") &&
-                mobileGrid.contains("cellWidthDp(cell.startUtcMillis, cell.endUtcMillis)") &&
+            "same window rule, same cell-width rule, same detail strip",
+            mobileGrid.contains("GridWindow.opening(nowMs, windowHours)") &&
+                mobileGrid.contains(
+                    "cellWidthDp(cell.startUtcMillis, cell.endUtcMillis, pxPerMin = pxPerMin)"
+                ) &&
                 mobileGrid.contains("MobileGridDetailStrip(")
         )
         assertFalse(

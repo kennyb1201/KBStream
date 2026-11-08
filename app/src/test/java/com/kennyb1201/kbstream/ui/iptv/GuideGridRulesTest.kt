@@ -483,6 +483,51 @@ class GuideGridRulesTest {
         assertEquals(12 * hour, wide.durationMs)
     }
 
+    // ── Round 4: the phone's zoom (spec T2) ───────────────────────────────
+
+    @Test
+    fun `the zoom's scale is eight four two dp a minute`() {
+        assertEquals(8, GuideGrid.pxPerMin(3))
+        assertEquals(4, GuideGrid.pxPerMin(6))
+        assertEquals(2, GuideGrid.pxPerMin(12))
+    }
+
+    @Test
+    fun `an unknown zoom level draws at the six-hour scale`() {
+        assertEquals(GuideGrid.PX_PER_MIN, GuideGrid.pxPerMin(9))
+        assertEquals(GuideGrid.PX_PER_MIN, GuideGrid.pxPerMin(0))
+    }
+
+    @Test
+    fun `the zoomed content is 1440dp wide at every level`() {
+        GuideGrid.ZOOM_WINDOW_HOURS.forEach { hours ->
+            val minutes = hours * GuideGrid.MINUTES_PER_HOUR
+            assertEquals(
+                "a ${hours}h window at its scale",
+                GuideGrid.CONTENT_WIDTH_DP,
+                minutes * GuideGrid.pxPerMin(hours)
+            )
+        }
+    }
+
+    @Test
+    fun `a zoomed cell is its air time at that level's scale`() {
+        val start = at(18)
+        val end = start + 120 * minute
+        assertEquals(960, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(3)))
+        assertEquals(480, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(6)))
+        assertEquals(240, cellWidthDp(start, end, pxPerMin = GuideGrid.pxPerMin(12)))
+    }
+
+    @Test
+    fun `the per-channel cap follows the zoom at four an hour`() {
+        assertEquals(12, GuideGrid.programsPerWindow(3))
+        assertEquals(24, GuideGrid.programsPerWindow(6))
+        assertEquals(48, GuideGrid.programsPerWindow(12))
+        // The six-hour level is the read path's own default.
+        assertEquals(GuideGrid.PER_CHANNEL_LIMIT, GuideGrid.programsPerWindow(6))
+    }
+
     @Test
     fun `the scrolled content is the window's own width`() {
         assertEquals(720, gridContentWidthDp(GridWindow.opening(at(18), windowHours = 3)))

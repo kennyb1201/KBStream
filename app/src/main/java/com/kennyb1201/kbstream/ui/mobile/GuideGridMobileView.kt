@@ -67,7 +67,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 /**
  * The phone's timeline grid (spec F5a).
  *
- * The same data, the same 6-hour window, the same cell widths and the same
+ * The same data, the same zoomable window, the same cell widths and the same
  * detail strip as the TV grid - and none of the TV focus machinery: on a phone
  * the axis is dragged with a finger and a cell is tapped, so every D-pad rule in
  * §3 is replaced by "the row scrolls sideways". Keeping it in its own tv-free
@@ -87,6 +87,14 @@ internal fun GuideGridMobileView(
      * matcher. Empty is the ordinary case and draws the reminder line as before.
      */
     scores: List<GuideScore> = emptyList(),
+    /**
+     * The zoom level: how many hours of air time the window draws (F3a).
+     *
+     * The screen owns it, because the header's zoom button sets it and persists
+     * it, and this view only draws whatever level it is handed - the TV's shape
+     * (`GuideGridView`'s `windowHours`).
+     */
+    windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
     nowMs: Long,
     onPlay: (IptvChannelWithEpg) -> Unit,
     onToggleReminder: (IptvChannelWithEpg, GridCell) -> Unit,
@@ -94,7 +102,23 @@ internal fun GuideGridMobileView(
     onRequestWindow: (List<String>, Long, Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val window = remember(nowMs / 3_600_000L) { GridWindow.opening(nowMs) }
+    // F3b: the zoom is a scale - the content stays the same width and more or
+    // less air time sits on it. Every width below reads THIS value, so the hour
+    // marks, the cells and the now-line cannot drift apart at a level.
+    val pxPerMin = GuideGrid.pxPerMin(windowHours)
+
+    // The window re-opens on the hour (so a grid left open follows the clock),
+    // and takes the zoom level it opens at (F3a).
+    var window by remember(nowMs / GuideGrid.HOUR_MS) {
+        mutableStateOf(GridWindow.opening(nowMs, windowHours))
+    }
+    // F3a: a zoom change keeps the window's START - the viewer stays on the air
+    // time they were looking at and only the scale changes (the TV's F12e rule).
+    LaunchedEffect(windowHours) {
+        val next = window.withHours(windowHours)
+        if (next != window) window = next
+    }
+
     val timeScroll = rememberScrollState()
     val listState = rememberLazyListState()
     var selected by remember { mutableStateOf<Pair<IptvChannelWithEpg, GridCell>?>(null) }
@@ -107,6 +131,18 @@ internal fun GuideGridMobileView(
                 window = window,
             )
         }
+    }
+
+    // F3d: a zoom re-clips every cell, so the strip's copy of the tapped program
+    // is re-resolved in the new window by the air time it covered - kept while
+    // that time is still on the axis, dropped when it is not.
+    LaunchedEffect(rows) {
+        val picked = selected ?: return@LaunchedEffect
+        val mid = (picked.second.startUtcMillis + picked.second.endUtcMillis) / 2
+        selected = rows.firstOrNull { it.first.channel.id == picked.first.channel.id }
+            ?.second
+            ?.firstOrNull { mid in it.startUtcMillis until it.endUtcMillis }
+            ?.let { cell -> picked.first to cell }
     }
 
     // The rows this view keeps loaded: what is on screen plus a page of lookahead,
@@ -132,7 +168,7 @@ internal fun GuideGridMobileView(
                     hourMarks(window).forEach { mark ->
                         Box(
                             modifier = Modifier.width(
-                                (GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
+                                (GuideGrid.MINUTES_PER_HOUR * pxPerMin).dp
                             )
                         ) {
                             Text(
@@ -174,7 +210,7 @@ internal fun GuideGridMobileView(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .width(CONTENT_WIDTH)
+                                    .width(GuideGrid.CONTENT_WIDTH_DP.dp)
                                     .height(MOBILE_ROW_HEIGHT)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize()) {
@@ -190,6 +226,7 @@ internal fun GuideGridMobileView(
                                         )
                                         MobileProgramCell(
                                             cell = cell,
+                                            pxPerMin = pxPerMin,
                                             isLive = !cell.isGap &&
                                                 nowMs >= cell.startUtcMillis &&
                                                 nowMs < cell.endUtcMillis,
@@ -228,7 +265,7 @@ internal fun GuideGridMobileView(
                                         modifier = Modifier
                                             .offset(
                                                 x = ((nowMs - window.startUtcMillis) / 60_000L *
-                                                    GuideGrid.PX_PER_MIN).toInt().dp
+                                                    pxPerMin).toInt().dp
                                             )
                                             .width(2.dp)
                                             .fillMaxHeight()
@@ -255,8 +292,6 @@ internal fun GuideGridMobileView(
 
 private val CHANNEL_CELL_WIDTH = 128.dp
 private val MOBILE_ROW_HEIGHT = 58.dp
-private val CONTENT_WIDTH =
-    (GuideGrid.WINDOW_HOURS * GuideGrid.MINUTES_PER_HOUR * GuideGrid.PX_PER_MIN).dp
 
 @Composable
 private fun MobileChannelCell(
@@ -333,6 +368,8 @@ private fun MobileChannelCell(
 @Composable
 private fun MobileProgramCell(
     cell: GridCell,
+    /** The zoom's scale (F3b); the cell is as wide as its air time at it. */
+    pxPerMin: Int,
     isLive: Boolean,
     nowMs: Long,
     /** The game this cell is carrying, if any (F3m-c); null draws the reminder. */
@@ -343,7 +380,7 @@ private fun MobileProgramCell(
     val fill = if (isLive) liveFillFraction(cell, nowMs) else 0f
     Box(
         modifier = Modifier
-            .width(cellWidthDp(cell.startUtcMillis, cell.endUtcMillis).dp)
+            .width(cellWidthDp(cell.startUtcMillis, cell.endUtcMillis, pxPerMin = pxPerMin).dp)
             .fillMaxHeight()
             .padding(end = 1.dp)
             .clip(KBShapeCard)

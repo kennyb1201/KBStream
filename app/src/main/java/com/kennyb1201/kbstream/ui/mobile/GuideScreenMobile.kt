@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsSoccer
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -95,6 +96,7 @@ import com.kennyb1201.kbstream.ui.components.touch.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.touch.KBSheetContent
 import com.kennyb1201.kbstream.ui.components.touch.KBTextField
 import com.kennyb1201.kbstream.ui.components.touch.MobileFilterChip
+import com.kennyb1201.kbstream.ui.iptv.GuideGrid
 import com.kennyb1201.kbstream.ui.iptv.GuideViewMode
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.iptv.ProgramHitPress
@@ -259,6 +261,17 @@ fun GuideScreenMobile(
         // Which view the guide draws (D1: the list stays the default).
         var guideView by remember(activeProfileId) {
             mutableStateOf(GuideViewMode.fromPref(guidePrefs.getString("guide_view", null)))
+        }
+        // The grid's zoom, in hours (F1a): the TV's key, the TV's levels and the
+        // TV's default, per profile and device-local like every guide pref. A
+        // level this build does not know opens at the default rather than
+        // leaving the grid with a span it cannot draw.
+        var gridWindowHours by remember(activeProfileId) {
+            mutableStateOf(
+                guidePrefs.getInt("grid_window_hours", GuideGrid.DEFAULT_WINDOW_HOURS)
+                    .takeIf { it in GuideGrid.ZOOM_WINDOW_HOURS }
+                    ?: GuideGrid.DEFAULT_WINDOW_HOURS
+            )
         }
         // The grid's group list is a slide-in drawer on a phone (F2k-e).
         var showGroupDrawer by remember { mutableStateOf(false) }
@@ -728,6 +741,18 @@ fun GuideScreenMobile(
                     guideView = next
                     guidePrefs.edit().putString("guide_view", next.prefValue).apply()
                 },
+                windowHours = gridWindowHours,
+                // F2a: grid view only - a zoom on the list would be a control
+                // with nothing to do (the TV's rule).
+                onCycleWindow = if (guideView == GuideViewMode.GRID) {
+                    {
+                        val next = GuideGrid.nextZoomHours(gridWindowHours)
+                        gridWindowHours = next
+                        guidePrefs.edit().putInt("grid_window_hours", next).apply()
+                    }
+                } else {
+                    null
+                },
                 onOpenGroups = if (guideView == GuideViewMode.GRID) {
                     { showGroupDrawer = true }
                 } else {
@@ -929,6 +954,7 @@ fun GuideScreenMobile(
                             loadingGuideIds = gridLoadingIds,
                             reminderKeys = reminderKeys,
                             scores = gridScores,
+                            windowHours = gridWindowHours,
                             nowMs = nowMs,
                             onPlay = { item ->
                                 recentKeys = nextRecentKeys(recentKeys, item.channelKey())
@@ -953,7 +979,15 @@ fun GuideScreenMobile(
                                 null
                             },
                             onRequestWindow = { ids, start, end ->
-                                viewModel.requestGuideGridWindow(ids, start, end)
+                                // F3c: the cap follows the zoom (4 an hour), so
+                                // a wider window asks for more programs per
+                                // channel through the same read path.
+                                viewModel.requestGuideGridWindow(
+                                    ids,
+                                    start,
+                                    end,
+                                    GuideGrid.programsPerWindow(gridWindowHours)
+                                )
                             },
                             modifier = Modifier.fillMaxSize()
                         )
@@ -1172,6 +1206,12 @@ private fun MobileGuideTopBar(
     onOpenSports: (() -> Unit)?,
     guideView: GuideViewMode = GuideViewMode.LIST,
     onToggleView: (() -> Unit)? = null,
+    /**
+     * The grid's zoom level in hours, and the button that walks it (F2a).
+     * Grid view only: a zoom on the list would be a control with nothing to do.
+     */
+    windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
+    onCycleWindow: (() -> Unit)? = null,
     /** The grid's group drawer (F2k-e); null in list view, where the chips do it. */
     onOpenGroups: (() -> Unit)? = null
 ) {
@@ -1231,6 +1271,35 @@ private fun MobileGuideTopBar(
                         "List view"
                     },
                     tint = KBAccent
+                )
+            }
+        }
+        // F2a/F2b: the grid's zoom, right after the view toggle it belongs to
+        // and before anything that navigates away. The glyph says what it does
+        // and the level beside it says which span is on screen (the TV's header
+        // shape, F12e) - a tap that silently changed the zoom would leave the
+        // viewer guessing. A Row rather than an IconButton because the label is
+        // part of the control.
+        if (onCycleWindow != null) {
+            Row(
+                modifier = Modifier
+                    .clip(KBShapeCard)
+                    .clickable(onClick = onCycleWindow)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ZoomIn,
+                    contentDescription =
+                        "Zoom to ${GuideGrid.nextZoomHours(windowHours)} hours",
+                    tint = KBTextHi,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = "${windowHours}H",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 4.dp)
                 )
             }
         }

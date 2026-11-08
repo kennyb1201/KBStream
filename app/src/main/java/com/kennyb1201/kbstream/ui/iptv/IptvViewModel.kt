@@ -1137,7 +1137,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     fun requestGuideGridWindow(
         channelIds: List<String>,
         windowStart: Long,
-        windowEnd: Long
+        windowEnd: Long,
+        /**
+         * Programs a channel may contribute, at most (F3c). The grids pass
+         * `GuideGrid.programsPerWindow` so a zoomed window asks for what its
+         * span holds; the default is the six-hour level.
+         */
+        perChannelLimit: Int = GuideGrid.PER_CHANNEL_LIMIT
     ) {
         val playlist = _playlist.value ?: return
         if (channelIds.isEmpty() || windowEnd <= windowStart) return
@@ -1172,7 +1178,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     epgUrls = allEpgUrls(),
                     windowStart = windowStart,
                     windowEnd = windowEnd,
-                    perChannelLimit = GuideGrid.PER_CHANNEL_LIMIT
+                    perChannelLimit = perChannelLimit
                 )
             }.getOrDefault(emptyMap())
 

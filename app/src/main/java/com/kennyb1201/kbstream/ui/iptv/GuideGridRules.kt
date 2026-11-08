@@ -65,11 +65,11 @@ internal enum class GuideViewMode(val prefValue: String) {
 internal object GuideGrid {
 
     /**
-     * The window the PHONE grid draws, in hours.
+     * The window the phone grid drew before it had a zoom, in hours.
      *
-     * The TV grid's zoom opens on [DEFAULT_WINDOW_HOURS] instead and walks
-     * [ZOOM_WINDOW_HOURS] (F12e); its window is a parameter from then on, and
-     * this constant is only the phone view's own.
+     * Both grids now open on [DEFAULT_WINDOW_HOURS] and walk
+     * [ZOOM_WINDOW_HOURS] (F12e on the TV, F1-F3 on the phone); this is left as
+     * the span a caller that passes no level still gets.
      */
     const val WINDOW_HOURS = 6
 
@@ -93,8 +93,20 @@ internal object GuideGrid {
     /** How far one page of the time axis moves, in hours. */
     const val PAGE_HOURS = 3
 
-    /** Width of one minute of air time. */
+    /** Width of one minute of air time at the six-hour window. */
     const val PX_PER_MIN = 4
+
+    /**
+     * Width of the scrolled content at every zoom level (F3b): the zoom is a
+     * scale, not a wider canvas - 3h x 8, 6h x 4 and 12h x 2 all land on 1440.
+     */
+    const val CONTENT_WIDTH_DP = 1440
+
+    /**
+     * Programs per channel per hour of window (F3c): 4, so a 3h window asks for
+     * 12, six for 24 and twelve for 48.
+     */
+    const val PROGRAMS_PER_HOUR = 4
 
     /**
      * The narrowest a cell may render. A 5-minute program is 20dp at
@@ -110,11 +122,12 @@ internal object GuideGrid {
     const val CHANNEL_COLUMN_WIDTH_DP = 200
 
     /**
-     * Programs per channel per window read.
+     * Programs per channel per window read when the caller names no zoom.
      *
      * A 6-hour window of 30-minute programs is 12; 24 leaves room for the
      * short-form channels (news, music) whose schedules run 10-15 minutes
-     * without letting the read grow.
+     * without letting the read grow. A zoomed grid asks
+     * [programsPerWindow] instead, so the cap follows the span (F3c).
      */
     const val PER_CHANNEL_LIMIT = 24
 
@@ -147,6 +160,25 @@ internal object GuideGrid {
             ZOOM_WINDOW_HOURS[(index + 1) % ZOOM_WINDOW_HOURS.size]
         }
     }
+
+    /**
+     * The scale a [windowHours] window draws at (F3b): [CONTENT_WIDTH_DP] spent
+     * over the window's minutes, i.e. 8 / 4 / 2 dp a minute for 3h / 6h / 12h.
+     *
+     * An unknown level falls back to [PX_PER_MIN] rather than zooming a grid
+     * that has no level it can draw.
+     */
+    fun pxPerMin(windowHours: Int): Int {
+        if (windowHours !in ZOOM_WINDOW_HOURS) return PX_PER_MIN
+        return CONTENT_WIDTH_DP / (windowHours * MINUTES_PER_HOUR)
+    }
+
+    /**
+     * How many programs a channel may contribute to a [windowHours] window
+     * (F3c), at [PROGRAMS_PER_HOUR]: 12 / 24 / 48 for 3h / 6h / 12h.
+     */
+    fun programsPerWindow(windowHours: Int): Int =
+        windowHours.coerceAtLeast(1) * PROGRAMS_PER_HOUR
 }
 
 /**
@@ -215,8 +247,7 @@ internal data class GridWindow(
         /**
          * The window the grid opens on: the current hour, [windowHours] wide.
          *
-         * The TV grid passes its zoom level; the phone view leaves the default,
-         * which is its own six-hour window.
+         * Both grids pass their zoom level (F1a, F3a).
          */
         fun opening(
             nowUtcMillis: Long,
