@@ -12,6 +12,7 @@ import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.sync.SimklAuthRules
+import com.kennyb1201.kbstream.data.watched.WatchedWriteStamp
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -46,6 +47,19 @@ private fun activeOwner(): String =
     com.kennyb1201.kbstream.data.sync.ProfileManager
         .activeProfile.value?.id
         ?: ""
+
+/**
+ * Where the cached show library stands right now: which store a read would
+ * answer from, and when that blob was minted.
+ *
+ * [updatedAt] null means there is no blob at all - a cold start, or the write
+ * path has just dropped it - which the caught-up leg treats as "nothing to
+ * trust", exactly as it treats a blob older than the last watched write.
+ */
+internal data class ShowLibraryStamp(
+    val updatedAt: Long?,
+    val source: String
+)
 
 class SimklRepository(
     private val context: Context? = null
@@ -131,6 +145,23 @@ class SimklRepository(
 
     @Volatile
     internal var cachedAllShowItemsFetchedAt =
+        0L
+
+    /**
+     * When the blob now in [cachedAllShowItems] was minted ON SIMKL'S SIDE -
+     * the network fetch's own clock, or the disk blob's `updatedAt` when the
+     * snapshot was parsed out of the 12h file.
+     *
+     * Not [cachedAllShowItemsFetchedAt]: that is when this PROCESS got hold of
+     * the list, and reading it back off the disk resets it to "now". A blob
+     * written before a watched write and parsed out of the disk after a
+     * relaunch therefore looked brand new - which is exactly the reported miss,
+     * because the relaunch is what served the pre-finish tally. The caught-up
+     * leg measures this number against the last watched write (see
+     * [showLibraryStamp]).
+     */
+    @Volatile
+    internal var cachedAllShowItemsBlobUpdatedAt =
         0L
 
     /**
@@ -517,6 +548,7 @@ class SimklRepository(
     fun clearWatchedCachesForProfileSwitch() {
         cachedAllShowItems = null
         cachedAllShowItemsFetchedAt = 0L
+        cachedAllShowItemsBlobUpdatedAt = 0L
         cachedAllShowItemsToken = null
         cachedCompletedMovieKeys = null
         cachedCompletedMovieKeysFetchedAt = 0L
@@ -538,6 +570,9 @@ class SimklRepository(
             null
 
         cachedAllShowItemsFetchedAt =
+            0L
+
+        cachedAllShowItemsBlobUpdatedAt =
             0L
 
         cachedAllShowItemsToken =
@@ -897,6 +932,20 @@ class SimklRepository(
      * resume and left the show off the rail.
      */
     internal suspend fun invalidateWatchedSnapshots() {
+        /*
+         * A watched write is also the instant the caught-up leg measures the
+         * show library against (see [lastWatchedWriteAt] and
+         * `isShowLibraryBlobTrustworthy`). Stamped here because this is the one
+         * place a Simkl write SUCCEEDS: a blob that predates it cannot decide
+         * whether a show is caught up, and the invalidation below only covers
+         * the fetches that come after it in this process - not the write whose
+         * refetch raced Simkl's own apply, and not the finish that never
+         * reached this method at all (see [WatchedWriteStamp]).
+         */
+        context
+            ?.applicationContext
+            ?.let { appContext -> WatchedWriteStamp.record(appContext) }
+
         invalidateShowLibraryCache()
 
         cachedCompletedMovieKeys = null
@@ -923,6 +972,7 @@ class SimklRepository(
     internal suspend fun invalidateShowLibraryCache() {
         cachedAllShowItems = null
         cachedAllShowItemsFetchedAt = 0L
+        cachedAllShowItemsBlobUpdatedAt = 0L
         cachedAllShowItemsToken = null
 
         runCatchingCancellable {
@@ -1187,6 +1237,69 @@ class SimklRepository(
         )
     }
 
+    /**
+     * When this device last wrote watched state on this profile, or 0 when it
+     * has not. See [WatchedWriteStamp] for what writes it.
+     *
+     * Not [getSavedWatchedActivityAll]: that is the ACCOUNT's own activity
+     * token, fetched from Simkl after a sync check, so it says nothing about a
+     * write this device made offline and nothing about when a cached blob was
+     * minted. This is a device clock, comparable with a blob's `updatedAt`,
+     * which is the whole point of the guard that reads it.
+     */
+    fun lastWatchedWriteAt(): Long =
+        context
+            ?.applicationContext
+            ?.let { appContext -> WatchedWriteStamp.last(appContext) }
+            ?: 0L
+
+    /**
+     * What the next [getAllShowItemsCached] would answer from, and when that
+     * blob was minted - read WITHOUT refreshing anything, so a caller can decide
+     * whether to force the refresh.
+     *
+     * Only the timestamps and the store's name: the blob itself is large, and
+     * the caller is deciding whether a read may skip it.
+     */
+    internal suspend fun showLibraryStamp(
+        accessToken: String
+    ): ShowLibraryStamp {
+        val memory =
+            cachedAllShowItems
+
+        if (
+            memory != null &&
+            cachedAllShowItemsToken == accessToken
+        ) {
+            return ShowLibraryStamp(
+                updatedAt = cachedAllShowItemsBlobUpdatedAt,
+                source = "memory"
+            )
+        }
+
+        val disk =
+            readSimklJsonFromDisk(
+                tokenScopedDiskKey(
+                    ALL_SHOW_ITEMS_DISK_KEY_BASE,
+                    accessToken
+                )
+            )
+
+        return if (
+            disk != null
+        ) {
+            ShowLibraryStamp(
+                updatedAt = disk.updatedAt,
+                source = "disk"
+            )
+        } else {
+            ShowLibraryStamp(
+                updatedAt = null,
+                source = "none"
+            )
+        }
+    }
+
     // Bodies live in SimklReads.kt.
     suspend fun getPlaybackItems(
         accessToken: String =
@@ -1335,6 +1448,11 @@ class SimklRepository(
                         cachedAllShowItemsFetchedAt =
                             now
 
+                        // The blob's OWN mint time, not this read's: see
+                        // [cachedAllShowItemsBlobUpdatedAt].
+                        cachedAllShowItemsBlobUpdatedAt =
+                            diskCached.updatedAt
+
                         cachedAllShowItemsToken =
                             accessToken
 
@@ -1412,6 +1530,10 @@ class SimklRepository(
                     body
 
                 cachedAllShowItemsFetchedAt =
+                    now
+
+                // Minted by this fetch, so the two clocks agree here.
+                cachedAllShowItemsBlobUpdatedAt =
                     now
 
                 cachedAllShowItemsToken =

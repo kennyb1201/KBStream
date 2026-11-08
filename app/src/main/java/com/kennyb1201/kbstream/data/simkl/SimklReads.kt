@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.simkl
 
+import android.util.Log
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /*
@@ -538,6 +539,12 @@ internal fun SimklRepository.isContinueWatchingCandidate(
  * Costs no request of its own - the all-shows library is the blob the
  * watched-state resolution already reads, cached for 15 minutes in memory
  * and half a day on disk.
+ *
+ * One exception, and it is the fix for the reported miss: a blob that predates
+ * this device's last watched write (or was minted too soon after it to have
+ * picked the write up) is refreshed instead of served, because a pre-finish
+ * tally filters a caught-up show out of the rail entirely. See
+ * [isShowLibraryBlobTrustworthy].
  */
 suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
     List<SimklContinueWatchingItem> {
@@ -557,16 +564,54 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
             }
             ?: return emptyList()
 
+    /*
+     * F1: never decide "caught up" from a blob older than the last watched
+     * write.
+     *
+     * A caught-up show with no local history row reaches Upcoming through this
+     * leg alone, and this leg's only input is the cached all-shows library. When
+     * that blob predates the viewer's last finish it still carries the pre-finish
+     * tally - MobLand finished its last aired episode, the blob still said 17 of
+     * 18 aired watched, and the show was filtered out of the rail with no log
+     * line to say so. The write path drops the blob on a successful push, but a
+     * finish with no push (offline, a failed push, a local-only mark) drops
+     * nothing, and a fetch that raced Simkl's own apply is newer than the write
+     * while still carrying the old counts.
+     *
+     * So the guard is read time, not write time: if what the read WOULD serve
+     * cannot be trusted ([isShowLibraryBlobTrustworthy]), refresh it now - after
+     * the write has had time to land on Simkl's side - and only then filter. A
+     * blob that is already newer than the last write is served from cache,
+     * untouched: the TTLs and the "no fetch on an idle Home load" rule are
+     * unchanged (F1c).
+     */
+    val blobBefore =
+        showLibraryStamp(
+            accessToken
+        )
+
+    val lastWriteAt =
+        lastWatchedWriteAt()
+
+    val refreshed =
+        !isShowLibraryBlobTrustworthy(
+            blobUpdatedAt = blobBefore.updatedAt,
+            lastWatchedWriteAt = lastWriteAt
+        )
+
     val body =
         runCatchingCancellable {
             getAllShowItemsCached(
                 accessToken =
-                    accessToken
+                    accessToken,
+
+                forceRefresh =
+                    refreshed
             )
         }.getOrNull()
             ?: return emptyList()
 
-    return body.shows
+    val caughtUp = body.shows
         .asSequence()
         .filter { item ->
 
@@ -689,6 +734,38 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
             )
         }
         .toList()
+
+    /*
+     * F2: what this leg decided, and on what evidence.
+     *
+     * The reported miss cost a logcat dump and a tree walk to prove: the show
+     * never reached the build, and nothing here said why. One line per load,
+     * next to the local leg's own - the blob's age, whether the load served the
+     * cache or forced the refresh above, and the parent ids that survived the
+     * filter.
+     */
+    if (
+        UPCOMING_DIAGNOSTICS
+    ) {
+        val now =
+            System.currentTimeMillis()
+
+        Log.d(
+            "UPCOMING_DIAG",
+            "caught-up blob source=" +
+                blobBefore.source + " ageMs=" +
+                (blobBefore.updatedAt?.let { now - it } ?: -1L) +
+                " lastWriteAgeMs=" +
+                (lastWriteAt.takeIf { it > 0L }?.let { now - it } ?: -1L) +
+                " refreshed=" + refreshed +
+                " candidates=" + caughtUp.size + " " +
+                caughtUp.joinToString {
+                    "'${it.imdbId ?: it.tmdbId ?: it.simklId ?: "?"}'"
+                }
+        )
+    }
+
+    return caughtUp
 }
 
 internal fun SimklRepository.isShowFullyWatched(

@@ -1526,6 +1526,21 @@ class WatchedStatusRepository(
                 .apply()
         }
 
+        /*
+         * This is a watched write, so it is also what the Upcoming rail's
+         * caught-up leg measures the cached Simkl library against (see
+         * [WatchedWriteStamp] and `isShowLibraryBlobTrustworthy`): a blob
+         * minted before it still describes the account as it was before this
+         * mark, and one episode of that staleness is enough to keep a
+         * caught-up show off the rail. Every local mark and unmark passes
+         * through here - the UI paths and the tracker fan-out both - which is
+         * why the stamp is here rather than at each call site.
+         */
+        WatchedWriteStamp.record(
+            context = context,
+            at = now
+        )
+
         cacheMutex.withLock {
             keys.forEach { target ->
                 if (watched) {
@@ -2143,6 +2158,16 @@ class WatchedStatusRepository(
             runCatchingCancellable {
                 historyDao.upsert(row)
             }.onSuccess {
+                // A watched write, like every mark that goes through
+                // [applyOverrideKeys] - this one writes a marker row of its
+                // own instead, so it has to say so here. See
+                // [WatchedWriteStamp]: the Upcoming rail's caught-up leg will
+                // not trust a Simkl library blob minted before it.
+                WatchedWriteStamp.record(
+                    context = context,
+                    at = now
+                )
+
                 runCatching {
                     com.kennyb1201.kbstream.data.sync.SupabaseSync
                         .enqueueHistory(row)

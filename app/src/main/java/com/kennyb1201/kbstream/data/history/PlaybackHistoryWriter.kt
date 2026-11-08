@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.watched.WatchedWriteStamp
 
 /**
  * The one place a PLAYBACK row is written.
@@ -138,7 +139,7 @@ internal object PlaybackHistoryWriter {
         if (mayWrite(active, sessionProfileId)) {
             val ok = runCatchingCancellable {
                 WatchHistoryDatabase.withScopedDao(context) { dao ->
-                    val row = preserveCompletion(entry, dao)
+                    val row = preserveCompletion(context, entry, dao)
                     dao.upsert(row)
                     // The completion has landed, so the episode's resume point
                     // goes with it - the rows the upsert above does not reach
@@ -341,11 +342,25 @@ internal object PlaybackHistoryWriter {
      * marked watched.
      */
     private suspend fun preserveCompletion(
+        context: Context,
         entry: WatchHistoryEntity,
         dao: WatchHistoryDao
     ): WatchHistoryEntity {
         if (!(entry.isCompleted && entry.completedAt == null)) return entry
         val existing = dao.getById(entry.id)
+
+        /*
+         * The FIRST completion of a row is a watched write, and the one write
+         * the app makes that no tracker has to accept: a finish recorded offline,
+         * or with a failed Simkl push, still lands here (see [WatchedWriteStamp]).
+         * Stamped only when there was no completion stamp before, so the ticks a
+         * player keeps making after the end of an episode do not keep the stamp
+         * moving.
+         */
+        if (existing?.completedAt == null) {
+            WatchedWriteStamp.record(context)
+        }
+
         return entry.copy(completedAt = existing?.completedAt ?: entry.updatedAt)
     }
 }
