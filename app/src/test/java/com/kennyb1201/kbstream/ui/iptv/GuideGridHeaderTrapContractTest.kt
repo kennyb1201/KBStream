@@ -188,10 +188,10 @@ class GuideGridHeaderTrapContractTest {
             "and that is still the view toggle, not the row's last button",
             screen.contains("headerFocusRequester = viewToggleFocusRequester")
         )
-        assertTrue(
+        assertFalse(
             "F1c: no new requester for the other buttons - DOWN is the only " +
                 "thing they gained",
-            !header.contains("FocusRequester()")
+            header.contains("FocusRequester()")
         )
         assertTrue(
             "T4/F3a: the header's DOWN is grid only, so the list still hands DOWN " +
@@ -199,10 +199,13 @@ class GuideGridHeaderTrapContractTest {
             headerCall.contains("guideView == GuideViewMode.GRID &&") &&
                 screen.contains("onDownReturn = if (guideView == GuideViewMode.GRID) {")
         )
-        assertTrue(
-            "and LEFT/RIGHT across the buttons is untouched - no key handling " +
-                "for either direction was added",
-            !header.contains("Key.DirectionRight") && !header.contains("Key.DirectionLeft")
+        assertFalse(
+            "and RIGHT across the buttons is untouched - no key handling was added",
+            header.contains("Key.DirectionRight")
+        )
+        assertFalse(
+            "nor LEFT",
+            header.contains("Key.DirectionLeft")
         )
     }
 
