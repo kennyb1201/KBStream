@@ -163,7 +163,12 @@ class GuideGridWiringTest {
         assertTrue(
             "a row's first cell hands Left to the channel column",
             grid.contains("val target = horizontalTarget(row.cells, cell.id, -1)") &&
-                grid.contains("if (target != null) focusCell(rowIndex, target) else focusChannel(rowIndex)")
+                // Round-2 F11 / F1: the move is DELIVERED through the direct-first
+                // handoff (a null cell is the channel column). The destination is
+                // the same one `focusCell` / `focusChannel` posted before, and
+                // GuideGridCatchUpContractTest pins the delivery itself.
+                grid.contains("handoffFocus(rowIndex, target, \"cell-left\")") &&
+                grid.contains("handoffFocus(rowIndex, null, \"cell-left-to-channel\")")
         )
         assertTrue(
             "the channel column hands Left to the sidebar and Right back to the grid",

@@ -32,6 +32,12 @@ import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
 import com.kennyb1201.kbstream.data.iptv.landed
 import com.kennyb1201.kbstream.data.reporting.Redaction
+import com.kennyb1201.kbstream.data.sports.GameState
+import com.kennyb1201.kbstream.data.sports.LiveScoreFeed
+import com.kennyb1201.kbstream.data.sports.MatcherProgram
+import com.kennyb1201.kbstream.data.sports.SportsChannelMatcher
+import com.kennyb1201.kbstream.data.sports.SportsGame
+import com.kennyb1201.kbstream.data.sports.gameScoreLine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,6 +47,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -756,6 +763,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // The shared score poll is ref-counted: a ViewModel that goes away while
+        // its grid is open must not leave the loop holding a consumer.
+        stopLiveScores()
         hiddenIdsPrefs?.unregisterOnSharedPreferenceChangeListener(hiddenIdsPrefListener)
         hiddenIdsPrefs = null
         super.onCleared()
@@ -1184,6 +1194,101 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun gridWindowKey(channelId: String, windowStart: Long, windowEnd: Long): String =
         "$channelId|$windowStart|$windowEnd"
+
+    /**
+     * The live scores the grid draws (round-2 F9 / F3, F3m-c).
+     *
+     * Every game the SHARED feed holds, resolved once into the playlist channels
+     * that carry it by the hub's own [SportsChannelMatcher] - the same tiers, the
+     * same EPG rows as evidence, no second match anywhere in the app. The TV cell
+     * and the phone cell both read this list through `scoreFor`, so the two
+     * surfaces cannot show different scores for the same game.
+     *
+     * Games with no matched channel are dropped here rather than at the cell: a
+     * score with no cell to sit on is work every recomposition would repeat.
+     */
+    private val _liveScores = MutableStateFlow<List<GuideScore>>(emptyList())
+
+    /** Internal with its type: [GuideScore] is the shared rule's own model. */
+    internal val liveScores: StateFlow<List<GuideScore>> = _liveScores.asStateFlow()
+
+    private var liveScoresJob: Job? = null
+
+    /**
+     * Joins the shared score poll while a grid is on screen (F3a).
+     *
+     * Ref-counted in [LiveScoreFeed], so the TV guide and the phone guide share
+     * one loop and one ESPN read however the viewer moves between them; leaving
+     * the grid releases it, and nothing is polled while the list is showing.
+     */
+    internal fun startLiveScores() {
+        if (liveScoresJob != null) return
+        LiveScoreFeed.attach(app)
+        liveScoresJob = viewModelScope.launch {
+            // Re-matched on a NEW POLL and on a new channel list, not on every
+            // grid window the viewer scrolls through: the rows are evidence, not
+            // a trigger, so a pass reads whatever the grid has loaded at the time
+            // and a scroll cannot multiply the match work.
+            combine(LiveScoreFeed.games, visibleChannels) { games, channels ->
+                games to channels
+            }.collectLatest { (games, channels) ->
+                _liveScores.value = resolveLiveScores(games, _gridPrograms.value, channels)
+            }
+        }
+    }
+
+    internal fun stopLiveScores() {
+        if (liveScoresJob == null) return
+        liveScoresJob?.cancel()
+        liveScoresJob = null
+        LiveScoreFeed.detach()
+        _liveScores.value = emptyList()
+    }
+
+    private suspend fun resolveLiveScores(
+        games: List<SportsGame>,
+        programsByChannel: Map<String, List<GridProgram>>,
+        channels: List<IptvChannelWithEpg>,
+    ): List<GuideScore> = withContext(Dispatchers.Default) {
+        if (games.isEmpty() || channels.isEmpty()) return@withContext emptyList()
+        val playlistChannels = channels.map { it.channel }
+        // Built ONCE for the pass, exactly as the hub does it: the channel list
+        // is fixed under the pass, and rebuilding a name index per game is what
+        // made the hub's own loop slow (see SportsChannelMatcher.ChannelIndex).
+        val channelById = playlistChannels.associateBy { it.id }
+        val channelIndex = SportsChannelMatcher.ChannelIndex.of(playlistChannels)
+        // The grid's own rows are the tier-1 evidence the hub would have had: a
+        // program whose title names both teams IS the game being on that channel.
+        val programs = programsByChannel.flatMap { (channelId, rows) ->
+            rows.map { program ->
+                MatcherProgram(
+                    channelId = channelId,
+                    title = program.title,
+                    startMs = program.startUtcMillis,
+                    endMs = program.endUtcMillis,
+                    description = program.description,
+                )
+            }
+        }
+        games.mapNotNull { game ->
+            val line = gameScoreLine(game) ?: return@mapNotNull null
+            val matched = SportsChannelMatcher.matches(
+                game = game,
+                channels = playlistChannels,
+                programs = programs,
+                channelById = channelById,
+                channelIndex = channelIndex,
+            ).mapTo(HashSet()) { it.id }
+            matched.takeIf { it.isNotEmpty() }?.let { ids ->
+                GuideScore(
+                    channelIds = ids,
+                    startUtcMillis = game.dateMs,
+                    line = line,
+                    live = game.state == GameState.LIVE,
+                )
+            }
+        }
+    }
 
     /**
      * The right edge of the timeline grid: the end of the newest program the

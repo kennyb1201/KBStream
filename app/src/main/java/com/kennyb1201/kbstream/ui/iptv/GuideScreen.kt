@@ -210,6 +210,10 @@ fun GuideScreen(
     val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
     // The timeline grid's own reads: every program of the rows it has loaded.
     val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
+    // F3: the live/finished games the grid's cells may show a score for, resolved
+    // in the ViewModel by the hub's own matcher. The phone grid is handed the
+    // same list.
+    val liveScores by viewModel.liveScores.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
     val guideImport by viewModel.guideImport.collectAsStateWithLifecycle()
@@ -283,8 +287,14 @@ fun GuideScreen(
     var guideView by remember(activeProfileId) {
         mutableStateOf(GuideViewMode.fromPref(guidePreferences.getString("guide_view", null)))
     }
-    // Bumped by the header's Jump to now; the grid owns what it does with it.
-    var jumpToNowSignal by remember { mutableStateOf(0) }
+    // F3a: the shared ESPN score poll runs while - and only while - the grid is
+    // the body on screen. Leaving it, or toggling back to the list, stops it: the
+    // list has no cells to draw a score on. Ref-counted in the feed, so the phone
+    // grid joining the same poll does not start a second one.
+    DisposableEffect(guideView) {
+        if (guideView == GuideViewMode.GRID) viewModel.startLiveScores()
+        onDispose { if (guideView == GuideViewMode.GRID) viewModel.stopLiveScores() }
+    }
     // F1a/F1f: the grid's groups sidebar hides while focus is in the grid, and
     // the header names the current group while it is hidden. Owned here (not
     // inside the grid) so the header can read it and so switching to the list
@@ -1584,9 +1594,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         onSearchClick = { showSearch = true },
                         onSportsClick = onOpenSports,
                         guideView = guideView,
-                        // The two controls the grid adds (F2k): the List/Grid
-                        // toggle and Jump to now. Nothing else in the header
-                        // moves, and the list keeps its group chips.
+                        // The List/Grid toggle, and the grid's zoom and preview
+                        // toggles beside it (F12e, F13d). Jump to now is gone
+                        // (round-2 F7 / F2b): the grid follows now on its own,
+                        // so the header has nothing left to press for it.
                         onToggleView = {
                             val next = GuideViewMode.toggled(guideView)
                             guideView = next
@@ -1596,11 +1607,6 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             guidePreferences.edit()
                                 .putString("guide_view", next.prefValue)
                                 .apply()
-                        },
-                        onJumpToNow = if (guideView == GuideViewMode.GRID) {
-                            { jumpToNowSignal += 1 }
-                        } else {
-                            null
                         },
                         viewToggleRequester = viewToggleFocusRequester,
                         // F1e: Down from the header goes back into the grid, to
@@ -1653,7 +1659,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                             reminderKeys = reminderKeys,
                             nowMs = rememberNowMillis(),
                             scheduleEndMs = guideScheduleEndMs,
-                            jumpToNowSignal = jumpToNowSignal,
+                            scores = liveScores,
                             returnFocusSignal = gridReturnFocusSignal,
                             sidebarVisible = gridSidebarVisible,
                             onSidebarVisibleChange = { gridSidebarVisible = it },
@@ -3008,11 +3014,6 @@ private fun GuideHeader(
      */
     guideView: GuideViewMode = GuideViewMode.LIST,
     onToggleView: (() -> Unit)? = null,
-    /**
-     * Jumps the grid's axis back to the current hour. Only supplied in grid
-     * view; a Jump to now on the list would be a control with nothing to do.
-     */
-    onJumpToNow: (() -> Unit)? = null,
     /** Where Up out of the first grid row lands (F3g). */
     viewToggleRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
@@ -3079,20 +3080,6 @@ private fun GuideHeader(
                             },
                             tint = KBAccent,
                             modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
-            if (onJumpToNow != null) {
-                KBCard(onClick = onJumpToNow) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "NOW",
-                            color = KBTextHi,
-                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }

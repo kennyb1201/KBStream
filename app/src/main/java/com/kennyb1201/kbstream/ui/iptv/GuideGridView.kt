@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -92,10 +93,12 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.launch
 
 // F12a: 48dp, TiviMate's own row, down from 62. The program cell is 20 + 16 +
 // 8 = 44dp of content with its 4dp padding, so the optional second line
-// (reminder, score) still fits and no row needs a height exception.
+// (reminder, score) still fits and no row needs a height exception (F5: the
+// score line is why the row does not shrink further).
 private val GRID_ROW_HEIGHT: Dp = 48.dp
 
 // F13a/F14b: the top band's two heights. 180dp is exactly the preview's own
@@ -141,8 +144,12 @@ internal fun GuideGridView(
     reminderKeys: Set<String>,
     nowMs: Long,
     scheduleEndMs: Long?,
-    /** Bumped by the header's Jump to now; 0 on first composition. */
-    jumpToNowSignal: Int,
+    /**
+     * The live/finished games the cells may show a score for (F3b): the shared
+     * match, resolved once in the ViewModel. Empty is the ordinary case and
+     * draws the reminder line exactly as before.
+     */
+    scores: List<GuideScore> = emptyList(),
     /**
      * Bumped by the header's Down, so focus comes back to where it left (F1e).
      * The screen owns the header, this grid owns the focus homes.
@@ -180,6 +187,9 @@ internal fun GuideGridView(
 ) {
     val density = LocalDensity.current
     val reducedMotion = rememberReducedMotion()
+    // The direct handoffs scroll the time axis from a key handler, which cannot
+    // suspend: the scroll is a frame's work posted ahead of the focus request.
+    val scope = rememberCoroutineScope()
 
     var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }
     var focusedRow by remember { mutableStateOf(0) }
@@ -209,6 +219,18 @@ internal fun GuideGridView(
                 ),
             )
         }
+    }
+
+    /**
+     * Puts [cell]'s left edge at the viewport's left edge - the axis move every
+     * cell handoff makes, direct or pending, so the two paths look the same.
+     */
+    suspend fun scrollTimeTo(row: GridRowModel, cell: GridCell, animate: Boolean) {
+        val offsetDp = row.cells.takeWhile { it.id != cell.id }
+            .sumOf { cellWidthDp(it.startUtcMillis, it.endUtcMillis) }
+        val offsetPx = with(density) { offsetDp.dp.toPx() }.toInt()
+        val target = offsetPx.coerceIn(0, timeScroll.maxValue)
+        if (animate) timeScroll.animateScrollTo(target) else timeScroll.scrollTo(target)
     }
 
     // F3e: the per-cell requester map is pruned to the live set, exactly as the
@@ -241,11 +263,24 @@ internal fun GuideGridView(
         if (next != window) window = next
     }
 
-    // Jump to now (F2d): reset the axis to the current hour and re-anchor focus on
-    // the live program of the focused channel.
-    LaunchedEffect(jumpToNowSignal) {
-        if (jumpToNowSignal <= 0) return@LaunchedEffect
-        window = GridWindow.opening(System.currentTimeMillis(), windowHours)
+    // F2a: the grid follows now on its own - the NOW button is gone (F2b) and
+    // this is what replaced it. On the tick that carries the clock past a
+    // window's right edge the axis slides one page and focus re-anchors on the
+    // focused row's live program, through the same path the button used to
+    // drive. The rule itself is [autoFollowWindow]: only a window the clock has
+    // just left follows, so a viewer paged away is never yanked, and the
+    // guide's schedule end still stops the axis.
+    var autoFollowedEdgeMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(nowMs, window.endUtcMillis, scheduleEndMs) {
+        if (autoFollowedEdgeMs == window.endUtcMillis) return@LaunchedEffect
+        val next = autoFollowWindow(
+            window = window,
+            nowUtcMillis = nowMs,
+            windowHours = windowHours,
+            scheduleEndMs = scheduleEndMs,
+        ) ?: return@LaunchedEffect
+        autoFollowedEdgeMs = window.endUtcMillis
+        window = next
         focusLiveOnNextWindow = true
     }
 
@@ -280,24 +315,17 @@ internal fun GuideGridView(
 
         val row = rows[target.rowIndex]
         val cell = target.cellId?.let { id -> row.cells.firstOrNull { it.id == id } }
-        if (cell != null) {
-            val offsetDp = row.cells.takeWhile { it.id != cell.id }
-                .sumOf { cellWidthDp(it.startUtcMillis, it.endUtcMillis) }
-            val offsetPx = with(density) { offsetDp.dp.toPx() }.toInt()
-            if (!reducedMotion) {
-                timeScroll.animateScrollTo(offsetPx.coerceIn(0, timeScroll.maxValue))
-            } else {
-                timeScroll.scrollTo(offsetPx.coerceIn(0, timeScroll.maxValue))
-            }
-        }
+        if (cell != null) scrollTimeTo(row, cell, animate = !reducedMotion)
 
         var attempts = 0
+        var requesterSeen = false
         while (attempts < 8) {
             val requester = when {
                 target.channelFocus -> channelRequesters[row.channelKey]
                 cell != null -> cellRequesters[cell.id]
                 else -> null
             }
+            if (requester != null) requesterSeen = true
             if (requester != null && runCatching { requester.requestFocus() }.getOrDefault(false)) {
                 focusedRow = target.rowIndex
                 focusedCellId = cell?.id
@@ -306,6 +334,14 @@ internal fun GuideGridView(
             withFrameNanos { }
             attempts++
         }
+        // F1c: the retry is the fallback, not a silent end. A handoff that dies
+        // without a line is the bug this spec is about - the press was consumed
+        // and nothing moved, and the log said nothing either.
+        Log.i(
+            "GUIDE",
+            "grid handoff pending-giveup row=${target.rowIndex} cell=${target.cellId} " +
+                "channel=${target.channelFocus} requester=$requesterSeen attempts=$attempts"
+        )
     }
 
     // F1b: the sidebar has to be composed before its requester can take focus,
@@ -353,12 +389,53 @@ internal fun GuideGridView(
         pendingFocus = GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)
     }
 
-    fun focusCell(rowIndex: Int, cell: GridCell) {
-        pendingFocus = GridPendingFocus(rowIndex, cell.id, channelFocus = false)
-    }
-
-    fun focusChannel(rowIndex: Int) {
-        pendingFocus = GridPendingFocus(rowIndex, cellId = null, channelFocus = true)
+    /**
+     * F1a/F1b: delivers one in-grid move the way [enterGrid] already delivers a
+     * sidebar one - the target's own requester FIRST, the pending path as the
+     * fallback, one GUIDE line either way.
+     *
+     * The field report is that every move inside the grid failed while the
+     * sidebar moves worked, and the code said why: the sidebar moves asked the
+     * target directly, every in-grid move only posted a target that an effect
+     * had eight frames to land. That effect cannot land a row the viewer is
+     * about to scroll into - there is no requester until it composes - and when
+     * it gives up, the press has already been consumed.
+     *
+     * [cell] null means the channel column of [rowIndex]. The direct path also
+     * moves the time axis: a horizontally scrolled row does not bring a focused
+     * child into view the way a LazyRow does, so without it a RIGHT onto a cell
+     * past the right edge would focus something off screen.
+     */
+    fun handoffFocus(rowIndex: Int, cell: GridCell?, direction: String) {
+        val row = rows.getOrNull(rowIndex)
+        if (row == null) {
+            Log.i("GUIDE", "grid handoff $direction row=$rowIndex dropped=no-row")
+            return
+        }
+        val requester = if (cell == null) {
+            channelRequesters[row.channelKey]
+        } else {
+            cellRequesters[cell.id]
+        }
+        // Only a row already on screen is asked directly: a move to a row the
+        // viewer is about to scroll to still needs the effect's scroll, and its
+        // cells have no requesters yet anyway.
+        val rowOnScreen = rowListState.layoutInfo.visibleItemsInfo.any { it.index == rowIndex }
+        val direct = rowOnScreen && requester != null &&
+            runCatching { requester.requestFocus() }.getOrDefault(false)
+        if (direct) {
+            focusedRow = rowIndex
+            focusedCellId = cell?.id
+            focusHome = if (cell == null) GridFocusHome.CHANNEL else GridFocusHome.CELL
+            if (cell != null) scope.launch { scrollTimeTo(row, cell, animate = !reducedMotion) }
+        } else {
+            pendingFocus = GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)
+        }
+        Log.i(
+            "GUIDE",
+            "grid handoff $direction row=$rowIndex cell=${cell?.id} onScreen=$rowOnScreen " +
+                "requester=${requester != null} direct=$direct fallback=${!direct}"
+        )
     }
 
     /**
@@ -385,7 +462,9 @@ internal fun GuideGridView(
         // F2b: the hide rides with the request, never after it - the channel
         // column lives outside the sidebar, so focus has a home either way.
         onSidebarVisibleChange(false)
-        if (!direct) focusChannel(rowIndex)
+        if (!direct) {
+            pendingFocus = GridPendingFocus(rowIndex, cellId = null, channelFocus = true)
+        }
         Log.i(
             "GUIDE",
             "grid handoff sidebar->channel row=$rowIndex channel=${row.channelKey} " +
@@ -404,19 +483,30 @@ internal fun GuideGridView(
         }
     }
 
-    /** One arrow press, answered from the loaded lists (F3a, F3b, F3d, F3g). */
+    /**
+     * One arrow press, answered from the loaded lists (F3a, F3b, F3d, F3g).
+     *
+     * Every branch resolves the target with the same rules it always used and
+     * then DELIVERS it through [handoffFocus] - direct first, pending as the
+     * fallback, one GUIDE line. The destination is unchanged (T2); only the
+     * delivery is (F1).
+     */
     fun onCellKey(rowIndex: Int, cell: GridCell, key: Key): Boolean {
         val row = rows.getOrNull(rowIndex) ?: return false
         when (key) {
             Key.DirectionLeft -> {
                 val target = horizontalTarget(row.cells, cell.id, -1)
-                if (target != null) focusCell(rowIndex, target) else focusChannel(rowIndex)
+                if (target != null) {
+                    handoffFocus(rowIndex, target, "cell-left")
+                } else {
+                    handoffFocus(rowIndex, null, "cell-left-to-channel")
+                }
                 return true
             }
             Key.DirectionRight -> {
                 val target = horizontalTarget(row.cells, cell.id, 1)
                 if (target != null) {
-                    focusCell(rowIndex, target)
+                    handoffFocus(rowIndex, target, "cell-right")
                     return true
                 }
                 // Past the last cell: page the window and land on the first
@@ -429,14 +519,18 @@ internal fun GuideGridView(
                 if (next == window) return true
                 window = next
                 val first = rows[rowIndex].cells.firstOrNull { !it.isGap }
-                if (first != null) focusCell(rowIndex, first)
+                if (first != null) handoffFocus(rowIndex, first, "cell-right-page")
                 return true
             }
             Key.DirectionUp, Key.DirectionDown -> {
                 val direction = if (key == Key.DirectionUp) -1 else 1
                 val target = verticalTarget(rows.map { it.cells }, rowIndex, cell, direction)
                 if (target != null) {
-                    focusCell(target.rowIndex, target.cell)
+                    handoffFocus(
+                        target.rowIndex,
+                        target.cell,
+                        if (direction < 0) "cell-up" else "cell-down",
+                    )
                 } else if (direction < 0) {
                     // Up out of the first row reaches the header (F3g); Down at
                     // the bottom is a defined no-op.
@@ -477,19 +571,19 @@ internal fun GuideGridView(
         Key.DirectionRight -> {
             val row = rows.getOrNull(rowIndex) ?: return true
             val first = row.cells.firstOrNull { !it.isGap } ?: return true
-            focusCell(rowIndex, first)
+            handoffFocus(rowIndex, first, "channel-right")
             true
         }
         Key.DirectionUp -> {
             if (rowIndex == 0) {
                 runCatching { headerFocusRequester.requestFocus() }
             } else {
-                focusChannel(rowIndex - 1)
+                handoffFocus(rowIndex - 1, null, "channel-up")
             }
             true
         }
         Key.DirectionDown -> {
-            if (rowIndex < rows.lastIndex) focusChannel(rowIndex + 1)
+            if (rowIndex < rows.lastIndex) handoffFocus(rowIndex + 1, null, "channel-down")
             true
         }
         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
@@ -661,6 +755,7 @@ internal fun GuideGridView(
                                 nowMs = nowMs,
                                 focusedCellId = if (index == focusedRow) focusedCellId else null,
                                 reminderKeys = reminderKeys,
+                                scores = scores,
                                 channelId = row.item.channel.id,
                                 requesters = cellRequesters,
                                 timeScroll = timeScroll,
@@ -851,8 +946,10 @@ private fun ChannelCell(
         Row(verticalAlignment = Alignment.CenterVertically) {
             val logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl
             Box(
-                // F12b: 28dp, not 34 - the logo and the two text lines have to
-                // fit 44dp of a 48dp row.
+                // F12b: 28dp, not 34 - the logo and the name line have to fit
+                // 44dp of a 48dp row (F4: the group line that used to sit under
+                // the name is gone, so the second line is only the number or the
+                // loading state).
                 modifier = Modifier
                     .size(28.dp)
                     .clip(KBShapeChip)
@@ -885,19 +982,25 @@ private fun ChannelCell(
                 Text(
                     text = item.channel.displayName.ifBlank { "Live Channel" },
                     color = if (focused || isFocusedRow) KBTextHi else KBTextLo,
-                    // F12b: labelMedium, so the name and the number still fit
-                    // the 48dp row without the second line being clipped.
+                    // F12b: labelMedium, so the name and its number still fit
+                    // the 48dp row without the second line being clipped (F4).
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (isFocusedRow) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                // F4: the number, the loading state, or nothing. The group
+                // title used to sit here too, under every channel in the group
+                // - the same word repeated down the whole column, and space the
+                // cell's one real line needed. The group is not lost: it is the
+                // header's title while the sidebar is away (F1f) and a row of
+                // the sidebar itself. Nothing replaces it here.
                 val number = item.channel.tvgChno?.trim()?.takeIf { it.isNotBlank() }
                 Text(
                     text = when {
                         number != null -> number
                         guidePending -> "Loading guide…"
-                        else -> item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() } ?: " "
+                        else -> " "
                     },
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall,
@@ -923,6 +1026,8 @@ private fun ProgramRow(
     nowMs: Long,
     focusedCellId: String?,
     reminderKeys: Set<String>,
+    /** The pass's resolved games; each cell asks [scoreFor] what it draws (F3b). */
+    scores: List<GuideScore>,
     channelId: String,
     requesters: MutableMap<String, FocusRequester>,
     timeScroll: ScrollState,
@@ -945,13 +1050,21 @@ private fun ProgramRow(
                 Row(modifier = Modifier.fillMaxSize()) {
                     row.cells.forEach { cell ->
                         key(cell.id) {
+                            // F3b: ONE lookup for both surfaces - the phone cell
+                            // calls the same function.
+                            val score = scoreFor(channelId, cell, nowMs, scores)
                             ProgramCell(
                                 cell = cell,
                                 isFocused = cell.id == focusedCellId,
                                 isLive = !cell.isGap &&
                                     nowMs >= cell.startUtcMillis && nowMs < cell.endUtcMillis,
                                 nowMs = nowMs,
-                                reminderSet = !cell.isGap && reminderKeys.contains(
+                                score = score,
+                                // The two lines share one slot: a live score wins
+                                // it while the game is on and the reminder marker
+                                // comes back after it goes final. The reminder
+                                // stays SET - only its indicator is suppressed.
+                                reminderSet = score == null && !cell.isGap && reminderKeys.contains(
                                     ReminderRules.reminderKey(channelId, cell.startUtcMillis)
                                 ),
                                 requester = remember(cell.id) {
@@ -984,6 +1097,8 @@ private fun ProgramCell(
     isFocused: Boolean,
     isLive: Boolean,
     nowMs: Long,
+    /** The game this cell is carrying, if any (F3b); null draws the reminder line. */
+    score: GridCellScore? = null,
     reminderSet: Boolean,
     requester: FocusRequester,
     onKey: (Key) -> Boolean,
@@ -1049,10 +1164,14 @@ private fun ProgramCell(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (reminderSet) {
+            // F3b: the second line is the score while a game is on (or reading
+            // Final after it), and the reminder marker otherwise - the two
+            // never share it.
+            val secondLine = score?.line ?: "REMINDER SET".takeIf { reminderSet }
+            if (secondLine != null) {
                 Text(
-                    text = "REMINDER SET",
-                    color = KBAccent,
+                    text = secondLine,
+                    color = if (score != null && !score.live) KBTextLo else KBAccent,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1
                 )

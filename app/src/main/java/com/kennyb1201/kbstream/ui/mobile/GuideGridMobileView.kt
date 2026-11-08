@@ -42,14 +42,17 @@ import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.ui.iptv.GridCell
+import com.kennyb1201.kbstream.ui.iptv.GridCellScore
 import com.kennyb1201.kbstream.ui.iptv.GridProgram
 import com.kennyb1201.kbstream.ui.iptv.GridWindow
 import com.kennyb1201.kbstream.ui.iptv.GuideGrid
 import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
+import com.kennyb1201.kbstream.ui.iptv.GuideScore
 import com.kennyb1201.kbstream.ui.iptv.guideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.cellWidthDp
 import com.kennyb1201.kbstream.ui.iptv.gridCellHeadline
 import com.kennyb1201.kbstream.ui.iptv.hourMarks
+import com.kennyb1201.kbstream.ui.iptv.scoreFor
 import com.kennyb1201.kbstream.ui.iptv.liveFillFraction
 import com.kennyb1201.kbstream.ui.iptv.rowCells
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -78,6 +81,12 @@ internal fun GuideGridMobileView(
     resolvedGuideIds: Set<String>,
     loadingGuideIds: Set<String>,
     reminderKeys: Set<String>,
+    /**
+     * The live/finished games the cells may show a score for (F3m-b): the same
+     * list the TV grid is handed, resolved once in the ViewModel by the hub's
+     * matcher. Empty is the ordinary case and draws the reminder line as before.
+     */
+    scores: List<GuideScore> = emptyList(),
     nowMs: Long,
     onPlay: (IptvChannelWithEpg) -> Unit,
     onToggleReminder: (IptvChannelWithEpg, GridCell) -> Unit,
@@ -170,18 +179,34 @@ internal fun GuideGridMobileView(
                             ) {
                                 Row(modifier = Modifier.fillMaxSize()) {
                                     cells.forEach { cell ->
+                                        // F3m-a: the SAME single lookup the TV
+                                        // cell uses - no second score pipeline,
+                                        // no second match in this file.
+                                        val score = scoreFor(
+                                            channelId = item.channel.id,
+                                            cell = cell,
+                                            nowUtcMillis = nowMs,
+                                            scores = scores,
+                                        )
                                         MobileProgramCell(
                                             cell = cell,
                                             isLive = !cell.isGap &&
                                                 nowMs >= cell.startUtcMillis &&
                                                 nowMs < cell.endUtcMillis,
                                             nowMs = nowMs,
-                                            reminderSet = !cell.isGap && reminderKeys.contains(
-                                                ReminderRules.reminderKey(
-                                                    item.channel.id,
-                                                    cell.startUtcMillis
-                                                )
-                                            ),
+                                            score = score,
+                                            // One slot, two occupants (F3m-c): the
+                                            // score wins it while the game is on
+                                            // and the reminder marker returns
+                                            // after it goes final. The reminder
+                                            // itself stays set either way.
+                                            reminderSet = score == null && !cell.isGap &&
+                                                reminderKeys.contains(
+                                                    ReminderRules.reminderKey(
+                                                        item.channel.id,
+                                                        cell.startUtcMillis
+                                                    )
+                                                ),
                                             onTap = {
                                                 if (cell.isGap) {
                                                     selected = item to cell
@@ -303,6 +328,8 @@ private fun MobileProgramCell(
     cell: GridCell,
     isLive: Boolean,
     nowMs: Long,
+    /** The game this cell is carrying, if any (F3m-c); null draws the reminder. */
+    score: GridCellScore? = null,
     reminderSet: Boolean,
     onTap: () -> Unit,
 ) {
@@ -339,10 +366,14 @@ private fun MobileProgramCell(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (reminderSet) {
+            // F3m-c: the second line is the score while a game is on (or reading
+            // Final after it), and the reminder marker otherwise. The title's two
+            // lines plus this one fit the 58dp row (F3m-d).
+            val secondLine = score?.line ?: "REMINDER SET".takeIf { reminderSet }
+            if (secondLine != null) {
                 Text(
-                    text = "REMINDER SET",
-                    color = KBAccent,
+                    text = secondLine,
+                    color = if (score != null && !score.live) KBTextLo else KBAccent,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1
                 )

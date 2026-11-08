@@ -264,6 +264,9 @@ fun GuideScreenMobile(
         var showGroupDrawer by remember { mutableStateOf(false) }
         val gridPrograms by viewModel.gridPrograms.collectAsStateWithLifecycle()
         val gridLoadingIds by viewModel.gridLoadingChannelIds.collectAsStateWithLifecycle()
+        // F3m: the same resolved games the TV grid is handed. The poll is shared
+        // (ref-counted in the feed), so a phone grid and a TV grid never cost two.
+        val gridScores by viewModel.liveScores.collectAsStateWithLifecycle()
         val groupDrawerState = rememberDrawerState(DrawerValue.Closed)
         LaunchedEffect(showGroupDrawer) {
             if (showGroupDrawer) groupDrawerState.open() else groupDrawerState.close()
@@ -772,6 +775,14 @@ fun GuideScreenMobile(
             // the grid, so the chips and the grid can never share the screen.
             val showGrid = guideShowsGrid(guideView, query)
 
+            // F3m: the shared score poll runs only while the grid is the body on
+            // screen - the list has no cells to draw a score on, and the poll is
+            // ref-counted so the TV grid and this one never cost two.
+            DisposableEffect(showGrid) {
+                if (showGrid) viewModel.startLiveScores()
+                onDispose { if (showGrid) viewModel.stopLiveScores() }
+            }
+
             // The TV group strip, for a thumb. A horizontal scroll is the right
             // control here too: a wrapped row of a provider's forty categories
             // would push the channels off the screen.
@@ -930,6 +941,7 @@ fun GuideScreenMobile(
                             resolvedGuideIds = resolvedGuideIds,
                             loadingGuideIds = gridLoadingIds,
                             reminderKeys = reminderKeys,
+                            scores = gridScores,
                             nowMs = nowMs,
                             onPlay = { item ->
                                 recentKeys = nextRecentKeys(recentKeys, item.channelKey())

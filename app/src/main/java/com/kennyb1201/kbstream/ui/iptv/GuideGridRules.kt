@@ -693,6 +693,118 @@ internal fun guideRowGuideState(
     }
 }
 
+/**
+ * One live or finished game as the grid draws it on a cell (F3b, F3m-c).
+ *
+ * [channelIds] is the answer of the HUB's game-to-channel resolution, not a
+ * second match: the grid only asks which of its cells show the game, never
+ * which channel carries it. [line] is [com.kennyb1201.kbstream.data.sports]
+ * gameScoreLine's own sentence - `TB 3 - 2 MIN · 2nd 14:32` while live,
+ * `Final 3 - 2` after - so the hub's card and the grid's cell cannot disagree
+ * about what a game's score reads like.
+ */
+internal data class GuideScore(
+    val channelIds: Set<String>,
+    /** The game's scheduled kickoff, epoch millis. */
+    val startUtcMillis: Long,
+    val line: String,
+    /** True while the game is being played, false once it is final. */
+    val live: Boolean,
+)
+
+/** What a single cell's second line says about a game, when it has one. */
+internal data class GridCellScore(
+    val line: String,
+    val live: Boolean,
+)
+
+/**
+ * The score a cell draws, or null when its program is not carrying a game
+ * (F3b, F3m-c).
+ *
+ * The ONE lookup both surfaces use - the TV cell and the phone cell render what
+ * this returns, so there is no second score pipeline and no second match.
+ *
+ * "Its program carries the game" is asked of the cell, not of the clock alone:
+ * a cell is CLIPPED to the window (a program that started before the window
+ * opens has the window's start), so a kickoff is not always inside it even
+ * though the program is the game's own broadcast slot. The two cases are
+ * therefore:
+ *
+ *  - **live**: the cell is the one on air right now on that channel. That is
+ *    the program carrying the game at this moment, whether it began ten minutes
+ *    or two hours ago.
+ *  - **final**: the cell whose span contains the kickoff - the program the game
+ *    was scheduled in. It keeps reading `Final 3 - 2` until its own end, which
+ *    is what F3b asks for, and the next program does not inherit it.
+ *
+ * A gap cell never shows a score: nothing is airing there.
+ */
+internal fun scoreFor(
+    channelId: String,
+    cell: GridCell,
+    nowUtcMillis: Long,
+    scores: List<GuideScore>,
+): GridCellScore? {
+    if (cell.isGap) return null
+    val score = scores.firstOrNull { game ->
+        channelId in game.channelIds && scoreOverlapsCell(game, cell, nowUtcMillis)
+    } ?: return null
+    return GridCellScore(line = score.line, live = score.live)
+}
+
+/** Whether [score]'s game is the one [cell] is airing (see [scoreFor]). */
+internal fun scoreOverlapsCell(
+    score: GuideScore,
+    cell: GridCell,
+    nowUtcMillis: Long,
+): Boolean = if (score.live) {
+    nowUtcMillis >= cell.startUtcMillis && nowUtcMillis < cell.endUtcMillis
+} else {
+    cell.startUtcMillis <= score.startUtcMillis && score.startUtcMillis < cell.endUtcMillis
+}
+
+/**
+ * How far past a window's right edge the auto-follow still counts as "just
+ * crossed" (F2a).
+ *
+ * The grid's clock ticks every 30 seconds, so the tick that sees the crossing is
+ * at most one tick late. Two minutes leaves room for a device that slept a beat
+ * without letting a viewer who has been away for an hour be yanked forward: that
+ * is a window that no longer contains now, not one the clock just left.
+ */
+internal const val GRID_AUTO_FOLLOW_SLACK_MS = 120_000L
+
+/**
+ * The window auto-follow moves to, or null when it must not move (F2a, T3).
+ *
+ * The rule, in one place so it can be checked without a grid on screen:
+ *
+ *  - only a window the clock has JUST left follows. A viewer paged forward is
+ *    never yanked back to now, and one who has been away for an hour is not
+ *    dragged forward - [nowUtcMillis] may sit past the edge by at most
+ *    [GRID_AUTO_FOLLOW_SLACK_MS];
+ *  - the move is one page, at the window's own zoom, through [GridWindow.paged]
+ *    - so the floor (never before the current hour) and the guide's schedule
+ *    end still apply, and a window pinned at the end answers itself;
+ *  - a schedule that has ended before the next page answers null, i.e. no move.
+ */
+internal fun autoFollowWindow(
+    window: GridWindow,
+    nowUtcMillis: Long,
+    windowHours: Int,
+    scheduleEndMs: Long?,
+): GridWindow? {
+    if (nowUtcMillis < window.endUtcMillis) return null
+    if (nowUtcMillis - window.endUtcMillis > GRID_AUTO_FOLLOW_SLACK_MS) return null
+    val next = window.paged(
+        direction = 1,
+        floorStartUtcMillis = GridWindow.opening(nowUtcMillis, windowHours).startUtcMillis,
+        maxEndUtcMillis = scheduleEndMs,
+    )
+    return next.takeIf { it != window }
+}
+
 /** Fraction of the cell already aired, 0..1 - the live cell's fill (F2h). */
 internal fun liveFillFraction(cell: GridCell, nowUtcMillis: Long): Float {
     if (cell.isGap || cell.durationMs <= 0L) return 0f

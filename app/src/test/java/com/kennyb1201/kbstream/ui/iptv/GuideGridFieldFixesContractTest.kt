@@ -45,7 +45,7 @@ class GuideGridFieldFixesContractTest {
 
     private val sidebarReturn = grid.slice("LaunchedEffect(pendingSidebarFocus", "// F1e:")
 
-    private val headerReturn = grid.slice("LaunchedEffect(returnFocusSignal,", "fun focusCell(")
+    private val headerReturn = grid.slice("LaunchedEffect(returnFocusSignal,", "fun handoffFocus(")
 
     // ── T1: RIGHT from a group enters the grid and hides the sidebar ───────
 
@@ -67,7 +67,12 @@ class GuideGridFieldFixesContractTest {
         )
         assertTrue(
             "the async path survives for rows that still have to be scrolled into place",
-            enterGrid.contains("if (!direct) focusChannel(rowIndex)")
+            // Round-2 F11 / F1a: same fallback as before, posted directly now
+            // that the two one-line helpers are gone (the delivery of every
+            // in-grid move goes through handoffFocus).
+            enterGrid.contains(
+                "if (!direct) {\n            pendingFocus = GridPendingFocus(rowIndex, cellId = null, channelFocus = true)"
+            )
         )
         assertTrue(
             "the panels weigh the grid, so no width is reserved for a hidden sidebar",
@@ -112,9 +117,8 @@ class GuideGridFieldFixesContractTest {
     fun `the two LEFT edges stay distinct`() {
         assertTrue(
             "LEFT from a program cell is the channel column (F3f, unchanged)",
-            cellLeft.contains(
-                "if (target != null) focusCell(rowIndex, target) else focusChannel(rowIndex)"
-            )
+            cellLeft.contains("handoffFocus(rowIndex, target, \"cell-left\")") &&
+                cellLeft.contains("handoffFocus(rowIndex, null, \"cell-left-to-channel\")")
         )
         assertFalse(
             "and never the sidebar, even past the first program",
