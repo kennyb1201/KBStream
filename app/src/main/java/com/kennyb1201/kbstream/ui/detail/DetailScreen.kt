@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -181,6 +182,7 @@ import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBFocusButton
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
@@ -5091,7 +5093,23 @@ fun DetailScreen(
                                                     elevation = KBFocusGlowSmall
                                                 )
                                             ),
+                                            // The same room the actor page's
+                                            // biography pill takes (check, not a
+                                            // second spec: same control, same
+                                            // treatment): the 1.06x scale, 2dp ring
+                                            // and 8dp glow are drawn outside this
+                                            // Surface, and the list clips at its own
+                                            // edge, so the room goes INSIDE it and
+                                            // the offset cancels it on the outside -
+                                            // the toggle is drawn exactly where it
+                                            // was. Detail needed the fix rather than
+                                            // already having it.
                                             modifier = Modifier
+                                                .padding(KBFocusChipInset)
+                                                .offset(
+                                                    x = -KBFocusChipInset,
+                                                    y = -KBFocusChipInset
+                                                )
                                                 // The same snap as the header's, with the
                                                 // same gates: this toggle is the topmost
                                                 // focusable INSIDE the list, so it is the

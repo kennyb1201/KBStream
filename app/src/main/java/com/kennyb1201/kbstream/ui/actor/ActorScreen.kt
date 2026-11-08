@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -103,6 +104,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
@@ -170,6 +172,16 @@ private val LocalActorBringIntoViewSpec = ActorBringIntoViewSpec()
 private val ActorCaptionRoom = 44.dp
 
 /**
+ * The gap the biography's "View more" pill keeps under the paragraph.
+ *
+ * Named because it is part of the pill's focused-treatment room rather than a
+ * separate margin (see the pill's modifier): the room the ring needs above the
+ * pill includes this gap, so the offset that cancels the room is the room LESS
+ * this - and the pill is drawn where it always was, 8dp under the text.
+ */
+private val ActorPillGap = 8.dp
+
+/**
  * Focus scrolling for the page's own VERTICAL list - the bio and the rows under
  * it - which is a different question from where a tile comes to rest in a rail.
  *
@@ -214,6 +226,34 @@ internal class ActorListBringIntoViewSpec(
      * density.
      */
     private val canLand: () -> Boolean = { true },
+    /**
+     * The focus glow's radius, in pixels - the part of the cue tv-material3 draws
+     * OUTSIDE the focused node's layout rectangle ([KBFocusGlowSmall] at the
+     * caller's density). Zero for a surface whose nodes draw no glow.
+     *
+     * The focused 2dp ring is drawn on the surface's own edge, so the only part
+     * of it past the layout rect is its outer half-dp: that is inside this reach,
+     * which is why the reach is the glow and not glow-plus-ring.
+     *
+     * The rect this spec is handed is the focused node's LAYOUT rect, and the
+     * treatment is painted past it: a landing computed from the rect alone parks
+     * the drawn ring under the container's clip and answers "already visible" to
+     * the node that is visibly cut. That is the second half of the biography
+     * pill's report - see the class note, and the hub's landing
+     * (`SportsCardBringIntoViewSpec`) for the same repair one screen over.
+     */
+    private val glowPx: Float = 0f,
+    /**
+     * The scale a node in this container grows to on focus ([KBFocusChip] for a
+     * chip-shaped control, 1f for one that does not grow).
+     *
+     * tv-material 1.1.0 applies it through `graphicsLayer` with `transformOrigin`
+     * left at its default, the CENTRE, so the growth is split evenly and each
+     * edge moves out by half of it. A version that pivoted at an edge would put
+     * the whole growth on one side and this half would have to become the full
+     * amount for that side.
+     */
+    private val focusedScale: Float = 1f,
 ) : BringIntoViewSpec {
 
     override fun calculateScrollDistance(
@@ -226,7 +266,16 @@ internal class ActorListBringIntoViewSpec(
         // margins leave still lands on the nearest edge rather than being
         // scrolled somewhere it could not be seen at all.
         val margin = insetPx.coerceAtMost(containerSize / 3f)
-        val trailingEdge = offset + abs(size)
+        // The rect arrives as the focused node's leading edge and its extent - the
+        // LAYOUT rect. What the viewer sees, and what the list clips, is that rect
+        // scaled about its centre plus the glow painted past it, so both edges are
+        // expanded by the overhang before anything is decided. Measuring the layout
+        // rect was the pill's report: a node whose layout rect cleared the room
+        // still had its grown ring under the clip, the landing asked for nothing,
+        // and the control that was visibly cut re-requested on every pass.
+        val overhangPx = glowPx + (focusedScale - 1f) * abs(size) / 2f
+        val drawnOffset = offset - overhangPx
+        val trailingEdge = offset + abs(size) + overhangPx
         // Already inside the viewport AND clearing the bottom margin: there is no
         // landing to make. This is the answer the page was missing, and it is
         // also what keeps a row that merely remeasured from being nudged by its
@@ -239,12 +288,12 @@ internal class ActorListBringIntoViewSpec(
         // fold - and only on the way DOWN into the rail, which is exactly the
         // asymmetry that was reported. A poster that clears the line still asks
         // for nothing.
-        if (offset >= 0f && trailingEdge <= containerSize - margin) return 0f
+        if (drawnOffset >= 0f && trailingEdge <= containerSize - margin) return 0f
         return when {
             // Past the bottom margin: scroll forward just far enough to clear it.
             trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
             // Above the top one: back off by the same amount.
-            offset < margin -> offset - margin
+            drawnOffset < margin -> drawnOffset - margin
             // Already clear of both: no scroll at all.
             else -> 0f
         }
@@ -632,6 +681,12 @@ fun ActorScreen(
                     // under it: a landing that clears only the poster leaves the
                     // date, title and rating off the bottom edge.
                     insetPx = with(density) { (KBFocusRowInset + ActorCaptionRoom).toPx() },
+                    // The biography's pill draws its 8dp glow and its 1.06x chip
+                    // growth OUTSIDE its layout rect, so the landing is measured
+                    // from the drawn rect: the layout one cleared the inset while
+                    // the ring sat under the list's clip (see the spec's note).
+                    glowPx = with(density) { KBFocusGlowSmall.toPx() },
+                    focusedScale = KBFocusChip,
                     // One driver per move: while the bio's toggle is snapping
                     // the list itself, this landing stays out of it.
                     canLand = { !pillOwnsListScroll.value }
@@ -794,7 +849,14 @@ fun ActorScreen(
                                                 start = 24.dp,
                                                 end = 24.dp,
                                                 top = 4.dp,
-                                                bottom = 20.dp
+                                                // 4dp, not 20dp: the pill's own ring
+                                                // room now carries the space under
+                                                // it (see the pill's modifier), so
+                                                // the bio item keeps exactly the
+                                                // height it had - the paragraph, the
+                                                // pill and the MOVIES header do not
+                                                // move.
+                                                bottom = 4.dp
                                             )
                                             .animateContentSize()
                                     ) {
@@ -965,6 +1027,20 @@ fun ActorScreen(
                                                                 // the framework was
                                                                 // passing through.
                                                                 if (!pillFocused || bioExpanded) return@launch
+                                                                // The target is the
+                                                                // ITEM's top, not the
+                                                                // pill's edge: the
+                                                                // paragraph goes to
+                                                                // the viewport's top
+                                                                // and the pill - the
+                                                                // item's last line -
+                                                                // comes to rest with
+                                                                // its whole drawn ring
+                                                                // inside the list. The
+                                                                // drawn-rect margin in
+                                                                // the landing above is
+                                                                // what a stop AT an
+                                                                // edge has to pay.
                                                                 browseListState.animateScrollToItem(0)
                                                             } finally {
                                                                 // Give the page's
@@ -976,7 +1052,41 @@ fun ActorScreen(
                                                             }
                                                         }
                                                     }
-                                                    .padding(top = 8.dp)
+                                                    // F1: the pill owns the room its
+                                                    // focused treatment needs,
+                                                    // instead of borrowing the bio
+                                                    // Column's padding for it. The
+                                                    // treatment is drawn OUTSIDE the
+                                                    // layout rect - 1.06x scale, 2dp
+                                                    // ring, 8dp glow - and a lazy
+                                                    // list clips at its own edge, so
+                                                    // the room goes INSIDE the list on
+                                                    // all four sides, the way a chip
+                                                    // row gives it to a chip
+                                                    // ([KBFocusChipInset]). The offset
+                                                    // cancels the room on the outside,
+                                                    // less the 8dp gap the pill
+                                                    // already kept under the text -
+                                                    // that gap is part of the room now
+                                                    // - so the pill is still drawn
+                                                    // 8dp under the paragraph and the
+                                                    // bio item is exactly as tall as
+                                                    // it was (see the Column's bottom
+                                                    // padding). What the cancel leaves
+                                                    // is real room inside the node: 12dp
+                                                    // past the pill's right edge and 16dp
+                                                    // under it. The ring's left 12dp sits
+                                                    // in the Column's own 24dp start, and
+                                                    // its top 4dp over the paragraph's
+                                                    // last line - the treatment has always
+                                                    // overlapped that line, and the list's
+                                                    // own margin is what keeps the top
+                                                    // clear.
+                                                    .padding(KBFocusChipInset)
+                                                    .offset(
+                                                        x = -KBFocusChipInset,
+                                                        y = -(KBFocusChipInset - ActorPillGap)
+                                                    )
                                             ) {
                                                 Text(
                                                     text = if (bioExpanded) "View less" else "View more",
