@@ -189,9 +189,10 @@ class ActorPillRingContractTest {
         // pill - the item's last line - comes to rest inside the viewport; the
         // drawn-rect margin above is what a stop AT an edge has to pay.
         assertEquals(
-            "exactly one scroll animation belongs to the toggle",
+            "exactly one scroll animation belongs to the toggle - the rails' own " +
+                "UP-to-top press drives a different list and is not a second one",
             2,
-            page.split("animateScrollToItem(0)").size
+            page.split("browseListState.animateScrollToItem(0)").size
         )
         assertTrue(
             "the page's landing answers zero while the snap owns the list",
