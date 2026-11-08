@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.mobile
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,6 +49,7 @@ import com.kennyb1201.kbstream.ui.iptv.GridWindow
 import com.kennyb1201.kbstream.ui.iptv.GuideGrid
 import com.kennyb1201.kbstream.ui.iptv.GuideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.GuideScore
+import com.kennyb1201.kbstream.ui.iptv.autoFollowWindow
 import com.kennyb1201.kbstream.ui.iptv.guideRowGuideState
 import com.kennyb1201.kbstream.ui.iptv.cellWidthDp
 import com.kennyb1201.kbstream.ui.iptv.gridCellHeadline
@@ -96,6 +98,13 @@ internal fun GuideGridMobileView(
      */
     windowHours: Int = GuideGrid.DEFAULT_WINDOW_HOURS,
     nowMs: Long,
+    /**
+     * The guide's hard right edge (F1a): the end of the newest program it has
+     * imported, from the same `guideScheduleEndUtcMillis` read the TV grid is
+     * handed. Null when the guide holds none - no pin to apply, which is the TV's
+     * answer too.
+     */
+    scheduleEndMs: Long?,
     onPlay: (IptvChannelWithEpg) -> Unit,
     onToggleReminder: (IptvChannelWithEpg, GridCell) -> Unit,
     onCatchup: ((IptvChannelWithEpg, GridCell) -> Unit)?,
@@ -107,11 +116,12 @@ internal fun GuideGridMobileView(
     // marks, the cells and the now-line cannot drift apart at a level.
     val pxPerMin = GuideGrid.pxPerMin(windowHours)
 
-    // The window re-opens on the hour (so a grid left open follows the clock),
-    // and takes the zoom level it opens at (F3a).
-    var window by remember(nowMs / GuideGrid.HOUR_MS) {
-        mutableStateOf(GridWindow.opening(nowMs, windowHours))
-    }
+    // The window opens at now and then stays put until the clock leaves it
+    // (F1b). It used to re-open on the hour, which moved the axis whether the
+    // viewer had browsed away or not - a viewer scrolled right to tonight's games
+    // was yanked forward at the top of the hour. Nothing moves the axis now
+    // except the auto-follow below.
+    var window by remember { mutableStateOf(GridWindow.opening(nowMs, windowHours)) }
     // F3a: a zoom change keeps the window's START - the viewer stays on the air
     // time they were looking at and only the scale changes (the TV's F12e rule).
     LaunchedEffect(windowHours) {
@@ -122,6 +132,33 @@ internal fun GuideGridMobileView(
     val timeScroll = rememberScrollState()
     val listState = rememberLazyListState()
     var selected by remember { mutableStateOf<Pair<IptvChannelWithEpg, GridCell>?>(null) }
+
+    // F1a/F2a: the TV grid's follow, on this screen's own 30s tick - the SAME
+    // [autoFollowWindow] rule, not a mobile fork of it. Only a window the clock
+    // has just left follows, so a viewer paged forward is never yanked back and
+    // one who has been away for an hour is not dragged forward; the move is one
+    // page at the current zoom, and the guide's schedule end still stops the
+    // axis (F1c/F1d).
+    //
+    // F2a: the scroll reset is this file's half of the TV's focus re-anchor
+    // (`focusLiveOnNextWindow`). The window and the viewport move together, so
+    // the now-line is on screen after a follow instead of the axis sliding
+    // underneath a viewport that kept its pixel offset. It happens ONLY here - an
+    // ordinary drag is never undone (F2b).
+    var autoFollowedEdgeMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(nowMs, window.endUtcMillis, scheduleEndMs) {
+        if (autoFollowedEdgeMs == window.endUtcMillis) return@LaunchedEffect
+        val next = autoFollowWindow(
+            window = window,
+            nowUtcMillis = nowMs,
+            windowHours = windowHours,
+            scheduleEndMs = scheduleEndMs,
+        ) ?: return@LaunchedEffect
+        autoFollowedEdgeMs = window.endUtcMillis
+        Log.d(TAG, "follow window ${window.startUtcMillis} -> ${next.startUtcMillis}")
+        window = next
+        timeScroll.scrollTo(0)
+    }
 
     val rows = remember(items, programsByChannel, window) {
         items.map { item ->
@@ -289,6 +326,8 @@ internal fun GuideGridMobileView(
         }
     }
 }
+
+private const val TAG = "GUIDE_GRID"
 
 private val CHANNEL_CELL_WIDTH = 128.dp
 private val MOBILE_ROW_HEIGHT = 58.dp

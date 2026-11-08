@@ -511,6 +511,15 @@ fun GuideScreenMobile(
         }
         val guideImportLabel = GuideImportProgress.label(guideImport, nowMs)
 
+        // The grid's hard right edge (F1a): the end of the newest program the
+        // guide has imported - the same read the TV grid is handed, and the value
+        // its auto-follow stops at. Re-read when the lineup or an import moves the
+        // window, exactly as the TV screen does; null means the guide holds none,
+        // which is no pin rather than a stop at the top of the hour.
+        val guideScheduleEndMs by produceState<Long?>(null, playlist, guideImport) {
+            value = viewModel.guideScheduleEndUtcMillis()
+        }
+
         // Reminders use the same store the TV guide and the background worker
         // share, so one set here alerts even with the app closed. The banner is
         // the in-guide "it just started" affordance; stale entries are pruned on
@@ -956,6 +965,7 @@ fun GuideScreenMobile(
                             scores = gridScores,
                             windowHours = gridWindowHours,
                             nowMs = nowMs,
+                            scheduleEndMs = guideScheduleEndMs,
                             onPlay = { item ->
                                 recentKeys = nextRecentKeys(recentKeys, item.channelKey())
                                 onPlayChannel?.invoke(item)
