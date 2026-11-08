@@ -1609,9 +1609,19 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                                 .apply()
                         },
                         viewToggleRequester = viewToggleFocusRequester,
+                        // HEADER-TRAP F1a: the same signal, bumped from inside
+                        // each button as well - the buttons are the focus stops
+                        // whose DOWN was getting lost.
+                        onDownReturn = if (guideView == GuideViewMode.GRID) {
+                            { gridReturnFocusSignal += 1 }
+                        } else {
+                            null
+                        },
                         // F1e: Down from the header goes back into the grid, to
                         // the home focus left (sidebar row or the channel/cell).
                         // Grid only: on the list the header is above the chips.
+                        // HEADER-TRAP F1b: this stays as the backstop now that
+                        // every button carries the same handler.
                         modifier = Modifier.onPreviewKeyEvent { event ->
                             if (
                                 guideView == GuideViewMode.GRID &&
@@ -1699,7 +1709,13 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                                 null
                             },
                             onRequestWindow = { ids, start, end ->
-                                viewModel.requestGuideGridWindow(ids, start, end)
+                                // F3c: the cap follows the zoom (4 an hour).
+                                viewModel.requestGuideGridWindow(
+                                    ids,
+                                    start,
+                                    end,
+                                    GuideGrid.programsPerWindow(gridWindowHours)
+                                )
                             },
                             modifier = Modifier.fillMaxSize()
                         )
@@ -3016,8 +3032,34 @@ private fun GuideHeader(
     onToggleView: (() -> Unit)? = null,
     /** Where Up out of the first grid row lands (F3g). */
     viewToggleRequester: FocusRequester? = null,
+    /**
+     * HEADER-TRAP F1a: what a DOWN on one of the buttons below does - bump the
+     * screen's return signal, the same one the Row's handler bumps. Null on the
+     * list, where DOWN from the header goes to the chips instead.
+     */
+    onDownReturn: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    // HEADER-TRAP F1a/F1b: every button drives the return into the guide
+    // itself, on top of the screen's Row handler. The Row handler stays as the
+    // backstop; the preview pass runs the outermost handler first, so in the
+    // ordinary case the Row's handler claims the press and this one never
+    // runs. One press is one bump whichever handler sees it - the signal is a
+    // counter, and the effect lands the same target twice harmlessly.
+    val onDown = onDownReturn
+    val downReturn: Modifier = if (guideView == GuideViewMode.GRID && onDown != null) {
+        Modifier.onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+                onDown()
+                true
+            } else {
+                false
+            }
+        }
+    } else {
+        Modifier
+    }
+
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3061,7 +3103,7 @@ private fun GuideHeader(
                         Modifier.focusRequester(viewToggleRequester)
                     } else {
                         Modifier
-                    }
+                    }.then(downReturn)
                 ) {
                     Box(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
@@ -3090,7 +3132,7 @@ private fun GuideHeader(
             // the viewer guessing. Same card, 24dp glyph and 12/9 padding as the
             // rest of the row.
             if (onCycleWindow != null) {
-                KBCard(onClick = onCycleWindow) {
+                KBCard(onClick = onCycleWindow, modifier = downReturn) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -3116,7 +3158,7 @@ private fun GuideHeader(
             // preview is playing and struck through while it is off, so the
             // button says the state as well as the action.
             if (onTogglePreview != null) {
-                KBCard(onClick = onTogglePreview) {
+                KBCard(onClick = onTogglePreview, modifier = downReturn) {
                     Box(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         contentAlignment = Alignment.Center
@@ -3157,7 +3199,7 @@ private fun GuideHeader(
             // contentDescription is the TalkBack name the word label used to
             // provide; an icon-only button without one is silent.
             if (onSportsClick != null) {
-                KBCard(onClick = onSportsClick) {
+                KBCard(onClick = onSportsClick, modifier = downReturn) {
                     Box(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         contentAlignment = Alignment.Center
@@ -3172,7 +3214,7 @@ private fun GuideHeader(
                 }
             }
             if (onSearchClick != null) {
-                KBCard(onClick = onSearchClick) {
+                KBCard(onClick = onSearchClick, modifier = downReturn) {
                     Box(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         contentAlignment = Alignment.Center
@@ -3188,7 +3230,7 @@ private fun GuideHeader(
             }
             // SETUP is never omitted, unlike the two above: setup is always
             // available, they are not.
-            KBCard(onClick = onSetupClick) {
+            KBCard(onClick = onSetupClick, modifier = downReturn) {
                 Box(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center

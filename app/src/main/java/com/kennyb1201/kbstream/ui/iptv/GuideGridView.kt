@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -64,6 +65,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -101,14 +103,28 @@ import kotlinx.coroutines.launch
 // score line is why the row does not shrink further).
 private val GRID_ROW_HEIGHT: Dp = 48.dp
 
-// F13a/F14b: the top band's two heights. 180dp is exactly the preview's own
-// 16:9 box, so the band adds no padding around it; the text height is the
-// block's fixed height when the preview is off, which is what gives that space
-// back to the rows without the band resizing as focus moves.
-private val GRID_BAND_WITH_PREVIEW: Dp = 180.dp
+// F13a/F14b: the top band's two heights. With the preview on it is exactly the
+// preview's own 16:9 box, so the band adds no padding around it; the text
+// height is the block's fixed height when the preview is off, which is what
+// gives that space back to the rows without the band resizing as focus moves.
+//
+// Density spec F1: the box is 240x135, not 320x180, and the band follows it to
+// 135dp - 45dp, about a row, back to the channels. The block keeps its own
+// 128dp of text height (F1b): it is not cut to make the band fit, the band has
+// 7dp of room over it.
+private val GRID_BAND_WITH_PREVIEW: Dp = 135.dp
 private val GRID_BAND_TEXT_HEIGHT: Dp = 128.dp
-private val GRID_PREVIEW_WIDTH: Dp = 320.dp
-private val GRID_PREVIEW_HEIGHT: Dp = 180.dp
+private val GRID_PREVIEW_WIDTH: Dp = 240.dp
+private val GRID_PREVIEW_HEIGHT: Dp = 135.dp
+
+// Density spec F2: 24dp, down from 30. One labelSmall day line and one
+// labelMedium hour label still clear it - the marks themselves are unchanged.
+private val GRID_TIME_HEADER_HEIGHT: Dp = 24.dp
+
+// HEADER-TRAP F2: how many frames the return-from-header handoff retries the
+// remembered home's requester before it hands the direction to the platform's
+// focus search - the same eight frames the grid's own pending moves get.
+private const val HEADER_RETURN_ATTEMPTS = 8
 
 /**
  * The TiviMate-style timeline grid (spec §2, §2k, §3, §4).
@@ -374,19 +390,116 @@ internal fun GuideGridView(
     // row while it is showing, otherwise the channel or cell the viewer was on
     // (a hidden sidebar stays hidden). The handoff remembers which of the two
     // grid homes it was, instead of always assuming the sidebar.
+    //
+    // HEADER-TRAP spec F2: the return now lands ITSELF, and says so. The field
+    // report was a DOWN that stayed on the same header button: the press was
+    // claimed and the old shape only ever posted an async target, so a home
+    // whose requester was not composed yet ended in silence with focus still
+    // on the header. Three paths, in order:
+    //
+    //  direct    - ask the remembered home's requester right now (it is
+    //              composed in the reported case),
+    //  fallback  - the pending shape: scroll the row into place and retry the
+    //              requester for a few frames,
+    //  geometric - neither landed, so hand the direction to the platform's
+    //              focus search; the press is already ours, and this is the
+    //              one path that cannot leave focus on the header.
+    //
+    // One GUIDE line per return names the home, the path and the target.
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(returnFocusSignal, sidebarVisible) {
         if (returnFocusSignal <= 0) return@LaunchedEffect
-        if (sidebarVisible) {
-            pendingSidebarFocus = true
-            return@LaunchedEffect
-        }
         val rowIndex = focusedRow.coerceIn(0, rows.lastIndex.coerceAtLeast(0))
-        val cell = if (focusHome == GridFocusHome.CELL) {
+        val onCell = focusHome == GridFocusHome.CELL && focusedCellId != null
+        val cell = if (onCell) {
             rows.getOrNull(rowIndex)?.cells?.firstOrNull { it.id == focusedCellId }
         } else {
             null
         }
-        pendingFocus = GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)
+        val home = when {
+            sidebarVisible -> "sidebar"
+            cell != null -> "cell"
+            else -> "channel"
+        }
+        val label = groups.getOrNull(groups.indexOf(selectedGroup).coerceAtLeast(0))
+
+        // The target's requester, or null while that target is not composed.
+        fun requesterFor(kind: String): FocusRequester? = when (kind) {
+            "sidebar" -> label?.let { sidebarRequesters[it] }
+            "cell" -> cell?.let { cellRequesters[it.id] }
+            else -> rows.getOrNull(rowIndex)?.let { channelRequesters[it.channelKey] }
+        }
+
+        val target = when (home) {
+            "sidebar" -> "sidebar group=$label"
+            "cell" -> "cell row=$rowIndex cell=${cell?.id}"
+            else -> "channel row=$rowIndex"
+        }
+
+        fun landHome() {
+            // Focus is where it was asked to go, so the pending effects have
+            // nothing left to do and must not also fire.
+            pendingSidebarFocus = false
+            pendingFocus = null
+            focusHome = when (home) {
+                "sidebar" -> GridFocusHome.SIDEBAR
+                "cell" -> GridFocusHome.CELL
+                else -> GridFocusHome.CHANNEL
+            }
+        }
+
+        val wanted = requesterFor(home)
+        if (wanted != null && runCatching { wanted.requestFocus() }.getOrDefault(false)) {
+            landHome()
+            Log.i(
+                "GUIDE",
+                "grid handoff header->grid signal=$returnFocusSignal $target " +
+                    "direct=true landed=$home"
+            )
+            return@LaunchedEffect
+        }
+
+        var attempts = 0
+        var landed = false
+        while (attempts < HEADER_RETURN_ATTEMPTS) {
+            val requester = requesterFor(home)
+            if (requester != null &&
+                runCatching { requester.requestFocus() }.getOrDefault(false)
+            ) {
+                landed = true
+                break
+            }
+            // A row that has to scroll into place has no requesters until it
+            // composes, so the fallback scrolls it first, once.
+            if (attempts == 0 && home != "sidebar" && rowIndex in rows.indices) {
+                if (!reducedMotion) rowListState.animateScrollToItem(rowIndex)
+                else rowListState.scrollToItem(rowIndex)
+            }
+            withFrameNanos { }
+            attempts++
+        }
+        if (landed) {
+            landHome()
+            Log.i(
+                "GUIDE",
+                "grid handoff header->grid signal=$returnFocusSignal $target " +
+                    "direct=false fallback=true landed=$home attempts=$attempts"
+            )
+            return@LaunchedEffect
+        }
+
+        // F2b: never end with focus on the header. Geometry is the last
+        // resort; the line records that it ran, landed or not.
+        pendingSidebarFocus = false
+        pendingFocus = null
+        val moved = runCatching {
+            focusManager.moveFocus(FocusDirection.Down)
+        }.getOrDefault(false)
+        Log.i(
+            "GUIDE",
+            "grid handoff header->grid signal=$returnFocusSignal $target " +
+                "direct=false fallback=false geometric=$moved attempts=$attempts"
+        )
     }
 
     /**
@@ -640,7 +753,9 @@ internal fun GuideGridView(
     // F13/F14: the top band - the preview in the left corner, the focused
     // program's block beside it. It is chrome, above both columns: no grid cell
     // sits under it (F13a) and it is not a focus stop (F13f/F14d).
-    Column(modifier = modifier.fillMaxSize().padding(bottom = 12.dp)) {
+    // Density spec F4: 4dp, down from the strip era's 12dp safe area. The strip
+    // is gone, so this only keeps the last row off the screen edge.
+    Column(modifier = modifier.fillMaxSize().padding(bottom = 4.dp)) {
         GridTopBand(
             previewEnabled = previewEnabled,
             previewChannel = previewChannel,
@@ -683,11 +798,12 @@ internal fun GuideGridView(
                 // The sticky time header: the same shared scroll state as every
                 // row, so its labels cannot drift from the cells under them
                 // (F2e).
-                Row(modifier = Modifier.fillMaxWidth().height(30.dp)) {
+                Row(modifier = Modifier.fillMaxWidth().height(GRID_TIME_HEADER_HEIGHT)) {
                     Spacer(modifier = Modifier.width(GuideGrid.CHANNEL_COLUMN_WIDTH_DP.dp))
                     Box(modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                         Row(
-                            modifier = Modifier.horizontalScroll(timeScroll).height(30.dp),
+                            modifier = Modifier.horizontalScroll(timeScroll)
+                                .height(GRID_TIME_HEADER_HEIGHT),
                             verticalAlignment = Alignment.Bottom
                         ) {
                             hourMarks(window).forEach { mark ->
@@ -721,8 +837,9 @@ internal fun GuideGridView(
                 LazyColumn(
                     state = rowListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(bottom = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    contentPadding = PaddingValues(bottom = 6.dp)
+                    // Density spec F3: rows sit adjacent, no 2dp gap. The 48dp
+                    // row edge is the separator and the focus ring is unchanged.
                 ) {
                     itemsIndexed(items = rows, key = { _, row -> row.channelKey }) { index, row ->
                         Row(modifier = Modifier.fillMaxWidth().height(GRID_ROW_HEIGHT)) {
@@ -1186,7 +1303,7 @@ private fun ProgramCell(
  *
  * The band is chrome above both columns, so nothing is drawn under it and no
  * cell moves when it changes (F13a). Its height is the preview's state, not the
- * content's: 180dp - exactly the preview's 16:9 box - while the preview is
+ * content's: 135dp - exactly the preview's 16:9 box - while the preview is
  * drawn, and the block's own fixed text height when it is not (F14b/T8).
  */
 @Composable

@@ -64,8 +64,8 @@ class GuideGridRound3ContractTest {
             programCell.contains("\"REMINDER SET\"")
         )
         assertTrue(
-            "the rows are still 2dp apart",
-            grid.contains("verticalArrangement = Arrangement.spacedBy(2.dp)")
+            "density F3: the rows sit adjacent now, so the 2dp gap is gone too",
+            !grid.contains("verticalArrangement = Arrangement.spacedBy(2.dp)")
         )
         assertTrue(
             "F12b: the channel logo is 28dp",
@@ -155,7 +155,7 @@ class GuideGridRound3ContractTest {
         assertTrue(
             "F13d: a KBCard like the rest of the header, not a bare button",
             header.contains("if (onTogglePreview != null)") &&
-                header.contains("KBCard(onClick = onTogglePreview)")
+                header.contains("KBCard(onClick = onTogglePreview, modifier = downReturn)")
         )
         assertTrue(
             "the eye says the state as well as the action",
@@ -303,13 +303,13 @@ class GuideGridRound3ContractTest {
     @Test
     fun `the band is the preview's 16 by 9 box above the timeline, preview left`() {
         assertTrue(
-            "F13a: 320x180",
-            grid.contains("private val GRID_PREVIEW_WIDTH: Dp = 320.dp") &&
-                grid.contains("private val GRID_PREVIEW_HEIGHT: Dp = 180.dp")
+            "density F1: 240x135, still 16:9",
+            grid.contains("private val GRID_PREVIEW_WIDTH: Dp = 240.dp") &&
+                grid.contains("private val GRID_PREVIEW_HEIGHT: Dp = 135.dp")
         )
         assertTrue(
-            "F14b: 180dp while the preview is drawn",
-            grid.contains("private val GRID_BAND_WITH_PREVIEW: Dp = 180.dp")
+            "F14b: the band is the preview's box, 135dp since density F1b",
+            grid.contains("private val GRID_BAND_WITH_PREVIEW: Dp = 135.dp")
         )
         assertTrue(
             "the preview sits at the band's left and the block is beside it",

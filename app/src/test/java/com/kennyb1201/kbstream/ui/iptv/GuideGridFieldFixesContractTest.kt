@@ -204,8 +204,8 @@ class GuideGridFieldFixesContractTest {
             grid.contains("verticalTarget(rows.map { it.cells }, rowIndex, cell, direction)")
         )
         assertTrue(
-            "F5b: 12dp under the detail strip, inside the grid's own bounds",
-            grid.contains(".fillMaxSize().padding(bottom = 12.dp)")
+            "density F4: 4dp under the rows - the strip that wanted 12dp is gone",
+            grid.contains(".fillMaxSize().padding(bottom = 4.dp)")
         )
         assertTrue(
             "the LazyColumn's 6dp is content padding, not the safe area - both stay",
@@ -227,14 +227,16 @@ class GuideGridFieldFixesContractTest {
             screen.contains("guideView == GuideViewMode.GRID &&\n                                event.type == KeyEventType.KeyDown")
         )
         assertTrue(
-            "a sidebar that is still showing gets the sidebar",
-            headerReturn.contains("if (sidebarVisible) {") &&
-                headerReturn.contains("pendingSidebarFocus = true")
+            "a sidebar that is still showing gets the sidebar, asked directly " +
+                "since the header-trap fix",
+            headerReturn.contains("sidebarVisible -> \"sidebar\"") &&
+                headerReturn.contains("label?.let { sidebarRequesters[it] }")
         )
         assertTrue(
             "otherwise the channel or the cell it came from - and the sidebar stays away",
             headerReturn.contains("focusHome == GridFocusHome.CELL") &&
-                headerReturn.contains("GridPendingFocus(rowIndex, cell?.id, channelFocus = cell == null)") &&
+                headerReturn.contains("cell?.let { cellRequesters[it.id] }") &&
+                headerReturn.contains("channelRequesters[it.channelKey]") &&
                 !headerReturn.contains("onSidebarVisibleChange")
         )
         assertTrue(
